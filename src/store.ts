@@ -1,0 +1,101 @@
+import { create } from 'zustand'
+
+export type DocKind = 'doc' | 'sheet' | 'ppt'
+
+export interface Tab {
+  id: string
+  kind: DocKind
+  title: string
+  path?: string
+  dirty: boolean
+}
+
+export interface RecentFile {
+  path: string
+  kind: DocKind
+  openedAt: number
+}
+
+interface AppState {
+  view: 'home' | 'workspace'
+  tabs: Tab[]
+  activeId?: string
+  recents: RecentFile[]
+  openTab: (tab: Omit<Tab, 'id' | 'dirty'>) => void
+  closeTab: (id: string) => void
+  setActive: (id: string) => void
+  goHome: () => void
+  renameTab: (id: string, title: string, path?: string) => void
+  markDirty: (id: string, dirty: boolean) => void
+  markRecent: (path: string, kind: DocKind) => void
+  clearRecents: () => void
+}
+
+const RECENTS_KEY = 'openoffices.recents'
+
+function loadRecents(): RecentFile[] {
+  try {
+    return JSON.parse(localStorage.getItem(RECENTS_KEY) ?? '[]')
+  } catch {
+    return []
+  }
+}
+
+let seq = 0
+
+export const useApp = create<AppState>((set, get) => ({
+  view: 'home',
+  tabs: [],
+  activeId: undefined,
+  recents: loadRecents(),
+  openTab: (tab) => {
+    const existing = get().tabs.find(
+      (t) => tab.path ? t.path === tab.path : false,
+    )
+    if (existing) {
+      set({ view: 'workspace', activeId: existing.id })
+      return
+    }
+    const id = `tab-${Date.now()}-${seq++}`
+    set((s) => ({
+      view: 'workspace',
+      tabs: [...s.tabs, { ...tab, id, dirty: false }],
+      activeId: id,
+    }))
+  },
+  closeTab: (id) =>
+    set((s) => {
+      const tabs = s.tabs.filter((t) => t.id !== id)
+      let activeId = s.activeId
+      if (activeId === id) {
+        activeId = tabs[tabs.length - 1]?.id
+      }
+      const view = tabs.length === 0 ? 'home' : s.view
+      return { tabs, activeId, view }
+    }),
+  setActive: (id) => set({ activeId: id }),
+  goHome: () => set({ view: 'home' }),
+  renameTab: (id, title, path) =>
+    set((s) => ({
+      tabs: s.tabs.map((t) =>
+        t.id === id ? { ...t, title, path: path ?? t.path, dirty: false } : t,
+      ),
+    })),
+  markDirty: (id, dirty) =>
+    set((s) => ({
+      tabs: s.tabs.map((t) => (t.id === id ? { ...t, dirty } : t)),
+    })),
+  markRecent: (path, kind) =>
+    set((s) => {
+      const recents = [
+        { path, kind, openedAt: Date.now() },
+        ...s.recents.filter((r) => r.path !== path),
+      ].slice(0, 30)
+      localStorage.setItem(RECENTS_KEY, JSON.stringify(recents))
+      return { recents }
+    }),
+  clearRecents: () => {
+    localStorage.removeItem(RECENTS_KEY)
+    set({ recents: [] })
+  },
+}))
