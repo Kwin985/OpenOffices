@@ -1024,6 +1024,56 @@ button {
   font-size: 13px;
 }
 
+/* 演讲者备注：编辑面板底部条 + 放映浮层 */
+.ppt-notes-wrap {
+  flex-shrink: 0;
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 6px 12px 8px;
+  background: var(--panel);
+  border-top: 1px solid var(--border);
+}
+
+.ppt-notes-label {
+  font-size: 12px;
+  color: var(--text-2);
+  line-height: 22px;
+  flex-shrink: 0;
+}
+
+.ppt-notes {
+  flex: 1;
+  min-height: 34px;
+  max-height: 110px;
+  resize: vertical;
+  font: inherit;
+  font-size: 13px;
+  color: var(--text);
+  background: var(--sheet-input, var(--bg));
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 3px 8px;
+  box-sizing: border-box;
+}
+
+.ppt-present-notes {
+  position: absolute;
+  left: 5%;
+  right: 5%;
+  bottom: 48px;
+  background: rgba(10, 12, 16, 0.82);
+  color: #e8ecf5;
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  border-radius: 8px;
+  padding: 10px 14px;
+  font-size: 14px;
+  line-height: 1.6;
+  white-space: pre-wrap;
+  max-height: 32%;
+  overflow: auto;
+}
+
 
 /* 字色 / 高亮控件 */
 .tb-color {

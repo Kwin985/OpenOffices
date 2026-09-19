@@ -1,11 +1,29 @@
 export type SlideLayout = 'title' | 'bullets' | 'image' | 'blank'
 
+export interface MasterRect {
+  x: number
+  y: number
+  w: number
+  h: number
+}
+
+export interface MasterStyle {
+  bg?: string // 纯色背景 #rrggbb
+  bgImage?: string // 背景图 data URI
+  titleColor?: string
+  bodyColor?: string
+  titleRect?: MasterRect
+  bodyRect?: MasterRect
+}
+
 export interface Slide {
   id: string
   layout: SlideLayout
   title: string
   body: string
   image?: string // data URI
+  notes?: string // 演讲者备注
+  bg?: string // 单页纯色背景覆盖
 }
 
 export interface DeckTheme {
@@ -23,6 +41,7 @@ export interface Deck {
   title: string
   theme: string
   slides: Slide[]
+  master?: MasterStyle
 }
 
 export const THEMES: DeckTheme[] = [
@@ -79,12 +98,34 @@ export function serializeDeck(deck: Deck): string {
   return JSON.stringify(deck, null, 2)
 }
 
+function parseRect(v: unknown): MasterRect | undefined {
+  if (typeof v !== 'object' || v === null) return undefined
+  const r = v as Record<string, unknown>
+  const n = [r.x, r.y, r.w, r.h].map((k) => (typeof k === 'number' && Number.isFinite(k) ? k : NaN))
+  return n.every((k) => !Number.isNaN(k)) ? { x: n[0], y: n[1], w: n[2], h: n[3] } : undefined
+}
+
+function parseMaster(v: unknown): MasterStyle | undefined {
+  if (typeof v !== 'object' || v === null) return undefined
+  const m = v as Record<string, unknown>
+  const str = (k: string) => (typeof m[k] === 'string' ? (m[k] as string) : undefined)
+  const out: MasterStyle = {
+    bg: str('bg'),
+    bgImage: str('bgImage'),
+    titleColor: str('titleColor'),
+    bodyColor: str('bodyColor'),
+    titleRect: parseRect(m.titleRect),
+    bodyRect: parseRect(m.bodyRect),
+  }
+  return Object.values(out).some((x) => x !== undefined) ? out : undefined
+}
+
 export function parseDeck(text: string): Deck {
   const raw = JSON.parse(text) as Partial<Deck>
   if (raw.app !== 'openoffices' || raw.kind !== 'deck' || !Array.isArray(raw.slides)) {
     throw new Error('不是有效的 OpenOffices 演示文件（.opd）')
   }
-  return {
+  const deck: Deck = {
     app: 'openoffices',
     kind: 'deck',
     version: 1,
@@ -98,6 +139,11 @@ export function parseDeck(text: string): Deck {
       title: typeof s.title === 'string' ? s.title : '',
       body: typeof s.body === 'string' ? s.body : '',
       image: typeof s.image === 'string' ? s.image : undefined,
+      notes: typeof s.notes === 'string' ? s.notes : undefined,
+      bg: typeof s.bg === 'string' ? s.bg : undefined,
     })),
   }
+  const master = parseMaster(raw.master)
+  if (master) deck.master = master
+  return deck
 }

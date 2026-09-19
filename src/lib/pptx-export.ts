@@ -1,18 +1,25 @@
 import type PptxGenJS from 'pptxgenjs'
-import { bodyLines, themeOf, type Slide, type Deck } from './ppt'
+import { bodyLines, themeOf, type MasterRect, type Slide, type Deck } from './ppt'
 
 const W = 10 // inches, LAYOUT_16x9
 const H = 5.625
 
 type IPptxSlide = ReturnType<PptxGenJS['addSlide']>
 
-function addTitleBar(pptx: PptxGenJS, slide: IPptxSlide, s: Slide, accent: string) {
+// 母版分数坐标 → 英寸；无母版用默认
+function rectOr(rect: MasterRect | undefined, def: { x: number; y: number; w: number; h: number }) {
+  if (!rect) return def
+  return { x: rect.x * W, y: rect.y * H, w: rect.w * W, h: rect.h * H }
+}
+
+function addTitleBar(pptx: PptxGenJS, slide: IPptxSlide, s: Slide, accent: string, titleRect?: MasterRect) {
   if (!s.title) return
+  const r = rectOr(titleRect, { x: 0.55, y: 0.35, w: W - 1.1, h: 0.85 })
   slide.addText(s.title, {
-    x: 0.55,
-    y: 0.35,
-    w: W - 1.1,
-    h: 0.85,
+    x: r.x,
+    y: r.y,
+    w: r.w,
+    h: r.h,
     fontSize: 28,
     bold: true,
     color: accent,
@@ -20,8 +27,8 @@ function addTitleBar(pptx: PptxGenJS, slide: IPptxSlide, s: Slide, accent: strin
     valign: 'bottom',
   })
   slide.addShape(pptx.ShapeType.rect, {
-    x: 0.58,
-    y: 1.26,
+    x: r.x + 0.03,
+    y: r.y + r.h + 0.04,
     w: 1.6,
     h: 0.035,
     fill: { color: accent },
@@ -29,16 +36,17 @@ function addTitleBar(pptx: PptxGenJS, slide: IPptxSlide, s: Slide, accent: strin
   })
 }
 
-function addBody(slide: IPptxSlide, s: Slide, fg: string) {
+function addBody(slide: IPptxSlide, s: Slide, fg: string, bodyRect?: MasterRect) {
   const lines = bodyLines(s)
   if (!lines.length) return
+  const r = rectOr(bodyRect, { x: 0.65, y: 1.55, w: W - 1.3, h: H - 2.1 })
   slide.addText(
     lines.map((t) => ({ text: t, options: { bullet: { code: '2022' }, breakLine: true } })),
     {
-      x: 0.65,
-      y: 1.55,
-      w: W - 1.3,
-      h: H - 2.1,
+      x: r.x,
+      y: r.y,
+      w: r.w,
+      h: r.h,
       fontSize: 18,
       color: fg,
       lineSpacing: 30,
@@ -53,20 +61,25 @@ export async function deckToPptxBytes(deck: Deck): Promise<Uint8Array> {
   pptx.title = deck.title
   pptx.layout = 'LAYOUT_16x9'
   const theme = themeOf(deck.theme)
-  const fg = theme.fg.replace('#', '')
-  const accent = theme.accent.replace('#', '')
+  const m = deck.master
+  const fg = (m?.bodyColor ?? theme.fg).replace('#', '')
+  const accent = (m?.titleColor ?? theme.accent).replace('#', '')
 
   for (const s of deck.slides) {
     const slide = pptx.addSlide()
-    slide.background = { color: theme.bg.replace('#', '') }
+    if (s.bg) slide.background = { color: s.bg.replace('#', '') }
+    else if (m?.bgImage) slide.background = { data: m.bgImage.replace(/^data:/, '') }
+    else slide.background = { color: (m?.bg ?? theme.bg).replace('#', '') }
+    if (s.notes?.trim()) slide.addNotes(s.notes)
 
     if (s.layout === 'title') {
+      const tr = rectOr(m?.titleRect, { x: 0.8, y: 1.7, w: W - 1.6, h: 1.3 })
       if (s.title) {
         slide.addText(s.title, {
-          x: 0.8,
-          y: 1.7,
-          w: W - 1.6,
-          h: 1.3,
+          x: tr.x,
+          y: tr.y,
+          w: tr.w,
+          h: tr.h,
           fontSize: 40,
           bold: true,
           color: accent,
@@ -74,18 +87,19 @@ export async function deckToPptxBytes(deck: Deck): Promise<Uint8Array> {
         })
       }
       if (s.body) {
+        const br = rectOr(m?.bodyRect, { x: 1.2, y: 3.15, w: W - 2.4, h: 1.0 })
         slide.addText(s.body, {
-          x: 1.2,
-          y: 3.15,
-          w: W - 2.4,
-          h: 1.0,
+          x: br.x,
+          y: br.y,
+          w: br.w,
+          h: br.h,
           fontSize: 18,
           color: fg,
           align: 'center',
         })
       }
     } else if (s.layout === 'image') {
-      addTitleBar(pptx, slide, s, accent)
+      addTitleBar(pptx, slide, s, accent, m?.titleRect)
       const lines = bodyLines(s)
       const imgW = lines.length ? W * 0.55 : W - 1.1
       if (s.image) {
@@ -111,20 +125,10 @@ export async function deckToPptxBytes(deck: Deck): Promise<Uint8Array> {
         })
       }
     } else if (s.layout === 'blank') {
-      if (s.title) {
-        slide.addText(s.title, {
-          x: 0.55,
-          y: 0.35,
-          w: W - 1.1,
-          h: 0.9,
-          fontSize: 28,
-          bold: true,
-          color: accent,
-        })
-      }
+      addTitleBar(pptx, slide, s, accent, m?.titleRect)
     } else {
-      addTitleBar(pptx, slide, s, accent)
-      addBody(slide, s, fg)
+      addTitleBar(pptx, slide, s, accent, m?.titleRect)
+      addBody(slide, s, fg, m?.bodyRect)
     }
   }
 
