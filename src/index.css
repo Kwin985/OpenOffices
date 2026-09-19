@@ -1610,6 +1610,8 @@ button {
     border-radius: 0;
     box-shadow: none;
     padding: 0;
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
   }
 }
 
@@ -1693,4 +1695,55 @@ button {
 .theme-btn {
   flex-shrink: 0;
   font-size: 13px;
+}
+
+/* ---------- PDF 查看器（pdf.js） ---------- */
+.tb-btn:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.pdf-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+
+.pdf-pageinfo {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 13px;
+  color: var(--text);
+}
+
+.pdf-page-input {
+  width: 56px;
+  text-align: center;
+}
+
+.pdf-zoom {
+  font-size: 13px;
+  color: var(--text);
+  min-width: 42px;
+  text-align: center;
+}
+
+.pdf-scroll {
+  flex: 1;
+  overflow: auto;
+  background: var(--bg);
+  padding: 28px 0 60px;
+  display: flex;
+  justify-content: center;
+}
+
+.pdf-canvas {
+  align-self: flex-start;
+  background: #fff;
+  border: 1px solid var(--border);
+  box-shadow: 0 2px 12px rgba(31, 41, 55, 0.12);
 }

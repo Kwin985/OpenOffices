@@ -39,12 +39,14 @@ export interface WorkbookPayload {
 const SHEET_EXTS = ['xlsx', 'xls', 'ods', 'csv']
 const DOC_EXTS = ['docx', 'odoc']
 const PPT_EXTS = ['pptx', 'ppt', 'opd']
+const PDF_EXTS = ['pdf']
 
 export function kindOfPath(path: string): DocKind | undefined {
   const ext = path.split('.').pop()?.toLowerCase() ?? ''
   if (SHEET_EXTS.includes(ext)) return 'sheet'
   if (DOC_EXTS.includes(ext)) return 'doc'
   if (PPT_EXTS.includes(ext)) return 'ppt'
+  if (PDF_EXTS.includes(ext)) return 'pdf'
   return undefined
 }
 
@@ -57,10 +59,11 @@ export async function pickOpenFile(): Promise<string | null> {
   const selected = await open({
     multiple: false,
     filters: [
-      { name: '所有支持格式', extensions: [...SHEET_EXTS, ...DOC_EXTS, ...PPT_EXTS] },
+      { name: '所有支持格式', extensions: [...SHEET_EXTS, ...DOC_EXTS, ...PPT_EXTS, ...PDF_EXTS] },
       { name: '表格', extensions: SHEET_EXTS },
       { name: '文档', extensions: DOC_EXTS },
       { name: '演示', extensions: PPT_EXTS },
+      { name: 'PDF', extensions: PDF_EXTS },
     ],
   })
   return typeof selected === 'string' ? selected : null

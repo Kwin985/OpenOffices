@@ -1,6 +1,6 @@
 [package]
 name = "openoffices"
-version = "0.11.0"
+version = "0.12.0"
 description = "A Tauri App"
 authors = ["you"]
 edition = "2021"
@@ -29,6 +29,11 @@ rust_xlsxwriter = "0.99.1"
 # 直接依赖以读取 xlsx 单元格样式/合并（calamine 不公开样式 API）；两者均已在依赖树中，零体积增量
 zip = { version = "8.6", default-features = false, features = ["deflate"] }
 quick-xml = "0.42"
+
+# WebView2 PrintToPdf（导出 PDF）；两者已在依赖树（wry 传递），提为直接依赖零体积增量
+[target.'cfg(windows)'.dependencies]
+webview2-com = "0.38"
+windows = "0.61"
 
 
 # Read the optimization guideline for more details: https://tauri.app/concept/size/#cargo-configuration

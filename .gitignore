@@ -26,3 +26,6 @@ dist-ssr
 /target
 /src-tauri/target/
 /src-tauri/gen/schemas/
+
+# pdf.js 资源由 scripts/copy-pdfjs-assets.mjs 从 node_modules 同步，不入库
+/public/pdfjs

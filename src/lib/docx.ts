@@ -26,6 +26,12 @@ export interface PMNode {
   attrs?: Record<string, unknown>
   content?: PMNode[]
   marks?: { type: string; attrs?: Record<string, unknown> }[]
+  text?: string
+}
+
+// TipTap 3 getJSON 的文本节点是顶层 text；历史结构测试用过 attrs.text，两者都兼容
+function textValue(node: PMNode): string {
+  return node.text ?? (node.attrs?.text as string) ?? ''
 }
 
 // 批注条目：text 为批注内容，正文用 comment mark(cid) 锚定；docx 往返写 word/comments.xml
@@ -187,7 +193,7 @@ export async function docxToCommentHtml(
 }
 
 function textOf(node: PMNode): string {
-  if (node.type === 'text') return (node.attrs?.text as string) ?? ''
+  if (node.type === 'text') return textValue(node)
   if (node.type === 'hardBreak') return '\n'
   return (node.content ?? []).map(textOf).join('')
 }
@@ -281,7 +287,7 @@ function inlineToChildren(node: PMNode, inherited: Inherited = {}, cs?: CommentT
         if (cid === null) closeComment(out, cs)
         else openComment(out, cs, cid)
       }
-      const text = (child.attrs?.text as string) ?? ''
+      const text = textValue(child)
       const bold = inherited.bold || hasMark(child, 'bold')
       const italic = inherited.italic || hasMark(child, 'italic')
       const underline = inherited.underline || hasMark(child, 'underline')

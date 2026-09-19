@@ -1,3 +1,4 @@
+mod pdf;
 mod xlsx;
 mod xlsx_style;
 
@@ -7,7 +8,11 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())
-        .invoke_handler(tauri::generate_handler![xlsx::read_xlsx, xlsx::write_xlsx])
+        .invoke_handler(tauri::generate_handler![
+            xlsx::read_xlsx,
+            xlsx::write_xlsx,
+            pdf::export_pdf
+        ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }

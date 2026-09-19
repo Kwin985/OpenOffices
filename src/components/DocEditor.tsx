@@ -9,6 +9,7 @@ import Color from '@tiptap/extension-color'
 import Highlight from '@tiptap/extension-highlight'
 import { CharacterCount } from '@tiptap/extensions'
 import { message, open } from '@tauri-apps/plugin-dialog'
+import { invoke } from '@tauri-apps/api/core'
 import type { Tab } from '../store'
 import { useApp } from '../store'
 import { baseName, pickSaveFile, readBytes, readText, writeBytes, writeText } from '../lib/fs'
@@ -158,6 +159,25 @@ function DocEditor({ tab }: Props) {
     }
   }
 
+  // WebView2 原生 PrintToPdf：主窗口按 @media print 样式矢量落盘，需当前文档标签处于激活态
+  const exportPdf = async () => {
+    try {
+      const path = await pickSaveFile(
+        (tab.path ? baseName(tab.path).replace(/\.[^.]+$/, '') : '未命名文档') + '.pdf',
+        ['pdf'],
+      )
+      if (!path) return
+      setStatus('正在生成 PDF…')
+      await invoke('export_pdf', { filePath: path })
+      markRecent(path, 'pdf')
+      setStatus('已导出 PDF')
+      setTimeout(() => setStatus(''), 1500)
+    } catch (e) {
+      setStatus('')
+      await message(String(e), { title: '导出 PDF 失败', kind: 'error' })
+    }
+  }
+
   const addImage = async () => {
     if (!editor) return
     const selected = await open({
@@ -301,6 +321,7 @@ function DocEditor({ tab }: Props) {
         {btn('批注', () => setCmOpen((v) => !v), cmOpen || comments.length > 0, '批注侧栏：选中文字后可添加批注，导出为 docx 原生批注')}
         {btn('新建批注', startComment, !!draft, '选中正文文字后点击，为其添加一条批注')}
         {btn('打印 / PDF', () => window.print(), false, '调用系统打印，可选择另存为 PDF')}
+        {btn('导出 PDF', exportPdf, false, 'WebView2 原生 PrintToPdf：按打印样式矢量输出，含高亮底色')}
         {status && <span className="editor-status">{status}</span>}
         <span className="editor-hint">
           字数 {cc.words()} · 字符 {cc.characters()}

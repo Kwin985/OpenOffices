@@ -1,6 +1,6 @@
 import { create } from 'zustand'
 
-export type DocKind = 'doc' | 'sheet' | 'ppt'
+export type DocKind = 'doc' | 'sheet' | 'ppt' | 'pdf'
 
 export interface Tab {
   id: string

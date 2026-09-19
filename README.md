@@ -111,6 +111,21 @@
   批注正文、`Scope.Text` 锚文本（含 `&` 实体）全部正确；规范重存回测因当日 Word COM
   SaveAs 环境故障顺延（见开发备注）
 
+## PDF 查看与导出（v0.12）
+
+- **PDF 查看**：新增 `pdf` 标签种类，pdfjs-dist（Apache-2.0）渲染——上下页、缩放 50%~300%、
+  worker 分离加载；cmaps/standard_fonts 由 `scripts/copy-pdfjs-assets.mjs` 在 dev/build 前复制到
+  `public/pdfjs`（gitignore）；pdf 只读、不可新建，打开/拖拽/最近文件全支持
+- **文档导出 PDF**：Rust `export_pdf` 命令走 WebView2 原生 `PrintToPdf`（`with_webview`（稳定
+  API，非 unstable）取 `ICoreWebView2_7`，`ICoreWebView2Environment6.CreatePrintSettings` 设
+  背景色/页边距），无对话框、按 `@media print` 样式矢量出图；实机验证 4 页分页、54 个编号
+  段落齐全、高亮底色保留（`print-color-adjust: exact`）
+- **顺带修复真实数据丢失 bug**：TipTap 3 `getJSON` 的文本节点是**顶层 `text`** 而非
+  `attrs.text`，docx 导出此前只读后者——应用真实保存的文档导出 docx 正文全空；历史结构测试
+  用同错格式造夹具故未暴露。现两者兼容、夹具改用应用真实产物格式重建，本机 Word 16.0 只读
+  回归通过（Pages=3、批注锚文本与正文正确）
+- **范围**：表格/演示导出 PDF 暂未纳入；查看器的文字选择复制与全文搜索未做
+
 ## 性能（v0.3）
 
 - **按编辑器分包 + 懒加载**：主包 8MB → 首屏约 300KB；Univer（6.1MB）只在首次激活表格标签时加载，
@@ -131,6 +146,8 @@
 | [docx](https://github.com/dolanmiu/docx) | ProseMirror JSON → docx 导出 | MIT |
 | [pptxgenjs](https://gitbrent.github.io/PptxGenJS/) | 幻灯片 → pptx 导出 | MIT |
 | [JSZip](https://github.com/Stuk/jszip) | pptx（zip）解包导入 | MIT |
+| [pdfjs-dist](https://github.com/mozilla/pdf.js) | PDF 查看渲染（worker + cmaps/标准字体） | Apache-2.0 |
+| [webview2-com](https://docs.rs/webview2-com) + [windows](https://github.com/microsoft/windows-rs) | PrintToPdf 原生调用（wry 依赖树内，零体积增量） | MIT / Apache-2.0 |
 | [calamine](https://github.com/tafia/calamine) | Rust xlsx/xls/ods 读取 | MIT |
 | [rust_xlsxwriter](https://github.com/jmcnamara/rust_xlsxwriter) | Rust xlsx 写出（含 Format 样式/合并） | BSD-2 / Artistic-2.0 |
 | [zip](https://github.com/zip-rs/zip) | Rust xlsx 解包（读取样式/合并 XML） | MIT |
@@ -144,13 +161,14 @@
 src-tauri/            Rust 后端
   src/xlsx.rs         read_xlsx (calamine) / write_xlsx (rust_xlsxwriter) 命令，含样式与合并区
   src/xlsx_style.rs   zip + quick-xml 直读 xlsx 的 styles.xml / mergeCells（calamine 无样式 API）
+  src/pdf.rs          export_pdf 命令：with_webview → WebView2 PrintToPdf（cfg windows）
   capabilities/       dialog + fs 权限与路径作用域
 src/                  React 前端
   store.ts            标签页 / 最近文件 / 主题（zustand）
   App.tsx             全局快捷键、拖拽打开、关闭确认、懒加载路由
   lib/univer.ts       Univer 实例工厂（公式 worker + 五个社区高级预设）
   lib/univer-io.ts    xlsx 数据+样式/合并 ↔ Univer 快照 转换（样式去重注册）
-  lib/docx.ts         docx 导入导出（ProseMirror JSON ↔ docx，字色/高亮/页眉页脚/TOC 域/批注映射）
+  lib/docx.ts         docx 导入导出（ProseMirror JSON ↔ docx，字色/高亮/页眉页脚/TOC 域/批注映射；文本节点兼容顶层 text 与 attrs.text）
   lib/toc-extension.ts TipTap 目录原子节点：按标题实时汇总、点击跳转
   lib/comment-extension.ts comment mark（cid 锚定批注）+ 加/删/定位/汇总工具
   lib/ppt.ts          .opd 幻灯片数据模型（版式/主题/序列化）
@@ -158,12 +176,14 @@ src/                  React 前端
   lib/pptx-import.ts  pptx → Deck（JSZip 解包 + OOXML 解析 + 媒体还原）
   lib/registry.ts     跨组件保存器注册表（Ctrl+S 路由到当前标签）
   lib/open.ts         路径→标签 打开 / 带确认关闭
-  components/         Home / Workspace / SheetEditor / DocEditor / PptEditor
+  components/         Home / Workspace / SheetEditor / DocEditor / PptEditor / PdfViewer（pdfjs-dist 懒加载）
+scripts/              copy-pdfjs-assets.mjs（dev/build 前复制 cmaps/标准字体到 public/pdfjs）
 ```
 
 表格文件流：`xlsx 磁盘 → Rust(calamine 值 + zip/quick-xml 样式合并) → JSON 快照 → Univer 渲染`；保存反向经 `rust_xlsxwriter` 落盘。
 文档文件流：`docx → mammoth 正文 + zip 直读页眉页脚/批注 → HTML/元数据 → TipTap`；保存为 `.odoc` JSON（含 meta）或导出 docx。
 演示文件流：`pptx → JSZip 解包 OOXML → Deck 模型 → 编辑器`；保存为 `.opd` JSON 或经 pptxgenjs 导出 pptx。
+PDF 文件流：查看 `pdf 磁盘 → readBytes → pdfjs-dist（worker + canvas）`；导出 `文档 → @media print 排版 → Rust export_pdf → WebView2 PrintToPdf 落盘`。
 
 ## 开发
 
@@ -175,6 +195,9 @@ cargo check        # Rust 后端检查（在 src-tauri 下）
 ```
 
 环境要求：Rust (MSVC)、Node ≥ 20、WebView2 运行时。
+
+> `pnpm dev` / `pnpm build` 会先跑 `scripts/copy-pdfjs-assets.mjs`，把 pdf.js 的 cmaps 与标准字体
+> 复制到 `public/pdfjs`（该目录已 gitignore，不入库）。
 
 > 开发备注（2026-09-19）：本机 Word COM 出现任意文档 `SaveAs/SaveAs2` 均挂起的环境故障
 > （新建空白也卡、无对话框、与文件内容和落盘位置无关），只读回归（Open + 批注枚举）不受影响；
@@ -191,7 +214,8 @@ cargo check        # Rust 后端检查（在 src-tauri 下）
 - [ ] 表格：图表（调研结论：Univer 图表插件属 @univerjs-pro 商业授权，社区版不可用；待评估 VChart/Apache 自绘方案）
 - [x] 文档：页眉页脚（含 PAGE 页码域）与目录（原生 TOC 域）docx 往返，Word 实机回归
 - [x] 文档：批注（锚点标记 + 侧栏面板 + docx comments 往返）
-- [ ] PDF 查看（pdf.js）与导出
+- [x] PDF 查看（pdf.js）与文档导出（WebView2 PrintToPdf）
+- [ ] PDF：表格/演示导出
 - [ ] ODF（ods/odt）原生格式
 - [ ] 本地文件关联与"最近项目"跨设备同步（可选、端到端加密）
 

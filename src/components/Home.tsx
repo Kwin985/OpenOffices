@@ -6,7 +6,11 @@ const KIND_META: Record<DocKind, { label: string; icon: string; cls: string; des
   doc: { label: '文档', icon: '文', cls: 'kind-doc', desc: '富文本写作 · docx 导入导出', sample: '未命名文档' },
   sheet: { label: '表格', icon: '表', cls: 'kind-sheet', desc: '类 Excel 编辑 · xlsx 读写', sample: '未命名表格' },
   ppt: { label: '演示', icon: '演', cls: 'kind-ppt', desc: '幻灯片编辑 · pptx 导入导出', sample: '未命名演示' },
+  pdf: { label: 'PDF', icon: 'P', cls: 'kind-pdf', desc: 'PDF 查看 · pdf.js 渲染', sample: '' },
 }
+
+// pdf 只读不可新建，不进首页卡片
+const CREATABLE_KINDS = (Object.keys(KIND_META) as DocKind[]).filter((k) => k !== 'pdf')
 
 function timeAgo(ts: number): string {
   const diff = Date.now() - ts
@@ -58,7 +62,7 @@ export default function Home() {
       </div>
 
       <div className="home-cards">
-        {(Object.keys(KIND_META) as DocKind[]).map((kind) => {
+        {CREATABLE_KINDS.map((kind) => {
           const meta = KIND_META[kind]
           return (
             <div key={kind} className={`home-card ${meta.cls}`}>

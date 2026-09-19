@@ -6,9 +6,10 @@ import { saveTab } from '../lib/registry'
 const SheetEditor = lazy(() => import('./SheetEditor'))
 const DocEditor = lazy(() => import('./DocEditor'))
 const PptEditor = lazy(() => import('./PptEditor'))
+const PdfViewer = lazy(() => import('./PdfViewer'))
 
-const KIND_ICON: Record<DocKind, string> = { doc: '文', sheet: '表', ppt: '演' }
-const KIND_CLS: Record<DocKind, string> = { doc: 'kind-doc', sheet: 'kind-sheet', ppt: 'kind-ppt' }
+const KIND_ICON: Record<DocKind, string> = { doc: '文', sheet: '表', ppt: '演', pdf: 'P' }
+const KIND_CLS: Record<DocKind, string> = { doc: 'kind-doc', sheet: 'kind-sheet', ppt: 'kind-ppt', pdf: 'kind-pdf' }
 
 export default function Workspace() {
   const tabs = useApp((s) => s.tabs)
@@ -40,7 +41,7 @@ export default function Workspace() {
   const active = tabs.find((t) => t.id === activeId)
 
   const newTab = (kind: DocKind) => {
-    const titles: Record<DocKind, string> = { doc: '未命名文档', sheet: '未命名表格', ppt: '未命名演示' }
+    const titles: Record<DocKind, string> = { doc: '未命名文档', sheet: '未命名表格', ppt: '未命名演示', pdf: 'PDF 查看' }
     openTab({ kind, title: titles[kind] })
     setMenuOpen(false)
   }
@@ -112,6 +113,7 @@ export default function Workspace() {
                   {t.kind === 'sheet' && <SheetEditor tab={t} />}
                   {t.kind === 'doc' && <DocEditor tab={t} />}
                   {t.kind === 'ppt' && <PptEditor tab={t} />}
+                  {t.kind === 'pdf' && <PdfViewer tab={t} />}
                 </Suspense>
               ) : (
                 <div className="editor-loading">编辑器待命 · 切换到该标签后初始化</div>
