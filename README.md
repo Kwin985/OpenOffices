@@ -39,9 +39,18 @@
 ## 逐条动画与自动换页（v0.6）
 
 - **要点逐条入场**：每页可选淡入/飞入/擦除三种逐条效果，放映与演讲者视图同步揭示——
-  方向键/空格先揭示下一条，揭示完毕再换页（本地 `.opd` 保真，pptx 端不映射 PowerPoint 元素级 timing 树）
+  方向键/空格先揭示下一条，揭示完毕再换页（v0.7 起随 pptx 原生 timing 树往返，见下）
 - **自动换页计时**：每页可设 1~3600 秒到点自动换页，导出写入 OOXML `<p:transition advTm>`、
   导入反向解析，与切换动画同族往返；末页计时器不触发
+
+## PowerPoint 原生 timing 树（v0.7）
+
+- **逐条入场导出**：含逐条动画的页向 slideN.xml 注入 PowerPoint 原生 `<p:timing>`——
+  mainSeq 内每段一个 `clickEffect`（`set` 可见性 + 入场行为），`bldLst/bldP build="p"` 驱动逐段构建；
+  淡入→`animEffect filter="fade"`、擦除→`wipe(down)`、飞入→`ppt_y` 位移动作，与 `<p:transition advTm>` 共存且顺序符合 schema
+- **逐条入场导入**：解析任意来源 pptx 的 timing 树，按 `bldP`+`animEffect` 滤镜/`ppt_*` 动作识别
+  fade/wipe/fly 并还原为本地逐条放映；无 `bldP` 的整形效果不误判为逐条
+- **形状定位**：pptxgenjs 不给形状可预测 id，导出后处理按正文首行文本反查所在 `<p:sp>` 的 `cNvPr id` 作为 `spid`
 
 ## 性能（v0.3）
 
@@ -108,7 +117,8 @@ cargo check        # Rust 后端检查（在 src-tauri 下）
 - [x] 演示：pptx 母版/背景图还原、演讲者备注
 - [x] 演示：动画、演讲者视图（双屏备注独立窗口）
 - [x] 演示：元素级动画（逐条入场）与自动换页计时
-- [ ] 演示：动画映射 PowerPoint 原生 timing 树（元素级跨端保真）
+- [x] 演示：动画映射 PowerPoint 原生 timing 树（元素级跨端保真）
+- [ ] 演示：动画方向/出场效果补全 + PowerPoint 实机回放回归确认
 - [ ] 表格：样式（字体/颜色/合并）随 xlsx 往返、图表（Univer plugins）
 - [ ] 文档：页眉页脚、批注、目录
 - [ ] PDF 查看（pdf.js）与导出

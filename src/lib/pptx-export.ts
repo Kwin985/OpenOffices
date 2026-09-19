@@ -1,5 +1,13 @@
 import type PptxGenJS from 'pptxgenjs'
-import { bodyLines, themeOf, type MasterRect, type Slide, type SlideTransition, type Deck } from './ppt'
+import {
+  bodyLines,
+  themeOf,
+  type BulletAnim,
+  type MasterRect,
+  type Slide,
+  type SlideTransition,
+  type Deck,
+} from './ppt'
 
 const W = 10 // inches, LAYOUT_16x9
 const H = 5.625
@@ -134,18 +142,24 @@ export async function deckToPptxBytes(deck: Deck): Promise<Uint8Array> {
 
   const out = (await pptx.write({ outputType: 'arraybuffer' })) as ArrayBuffer
 
-  // pptxgenjs 不支持切换/换页计时：解包后向 slideN.xml 注入 <p:transition>（schema 顺序在末尾即可）
-  if (deck.slides.some((s) => s.transition || s.autoAdvance)) {
+  // pptxgenjs 不支持动画/换页计时：解包后向 slideN.xml 注入 <p:transition> 与 <p:timing>（schema 顺序：transition 在 timing 前）
+  if (deck.slides.some((s) => s.transition || s.autoAdvance || s.anim)) {
     const { default: JSZip } = await import('jszip')
     const zip = await JSZip.loadAsync(out)
     for (let i = 0; i < deck.slides.length; i++) {
       const s = deck.slides[i]
-      if (!s.transition && !s.autoAdvance) continue
+      if (!s.transition && !s.autoAdvance && !s.anim) continue
       const name = `ppt/slides/slide${i + 1}.xml`
       const file = zip.file(name)
       if (!file) continue
-      const xml = await file.async('string')
-      zip.file(name, xml.replace('</p:sld>', `${transitionXml(s.transition, s.autoAdvance)}</p:sld>`))
+      let xml = await file.async('string')
+      let inject = transitionXml(s.transition, s.autoAdvance)
+      if (s.anim) {
+        const lines = bodyLines(s)
+        const spid = lines.length ? findBodySpid(xml, lines[0]) : undefined
+        if (spid) inject += timingXml(s.anim, spid, lines.length)
+      }
+      zip.file(name, xml.replace('</p:sld>', `${inject}</p:sld>`))
     }
     const buf = (await zip.generateAsync({ type: 'arraybuffer' })) as ArrayBuffer
     return new Uint8Array(buf)
@@ -154,6 +168,7 @@ export async function deckToPptxBytes(deck: Deck): Promise<Uint8Array> {
 }
 
 function transitionXml(tr: SlideTransition | undefined, autoAdvance: number | undefined): string {
+  if (!tr && !autoAdvance) return ''
   const inner =
     tr === 'fade'
       ? '<p:fade/>'
@@ -166,4 +181,49 @@ function transitionXml(tr: SlideTransition | undefined, autoAdvance: number | un
             : ''
   const advTm = autoAdvance ? ` advTm="${Math.round(autoAdvance * 1000)}"` : ''
   return `<p:transition spd="med" advClick="1"${advTm}>${inner}</p:transition>`
+}
+
+function escXml(s: string): string {
+  return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+}
+
+// pptxgenjs 不给形状起可预测的 name/id：按正文首行文本反查所在 <p:sp> 的 cNvPr id；取最后一个命中（正文形状总在标题之后）
+function findBodySpid(xml: string, firstLine: string): string | undefined {
+  const needle = `<a:t>${escXml(firstLine)}</a:t>`
+  if (!firstLine.trim()) return undefined
+  let spid: string | undefined
+  for (const seg of xml.split('<p:sp>').slice(1)) {
+    const m = seg.match(/<p:cNvPr id="(\d+)"/)
+    if (m && seg.includes(needle)) spid = m[1]
+  }
+  return spid
+}
+
+// PowerPoint 原生 timing 树：mainSeq 内每段一个 clickEffect（set 可见性 + 入场行为），bldP build="p" 驱动逐段构建
+function timingXml(anim: BulletAnim, spid: string, count: number): string {
+  const preset = anim === 'fade' ? 10 : anim === 'wipe' ? 22 : 2
+  const subtype = anim === 'fly' ? 4 : 0
+  let id = 10
+  const nid = () => String(id++)
+  const pars: string[] = []
+  for (let i = 0; i < count; i++) {
+    const effect =
+      anim === 'fly'
+        ? `<p:anim calcmode="lin" valueType="num"><p:cBhvr additive="base"><p:cTn id="${nid()}" dur="500" fill="hold"/><p:tgtEl><p:spTgt spid="${spid}"/></p:tgtEl><p:attrNameLst><p:attrName>ppt_y</p:attrName></p:attrNameLst></p:cBhvr><p:tavLst><p:tav tm="0"><p:val><p:strVal val="#+y+1"/></p:val></p:tav><p:tav tm="100000"><p:val><p:strVal val="#ppt_y"/></p:val></p:tav></p:tavLst></p:anim>`
+        : `<p:animEffect transition="in" filter="${anim === 'fade' ? 'fade' : 'wipe(down)'}"><p:cBhvr><p:cTn id="${nid()}" dur="500"/><p:tgtEl><p:spTgt spid="${spid}"/></p:tgtEl></p:cBhvr></p:animEffect>`
+    pars.push(
+      `<p:par><p:cTn id="${nid()}" fill="hold"><p:stCondLst><p:cond delay="indefinite"/></p:stCondLst><p:childTnLst><p:par><p:cTn id="${nid()}" fill="hold"><p:stCondLst><p:cond delay="0"/></p:stCondLst><p:childTnLst><p:par><p:cTn id="${nid()}" presetID="${preset}" presetClass="entr" presetSubtype="${subtype}" fill="hold" grpId="0" nodeType="clickEffect"><p:stCondLst><p:cond delay="0"/></p:stCondLst><p:childTnLst>` +
+        `<p:set><p:cBhvr><p:cTn id="${nid()}" dur="1" fill="hold"><p:stCondLst><p:cond delay="0"/></p:stCondLst></p:cTn><p:tgtEl><p:spTgt spid="${spid}"/></p:tgtEl><p:attrNameLst><p:attrName>style.visibility</p:attrName></p:attrNameLst></p:cBhvr><p:to><p:strVal val="visible"/></p:to></p:set>` +
+        effect +
+        `</p:childTnLst></p:cTn></p:par></p:childTnLst></p:cTn></p:par></p:childTnLst></p:cTn></p:par>`,
+    )
+  }
+  return (
+    `<p:timing><p:tnLst><p:par><p:cTn id="1" dur="indefinite" restart="never" nodeType="tmRoot"><p:childTnLst>` +
+    `<p:seq concurrent="1" nextAc="seek"><p:cTn id="2" dur="indefinite" nodeType="mainSeq"><p:childTnLst>${pars.join('')}</p:childTnLst></p:cTn>` +
+    `<p:prevCondLst><p:cond evt="onPrev" delay="0"><p:tgtEl><p:sldTgt/></p:tgtEl></p:cond></p:prevCondLst>` +
+    `<p:nextCondLst><p:cond evt="onNext" delay="0"><p:tgtEl><p:sldTgt/></p:tgtEl></p:cond></p:nextCondLst>` +
+    `</p:seq></p:childTnLst></p:cTn></p:par></p:tnLst>` +
+    `<p:bldLst><p:bldP spid="${spid}" grpId="0" build="p"/></p:bldLst></p:timing>`
+  )
 }

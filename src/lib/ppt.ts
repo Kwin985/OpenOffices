@@ -42,7 +42,7 @@ export interface Slide {
   notes?: string // 演讲者备注
   bg?: string // 单页纯色背景覆盖
   transition?: SlideTransition // 切页动画，未设=无
-  anim?: BulletAnim // 要点逐条入场动画（本地放映播放，pptx 不导出）
+  anim?: BulletAnim // 要点逐条入场动画；导出映射 PowerPoint 原生 <p:timing>，导入反向识别
   autoAdvance?: number // 自动换页秒数；导出为 OOXML advTm
 }
 

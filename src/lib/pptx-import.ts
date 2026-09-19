@@ -2,6 +2,7 @@ import type JSZip from 'jszip'
 import {
   emptyDeck,
   newId,
+  type BulletAnim,
   type Deck,
   type MasterRect,
   type MasterStyle,
@@ -291,6 +292,27 @@ function parseTransition(root: Element): {
   return out
 }
 
+// <p:timing> 逐条入场：找 body 形状的 bldP（build="p"）→ mainSeq 首个 entr clickEffect → 由行为判定 fade/wipe/fly
+function parseAnim(root: Element): BulletAnim | undefined {
+  const timing = childrenByName(root, 'timing')[0]
+  if (!timing) return undefined
+  const bld = descendantsByName(timing, 'bldP')[0]
+  if (!bld) return undefined
+  const effect = descendantsByName(timing, 'cTn').find(
+    (c) => c.getAttribute('nodeType') === 'clickEffect' && c.getAttribute('presetClass') === 'entr',
+  )
+  if (!effect) return undefined
+  const filter = (descendantsByName(effect, 'animEffect')[0]?.getAttribute('filter') ?? '').toLowerCase()
+  if (filter.startsWith('wipe')) return 'wipe'
+  if (filter.startsWith('fade')) return 'fade'
+  const fly = descendantsByName(effect, 'anim').some((a) => {
+    const attrs = descendantsByName(a, 'attrName').map((x) => x.textContent ?? '')
+    return attrs.some((v) => v === 'ppt_x' || v === 'ppt_y')
+  })
+  if (fly) return 'fly'
+  return 'fade'
+}
+
 async function slideToDeckSlide(
   zip: JSZip,
   slideXml: JSZip.JSZipObject,
@@ -392,6 +414,7 @@ async function slideToDeckSlide(
     notes,
     bg,
     transition,
+    anim: parseAnim(root),
     autoAdvance,
   }
 }
