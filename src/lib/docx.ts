@@ -72,6 +72,12 @@ interface Inherited {
   mono?: boolean
 }
 
+function markAttr(node: PMNode, mark: string, attr: string): string | undefined {
+  const m = node.marks?.find((x) => x.type === mark)
+  const v = m?.attrs?.[attr]
+  return typeof v === 'string' ? v : undefined
+}
+
 function inlineToChildren(node: PMNode, inherited: Inherited = {}): (TextRun | ExternalHyperlink)[] {
   const out: (TextRun | ExternalHyperlink)[] = []
   for (const child of node.content ?? []) {
@@ -83,12 +89,16 @@ function inlineToChildren(node: PMNode, inherited: Inherited = {}): (TextRun | E
       const strike = inherited.strike || hasMark(child, 'strike')
       const mono = inherited.mono || hasMark(child, 'code')
       const href = linkHref(child)
+      const color = markAttr(child, 'color', 'color')?.replace('#', '')
+      const highlight = markAttr(child, 'highlight', 'color')?.replace('#', '')
       const runOpts = {
         text,
         bold,
         italics: italic,
         strike,
         font: mono ? 'Consolas' : undefined,
+        ...(color ? { color } : {}),
+        ...(highlight ? { shading: { type: 'clear' as const, fill: highlight } } : {}),
         ...(underline ? { underline: {} } : {}),
       }
       if (href) {

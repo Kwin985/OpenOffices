@@ -1,8 +1,10 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useApp, type DocKind } from '../store'
 import SheetEditor from './SheetEditor'
 import DocEditor from './DocEditor'
 import PptEditor from './PptEditor'
+import { requestCloseTab } from '../lib/open'
+import { saveTab } from '../lib/registry'
 
 const KIND_ICON: Record<DocKind, string> = { doc: '文', sheet: '表', ppt: '演' }
 const KIND_CLS: Record<DocKind, string> = { doc: 'kind-doc', sheet: 'kind-sheet', ppt: 'kind-ppt' }
@@ -11,9 +13,20 @@ export default function Workspace() {
   const tabs = useApp((s) => s.tabs)
   const activeId = useApp((s) => s.activeId)
   const setActive = useApp((s) => s.setActive)
-  const closeTab = useApp((s) => s.closeTab)
   const openTab = useApp((s) => s.openTab)
   const [menuOpen, setMenuOpen] = useState(false)
+  const [ctx, setCtx] = useState<{ id: string; x: number; y: number } | null>(null)
+
+  useEffect(() => {
+    if (!ctx) return
+    const close = () => setCtx(null)
+    window.addEventListener('click', close)
+    window.addEventListener('contextmenu', close)
+    return () => {
+      window.removeEventListener('click', close)
+      window.removeEventListener('contextmenu', close)
+    }
+  }, [ctx])
 
   const active = tabs.find((t) => t.id === activeId)
 
@@ -21,6 +34,12 @@ export default function Workspace() {
     const titles: Record<DocKind, string> = { doc: '未命名文档', sheet: '未命名表格', ppt: '未命名演示' }
     openTab({ kind, title: titles[kind] })
     setMenuOpen(false)
+  }
+
+  const closeOthers = async (keepId: string) => {
+    for (const t of useApp.getState().tabs) {
+      if (t.id !== keepId) await requestCloseTab(t.id)
+    }
   }
 
   return (
@@ -31,6 +50,10 @@ export default function Workspace() {
             key={t.id}
             className={`tab${t.id === activeId ? ' tab-active' : ''}`}
             onClick={() => setActive(t.id)}
+            onContextMenu={(e) => {
+              e.preventDefault()
+              setCtx({ id: t.id, x: e.clientX, y: e.clientY })
+            }}
           >
             <span className={`tab-icon ${KIND_CLS[t.kind]}`}>{KIND_ICON[t.kind]}</span>
             <span className="tab-title">{t.title}</span>
@@ -39,7 +62,7 @@ export default function Workspace() {
               className="tab-close"
               onClick={(e) => {
                 e.stopPropagation()
-                closeTab(t.id)
+                void requestCloseTab(t.id)
               }}
             >
               ×
@@ -59,6 +82,13 @@ export default function Workspace() {
           )}
         </div>
       </div>
+      {ctx && (
+        <div className="tab-ctxmenu" style={{ left: ctx.x, top: ctx.y }} onClick={(e) => e.stopPropagation()}>
+          <button onClick={() => { saveTab(ctx.id); setCtx(null) }}>保存</button>
+          <button onClick={() => { void requestCloseTab(ctx.id); setCtx(null) }}>关闭标签</button>
+          <button onClick={() => { void closeOthers(ctx.id); setCtx(null) }}>关闭其他标签</button>
+        </div>
+      )}
       <div className="editor-area">
         {tabs.map((t) => (
           <div key={t.id} className="editor-slot" style={{ display: t.id === active?.id ? 'flex' : 'none' }}>

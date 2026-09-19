@@ -7,6 +7,7 @@ import { useApp } from '../store'
 import { createSheetApp } from '../lib/univer'
 import { payloadToWorkbook, workbookToPayload } from '../lib/univer-io'
 import { baseName, pickSaveFile, readXlsx, writeXlsx } from '../lib/fs'
+import { registerSaver } from '../lib/registry'
 
 interface Props {
   tab: Tab
@@ -85,6 +86,10 @@ export default function SheetEditor({ tab }: Props) {
       await message(String(e), { title: '保存失败', kind: 'error' })
     }
   }
+
+  const saveRef = useRef(save)
+  saveRef.current = save
+  useEffect(() => registerSaver(tab.id, (asNew) => saveRef.current(asNew)), [tab.id])
 
   return (
     <div className="editor-pane">

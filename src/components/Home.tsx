@@ -1,10 +1,11 @@
 import { useApp, type DocKind } from '../store'
-import { kindOfPath, pickOpenFile } from '../lib/fs'
+import { pickOpenFile } from '../lib/fs'
+import { openPath } from '../lib/open'
 
 const KIND_META: Record<DocKind, { label: string; icon: string; cls: string; desc: string; sample: string }> = {
   doc: { label: '文档', icon: '文', cls: 'kind-doc', desc: '富文本写作 · docx 导入导出', sample: '未命名文档' },
   sheet: { label: '表格', icon: '表', cls: 'kind-sheet', desc: '类 Excel 编辑 · xlsx 读写', sample: '未命名表格' },
-  ppt: { label: '演示', icon: '演', cls: 'kind-ppt', desc: '幻灯片 · 开发中', sample: '未命名演示' },
+  ppt: { label: '演示', icon: '演', cls: 'kind-ppt', desc: '幻灯片编辑 · pptx 导入导出', sample: '未命名演示' },
 }
 
 function timeAgo(ts: number): string {
@@ -31,11 +32,7 @@ export default function Home() {
 
   const openFile = async () => {
     const path = await pickOpenFile()
-    if (!path) return
-    const kind = kindOfPath(path)
-    if (!kind) return
-    markRecent(path, kind)
-    openTab({ kind, title: path.split(/[\\/]/).pop() ?? path, path })
+    if (path) openPath(path)
   }
 
   const openRecent = (path: string, kind: DocKind) => {

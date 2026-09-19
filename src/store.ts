@@ -21,6 +21,7 @@ interface AppState {
   tabs: Tab[]
   activeId?: string
   recents: RecentFile[]
+  theme: 'light' | 'dark'
   openTab: (tab: Omit<Tab, 'id' | 'dirty'>) => void
   closeTab: (id: string) => void
   setActive: (id: string) => void
@@ -29,9 +30,11 @@ interface AppState {
   markDirty: (id: string, dirty: boolean) => void
   markRecent: (path: string, kind: DocKind) => void
   clearRecents: () => void
+  toggleTheme: () => void
 }
 
 const RECENTS_KEY = 'openoffices.recents'
+const THEME_KEY = 'openoffices.theme'
 
 function loadRecents(): RecentFile[] {
   try {
@@ -48,6 +51,7 @@ export const useApp = create<AppState>((set, get) => ({
   tabs: [],
   activeId: undefined,
   recents: loadRecents(),
+  theme: localStorage.getItem(THEME_KEY) === 'dark' ? 'dark' : 'light',
   openTab: (tab) => {
     const existing = get().tabs.find(
       (t) => tab.path ? t.path === tab.path : false,
@@ -98,4 +102,10 @@ export const useApp = create<AppState>((set, get) => ({
     localStorage.removeItem(RECENTS_KEY)
     set({ recents: [] })
   },
+  toggleTheme: () =>
+    set((s) => {
+      const theme = s.theme === 'dark' ? 'light' : 'dark'
+      localStorage.setItem(THEME_KEY, theme)
+      return { theme }
+    }),
 }))

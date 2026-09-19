@@ -684,42 +684,487 @@ button {
   inset: 0;
 }
 
-/* 演示占位 */
-.ppt-placeholder {
-  margin: auto;
-  text-align: center;
-  color: var(--text-2);
-  max-width: 480px;
-  padding: 40px;
+/* 演示模块 */
+.tool-select {
+  font: inherit;
+  font-size: 13px;
+  padding: 4px 6px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--panel);
 }
 
-.ppt-icon {
-  display: inline-flex;
+.tool-sep {
+  width: 1px;
+  height: 18px;
+  background: var(--border);
+  margin: 0 4px;
+}
+
+.tool-btn-mini {
+  padding: 2px 8px;
+  font-size: 12px;
+}
+
+.tool-btn-primary {
+  background: var(--ppt);
+  border-color: var(--ppt);
+  color: #fff;
+}
+
+.tool-btn-primary:hover {
+  color: #fff;
+  filter: brightness(1.08);
+}
+
+.ppt-loading {
+  flex: 1;
+  display: flex;
   align-items: center;
   justify-content: center;
-  width: 72px;
-  height: 72px;
-  border-radius: 18px;
-  background: var(--ppt);
-  color: #fff;
-  font-size: 36px;
-  font-weight: 800;
-  margin-bottom: 18px;
+  color: var(--text-2);
 }
 
-.ppt-placeholder h2 {
-  color: var(--text);
-  margin-bottom: 10px;
+.ppt-body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
 }
 
-.ppt-placeholder ul {
-  text-align: left;
-  display: inline-block;
-  margin: 10px 0;
-  padding-left: 20px;
+.ppt-sidebar {
+  width: 168px;
+  flex-shrink: 0;
+  overflow-y: auto;
+  padding: 10px;
+  background: var(--panel);
+  border-right: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
 }
 
-.ppt-note {
+.ppt-thumb {
+  display: flex;
+  gap: 6px;
+  align-items: flex-start;
+  cursor: pointer;
+}
+
+.ppt-thumb-no {
+  width: 16px;
+  text-align: right;
+  font-size: 11px;
+  color: var(--text-2);
+  line-height: 68px;
+  flex-shrink: 0;
+}
+
+.ppt-thumb-mini {
+  flex: 1;
+  aspect-ratio: 16 / 9;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  position: relative;
+}
+
+.ppt-thumb-active .ppt-thumb-mini {
+  outline: 2px solid var(--ppt);
+}
+
+.ppt-stage-wrap {
+  flex: 1;
+  min-width: 0;
+  overflow: auto;
+  background: var(--bg);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 26px;
+}
+
+.ppt-stage {
+  width: min(100%, 900px);
+  aspect-ratio: 16 / 9;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  box-shadow: 0 4px 20px rgba(31, 41, 55, 0.12);
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  padding: 4.5% 5.5%;
+  box-sizing: border-box;
+}
+
+.ppt-stage textarea {
+  font: inherit;
+  border: none;
+  background: transparent;
+  resize: none;
+  outline: none;
+  width: 100%;
+  color: inherit;
+}
+
+.ppt-edit-title-wrap {
+  margin: auto;
+  text-align: center;
+  width: 82%;
+}
+
+.ppt-edit-title {
+  font-size: 34px;
+  font-weight: 700;
+  text-align: center;
+  line-height: 1.3;
+}
+
+.ppt-edit-sub {
+  font-size: 16px;
+  text-align: center;
   margin-top: 14px;
-  font-size: 12px;
+  line-height: 1.5;
+}
+
+.ppt-edit-head {
+  font-size: 24px;
+  font-weight: 700;
+  border-bottom: 2px solid currentColor;
+  padding-bottom: 6px;
+  margin-bottom: 12px;
+  line-height: 1.25;
+}
+
+.ppt-edit-content {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  gap: 16px;
+}
+
+.ppt-edit-img-col {
+  flex: 1.3;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.ppt-edit-img {
+  flex: 1;
+  min-height: 0;
+  width: 100%;
+  object-fit: contain;
+  border-radius: 6px;
+  background: rgba(127, 127, 127, 0.08);
+}
+
+.ppt-img-add {
+  flex: 1;
+  border: 1.5px dashed var(--border);
+  border-radius: 8px;
+  color: var(--text-2);
+  background: transparent;
+}
+
+.ppt-img-add:hover {
+  border-color: var(--ppt);
+  color: var(--ppt);
+}
+
+.ppt-img-actions {
+  display: flex;
+  gap: 6px;
+}
+
+.ppt-edit-body {
+  flex: 1;
+  font-size: 16px;
+  line-height: 1.9;
+}
+
+.ppt-edit-content .ppt-edit-body {
+  flex: 1;
+}
+
+.ppt-stage-no {
+  position: absolute;
+  right: 10px;
+  bottom: 6px;
+  font-size: 11px;
+  opacity: 0.45;
+}
+
+/* 静态幻灯片渲染（缩略图 / 放映共用，靠父级 font-size 缩放） */
+.ppt-slide-static {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  padding: 7% 8%;
+  overflow: hidden;
+}
+
+.ppt-slide-big {
+  position: relative;
+  width: min(92vw, 160vh);
+  aspect-ratio: 16 / 9;
+  padding: 4.5% 5.5%;
+  border-radius: 8px;
+  box-shadow: 0 10px 50px rgba(0, 0, 0, 0.5);
+}
+
+.ppt-sl-title {
+  justify-content: center;
+  align-items: center;
+  text-align: center;
+}
+
+.ppt-st-title-wrap {
+  margin: auto;
+  text-align: center;
+  max-width: 90%;
+}
+
+.ppt-st-title {
+  font-weight: 700;
+  line-height: 1.3;
+  font-size: 0.62em;
+}
+
+.ppt-sl-title .ppt-st-title {
+  font-size: 1em;
+}
+
+.ppt-slide-big.ppt-sl-title .ppt-st-title {
+  font-size: 1.15em;
+}
+
+.ppt-st-sub {
+  margin-top: 0.4em;
+  font-size: 0.4em;
+  opacity: 0.85;
+  white-space: pre-wrap;
+}
+
+.ppt-slide-big .ppt-st-sub {
+  font-size: 0.45em;
+}
+
+.ppt-sl-title .ppt-st-sub {
+  font-size: 0.45em;
+}
+
+.ppt-slide-big .ppt-st-title {
+  font-size: 0.72em;
+}
+
+.ppt-slide-big .ppt-st-list {
+  font-size: 0.44em;
+}
+
+.ppt-st-list {
+  margin: 0.5em 0 0;
+  padding-left: 1.1em;
+  font-size: 0.4em;
+  line-height: 1.8;
+}
+
+.ppt-st-list li {
+  list-style: disc;
+  margin-bottom: 0.2em;
+}
+
+.ppt-st-content {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  gap: 2%;
+}
+
+.ppt-st-img {
+  flex: 1.3;
+  min-width: 0;
+  object-fit: contain;
+  align-self: center;
+}
+
+.ppt-sl-image .ppt-st-list {
+  flex: 1;
+}
+
+/* 放映 */
+.ppt-present {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  background: #000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 2.4vmin;
+}
+
+.ppt-present-stage {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.ppt-present-bar {
+  position: absolute;
+  right: 16px;
+  bottom: 12px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  color: #cfd4dd;
+  font-size: 13px;
+}
+
+
+/* 字色 / 高亮控件 */
+.tb-color {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 13px;
+  color: var(--text);
+  padding: 2px 6px;
+}
+
+.tb-color input[type='color'] {
+  width: 26px;
+  height: 22px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 0;
+  background: none;
+  cursor: pointer;
+}
+
+.tb-swatch {
+  width: 22px;
+  height: 22px;
+  border-radius: 4px;
+  border: 1px solid var(--border);
+}
+
+.tb-swatch:hover {
+  transform: scale(1.08);
+}
+
+.doc-content mark {
+  padding: 0 2px;
+  border-radius: 2px;
+}
+
+/* 打印：仅输出当前文档页面 */
+@media print {
+  body * {
+    visibility: hidden;
+  }
+
+  .doc-page,
+  .doc-page * {
+    visibility: visible;
+  }
+
+  .doc-page {
+    position: absolute;
+    left: 0;
+    top: 0;
+    width: 100%;
+    max-width: none;
+    min-height: 0;
+    margin: 0;
+    border: none;
+    border-radius: 0;
+    box-shadow: none;
+    padding: 0;
+  }
+}
+
+/* ---------- 暗色主题 ---------- */
+:root[data-theme='dark'] {
+  --bg: #17181c;
+  --panel: #202329;
+  --border: #33373f;
+  --text: #dde1e8;
+  --text-2: #9aa1ac;
+  --accent: #5b8cff;
+  --doc: #5b8cff;
+  --sheet: #35c07e;
+  --ppt: #f08a45;
+  color-scheme: dark;
+}
+
+:root[data-theme='dark'] .editor-toolbar,
+:root[data-theme='dark'] .topbar {
+  background: var(--panel);
+}
+
+:root[data-theme='dark'] .doc-content blockquote {
+  background: #262a31;
+}
+
+:root[data-theme='dark'] .doc-content pre,
+:root[data-theme='dark'] .doc-content code {
+  background: #262a31;
+}
+
+:root[data-theme='dark'] .tb-active {
+  background: #2a3550;
+}
+
+:root[data-theme='dark'] .ppt-edit-img,
+:root[data-theme='dark'] .ppt-img-add {
+  background: rgba(255, 255, 255, 0.05);
+}
+
+:root[data-theme='dark'] .doc-page,
+:root[data-theme='dark'] .home-card,
+:root[data-theme='dark'] .recent-item:hover {
+  background: var(--panel);
+}
+
+/* 标签右键菜单 */
+.tab-ctxmenu {
+  position: fixed;
+  z-index: 900;
+  min-width: 140px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.18);
+  padding: 4px;
+  display: flex;
+  flex-direction: column;
+}
+
+.tab-ctxmenu button {
+  text-align: left;
+  padding: 7px 12px;
+  border-radius: 6px;
+  font-size: 13px;
+}
+
+.tab-ctxmenu button:hover {
+  background: var(--bg);
+  color: var(--accent);
+}
+
+.editor-loading {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-2);
+}
+
+.theme-btn {
+  flex-shrink: 0;
+  font-size: 13px;
 }

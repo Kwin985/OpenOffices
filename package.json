@@ -1,7 +1,7 @@
 {
   "name": "openoffices",
   "private": true,
-  "version": "0.1.0",
+  "version": "0.2.0",
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -14,6 +14,8 @@
     "@tauri-apps/plugin-dialog": "^2.7.3",
     "@tauri-apps/plugin-fs": "^2.5.2",
     "@tauri-apps/plugin-opener": "^2",
+    "@tiptap/extension-color": "^3.31.3",
+    "@tiptap/extension-highlight": "^3.31.3",
     "@tiptap/extension-image": "^3.31.3",
     "@tiptap/extension-link": "^3.31.3",
     "@tiptap/extension-placeholder": "^3.31.3",
@@ -24,7 +26,9 @@
     "@tiptap/starter-kit": "^3.31.3",
     "@univerjs/presets": "^0.25.1",
     "docx": "^9.7.1",
+    "jszip": "^3.10.2",
     "mammoth": "^1.12.3",
+    "pptxgenjs": "^4.0.1",
     "react": "^19.1.0",
     "react-dom": "^19.1.0",
     "zustand": "^5.0.15"
@@ -35,6 +39,7 @@
     "@types/react-dom": "^19.1.6",
     "@vitejs/plugin-react": "^6.0.2",
     "typescript": "~6.0.3",
-    "vite": "^8.0.16"
+    "vite": "^8.0.16",
+    "vite-node": "^6.0.0"
   }
 }

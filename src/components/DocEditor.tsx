@@ -1,21 +1,27 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useEditor, EditorContent } from '@tiptap/react'
 import StarterKit from '@tiptap/starter-kit'
 import Image from '@tiptap/extension-image'
 import Placeholder from '@tiptap/extension-placeholder'
 import TextAlign from '@tiptap/extension-text-align'
 import { TableKit } from '@tiptap/extension-table'
+import Color from '@tiptap/extension-color'
+import Highlight from '@tiptap/extension-highlight'
+import { CharacterCount } from '@tiptap/extensions'
 import { message, open } from '@tauri-apps/plugin-dialog'
 import type { Tab } from '../store'
 import { useApp } from '../store'
 import { baseName, pickSaveFile, readBytes, readText, writeBytes, writeText } from '../lib/fs'
 import { docxToHtml, prosemirrorToDocxBytes, type PMNode } from '../lib/docx'
+import { registerSaver } from '../lib/registry'
 
 interface Props {
   tab: Tab
 }
 
 const ODOC_HEADER = { app: 'openoffices', kind: 'doc', version: 1 }
+
+const HL_COLORS = ['#fff59d', '#a5d6a7', '#90caf9', '#f48fb1']
 
 export default function DocEditor({ tab }: Props) {
   const renameTab = useApp((s) => s.renameTab)
@@ -33,6 +39,9 @@ export default function DocEditor({ tab }: Props) {
       Placeholder.configure({ placeholder: '开始输入内容…' }),
       TextAlign.configure({ types: ['heading', 'paragraph'] }),
       TableKit.configure({ table: { resizable: true } }),
+      Color,
+      Highlight.configure({ multicolor: true }),
+      CharacterCount,
     ],
     content: '<p></p>',
     onUpdate: () => markDirty(tab.id, true),
@@ -90,6 +99,10 @@ export default function DocEditor({ tab }: Props) {
     }
   }
 
+  const saveRef = useRef(saveOdoc)
+  saveRef.current = saveOdoc
+  useEffect(() => registerSaver(tab.id, (asNew) => saveRef.current(asNew)), [tab.id])
+
   const exportDocx = async () => {
     if (!editor) return
     try {
@@ -146,6 +159,7 @@ export default function DocEditor({ tab }: Props) {
   }
 
   if (!editor) return null
+  const cc = editor.storage.characterCount as { words: () => number; characters: () => number }
   const btn = (label: string, onClick: () => void, active = false, title?: string) => (
     <button
       key={label + title}
@@ -163,7 +177,11 @@ export default function DocEditor({ tab }: Props) {
         {btn('保存', () => saveOdoc(false), false, '保存为 .odoc')}
         {btn('另存为', () => saveOdoc(true))}
         {btn('导出 docx', exportDocx)}
+        {btn('打印 / PDF', () => window.print(), false, '调用系统打印，可选择另存为 PDF')}
         {status && <span className="editor-status">{status}</span>}
+        <span className="editor-hint">
+          字数 {cc.words()} · 字符 {cc.characters()}
+        </span>
       </div>
       <div className="doc-toolbar">
         <select
@@ -191,6 +209,28 @@ export default function DocEditor({ tab }: Props) {
         {btn('I', () => editor.chain().focus().toggleItalic().run(), editor.isActive('italic'), '斜体')}
         {btn('U', () => editor.chain().focus().toggleUnderline().run(), editor.isActive('underline'), '下划线')}
         {btn('S', () => editor.chain().focus().toggleStrike().run(), editor.isActive('strike'), '删除线')}
+        <span className="tb-sep" />
+        <label className="tb-color" title="字体颜色">
+          字色
+          <input
+            type="color"
+            value={/^#[0-9a-fA-F]{6}$/.test(editor.getAttributes('color').color ?? '') ? editor.getAttributes('color').color : '#33383f'}
+            onChange={(e) => editor.chain().focus().setColor(e.target.value).run()}
+          />
+        </label>
+        {btn('清色', () => editor.chain().focus().unsetColor().run())}
+        {HL_COLORS.map((c) => (
+          <button
+            key={c}
+            className={`tb-swatch${editor.getAttributes('highlight').color === c ? ' tb-active' : ''}`}
+            style={{ background: c }}
+            title="高亮"
+            onClick={() =>
+              editor.chain().focus().toggleHighlight({ color: c }).run()
+            }
+          />
+        ))}
+        {btn('清高亮', () => editor.chain().focus().unsetHighlight().run())}
         <span className="tb-sep" />
         {btn('左', () => editor.chain().focus().setTextAlign('left').run(), editor.isActive({ textAlign: 'left' }))}
         {btn('中', () => editor.chain().focus().setTextAlign('center').run(), editor.isActive({ textAlign: 'center' }))}
