@@ -18,6 +18,34 @@ export interface MergeRange {
   endColumn: number
 }
 
+export interface ChartRangeRef {
+  sheet: string
+  r1: number
+  c1: number
+  r2: number
+  c2: number
+}
+
+export interface ChartSeriesPayload {
+  name: string
+  cat: ChartRangeRef | null
+  val: ChartRangeRef
+  cats: (string | number | boolean | null)[]
+  vals: number[]
+}
+
+// 图表载荷：column|bar|line|pie|doughnut|area；grouping 为 standard|stacked|percentStacked
+export interface ChartPayload {
+  chartType: string
+  grouping: string
+  title: string
+  anchorRow: number
+  anchorCol: number
+  width: number
+  height: number
+  series: ChartSeriesPayload[]
+}
+
 export interface CellPayload {
   r: number
   c: number
@@ -30,6 +58,7 @@ export interface SheetPayload {
   name: string
   cells: CellPayload[]
   merges?: MergeRange[]
+  charts?: ChartPayload[]
 }
 
 export interface WorkbookPayload {

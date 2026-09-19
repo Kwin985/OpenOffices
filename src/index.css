@@ -503,6 +503,7 @@ button {
 }
 
 .editor-toolbar {
+  position: relative;
   display: flex;
   align-items: center;
   gap: 8px;
@@ -533,6 +534,45 @@ button {
   margin-left: auto;
   color: var(--text-2);
   font-size: 12px;
+}
+
+.chart-pop {
+  position: absolute;
+  top: 40px;
+  left: 10px;
+  z-index: 30;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  box-shadow: 0 6px 20px rgb(0 0 0 / 12%);
+}
+
+.chart-pop label {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  font-size: 13px;
+  color: var(--text);
+}
+
+.chart-pop select,
+.chart-pop input {
+  padding: 4px 6px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg);
+  color: var(--text);
+}
+
+.chart-pop-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
 }
 
 .doc-toolbar {

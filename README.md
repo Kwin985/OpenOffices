@@ -126,6 +126,25 @@
   回归通过（Pages=3、批注锚文本与正文正确）
 - **范围**：表格/演示导出 PDF 暂未纳入；查看器的文字选择复制与全文搜索未做
 
+## 表格图表（v0.13）
+
+- **渲染路线**：Univer 图表插件属 `@univerjs-pro` 商业授权不可用，改用 **VChart**（MIT）
+  自绘——图表数据渲染成 PNG 后经社区绘图预设（`UniverSheetsDrawingPreset`，Apache-2.0）以
+  **浮动图片**（`FOverGridImage`）落在网格上；VChart 走动态导入独立分包（约 548KB gzip），
+  仅首次插入/还原图表时加载
+- **插入与刷新**：选中 ≥2行×2列 数据区（首行系列名、首列类别）→「插入图表」对话框，
+  柱形/条形/折线/面积/饼/环形 × 标准/堆叠/百分比堆叠分组；改数据后「刷新图表」按引用
+  重读现值重出 PNG；图表随拖拽/缩放保留锚点
+- **xlsx 原生往返（写）**：`write_xlsx` 用 `rust_xlsxwriter` 生成真图表部件
+  （chartN.xml + drawing 锚点），保存的文件 Excel 可直接编辑图表；数据引用按 A1 区间写
+  `numRef/strRef`，不带缓存值，Excel 打开即按实时网格计算
+- **xlsx 原生往返（读）**：`xlsx_chart.rs` 以 zip + quick-xml 解析任意来源 xlsx 的
+  `barChart/lineChart/pieChart/doughnutChart/areaChart`——系列名/类别/数值引用、标题
+  （含 `&` 实体还原）、`oneCellAnchor/twoCellAnchor` 锚点与 EMU 尺寸，数值再从实时网格取值解析
+  （不信缓存），重开文件图表按位置尺寸还原
+- **实机回归**：本机 Excel 16.0（COM 只读）打开应用保存的三图表文件——`ChartObjects=3`，
+  柱形 51×2 + 饼 5、系列数与标题正确；cargo 12 项测试含列形+饼双图表写读往返断言
+
 ## 性能（v0.3）
 
 - **按编辑器分包 + 懒加载**：主包 8MB → 首屏约 300KB；Univer（6.1MB）只在首次激活表格标签时加载，
@@ -140,7 +159,8 @@
 | 组件 | 用途 | 许可证 |
 | --- | --- | --- |
 | [Tauri 2](https://tauri.app) | 桌面壳（Rust 后端 + 系统 WebView） | MIT |
-| [Univer](https://univer.ai) | 电子表格内核（渲染/公式/撤销重做）+ 筛选/排序/条件格式/数据验证/查找替换社区预设 | Apache-2.0 |
+| [Univer](https://univer.ai) | 电子表格内核（渲染/公式/撤销重做）+ 筛选/排序/条件格式/数据验证/查找替换/绘图社区预设 | Apache-2.0 |
+| [VChart](https://visactor.io/vchart) | 表格图表自绘（PNG 渲染 → 浮动图片），动态导入懒加载 | MIT |
 | [TipTap 3](https://tiptap.dev) | 富文本编辑器内核（ProseMirror），含 color / highlight / character-count 扩展 | MIT |
 | [mammoth.js](https://github.com/mwilliamson/mammoth.js) | docx → HTML 导入 | BSD-2 |
 | [docx](https://github.com/dolanmiu/docx) | ProseMirror JSON → docx 导出 | MIT |
@@ -159,15 +179,17 @@
 
 ```
 src-tauri/            Rust 后端
-  src/xlsx.rs         read_xlsx (calamine) / write_xlsx (rust_xlsxwriter) 命令，含样式与合并区
+  src/xlsx.rs         read_xlsx (calamine) / write_xlsx (rust_xlsxwriter) 命令，含样式、合并区与图表往返
   src/xlsx_style.rs   zip + quick-xml 直读 xlsx 的 styles.xml / mergeCells（calamine 无样式 API）
+  src/xlsx_chart.rs   zip + quick-xml 直读 chartN.xml + drawing 锚点，系列值按实时网格解析
   src/pdf.rs          export_pdf 命令：with_webview → WebView2 PrintToPdf（cfg windows）
   capabilities/       dialog + fs 权限与路径作用域
 src/                  React 前端
   store.ts            标签页 / 最近文件 / 主题（zustand）
   App.tsx             全局快捷键、拖拽打开、关闭确认、懒加载路由
-  lib/univer.ts       Univer 实例工厂（公式 worker + 五个社区高级预设）
-  lib/univer-io.ts    xlsx 数据+样式/合并 ↔ Univer 快照 转换（样式去重注册）
+  lib/univer.ts       Univer 实例工厂（公式 worker + 六个社区预设，含绘图 FOverGridImage）
+  lib/univer-io.ts    xlsx 数据+样式/合并/图表 ↔ Univer 快照 转换（样式去重注册）
+  lib/chart.ts        ChartPayload → VChart spec → 离屏 canvas PNG dataURL（动态导入分包）
   lib/docx.ts         docx 导入导出（ProseMirror JSON ↔ docx，字色/高亮/页眉页脚/TOC 域/批注映射；文本节点兼容顶层 text 与 attrs.text）
   lib/toc-extension.ts TipTap 目录原子节点：按标题实时汇总、点击跳转
   lib/comment-extension.ts comment mark（cid 锚定批注）+ 加/删/定位/汇总工具
@@ -180,7 +202,7 @@ src/                  React 前端
 scripts/              copy-pdfjs-assets.mjs（dev/build 前复制 cmaps/标准字体到 public/pdfjs）
 ```
 
-表格文件流：`xlsx 磁盘 → Rust(calamine 值 + zip/quick-xml 样式合并) → JSON 快照 → Univer 渲染`；保存反向经 `rust_xlsxwriter` 落盘。
+表格文件流：`xlsx 磁盘 → Rust(calamine 值 + zip/quick-xml 样式合并图表) → JSON 快照 → Univer 渲染（图表经 VChart 出 PNG 浮动图片）`；保存反向经 `rust_xlsxwriter` 落盘（含原生图表部件）。
 文档文件流：`docx → mammoth 正文 + zip 直读页眉页脚/批注 → HTML/元数据 → TipTap`；保存为 `.odoc` JSON（含 meta）或导出 docx。
 演示文件流：`pptx → JSZip 解包 OOXML → Deck 模型 → 编辑器`；保存为 `.opd` JSON 或经 pptxgenjs 导出 pptx。
 PDF 文件流：查看 `pdf 磁盘 → readBytes → pdfjs-dist（worker + canvas）`；导出 `文档 → @media print 排版 → Rust export_pdf → WebView2 PrintToPdf 落盘`。
@@ -211,7 +233,7 @@ cargo check        # Rust 后端检查（在 src-tauri 下）
 - [x] 演示：动画映射 PowerPoint 原生 timing 树（元素级跨端保真）
 - [x] 演示：动画方向/出场效果补全 + PowerPoint 实机回放回归确认
 - [x] 表格：样式（字体/颜色/合并）随 xlsx 往返
-- [ ] 表格：图表（调研结论：Univer 图表插件属 @univerjs-pro 商业授权，社区版不可用；待评估 VChart/Apache 自绘方案）
+- [x] 表格：图表（VChart 渲染 PNG + Univer 社区浮动图片 + xlsx 原生图表往返，Excel 实机确认）
 - [x] 文档：页眉页脚（含 PAGE 页码域）与目录（原生 TOC 域）docx 往返，Word 实机回归
 - [x] 文档：批注（锚点标记 + 侧栏面板 + docx comments 往返）
 - [x] PDF 查看（pdf.js）与文档导出（WebView2 PrintToPdf）

@@ -1,5 +1,6 @@
 mod pdf;
 mod xlsx;
+mod xlsx_chart;
 mod xlsx_style;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]

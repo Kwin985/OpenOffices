@@ -1,7 +1,7 @@
 {
   "name": "openoffices",
   "private": true,
-  "version": "0.12.0",
+  "version": "0.13.0",
   "type": "module",
   "scripts": {
     "dev": "node scripts/copy-pdfjs-assets.mjs && vite",
@@ -25,6 +25,7 @@
     "@tiptap/react": "^3.31.3",
     "@tiptap/starter-kit": "^3.31.3",
     "@univerjs/presets": "^0.25.1",
+    "@visactor/vchart": "^2.1.7",
     "docx": "^9.7.1",
     "jszip": "^3.10.2",
     "mammoth": "^1.12.3",

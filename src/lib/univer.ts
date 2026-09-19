@@ -6,18 +6,21 @@ import { UniverSheetsSortPreset } from '@univerjs/presets/preset-sheets-sort'
 import { UniverSheetsConditionalFormattingPreset } from '@univerjs/presets/preset-sheets-conditional-formatting'
 import { UniverSheetsDataValidationPreset } from '@univerjs/presets/preset-sheets-data-validation'
 import { UniverSheetsFindReplacePreset } from '@univerjs/presets/preset-sheets-find-replace'
+import { UniverSheetsDrawingPreset } from '@univerjs/presets/preset-sheets-drawing'
 import UniverPresetSheetsCoreZhCN from '@univerjs/presets/preset-sheets-core/locales/zh-CN'
 import UniverPresetSheetsFilterZhCN from '@univerjs/presets/preset-sheets-filter/locales/zh-CN'
 import UniverPresetSheetsSortZhCN from '@univerjs/presets/preset-sheets-sort/locales/zh-CN'
 import UniverPresetSheetsConditionalFormattingZhCN from '@univerjs/presets/preset-sheets-conditional-formatting/locales/zh-CN'
 import UniverPresetSheetsDataValidationZhCN from '@univerjs/presets/preset-sheets-data-validation/locales/zh-CN'
 import UniverPresetSheetsFindReplaceZhCN from '@univerjs/presets/preset-sheets-find-replace/locales/zh-CN'
+import UniverPresetSheetsDrawingZhCN from '@univerjs/presets/preset-sheets-drawing/locales/zh-CN'
 import '@univerjs/presets/lib/styles/preset-sheets-core.css'
 import '@univerjs/presets/lib/styles/preset-sheets-filter.css'
 import '@univerjs/presets/lib/styles/preset-sheets-sort.css'
 import '@univerjs/presets/lib/styles/preset-sheets-conditional-formatting.css'
 import '@univerjs/presets/lib/styles/preset-sheets-data-validation.css'
 import '@univerjs/presets/lib/styles/preset-sheets-find-replace.css'
+import '@univerjs/presets/lib/styles/preset-sheets-drawing.css'
 
 export interface SheetApp {
   univer: Univer
@@ -35,6 +38,7 @@ export function createSheetApp(container: HTMLElement, worker: Worker): SheetApp
         UniverPresetSheetsConditionalFormattingZhCN,
         UniverPresetSheetsDataValidationZhCN,
         UniverPresetSheetsFindReplaceZhCN,
+        UniverPresetSheetsDrawingZhCN,
       ),
     },
     presets: [
@@ -47,6 +51,7 @@ export function createSheetApp(container: HTMLElement, worker: Worker): SheetApp
       UniverSheetsConditionalFormattingPreset(),
       UniverSheetsDataValidationPreset(),
       UniverSheetsFindReplacePreset(),
+      UniverSheetsDrawingPreset(),
     ],
   })
   if (import.meta.env.DEV) {

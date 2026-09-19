@@ -24,7 +24,7 @@ struct FontInfo {
     cl: Option<String>,
 }
 
-fn attr_str(e: &quick_xml::events::BytesStart<'_>, key: &str) -> Option<String> {
+pub(crate) fn attr_str(e: &quick_xml::events::BytesStart<'_>, key: &str) -> Option<String> {
     for a in e.attributes().flatten() {
         if a.key.local_name().as_ref() == key {
             return a
@@ -48,12 +48,12 @@ fn argb_to_hex(v: &str) -> Option<String> {
     Some(format!("#{}", rgb.to_lowercase()))
 }
 
-fn a1_to_rc(s: &str) -> Option<(u32, u32)> {
+pub(crate) fn a1_to_rc(s: &str) -> Option<(u32, u32)> {
     let mut col: u32 = 0;
     let mut i = 0usize;
     let b = s.as_bytes();
     while i < b.len() && b[i].is_ascii_alphabetic() {
-        col = col * 26 + (b[i] & 31) as u32;
+        col = col.checked_mul(26)?.checked_add((b[i] & 31) as u32)?;
         i += 1;
     }
     if i == 0 || i >= s.len() {
@@ -63,7 +63,7 @@ fn a1_to_rc(s: &str) -> Option<(u32, u32)> {
     Some((row.checked_sub(1)?, col.checked_sub(1)?))
 }
 
-fn read_entry(zip: &mut zip::ZipArchive<File>, name: &str) -> Option<String> {
+pub(crate) fn read_entry(zip: &mut zip::ZipArchive<File>, name: &str) -> Option<String> {
     let mut f = zip.by_name(name).ok()?;
     let mut buf = Vec::new();
     f.read_to_end(&mut buf).ok()?;
@@ -71,7 +71,7 @@ fn read_entry(zip: &mut zip::ZipArchive<File>, name: &str) -> Option<String> {
 }
 
 /// xl/workbook.xml + rels → [(sheetName, zip 内 sheet 路径)]，按 workbook 声明顺序
-fn sheet_paths(zip: &mut zip::ZipArchive<File>) -> Vec<(String, String)> {
+pub(crate) fn sheet_paths(zip: &mut zip::ZipArchive<File>) -> Vec<(String, String)> {
     let mut out = Vec::new();
     let Some(wb) = read_entry(zip, "xl/workbook.xml") else {
         return out;

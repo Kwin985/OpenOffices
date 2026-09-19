@@ -4,6 +4,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::path::Path;
 
+use crate::xlsx_chart;
 use crate::xlsx_style;
 
 fn is_false(v: &bool) -> bool {
@@ -53,6 +54,42 @@ pub struct CellPayload {
     pub s: Option<CellStyle>,
 }
 
+#[derive(Serialize, Deserialize, Clone, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct RangeRef {
+    pub sheet: String,
+    pub r1: u32,
+    pub c1: u32,
+    pub r2: u32,
+    pub c2: u32,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct ChartSeries {
+    pub name: String,
+    pub cat: Option<RangeRef>,
+    pub val: RangeRef,
+    pub cats: Vec<Value>,
+    pub vals: Vec<f64>,
+}
+
+/// 图表载荷：column|bar|line|pie|doughnut|area 六类；grouping 为 standard|stacked|percentStacked
+#[derive(Serialize, Deserialize, Clone, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct ChartPayload {
+    pub chart_type: String,
+    #[serde(default)]
+    pub grouping: String,
+    #[serde(default)]
+    pub title: String,
+    pub anchor_row: u32,
+    pub anchor_col: u32,
+    pub width: u32,
+    pub height: u32,
+    pub series: Vec<ChartSeries>,
+}
+
 #[derive(Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct SheetPayload {
@@ -60,6 +97,8 @@ pub struct SheetPayload {
     pub cells: Vec<CellPayload>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub merges: Vec<MergeRange>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub charts: Vec<ChartPayload>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -125,6 +164,8 @@ pub fn read_xlsx(path: String) -> Result<WorkbookPayload, Error> {
         open_workbook_auto(&path).map_err(|e| Error(format!("无法打开文件: {e}")))?;
     let fmts = xlsx_style::read_xlsx_styles(&path);
     let mut sheets = Vec::new();
+    let mut grids: std::collections::HashMap<String, xlsx_chart::Grid> =
+        std::collections::HashMap::new();
     for name in workbook.sheet_names().to_vec() {
         let range = match workbook.worksheet_range(&name) {
             Ok(r) => r,
@@ -139,6 +180,7 @@ pub fn read_xlsx(path: String) -> Result<WorkbookPayload, Error> {
                 if let Some(v) = data_to_value(cell) {
                     let (r, c) = (r0 + ri as u32, c0 + ci as u32);
                     seen.insert((r, c));
+                    grids.entry(name.clone()).or_default().insert((r, c), v.clone());
                     cells.push(CellPayload {
                         r,
                         c,
@@ -168,7 +210,15 @@ pub fn read_xlsx(path: String) -> Result<WorkbookPayload, Error> {
             name,
             cells,
             merges: fmt.map(|f| f.merges.clone()).unwrap_or_default(),
+            charts: Vec::new(),
         });
+    }
+    // 图表部件单独解析：值按引用从上面已建好的网格取
+    let charts = xlsx_chart::read_xlsx_charts(&path, &grids);
+    for sheet in sheets.iter_mut() {
+        if let Some(cs) = charts.get(&sheet.name) {
+            sheet.charts = cs.clone();
+        }
     }
     Ok(WorkbookPayload { sheets })
 }
@@ -200,6 +250,34 @@ fn cell_text(v: &Value) -> String {
         Value::String(s) => s.clone(),
         other => other.to_string(),
     }
+}
+
+fn chart_type_for(t: &str, grouping: &str) -> Option<rust_xlsxwriter::ChartType> {
+    use rust_xlsxwriter::ChartType as C;
+    let stacked = grouping == "stacked";
+    let percent = grouping == "percentStacked";
+    Some(match (t, stacked, percent) {
+        ("column", true, _) => C::ColumnStacked,
+        ("column", _, true) => C::ColumnPercentStacked,
+        ("column", _, _) => C::Column,
+        ("bar", true, _) => C::BarStacked,
+        ("bar", _, true) => C::BarPercentStacked,
+        ("bar", _, _) => C::Bar,
+        ("line", true, _) => C::LineStacked,
+        ("line", _, true) => C::LinePercentStacked,
+        ("line", _, _) => C::Line,
+        ("area", true, _) => C::AreaStacked,
+        ("area", _, true) => C::AreaPercentStacked,
+        ("area", _, _) => C::Area,
+        ("pie", _, _) => C::Pie,
+        ("doughnut", _, _) => C::Doughnut,
+        _ => return None,
+    })
+}
+
+/// px → 图表尺寸（rust_xlsxwriter 以厘米计）
+fn px_to_cm(px: u32) -> u32 {
+    ((px as f64) * 2.54 / 96.0).round().max(2.0) as u32
 }
 
 #[tauri::command]
@@ -265,6 +343,37 @@ pub fn write_xlsx(path: String, workbook: WorkbookPayload) -> Result<(), Error> 
                     }
                 }
             }
+        }
+        // 原生图表：系列引用直接映射为单元格区域公式，Excel 打开即活图
+        for chart in &sheet.charts {
+            let Ok(ctype) = chart_type_for(&chart.chart_type, &chart.grouping).ok_or(()) else {
+                continue;
+            };
+            let Ok(col) = u16::try_from(chart.anchor_col) else { continue };
+            let mut ch = rust_xlsxwriter::Chart::new(ctype);
+            if !chart.title.is_empty() {
+                ch.title().set_name(chart.title.as_str());
+            }
+            ch.set_width(px_to_cm(chart.width));
+            ch.set_height(px_to_cm(chart.height));
+            for s in &chart.series {
+                let ser = ch.add_series();
+                if !s.name.is_empty() {
+                    ser.set_name(s.name.as_str());
+                }
+                let host = if s.val.sheet.is_empty() {
+                    sheet.name.as_str()
+                } else {
+                    s.val.sheet.as_str()
+                };
+                let v = &s.val;
+                ser.set_values((host, v.r1, v.c1 as u16, v.r2, v.c2 as u16));
+                if let Some(c) = &s.cat {
+                    let csheet = if c.sheet.is_empty() { host } else { c.sheet.as_str() };
+                    ser.set_categories((csheet, c.r1, c.c1 as u16, c.r2, c.c2 as u16));
+                }
+            }
+            let _ = ws.insert_chart(chart.anchor_row, col, &ch);
         }
     }
     wb.save(&path).map_err(|e| Error(format!("保存失败: {e}")))?;
@@ -398,6 +507,7 @@ mod tests {
                     end_row: 1,
                     end_column: 4,
                 }],
+                ..Default::default()
             }],
         };
         write_xlsx(path.clone(), wb).expect("write failed");
@@ -433,5 +543,193 @@ mod tests {
             Some("#00ff00"),
             "F5 空格子底色"
         );
+    }
+
+    fn rf(sheet: &str, r1: u32, c1: u32, r2: u32, c2: u32) -> RangeRef {
+        RangeRef {
+            sheet: sheet.into(),
+            r1,
+            c1,
+            r2,
+            c2,
+        }
+    }
+
+    #[test]
+    fn chart_roundtrip() {
+        let path = tmp_path("chart");
+        let mk = |r: u32, c: u32, v: Value| CellPayload {
+            r,
+            c,
+            v: Some(v),
+            ..Default::default()
+        };
+        let wb = WorkbookPayload {
+            sheets: vec![SheetPayload {
+                name: "图表".into(),
+                cells: vec![
+                    mk(0, 0, json!("月")),
+                    mk(0, 1, json!("销量")),
+                    mk(0, 2, json!("利润")),
+                    mk(1, 0, json!("一月")),
+                    mk(1, 1, json!(10)),
+                    mk(1, 2, json!(1)),
+                    mk(2, 0, json!("二月")),
+                    mk(2, 1, json!(20)),
+                    mk(2, 2, json!(2)),
+                    mk(3, 0, json!("三月")),
+                    mk(3, 1, json!(30)),
+                    mk(3, 2, json!(3)),
+                ],
+                merges: vec![],
+                charts: vec![
+                    ChartPayload {
+                        chart_type: "column".into(),
+                        grouping: "standard".into(),
+                        title: "季度业绩".into(),
+                        anchor_row: 0,
+                        anchor_col: 5,
+                        width: 480,
+                        height: 300,
+                        series: vec![
+                            ChartSeries {
+                                name: "销量".into(),
+                                cat: Some(rf("图表", 1, 0, 3, 0)),
+                                val: rf("图表", 1, 1, 3, 1),
+                                cats: vec![],
+                                vals: vec![],
+                            },
+                            ChartSeries {
+                                name: "利润".into(),
+                                cat: Some(rf("图表", 1, 0, 3, 0)),
+                                val: rf("图表", 1, 2, 3, 2),
+                                cats: vec![],
+                                vals: vec![],
+                            },
+                        ],
+                    },
+                    ChartPayload {
+                        chart_type: "pie".into(),
+                        grouping: "standard".into(),
+                        title: "".into(),
+                        anchor_row: 16,
+                        anchor_col: 5,
+                        width: 400,
+                        height: 300,
+                        series: vec![ChartSeries {
+                            name: "".into(),
+                            cat: Some(rf("图表", 1, 0, 3, 0)),
+                            val: rf("图表", 1, 1, 3, 1),
+                            cats: vec![],
+                            vals: vec![],
+                        }],
+                    },
+                ],
+            }],
+        };
+        write_xlsx(path.clone(), wb).expect("write failed");
+        let back = read_xlsx(path.clone()).expect("read failed");
+        std::fs::remove_file(&path).ok();
+
+        let charts = &back.sheets[0].charts;
+        assert_eq!(charts.len(), 2, "两个图表都读回");
+        let col = &charts[0];
+        assert_eq!(col.chart_type, "column");
+        assert_eq!(col.title, "季度业绩");
+        assert_eq!((col.anchor_row, col.anchor_col), (0, 5));
+        assert!(col.width >= 100 && col.height >= 60, "锚点尺寸往返: {}x{}", col.width, col.height);
+        assert_eq!(col.series.len(), 2);
+        assert_eq!(col.series[0].name, "销量");
+        assert_eq!(col.series[0].vals, vec![10.0, 20.0, 30.0]);
+        assert_eq!(col.series[0].cats[0], json!("一月"));
+        assert_eq!(col.series[1].vals, vec![1.0, 2.0, 3.0]);
+        assert_eq!(col.series[1].val.c1, 2, "第二系列引用 C 列");
+        let pie = &charts[1];
+        assert_eq!(pie.chart_type, "pie");
+        assert_eq!((pie.anchor_row, pie.anchor_col), (16, 5));
+        assert_eq!(pie.series[0].vals, vec![10.0, 20.0, 30.0]);
+    }
+
+    // CDP 冒烟夹具：手动 `cargo test gen_smoke_fixture -- --ignored` 生成带图表 xlsx
+    #[test]
+    #[ignore]
+    fn gen_smoke_fixture() {
+        let path = std::env::var("OO_FIXTURE_PATH").unwrap_or_else(|_| {
+            concat!(env!("CARGO_MANIFEST_DIR"), "/../tmp/fixture-chart.xlsx").to_string()
+        });
+        let mk = |r: u32, c: u32, v: Value| CellPayload {
+            r,
+            c,
+            v: Some(v),
+            ..Default::default()
+        };
+        let wb = WorkbookPayload {
+            sheets: vec![SheetPayload {
+                name: "销售".into(),
+                cells: vec![
+                    mk(0, 0, json!("月")),
+                    mk(0, 1, json!("销量")),
+                    mk(0, 2, json!("利润")),
+                    mk(1, 0, json!("一月")),
+                    mk(1, 1, json!(10)),
+                    mk(1, 2, json!(3)),
+                    mk(2, 0, json!("二月")),
+                    mk(2, 1, json!(20)),
+                    mk(2, 2, json!(7)),
+                    mk(3, 0, json!("三月")),
+                    mk(3, 1, json!(35)),
+                    mk(3, 2, json!(12)),
+                    mk(4, 0, json!("四月")),
+                    mk(4, 1, json!(28)),
+                    mk(4, 2, json!(9)),
+                ],
+                merges: vec![],
+                charts: vec![
+                    ChartPayload {
+                        chart_type: "column".into(),
+                        grouping: "standard".into(),
+                        title: "季度业绩".into(),
+                        anchor_row: 0,
+                        anchor_col: 5,
+                        width: 480,
+                        height: 300,
+                        series: vec![
+                            ChartSeries {
+                                name: "销量".into(),
+                                cat: Some(rf("销售", 1, 0, 4, 0)),
+                                val: rf("销售", 1, 1, 4, 1),
+                                cats: vec![],
+                                vals: vec![],
+                            },
+                            ChartSeries {
+                                name: "利润".into(),
+                                cat: Some(rf("销售", 1, 0, 4, 0)),
+                                val: rf("销售", 1, 2, 4, 2),
+                                cats: vec![],
+                                vals: vec![],
+                            },
+                        ],
+                    },
+                    ChartPayload {
+                        chart_type: "pie".into(),
+                        grouping: "standard".into(),
+                        title: "".into(),
+                        anchor_row: 8,
+                        anchor_col: 5,
+                        width: 400,
+                        height: 300,
+                        series: vec![ChartSeries {
+                            name: "".into(),
+                            cat: Some(rf("销售", 1, 0, 4, 0)),
+                            val: rf("销售", 1, 1, 4, 1),
+                            cats: vec![],
+                            vals: vec![],
+                        }],
+                    },
+                ],
+            }],
+        };
+        write_xlsx(path.clone(), wb).expect("写夹具失败");
+        println!("fixture written: {path}");
     }
 }
