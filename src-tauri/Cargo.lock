@@ -2466,9 +2466,10 @@ dependencies = [
 
 [[package]]
 name = "openoffices"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "calamine",
+ "quick-xml 0.42.0",
  "rust_xlsxwriter",
  "serde",
  "serde_json",
@@ -2477,6 +2478,7 @@ dependencies = [
  "tauri-plugin-dialog",
  "tauri-plugin-fs",
  "tauri-plugin-opener",
+ "zip",
 ]
 
 [[package]]

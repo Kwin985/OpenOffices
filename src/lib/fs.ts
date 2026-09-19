@@ -3,16 +3,33 @@ import { open, save } from '@tauri-apps/plugin-dialog'
 import { readTextFile, writeTextFile, readFile, writeFile } from '@tauri-apps/plugin-fs'
 import type { DocKind } from '../store'
 
+export interface CellStyle {
+  bl?: boolean
+  it?: boolean
+  fs?: number
+  cl?: string
+  bg?: string
+}
+
+export interface MergeRange {
+  startRow: number
+  startColumn: number
+  endRow: number
+  endColumn: number
+}
+
 export interface CellPayload {
   r: number
   c: number
   v?: string | number | boolean | null
   f?: string | null
+  s?: CellStyle | null
 }
 
 export interface SheetPayload {
   name: string
   cells: CellPayload[]
+  merges?: MergeRange[]
 }
 
 export interface WorkbookPayload {

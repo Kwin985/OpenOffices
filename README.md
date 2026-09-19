@@ -52,6 +52,19 @@
   fade/wipe/fly 并还原为本地逐条放映；无 `bldP` 的整形效果不误判为逐条
 - **形状定位**：pptxgenjs 不给形状可预测 id，导出后处理按正文首行文本反查所在 `<p:sp>` 的 `cNvPr id` 作为 `spid`
 
+## xlsx 样式与合并往返（v0.8）
+
+- **样式通道**：单元格载荷新增 `s`（加粗/斜体/字号/字色/底色）与 `merges` 合并区，
+  xlsx ⇄ Univer 全链路映射——导入时样式去重注册进快照 `styles`（`oo{n}` id 引用），
+  保存时反向解析回写 `rust_xlsxwriter` `Format`
+- **样式读取**：calamine 不公开样式 API，故用 `zip` + `quick-xml` 直接解 xlsx 的
+  `styles.xml` / `sheet.xml`（字体、填充、cellXfs、mergeCells），与 calamine 的值读取按坐标缝合；
+  两 crate 均已在依赖树中，产物体积零增量
+- **合并单元格**：导入映射为 Univer `mergeData`（单格"合并"自动过滤）；导出时合并区先行
+  `merge_range` 写入左上值与格式，被覆盖格子跳过不重复写
+- **边界行为**：空值但带底色的格子从样式表补回保留；往返丢失的仅样式细节以外的少数格式维度
+  （边框/对齐/数字格式暂未纳入）
+
 ## 性能（v0.3）
 
 - **按编辑器分包 + 懒加载**：主包 8MB → 首屏约 300KB；Univer（6.1MB）只在首次激活表格标签时加载，
@@ -73,7 +86,9 @@
 | [pptxgenjs](https://gitbrent.github.io/PptxGenJS/) | 幻灯片 → pptx 导出 | MIT |
 | [JSZip](https://github.com/Stuk/jszip) | pptx（zip）解包导入 | MIT |
 | [calamine](https://github.com/tafia/calamine) | Rust xlsx/xls/ods 读取 | MIT |
-| [rust_xlsxwriter](https://github.com/jmcnamara/rust_xlsxwriter) | Rust xlsx 写出 | BSD-2 / Artistic-2.0 |
+| [rust_xlsxwriter](https://github.com/jmcnamara/rust_xlsxwriter) | Rust xlsx 写出（含 Format 样式/合并） | BSD-2 / Artistic-2.0 |
+| [zip](https://github.com/zip-rs/zip) | Rust xlsx 解包（读取样式/合并 XML） | MIT |
+| [quick-xml](https://github.com/tafia/quick-xml) | Rust OOXML 流式解析 | MIT |
 | [zustand](https://github.com/pmndrs/zustand) | 前端状态管理 | MIT |
 | React 19 + Vite | UI 框架与构建 | MIT |
 
@@ -81,13 +96,14 @@
 
 ```
 src-tauri/            Rust 后端
-  src/xlsx.rs         read_xlsx (calamine) / write_xlsx (rust_xlsxwriter) 命令
+  src/xlsx.rs         read_xlsx (calamine) / write_xlsx (rust_xlsxwriter) 命令，含样式与合并区
+  src/xlsx_style.rs   zip + quick-xml 直读 xlsx 的 styles.xml / mergeCells（calamine 无样式 API）
   capabilities/       dialog + fs 权限与路径作用域
 src/                  React 前端
   store.ts            标签页 / 最近文件 / 主题（zustand）
   App.tsx             全局快捷键、拖拽打开、关闭确认、懒加载路由
   lib/univer.ts       Univer 实例工厂（公式 worker + 五个社区高级预设）
-  lib/univer-io.ts    xlsx 数据 ↔ Univer 快照 转换
+  lib/univer-io.ts    xlsx 数据+样式/合并 ↔ Univer 快照 转换（样式去重注册）
   lib/docx.ts         docx 导入导出（ProseMirror JSON ↔ docx，含字色/高亮映射）
   lib/ppt.ts          .opd 幻灯片数据模型（版式/主题/序列化）
   lib/pptx-export.ts  Deck → pptx（pptxgenjs）
@@ -97,7 +113,7 @@ src/                  React 前端
   components/         Home / Workspace / SheetEditor / DocEditor / PptEditor
 ```
 
-表格文件流：`xlsx 磁盘 → Rust(calamine) → JSON 快照 → Univer 渲染`；保存反向经 `rust_xlsxwriter` 落盘。
+表格文件流：`xlsx 磁盘 → Rust(calamine 值 + zip/quick-xml 样式合并) → JSON 快照 → Univer 渲染`；保存反向经 `rust_xlsxwriter` 落盘。
 文档文件流：`docx → mammoth → HTML → TipTap`；保存为 `.odoc` JSON 或导出 docx。
 演示文件流：`pptx → JSZip 解包 OOXML → Deck 模型 → 编辑器`；保存为 `.opd` JSON 或经 pptxgenjs 导出 pptx。
 
@@ -119,7 +135,8 @@ cargo check        # Rust 后端检查（在 src-tauri 下）
 - [x] 演示：元素级动画（逐条入场）与自动换页计时
 - [x] 演示：动画映射 PowerPoint 原生 timing 树（元素级跨端保真）
 - [ ] 演示：动画方向/出场效果补全 + PowerPoint 实机回放回归确认
-- [ ] 表格：样式（字体/颜色/合并）随 xlsx 往返、图表（Univer plugins）
+- [x] 表格：样式（字体/颜色/合并）随 xlsx 往返
+- [ ] 表格：图表（Univer plugins，需先调研社区/商业许可边界）
 - [ ] 文档：页眉页脚、批注、目录
 - [ ] PDF 查看（pdf.js）与导出
 - [ ] ODF（ods/odt）原生格式
