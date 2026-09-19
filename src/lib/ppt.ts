@@ -17,6 +17,24 @@ export const BULLET_ANIM_NAMES: Record<BulletAnim, string> = {
   wipe: '擦除',
 }
 
+// 方向位标志与 ECMA-376 presetSubtype 对齐：1=上 2=右 4=下 8=左
+export type AnimDir = 'top' | 'right' | 'bottom' | 'left'
+
+export const ANIM_DIR_NAMES: Record<AnimDir, string> = {
+  top: '从上方',
+  right: '从右侧',
+  bottom: '从下方',
+  left: '从左侧',
+}
+
+export const ANIM_DIR_SUBTYPE: Record<AnimDir, number> = { top: 1, right: 2, bottom: 4, left: 8 }
+
+export type BulletExit = 'fade'
+
+export const BULLET_EXIT_NAMES: Record<BulletExit, string> = {
+  fade: '淡出',
+}
+
 export interface MasterRect {
   x: number
   y: number
@@ -43,6 +61,8 @@ export interface Slide {
   bg?: string // 单页纯色背景覆盖
   transition?: SlideTransition // 切页动画，未设=无
   anim?: BulletAnim // 要点逐条入场动画；导出映射 PowerPoint 原生 <p:timing>，导入反向识别
+  animDir?: AnimDir // 入场方向（fly/wipe 有意义，缺省从下方）
+  exitAnim?: BulletExit // 逐条出场（须先有入场）；揭示满后每击退一条
   autoAdvance?: number // 自动换页秒数；导出为 OOXML advTm
 }
 
@@ -122,6 +142,27 @@ function isBulletAnim(v: unknown): v is BulletAnim {
   return typeof v === 'string' && v in BULLET_ANIM_NAMES
 }
 
+function isAnimDir(v: unknown): v is AnimDir {
+  return typeof v === 'string' && v in ANIM_DIR_NAMES
+}
+
+function isBulletExit(v: unknown): v is BulletExit {
+  return typeof v === 'string' && v in BULLET_EXIT_NAMES
+}
+
+// 当前揭示步对应的点击步数上限：入场 total 步；若设了出场，再退场 total 步
+export function revealSteps(slide: Slide): number {
+  if (!slide.anim) return 0
+  const total = bodyLines(slide).length
+  return slide.exitAnim ? total * 2 : total
+}
+
+// 已出场退去的条数（reveal 超过 total 后每步退一条，先退最上一条）
+export function exitCount(slide: Slide, revealed: number): number {
+  if (!slide.anim || !slide.exitAnim) return 0
+  return Math.max(0, revealed - bodyLines(slide).length)
+}
+
 export function serializeDeck(deck: Deck): string {
   return JSON.stringify(deck, null, 2)
 }
@@ -171,6 +212,8 @@ export function parseDeck(text: string): Deck {
       bg: typeof s.bg === 'string' ? s.bg : undefined,
       transition: isTransition(s.transition) ? s.transition : undefined,
       anim: isBulletAnim(s.anim) ? s.anim : undefined,
+      animDir: isAnimDir(s.animDir) ? s.animDir : undefined,
+      exitAnim: isBulletExit(s.exitAnim) ? s.exitAnim : undefined,
       autoAdvance:
         typeof s.autoAdvance === 'number' && s.autoAdvance > 0 && s.autoAdvance <= 3600
           ? s.autoAdvance

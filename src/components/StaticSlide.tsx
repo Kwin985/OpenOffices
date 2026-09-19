@@ -2,7 +2,9 @@ import { memo, type CSSProperties } from 'react'
 import {
   bodyLines,
   themeOf,
+  type AnimDir,
   type BulletAnim,
+  type BulletExit,
   type MasterRect,
   type MasterStyle,
   type Slide,
@@ -17,6 +19,9 @@ export default memo(function StaticSlide({
   big,
   visibleLines,
   anim,
+  animDir,
+  exitCount,
+  exitAnim,
 }: {
   slide: Slide
   themeId: string
@@ -24,10 +29,16 @@ export default memo(function StaticSlide({
   big?: boolean
   visibleLines?: number // 仅显示前 N 条要点（放映逐条揭示）
   anim?: BulletAnim // 最新揭示那条的入场效果
+  animDir?: AnimDir // fly/wipe 入场方向
+  exitCount?: number // 已退场条数（前 exitCount 条播出场动画并保持隐藏）
+  exitAnim?: BulletExit // 出场效果
 }) {
   const t = themeOf(themeId)
   const lines = bodyLines(slide)
   const shown = visibleLines === undefined ? lines : lines.slice(0, visibleLines)
+  const exiting = (exitCount ?? 0) > 0
+  const inCls =
+    anim === 'fade' || !anim ? 'ppt-in-fade' : `ppt-in-${anim}-${animDir ?? 'bottom'}`
   const cls = `ppt-slide-static${big ? ' ppt-slide-big' : ''} ppt-sl-${slide.layout}`
   const fg = master?.bodyColor ?? t.fg
   const accent = master?.titleColor ?? t.accent
@@ -66,9 +77,14 @@ export default memo(function StaticSlide({
                   <li
                     key={i}
                     className={
-                      visibleLines !== undefined && anim && i === shown.length - 1
-                        ? `ppt-item-in ppt-in-${anim}`
-                        : undefined
+                      exiting && i < (exitCount ?? 0)
+                        ? `ppt-item-out ppt-out-${exitAnim ?? 'fade'}`
+                        : !exiting &&
+                            visibleLines !== undefined &&
+                            anim &&
+                            i === shown.length - 1
+                          ? `ppt-item-in ${inCls}`
+                          : undefined
                     }
                   >
                     {l}

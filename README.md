@@ -65,6 +65,20 @@
 - **边界行为**：空值但带底色的格子从样式表补回保留；往返丢失的仅样式细节以外的少数格式维度
   （边框/对齐/数字格式暂未纳入）
 
+## 动画方向/出场 + PowerPoint 实机回归（v0.9）
+
+- **入场方向**：飞入/擦除支持上下左右四向——UI 每页可选「从上方/右侧/下方/左侧」，`.opd` 存
+  `animDir`；pptx 导出映射为原生 `presetSubtype` 方向位（上1/右2/下4/左8），飞入按方向选
+  `ppt_x`/`ppt_y` 轴与 `#+y+1` 类屏外起点，擦除滤镜取扫过反方向（从下方→`wipe(up)`）
+- **逐条出场**：每页可选「出场 · 淡出」；放映揭示满后每击退一条（FIFO，步数 = 2×段数），
+  CSS `fill-mode: forwards` 保持退场隐藏；pptx 导出追加 `presetClass="exit"` 的
+  `animEffect transition="out" filter="fade"` clickEffect，与入场共用同一 `bldP`
+- **导入识别**：timing 树解析优先 `presetSubtype` 位、其次 wipe 滤镜反查、再次飞入 `strVal`
+  符号轴判向；`exit` clickEffect 识别为出场动画
+- **实机回归**：导出的 pptx 由本机 PowerPoint 16.0（COM 无界面）打开不修复并另存，重存文件
+  保留全部 6 个 clickEffect、`presetSubtype="8"`、`build="p"`、`advTm`——方向与出场被
+  PowerPoint 原生接受；该重存文件再经我们的导入器仍识别 fly/left/fade，双向往返闭环
+
 ## 性能（v0.3）
 
 - **按编辑器分包 + 懒加载**：主包 8MB → 首屏约 300KB；Univer（6.1MB）只在首次激活表格标签时加载，
@@ -134,7 +148,7 @@ cargo check        # Rust 后端检查（在 src-tauri 下）
 - [x] 演示：动画、演讲者视图（双屏备注独立窗口）
 - [x] 演示：元素级动画（逐条入场）与自动换页计时
 - [x] 演示：动画映射 PowerPoint 原生 timing 树（元素级跨端保真）
-- [ ] 演示：动画方向/出场效果补全 + PowerPoint 实机回放回归确认
+- [x] 演示：动画方向/出场效果补全 + PowerPoint 实机回放回归确认
 - [x] 表格：样式（字体/颜色/合并）随 xlsx 往返
 - [ ] 表格：图表（Univer plugins，需先调研社区/商业许可边界）
 - [ ] 文档：页眉页脚、批注、目录

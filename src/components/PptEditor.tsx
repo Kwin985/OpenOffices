@@ -6,18 +6,23 @@ import type { Tab } from '../store'
 import { useApp } from '../store'
 import { readBytes, readText, writeBytes, writeText, pickSaveFile, baseName } from '../lib/fs'
 import {
-  bodyLines,
   emptyDeck,
+  exitCount,
   newSlide,
   parseDeck,
+  revealSteps,
   serializeDeck,
   themeOf,
   LAYOUT_NAMES,
   TRANSITION_NAMES,
   BULLET_ANIM_NAMES,
+  ANIM_DIR_NAMES,
+  BULLET_EXIT_NAMES,
   THEMES,
-  type Deck,
+  type AnimDir,
   type BulletAnim,
+  type BulletExit,
+  type Deck,
   type Slide,
   type SlideLayout,
   type SlideTransition,
@@ -98,11 +103,11 @@ function PptEditor({ tab }: Props) {
 
   const slide = deck.slides[cur]
 
-  // 逐条揭示 / 翻页：anim 页先揭示下一条，满了才换页
+  // 逐条揭示 / 翻页：anim 页先揭示下一条，揭示满后若有出场再逐条退去，步数用尽才换页
   const revealNext = () => {
     const s = snapRef.current.deck.slides[snapRef.current.idx]
-    const total = s ? bodyLines(s).length : 0
-    if (s?.anim && revealedRef.current < total) {
+    const stepMax = s ? revealSteps(s) : 0
+    if (s?.anim && stepMax > 0 && revealedRef.current < stepMax) {
       revealedRef.current += 1
       setRevealed(revealedRef.current)
       return
@@ -348,7 +353,13 @@ function PptEditor({ tab }: Props) {
           value={slide.anim ?? ''}
           onChange={(e) =>
             editSlide(cur, (s) => {
-              s.anim = (e.target.value || undefined) as BulletAnim | undefined
+              const v = (e.target.value || undefined) as BulletAnim | undefined
+              if (v !== s.anim) {
+                s.animDir = undefined
+                s.exitAnim = undefined
+              }
+              if (v === 'fade' || !v) s.animDir = undefined
+              s.anim = v
             })
           }
           title="本页要点逐条入场动画（放映时点击逐条揭示）"
@@ -358,6 +369,39 @@ function PptEditor({ tab }: Props) {
             <option key={k} value={k}>逐条 · {n}</option>
           ))}
         </select>
+        {slide.anim && slide.anim !== 'fade' && (
+          <select
+            className="tool-select"
+            value={slide.animDir ?? 'bottom'}
+            onChange={(e) =>
+              editSlide(cur, (s) => {
+                s.animDir = e.target.value as AnimDir
+              })
+            }
+            title="逐条入场方向（导出映射 PowerPoint presetSubtype 与位移/擦除方向）"
+          >
+            {(Object.entries(ANIM_DIR_NAMES) as [AnimDir, string][]).map(([k, n]) => (
+              <option key={k} value={k}>{n}</option>
+            ))}
+          </select>
+        )}
+        {slide.anim && (
+          <select
+            className="tool-select"
+            value={slide.exitAnim ?? ''}
+            onChange={(e) =>
+              editSlide(cur, (s) => {
+                s.exitAnim = (e.target.value || undefined) as BulletExit | undefined
+              })
+            }
+            title="逐条出场：揭示满后每击退一条（导出为 PowerPoint exit clickEffect）"
+          >
+            <option value="">出场 · 无</option>
+            {(Object.entries(BULLET_EXIT_NAMES) as [BulletExit, string][]).map(([k, n]) => (
+              <option key={k} value={k}>出场 · {n}</option>
+            ))}
+          </select>
+        )}
         <label className="tool-num" title="放映时到秒自动换页；随 pptx advTm 往返">
           换页
           <input
@@ -501,6 +545,9 @@ function PptEditor({ tab }: Props) {
               master={deck.master}
               visibleLines={deck.slides[presentIdx]?.anim ? revealed : undefined}
               anim={deck.slides[presentIdx]?.anim}
+              animDir={deck.slides[presentIdx]?.animDir}
+              exitCount={deck.slides[presentIdx] ? exitCount(deck.slides[presentIdx]!, revealed) : 0}
+              exitAnim={deck.slides[presentIdx]?.exitAnim}
             />
           </div>
           {showNotes && deck.slides[presentIdx]?.notes && (

@@ -2,7 +2,9 @@ import type JSZip from 'jszip'
 import {
   emptyDeck,
   newId,
+  type AnimDir,
   type BulletAnim,
+  type BulletExit,
   type Deck,
   type MasterRect,
   type MasterStyle,
@@ -292,25 +294,68 @@ function parseTransition(root: Element): {
   return out
 }
 
-// <p:timing> 逐条入场：找 body 形状的 bldP（build="p"）→ mainSeq 首个 entr clickEffect → 由行为判定 fade/wipe/fly
-function parseAnim(root: Element): BulletAnim | undefined {
+// presetSubtype 方向位（与导出侧 ANIM_DIR_SUBTYPE 一致）
+const SUBTYPE_DIR: Record<number, AnimDir> = { 1: 'top', 2: 'right', 4: 'bottom', 8: 'left' }
+// wipe filter 是扫过方向：wipe(up) 即从下往上 → bottom（与导出侧 WIPE_FILTER 互逆）
+const WIPE_FILTER_DIR: Record<string, AnimDir> = {
+  'wipe(up)': 'bottom',
+  'wipe(down)': 'top',
+  'wipe(right)': 'left',
+  'wipe(left)': 'right',
+}
+
+function flyStartDir(effect: Element): AnimDir | undefined {
+  for (const sv of descendantsByName(effect, 'strVal')) {
+    const v = (sv.textContent ?? '').replace(/\s+/g, '')
+    if (v.startsWith('#+y')) return 'bottom'
+    if (v.startsWith('#-y')) return 'top'
+    if (v.startsWith('#-x')) return 'left'
+    if (v.startsWith('#+x')) return 'right'
+  }
+  return undefined
+}
+
+// <p:timing> 逐条构建：bldP + 首个 entr clickEffect 判定 fade/wipe/fly 与方向；exit clickEffect 识别淡出
+function parseAnim(root: Element): {
+  anim?: BulletAnim
+  animDir?: AnimDir
+  exitAnim?: BulletExit
+} {
   const timing = childrenByName(root, 'timing')[0]
-  if (!timing) return undefined
+  if (!timing) return {}
   const bld = descendantsByName(timing, 'bldP')[0]
-  if (!bld) return undefined
-  const effect = descendantsByName(timing, 'cTn').find(
-    (c) => c.getAttribute('nodeType') === 'clickEffect' && c.getAttribute('presetClass') === 'entr',
+  if (!bld) return {}
+  const clicks = descendantsByName(timing, 'cTn').filter(
+    (c) => c.getAttribute('nodeType') === 'clickEffect',
   )
-  if (!effect) return undefined
+  const effect = clicks.find((c) => c.getAttribute('presetClass') === 'entr')
+  if (!effect) return {}
   const filter = (descendantsByName(effect, 'animEffect')[0]?.getAttribute('filter') ?? '').toLowerCase()
-  if (filter.startsWith('wipe')) return 'wipe'
-  if (filter.startsWith('fade')) return 'fade'
-  const fly = descendantsByName(effect, 'anim').some((a) => {
-    const attrs = descendantsByName(a, 'attrName').map((x) => x.textContent ?? '')
-    return attrs.some((v) => v === 'ppt_x' || v === 'ppt_y')
-  })
-  if (fly) return 'fly'
-  return 'fade'
+  let anim: BulletAnim
+  if (filter.startsWith('wipe')) anim = 'wipe'
+  else if (filter.startsWith('fade')) anim = 'fade'
+  else if (
+    descendantsByName(effect, 'anim').some((a) =>
+      descendantsByName(a, 'attrName').some((x) => (x.textContent ?? '') === 'ppt_x' || (x.textContent ?? '') === 'ppt_y'),
+    )
+  )
+    anim = 'fly'
+  else anim = 'fade'
+  const out: { anim?: BulletAnim; animDir?: AnimDir; exitAnim?: BulletExit } = { anim }
+  if (anim !== 'fade') {
+    const dir =
+      SUBTYPE_DIR[Number(effect.getAttribute('presetSubtype') ?? 0)] ??
+      WIPE_FILTER_DIR[filter] ??
+      flyStartDir(effect)
+    if (dir) out.animDir = dir
+  }
+  const exit = clicks.find((c) => c.getAttribute('presetClass') === 'exit')
+  if (
+    exit &&
+    descendantsByName(exit, 'animEffect').some((a) => a.getAttribute('transition') === 'out')
+  )
+    out.exitAnim = 'fade'
+  return out
 }
 
 async function slideToDeckSlide(
@@ -405,6 +450,8 @@ async function slideToDeckSlide(
     console.warn('页背景/备注解析失败，忽略', e)
   }
 
+  const { anim, animDir, exitAnim } = parseAnim(root)
+
   return {
     id: newId(),
     layout,
@@ -414,7 +461,9 @@ async function slideToDeckSlide(
     notes,
     bg,
     transition,
-    anim: parseAnim(root),
+    anim,
+    animDir,
+    exitAnim,
     autoAdvance,
   }
 }

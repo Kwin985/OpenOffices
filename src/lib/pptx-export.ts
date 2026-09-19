@@ -2,7 +2,10 @@ import type PptxGenJS from 'pptxgenjs'
 import {
   bodyLines,
   themeOf,
+  ANIM_DIR_SUBTYPE,
+  type AnimDir,
   type BulletAnim,
+  type BulletExit,
   type MasterRect,
   type Slide,
   type SlideTransition,
@@ -157,7 +160,7 @@ export async function deckToPptxBytes(deck: Deck): Promise<Uint8Array> {
       if (s.anim) {
         const lines = bodyLines(s)
         const spid = lines.length ? findBodySpid(xml, lines[0]) : undefined
-        if (spid) inject += timingXml(s.anim, spid, lines.length)
+        if (spid) inject += timingXml(s.anim, s.animDir ?? 'bottom', s.exitAnim, spid, lines.length)
       }
       zip.file(name, xml.replace('</p:sld>', `${inject}</p:sld>`))
     }
@@ -199,24 +202,68 @@ function findBodySpid(xml: string, firstLine: string): string | undefined {
   return spid
 }
 
-// PowerPoint 原生 timing 树：mainSeq 内每段一个 clickEffect（set 可见性 + 入场行为），bldP build="p" 驱动逐段构建
-function timingXml(anim: BulletAnim, spid: string, count: number): string {
+// wipe 滤镜名指擦除移动方向（从下方进场 = 向上擦开）；fly 起始位移按方向选轴与符号
+const WIPE_FILTER: Record<AnimDir, string> = {
+  bottom: 'wipe(up)',
+  top: 'wipe(down)',
+  left: 'wipe(right)',
+  right: 'wipe(left)',
+}
+const FLY_START: Record<AnimDir, string> = {
+  bottom: '#+y+1',
+  top: '#-y+1',
+  left: '#-x+1',
+  right: '#+x+1',
+}
+
+function enterEffectXml(anim: BulletAnim, dir: AnimDir, spid: string, nid: () => string): string {
+  if (anim === 'fly') {
+    const axis = dir === 'left' || dir === 'right' ? 'ppt_x' : 'ppt_y'
+    return `<p:anim calcmode="lin" valueType="num"><p:cBhvr additive="base"><p:cTn id="${nid()}" dur="500" fill="hold"/><p:tgtEl><p:spTgt spid="${spid}"/></p:tgtEl><p:attrNameLst><p:attrName>${axis}</p:attrName></p:attrNameLst></p:cBhvr><p:tavLst><p:tav tm="0"><p:val><p:strVal val="${FLY_START[dir]}"/></p:val></p:tav><p:tav tm="100000"><p:val><p:strVal val="#${axis}"/></p:val></p:tav></p:tavLst></p:anim>`
+  }
+  const filter = anim === 'fade' ? 'fade' : WIPE_FILTER[dir]
+  return `<p:animEffect transition="in" filter="${filter}"><p:cBhvr><p:cTn id="${nid()}" dur="500"/><p:tgtEl><p:spTgt spid="${spid}"/></p:tgtEl></p:cBhvr></p:animEffect>`
+}
+
+function clickParXml(
+  presetId: number,
+  presetClass: 'entr' | 'exit',
+  subtype: number,
+  inner: string,
+  nid: () => string,
+): string {
+  return (
+    `<p:par><p:cTn id="${nid()}" fill="hold"><p:stCondLst><p:cond delay="indefinite"/></p:stCondLst><p:childTnLst><p:par><p:cTn id="${nid()}" fill="hold"><p:stCondLst><p:cond delay="0"/></p:stCondLst><p:childTnLst><p:par><p:cTn id="${nid()}" presetID="${presetId}" presetClass="${presetClass}" presetSubtype="${subtype}" fill="hold" grpId="0" nodeType="clickEffect"><p:stCondLst><p:cond delay="0"/></p:stCondLst><p:childTnLst>` +
+    inner +
+    `</p:childTnLst></p:cTn></p:par></p:childTnLst></p:cTn></p:par></p:childTnLst></p:cTn></p:par>`
+  )
+}
+
+// PowerPoint 原生 timing 树：mainSeq 内每段一个 entr clickEffect（set 可见性 + 入场行为），
+// 设了出场再按段追加 exit clickEffect；bldP build="p" 驱动逐段构建
+function timingXml(
+  anim: BulletAnim,
+  dir: AnimDir,
+  exit: BulletExit | undefined,
+  spid: string,
+  count: number,
+): string {
   const preset = anim === 'fade' ? 10 : anim === 'wipe' ? 22 : 2
-  const subtype = anim === 'fly' ? 4 : 0
+  const subtype = anim === 'fade' ? 0 : ANIM_DIR_SUBTYPE[dir]
   let id = 10
   const nid = () => String(id++)
   const pars: string[] = []
   for (let i = 0; i < count; i++) {
-    const effect =
-      anim === 'fly'
-        ? `<p:anim calcmode="lin" valueType="num"><p:cBhvr additive="base"><p:cTn id="${nid()}" dur="500" fill="hold"/><p:tgtEl><p:spTgt spid="${spid}"/></p:tgtEl><p:attrNameLst><p:attrName>ppt_y</p:attrName></p:attrNameLst></p:cBhvr><p:tavLst><p:tav tm="0"><p:val><p:strVal val="#+y+1"/></p:val></p:tav><p:tav tm="100000"><p:val><p:strVal val="#ppt_y"/></p:val></p:tav></p:tavLst></p:anim>`
-        : `<p:animEffect transition="in" filter="${anim === 'fade' ? 'fade' : 'wipe(down)'}"><p:cBhvr><p:cTn id="${nid()}" dur="500"/><p:tgtEl><p:spTgt spid="${spid}"/></p:tgtEl></p:cBhvr></p:animEffect>`
+    const setVisible = `<p:set><p:cBhvr><p:cTn id="${nid()}" dur="1" fill="hold"><p:stCondLst><p:cond delay="0"/></p:stCondLst></p:cTn><p:tgtEl><p:spTgt spid="${spid}"/></p:tgtEl><p:attrNameLst><p:attrName>style.visibility</p:attrName></p:attrNameLst></p:cBhvr><p:to><p:strVal val="visible"/></p:to></p:set>`
     pars.push(
-      `<p:par><p:cTn id="${nid()}" fill="hold"><p:stCondLst><p:cond delay="indefinite"/></p:stCondLst><p:childTnLst><p:par><p:cTn id="${nid()}" fill="hold"><p:stCondLst><p:cond delay="0"/></p:stCondLst><p:childTnLst><p:par><p:cTn id="${nid()}" presetID="${preset}" presetClass="entr" presetSubtype="${subtype}" fill="hold" grpId="0" nodeType="clickEffect"><p:stCondLst><p:cond delay="0"/></p:stCondLst><p:childTnLst>` +
-        `<p:set><p:cBhvr><p:cTn id="${nid()}" dur="1" fill="hold"><p:stCondLst><p:cond delay="0"/></p:stCondLst></p:cTn><p:tgtEl><p:spTgt spid="${spid}"/></p:tgtEl><p:attrNameLst><p:attrName>style.visibility</p:attrName></p:attrNameLst></p:cBhvr><p:to><p:strVal val="visible"/></p:to></p:set>` +
-        effect +
-        `</p:childTnLst></p:cTn></p:par></p:childTnLst></p:cTn></p:par></p:childTnLst></p:cTn></p:par>`,
+      clickParXml(preset, 'entr', subtype, setVisible + enterEffectXml(anim, dir, spid, nid), nid),
     )
+  }
+  if (exit) {
+    for (let i = 0; i < count; i++) {
+      const fadeOut = `<p:animEffect transition="out" filter="fade"><p:cBhvr><p:cTn id="${nid()}" dur="500"/><p:tgtEl><p:spTgt spid="${spid}"/></p:tgtEl></p:cBhvr></p:animEffect>`
+      pars.push(clickParXml(10, 'exit', 0, fadeOut, nid))
+    }
   }
   return (
     `<p:timing><p:tnLst><p:par><p:cTn id="1" dur="indefinite" restart="never" nodeType="tmRoot"><p:childTnLst>` +

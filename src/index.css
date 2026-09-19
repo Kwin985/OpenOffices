@@ -1073,23 +1073,69 @@ button {
   animation: ppt-anim-split 0.5s ease;
 }
 
-/* 要点逐条入场（放映/演讲者视图揭示） */
+/* 要点逐条入场（放映/演讲者视图揭示），方向类按 从下方/上方/左侧/右侧 */
 @keyframes ppt-in-item-fade {
   from {
     opacity: 0;
   }
 }
 
-@keyframes ppt-in-item-fly {
+@keyframes ppt-in-fly-bottom {
   from {
     opacity: 0;
     transform: translateY(0.8em);
   }
 }
 
-@keyframes ppt-in-item-wipe {
+@keyframes ppt-in-fly-top {
+  from {
+    opacity: 0;
+    transform: translateY(-0.8em);
+  }
+}
+
+@keyframes ppt-in-fly-left {
+  from {
+    opacity: 0;
+    transform: translateX(-1.4em);
+  }
+}
+
+@keyframes ppt-in-fly-right {
+  from {
+    opacity: 0;
+    transform: translateX(1.4em);
+  }
+}
+
+@keyframes ppt-in-wipe-bottom {
+  from {
+    clip-path: inset(100% 0 0 0);
+  }
+}
+
+@keyframes ppt-in-wipe-top {
+  from {
+    clip-path: inset(0 0 100% 0);
+  }
+}
+
+@keyframes ppt-in-wipe-left {
   from {
     clip-path: inset(0 100% 0 0);
+  }
+}
+
+@keyframes ppt-in-wipe-right {
+  from {
+    clip-path: inset(0 0 0 100%);
+  }
+}
+
+@keyframes ppt-out-item-fade {
+  to {
+    opacity: 0;
+    visibility: hidden;
   }
 }
 
@@ -1102,12 +1148,47 @@ button {
   animation-name: ppt-in-item-fade;
 }
 
-.ppt-in-fly {
-  animation-name: ppt-in-item-fly;
+.ppt-in-fly-bottom {
+  animation-name: ppt-in-fly-bottom;
 }
 
-.ppt-in-wipe {
-  animation-name: ppt-in-item-wipe;
+.ppt-in-fly-top {
+  animation-name: ppt-in-fly-top;
+}
+
+.ppt-in-fly-left {
+  animation-name: ppt-in-fly-left;
+}
+
+.ppt-in-fly-right {
+  animation-name: ppt-in-fly-right;
+}
+
+.ppt-in-wipe-bottom {
+  animation-name: ppt-in-wipe-bottom;
+}
+
+.ppt-in-wipe-top {
+  animation-name: ppt-in-wipe-top;
+}
+
+.ppt-in-wipe-left {
+  animation-name: ppt-in-wipe-left;
+}
+
+.ppt-in-wipe-right {
+  animation-name: ppt-in-wipe-right;
+}
+
+/* 逐条出场：退去的条目播一次淡出并保持隐藏 */
+.ppt-item-out {
+  animation-duration: 0.4s;
+  animation-timing-function: ease;
+  animation-fill-mode: forwards;
+}
+
+.ppt-out-fade {
+  animation-name: ppt-out-item-fade;
 }
 
 .ppt-present-bar {
