@@ -1,10 +1,11 @@
-import { useEffect, useState } from 'react'
+import { lazy, Suspense, useEffect, useState } from 'react'
 import { useApp, type DocKind } from '../store'
-import SheetEditor from './SheetEditor'
-import DocEditor from './DocEditor'
-import PptEditor from './PptEditor'
 import { requestCloseTab } from '../lib/open'
 import { saveTab } from '../lib/registry'
+
+const SheetEditor = lazy(() => import('./SheetEditor'))
+const DocEditor = lazy(() => import('./DocEditor'))
+const PptEditor = lazy(() => import('./PptEditor'))
 
 const KIND_ICON: Record<DocKind, string> = { doc: '文', sheet: '表', ppt: '演' }
 const KIND_CLS: Record<DocKind, string> = { doc: 'kind-doc', sheet: 'kind-sheet', ppt: 'kind-ppt' }
@@ -16,6 +17,14 @@ export default function Workspace() {
   const openTab = useApp((s) => s.openTab)
   const [menuOpen, setMenuOpen] = useState(false)
   const [ctx, setCtx] = useState<{ id: string; x: number; y: number } | null>(null)
+  // 标签首次激活才挂载编辑器（Univer/TipTap 等重型实例按需创建）
+  const [mounted, setMounted] = useState<Set<string>>(() => new Set())
+
+  useEffect(() => {
+    if (activeId && !mounted.has(activeId)) {
+      setMounted((prev) => new Set(prev).add(activeId))
+    }
+  }, [activeId, mounted])
 
   useEffect(() => {
     if (!ctx) return
@@ -90,13 +99,26 @@ export default function Workspace() {
         </div>
       )}
       <div className="editor-area">
-        {tabs.map((t) => (
-          <div key={t.id} className="editor-slot" style={{ display: t.id === active?.id ? 'flex' : 'none' }}>
-            {t.kind === 'sheet' && <SheetEditor tab={t} />}
-            {t.kind === 'doc' && <DocEditor tab={t} />}
-            {t.kind === 'ppt' && <PptEditor tab={t} />}
-          </div>
-        ))}
+        {tabs.map((t) => {
+          const visible = t.id === active?.id
+          return (
+            <div
+              key={t.id}
+              className="editor-slot"
+              style={{ display: visible ? 'flex' : 'none' }}
+            >
+              {mounted.has(t.id) ? (
+                <Suspense fallback={<div className="editor-loading">正在加载编辑器…</div>}>
+                  {t.kind === 'sheet' && <SheetEditor tab={t} />}
+                  {t.kind === 'doc' && <DocEditor tab={t} />}
+                  {t.kind === 'ppt' && <PptEditor tab={t} />}
+                </Suspense>
+              ) : (
+                <div className="editor-loading">编辑器待命 · 切换到该标签后初始化</div>
+              )}
+            </div>
+          )
+        })}
       </div>
     </div>
   )

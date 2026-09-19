@@ -86,9 +86,14 @@ export const useApp = create<AppState>((set, get) => ({
       ),
     })),
   markDirty: (id, dirty) =>
-    set((s) => ({
-      tabs: s.tabs.map((t) => (t.id === id ? { ...t, dirty } : t)),
-    })),
+    set((s) => {
+      const t = s.tabs.find((x) => x.id === id)
+      // Univer 每条命令都会回调 markDirty，状态没变就不触发订阅
+      if (!t || t.dirty === dirty) return s
+      return {
+        tabs: s.tabs.map((x) => (x.id === id ? { ...x, dirty } : x)),
+      }
+    }),
   markRecent: (path, kind) =>
     set((s) => {
       const recents = [

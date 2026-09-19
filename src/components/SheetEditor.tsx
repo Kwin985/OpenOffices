@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { memo, useEffect, useRef, useState } from 'react'
 import { message } from '@tauri-apps/plugin-dialog'
 import type { IWorkbookData } from '@univerjs/presets'
 import type { FUniver } from '@univerjs/presets'
@@ -13,7 +13,7 @@ interface Props {
   tab: Tab
 }
 
-export default function SheetEditor({ tab }: Props) {
+function SheetEditor({ tab }: Props) {
   const containerRef = useRef<HTMLDivElement>(null)
   const apiRef = useRef<FUniver | null>(null)
   const [status, setStatus] = useState<string>(tab.path ? '正在加载…' : '')
@@ -103,3 +103,5 @@ export default function SheetEditor({ tab }: Props) {
     </div>
   )
 }
+
+export default memo(SheetEditor)

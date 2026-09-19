@@ -1,4 +1,4 @@
-import PptxGenJS from 'pptxgenjs'
+import type PptxGenJS from 'pptxgenjs'
 import { bodyLines, themeOf, type Slide, type Deck } from './ppt'
 
 const W = 10 // inches, LAYOUT_16x9
@@ -48,6 +48,7 @@ function addBody(slide: IPptxSlide, s: Slide, fg: string) {
 }
 
 export async function deckToPptxBytes(deck: Deck): Promise<Uint8Array> {
+  const { default: PptxGenJS } = await import('pptxgenjs')
   const pptx = new PptxGenJS()
   pptx.title = deck.title
   pptx.layout = 'LAYOUT_16x9'

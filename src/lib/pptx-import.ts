@@ -1,4 +1,4 @@
-import JSZip from 'jszip'
+import type JSZip from 'jszip'
 import { emptyDeck, newId, type Deck, type Slide } from './ppt'
 
 const EMU_PER_IN = 914400
@@ -165,6 +165,7 @@ async function slideToDeckSlide(
 }
 
 export async function pptxBytesToDeck(bytes: Uint8Array): Promise<Deck> {
+  const { default: JSZip } = await import('jszip')
   const zip = await JSZip.loadAsync(bytes)
   const slideFiles = Object.values(zip.files)
     .filter((f) => /^ppt\/slides\/slide\d+\.xml$/.test(f.name))

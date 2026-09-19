@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { memo, useEffect, useRef, useState } from 'react'
 import { useEditor, EditorContent } from '@tiptap/react'
 import StarterKit from '@tiptap/starter-kit'
 import Image from '@tiptap/extension-image'
@@ -23,7 +23,7 @@ const ODOC_HEADER = { app: 'openoffices', kind: 'doc', version: 1 }
 
 const HL_COLORS = ['#fff59d', '#a5d6a7', '#90caf9', '#f48fb1']
 
-export default function DocEditor({ tab }: Props) {
+function DocEditor({ tab }: Props) {
   const renameTab = useApp((s) => s.renameTab)
   const markDirty = useApp((s) => s.markDirty)
   const markRecent = useApp((s) => s.markRecent)
@@ -276,3 +276,5 @@ export default function DocEditor({ tab }: Props) {
     </div>
   )
 }
+
+export default memo(DocEditor)

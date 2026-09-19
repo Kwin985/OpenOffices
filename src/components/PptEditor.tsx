@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { memo, useEffect, useRef, useState } from 'react'
 import { message } from '@tauri-apps/plugin-dialog'
 import type { Tab } from '../store'
 import { useApp } from '../store'
@@ -24,7 +24,7 @@ interface Props {
   tab: Tab
 }
 
-function StaticSlide({ slide, themeId, big }: { slide: Slide; themeId: string; big?: boolean }) {
+const StaticSlide = memo(function StaticSlide({ slide, themeId, big }: { slide: Slide; themeId: string; big?: boolean }) {
   const t = themeOf(themeId)
   const lines = bodyLines(slide)
   const cls = `ppt-slide-static${big ? ' ppt-slide-big' : ''} ppt-sl-${slide.layout}`
@@ -56,7 +56,7 @@ function StaticSlide({ slide, themeId, big }: { slide: Slide; themeId: string; b
       )}
     </div>
   )
-}
+})
 
 async function fileToDataUri(file: File): Promise<string> {
   const buf = new Uint8Array(await file.arrayBuffer())
@@ -68,7 +68,7 @@ async function fileToDataUri(file: File): Promise<string> {
   return `data:${file.type || 'image/png'};base64,${btoa(bin)}`
 }
 
-export default function PptEditor({ tab }: Props) {
+function PptEditor({ tab }: Props) {
   const [deck, setDeck] = useState<Deck>(() => emptyDeck())
   const [cur, setCur] = useState(0)
   const [present, setPresent] = useState(false)
@@ -379,3 +379,5 @@ export default function PptEditor({ tab }: Props) {
     </div>
   )
 }
+
+export default memo(PptEditor)

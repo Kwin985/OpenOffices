@@ -19,6 +19,15 @@
   **pptx 导出**（pptxgenjs）与 **pptx 导入解析**（jszip + DOMParser，含图片提取还原），
   自有 `.opd`（JSON）存档格式
 
+## 性能（v0.3）
+
+- **按编辑器分包 + 懒加载**：主包 8MB → 首屏约 300KB；Univer（6.1MB）只在首次激活表格标签时加载，
+  TipTap/docx（836KB）与 pptxgenjs/jszip 同理按编辑器按需加载，mammoth/pptxgenjs/jszip 进一步延迟到导入/导出动作
+- **编辑器懒挂载**：标签首次激活才创建 Univer/TipTap 重型实例，之后切换保留状态不重复初始化
+- **渲染裁剪**：三个编辑器与幻灯片缩略图 `React.memo` 化；store 的 `markDirty` 幂等去重，
+  避免 Univer 每条命令都触发无关标签重渲染
+- **Rust release profile**：`lto = true`、`codegen-units = 1`、`strip = true`、`panic = "abort"`
+
 ## 技术栈与开源组件
 
 | 组件 | 用途 | 许可证 |

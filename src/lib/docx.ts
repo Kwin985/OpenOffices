@@ -1,4 +1,3 @@
-import mammoth from 'mammoth'
 import {
   AlignmentType,
   BorderStyle,
@@ -24,6 +23,7 @@ export interface PMNode {
 
 export async function docxToHtml(bytes: Uint8Array): Promise<string> {
   const arrayBuffer = bytes.slice().buffer
+  const mammoth = (await import('mammoth')).default
   const result = await mammoth.convertToHtml({ arrayBuffer })
   return result.value
 }
