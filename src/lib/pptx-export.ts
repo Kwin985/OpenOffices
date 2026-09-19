@@ -1,5 +1,5 @@
 import type PptxGenJS from 'pptxgenjs'
-import { bodyLines, themeOf, type MasterRect, type Slide, type Deck } from './ppt'
+import { bodyLines, themeOf, type MasterRect, type Slide, type SlideTransition, type Deck } from './ppt'
 
 const W = 10 // inches, LAYOUT_16x9
 const H = 5.625
@@ -133,5 +133,34 @@ export async function deckToPptxBytes(deck: Deck): Promise<Uint8Array> {
   }
 
   const out = (await pptx.write({ outputType: 'arraybuffer' })) as ArrayBuffer
+
+  // pptxgenjs 不支持切换动画：解包后向 slideN.xml 注入 <p:transition>（schema 顺序在末尾即可）
+  if (deck.slides.some((s) => s.transition)) {
+    const { default: JSZip } = await import('jszip')
+    const zip = await JSZip.loadAsync(out)
+    for (let i = 0; i < deck.slides.length; i++) {
+      const tr = deck.slides[i].transition
+      if (!tr) continue
+      const name = `ppt/slides/slide${i + 1}.xml`
+      const file = zip.file(name)
+      if (!file) continue
+      const xml = await file.async('string')
+      zip.file(name, xml.replace('</p:sld>', `${transitionXml(tr)}</p:sld>`))
+    }
+    const buf = (await zip.generateAsync({ type: 'arraybuffer' })) as ArrayBuffer
+    return new Uint8Array(buf)
+  }
   return new Uint8Array(out)
+}
+
+function transitionXml(tr: SlideTransition): string {
+  const inner =
+    tr === 'fade'
+      ? '<p:fade/>'
+      : tr === 'push'
+        ? '<p:push dir="l"/>'
+        : tr === 'wipe'
+          ? '<p:wipe dir="l"/>'
+          : '<p:split orient="vert" dir="d"/>'
+  return `<p:transition spd="med" advClick="1">${inner}</p:transition>`
 }

@@ -6,6 +6,7 @@ import {
   type MasterRect,
   type MasterStyle,
   type Slide,
+  type SlideTransition,
 } from './ppt'
 
 const EMU_PER_IN = 914400
@@ -270,6 +271,17 @@ async function parseNotes(zip: JSZip, slideName: string): Promise<string | undef
   return text || undefined
 }
 
+// <p:transition spd="med"><p:fade/></p:transition> 的首个子元素即切换效果名
+function parseTransition(root: Element): SlideTransition | undefined {
+  const tr = descendantsByName(root, 'transition')[0]
+  if (!tr) return undefined
+  for (const c of kids(tr)) {
+    if (c.localName === 'fade' || c.localName === 'push' || c.localName === 'wipe' || c.localName === 'split')
+      return c.localName as SlideTransition
+  }
+  return undefined
+}
+
 async function slideToDeckSlide(
   zip: JSZip,
   slideXml: JSZip.JSZipObject,
@@ -340,9 +352,10 @@ async function slideToDeckSlide(
     layout = 'title'
   }
 
-  // 单页背景覆盖 + 演讲者备注
+  // 单页背景覆盖 + 演讲者备注 + 切页动画
   let bg: string | undefined
   let notes: string | undefined
+  let transition: SlideTransition | undefined
   try {
     const relsText = await zip
       .file(slideXml.name.replace(/slides\/(slide\d+\.xml)$/, 'slides/_rels/$1.rels'))
@@ -350,6 +363,7 @@ async function slideToDeckSlide(
     const slideBg = await bgOf(root, zip, relsText, 'ppt/slides', env.colors, env.clrMap)
     bg = slideBg.bg
     notes = await parseNotes(zip, slideXml.name)
+    transition = parseTransition(root)
     if (slideBg.bgImage && !image) {
       // 单页背景图当作整页图片还原
       image = slideBg.bgImage
@@ -359,7 +373,7 @@ async function slideToDeckSlide(
     console.warn('页背景/备注解析失败，忽略', e)
   }
 
-  return { id: newId(), layout, title, body: bodyLines.join('\n'), image, notes, bg }
+  return { id: newId(), layout, title, body: bodyLines.join('\n'), image, notes, bg, transition }
 }
 
 export async function pptxBytesToDeck(bytes: Uint8Array): Promise<Deck> {

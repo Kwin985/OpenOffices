@@ -1,5 +1,14 @@
 export type SlideLayout = 'title' | 'bullets' | 'image' | 'blank'
 
+export type SlideTransition = 'fade' | 'push' | 'wipe' | 'split'
+
+export const TRANSITION_NAMES: Record<SlideTransition, string> = {
+  fade: '淡入',
+  push: '推入',
+  wipe: '擦除',
+  split: '劈开',
+}
+
 export interface MasterRect {
   x: number
   y: number
@@ -24,6 +33,7 @@ export interface Slide {
   image?: string // data URI
   notes?: string // 演讲者备注
   bg?: string // 单页纯色背景覆盖
+  transition?: SlideTransition // 切页动画，未设=无
 }
 
 export interface DeckTheme {
@@ -94,6 +104,10 @@ export function bodyLines(slide: Slide): string[] {
   return slide.body.split(/\r?\n/).filter((l) => l.trim().length > 0)
 }
 
+function isTransition(v: unknown): v is SlideTransition {
+  return typeof v === 'string' && v in TRANSITION_NAMES
+}
+
 export function serializeDeck(deck: Deck): string {
   return JSON.stringify(deck, null, 2)
 }
@@ -141,6 +155,7 @@ export function parseDeck(text: string): Deck {
       image: typeof s.image === 'string' ? s.image : undefined,
       notes: typeof s.notes === 'string' ? s.notes : undefined,
       bg: typeof s.bg === 'string' ? s.bg : undefined,
+      transition: isTransition(s.transition) ? s.transition : undefined,
     })),
   }
   const master = parseMaster(raw.master)

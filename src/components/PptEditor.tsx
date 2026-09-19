@@ -1,91 +1,32 @@
 import { memo, useEffect, useRef, useState, type CSSProperties } from 'react'
 import { message } from '@tauri-apps/plugin-dialog'
+import { emit, listen } from '@tauri-apps/api/event'
+import { WebviewWindow } from '@tauri-apps/api/webviewWindow'
 import type { Tab } from '../store'
 import { useApp } from '../store'
 import { readBytes, readText, writeBytes, writeText, pickSaveFile, baseName } from '../lib/fs'
 import {
-  bodyLines,
   emptyDeck,
   newSlide,
   parseDeck,
   serializeDeck,
   themeOf,
   LAYOUT_NAMES,
+  TRANSITION_NAMES,
   THEMES,
   type Deck,
-  type MasterRect,
-  type MasterStyle,
   type Slide,
   type SlideLayout,
+  type SlideTransition,
 } from '../lib/ppt'
 import { deckToPptxBytes } from '../lib/pptx-export'
 import { pptxBytesToDeck } from '../lib/pptx-import'
 import { registerSaver } from '../lib/registry'
+import StaticSlide from './StaticSlide'
 
 interface Props {
   tab: Tab
 }
-
-const pct = (v: number) => `${(v * 100).toFixed(2)}%`
-
-const StaticSlide = memo(function StaticSlide({
-  slide,
-  themeId,
-  master,
-  big,
-}: {
-  slide: Slide
-  themeId: string
-  master?: MasterStyle
-  big?: boolean
-}) {
-  const t = themeOf(themeId)
-  const lines = bodyLines(slide)
-  const cls = `ppt-slide-static${big ? ' ppt-slide-big' : ''} ppt-sl-${slide.layout}`
-  const fg = master?.bodyColor ?? t.fg
-  const accent = master?.titleColor ?? t.accent
-  const style: CSSProperties = master?.bgImage
-    ? {
-        backgroundImage: `url(${master.bgImage})`,
-        backgroundSize: 'cover',
-        backgroundPosition: 'center',
-        color: fg,
-      }
-    : { background: slide.bg ?? master?.bg ?? t.bg, color: fg }
-  const abs = (r?: MasterRect): CSSProperties | undefined =>
-    r ? { position: 'absolute', left: pct(r.x), top: pct(r.y), width: pct(r.w), height: pct(r.h) } : undefined
-  const pad: CSSProperties | undefined = master?.titleRect || master?.bodyRect ? { padding: 0 } : undefined
-  return (
-    <div className={cls} style={{ ...style, ...pad }}>
-      {slide.layout === 'title' ? (
-        <div className="ppt-st-title-wrap" style={abs(master?.titleRect)}>
-          <div className="ppt-st-title" style={{ color: accent }}>{slide.title}</div>
-          <div className="ppt-st-sub">{slide.body}</div>
-        </div>
-      ) : (
-        <>
-          {slide.title && (
-            <div className="ppt-st-title" style={{ ...abs(master?.titleRect), color: accent }}>
-              {slide.title}
-            </div>
-          )}
-          <div className="ppt-st-content" style={abs(master?.bodyRect)}>
-            {slide.layout === 'image' && slide.image && (
-              <img className="ppt-st-img" src={slide.image} alt="" />
-            )}
-            {lines.length > 0 && (
-              <ul className="ppt-st-list">
-                {lines.map((l, i) => (
-                  <li key={i}>{l}</li>
-                ))}
-              </ul>
-            )}
-          </div>
-        </>
-      )}
-    </div>
-  )
-})
 
 async function fileToDataUri(file: File): Promise<string> {
   const buf = new Uint8Array(await file.arrayBuffer())
@@ -158,6 +99,7 @@ function PptEditor({ tab }: Props) {
     const onKey = (e: KeyboardEvent) => {
       if (e.key === 'Escape') setPresent(false)
       else if (e.key === 'n' || e.key === 'N') setShowNotes((v) => !v)
+      else if (e.key === 'p' || e.key === 'P') void togglePresenter()
       else if (e.key === 'ArrowRight' || e.key === ' ' || e.key === 'Enter')
         setPresentIdx((i) => Math.min(i + 1, deck.slides.length - 1))
       else if (e.key === 'ArrowLeft' || e.key === 'Backspace')
@@ -167,7 +109,49 @@ function PptEditor({ tab }: Props) {
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [present, deck.slides.length])
+
+  // 演讲者视图：第二窗口 + 事件同步
+  const snapRef = useRef({ present, idx: presentIdx, deck })
+  snapRef.current = { present, idx: presentIdx, deck }
+
+  useEffect(() => {
+    if (!present) {
+      void emit('present:closed')
+      return
+    }
+    void emit('present:sync', { deck, idx: presentIdx })
+  }, [present, presentIdx, deck])
+
+  useEffect(() => {
+    const un: Array<() => void> = []
+    void listen('presenter:ready', () => {
+      const s = snapRef.current
+      if (s.present) void emit('present:sync', { deck: s.deck, idx: s.idx })
+    }).then((fn) => un.push(fn))
+    void listen('present:quit', () => setPresent(false)).then((fn) => un.push(fn))
+    return () => un.forEach((f) => f())
+  }, [])
+
+  const togglePresenter = async () => {
+    const existing = await WebviewWindow.getByLabel('presenter')
+    if (existing) {
+      await existing.close()
+      return
+    }
+    const u = new URL(window.location.href)
+    u.searchParams.set('view', 'presenter')
+    new WebviewWindow('presenter', {
+      url: u.toString(),
+      title: '演讲者视图',
+      width: 1040,
+      height: 700,
+      visible: false,
+    })
+      .once('tauri://error', () => void message('无法创建演讲者窗口（检查权限）', { title: '演讲者视图' }))
+      .then(() => {})
+  }
 
   const save = async (asNew: boolean) => {
     try {
@@ -307,6 +291,21 @@ function PptEditor({ tab }: Props) {
             <option key={th.id} value={th.id}>主题 · {th.name}</option>
           ))}
         </select>
+        <select
+          className="tool-select"
+          value={slide.transition ?? ''}
+          onChange={(e) =>
+            editSlide(cur, (s) => {
+              s.transition = (e.target.value || undefined) as SlideTransition | undefined
+            })
+          }
+          title="本页切页动画"
+        >
+          <option value="">切换 · 无</option>
+          {(Object.entries(TRANSITION_NAMES) as [SlideTransition, string][]).map(([k, n]) => (
+            <option key={k} value={k}>切换 · {n}</option>
+          ))}
+        </select>
         <button
           className="tool-btn tool-btn-primary"
           onClick={() => {
@@ -418,7 +417,12 @@ function PptEditor({ tab }: Props) {
 
       {present && (
         <div className="ppt-present" onClick={() => setPresent(false)}>
-          <div className="ppt-present-stage">
+          <div
+            className={`ppt-present-stage${
+              deck.slides[presentIdx]?.transition ? ` ppt-tr-${deck.slides[presentIdx]!.transition}` : ''
+            }`}
+            key={presentIdx}
+          >
             <StaticSlide big slide={deck.slides[presentIdx]} themeId={deck.theme} master={deck.master} />
           </div>
           {showNotes && deck.slides[presentIdx]?.notes && (
@@ -428,8 +432,11 @@ function PptEditor({ tab }: Props) {
           )}
           <div className="ppt-present-bar" onClick={(e) => e.stopPropagation()}>
             <span>
-              {presentIdx + 1} / {deck.slides.length} · ←/→ 翻页 · N 备注 · Esc 退出
+              {presentIdx + 1} / {deck.slides.length} · ←/→ 翻页 · N 备注 · P 演讲者视图 · Esc 退出
             </span>
+            <button className="tool-btn" onClick={() => void togglePresenter()}>
+              演讲者视图
+            </button>
             <button className="tool-btn" onClick={() => setPresent(false)}>退出放映</button>
           </div>
         </div>

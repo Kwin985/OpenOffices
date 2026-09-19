@@ -9,6 +9,11 @@ import { openPath, requestCloseTab } from './lib/open'
 import { saveTab } from './lib/registry'
 
 const Workspace = lazy(() => import('./components/Workspace'))
+const Presenter = lazy(() => import('./components/Presenter'))
+
+const IS_PRESENTER =
+  typeof window !== 'undefined' &&
+  new URLSearchParams(window.location.search).get('view') === 'presenter'
 
 function cycleTab(dir: 1 | -1) {
   const { tabs, activeId, setActive } = useApp.getState()
@@ -19,6 +24,15 @@ function cycleTab(dir: 1 | -1) {
 }
 
 export default function App() {
+  if (!IS_PRESENTER) return <MainApp />
+  return (
+    <Suspense fallback={<div className="editor-loading">正在加载演讲者视图…</div>}>
+      <Presenter />
+    </Suspense>
+  )
+}
+
+function MainApp() {
   const view = useApp((s) => s.view)
   const theme = useApp((s) => s.theme)
   const goHome = useApp((s) => s.goHome)

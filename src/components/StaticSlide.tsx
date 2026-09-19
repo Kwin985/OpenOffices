@@ -1,0 +1,63 @@
+import { memo, type CSSProperties } from 'react'
+import { bodyLines, themeOf, type MasterRect, type MasterStyle, type Slide } from '../lib/ppt'
+
+const pct = (v: number) => `${(v * 100).toFixed(2)}%`
+
+export default memo(function StaticSlide({
+  slide,
+  themeId,
+  master,
+  big,
+}: {
+  slide: Slide
+  themeId: string
+  master?: MasterStyle
+  big?: boolean
+}) {
+  const t = themeOf(themeId)
+  const lines = bodyLines(slide)
+  const cls = `ppt-slide-static${big ? ' ppt-slide-big' : ''} ppt-sl-${slide.layout}`
+  const fg = master?.bodyColor ?? t.fg
+  const accent = master?.titleColor ?? t.accent
+  const style: CSSProperties = master?.bgImage
+    ? {
+        backgroundImage: `url(${master.bgImage})`,
+        backgroundSize: 'cover',
+        backgroundPosition: 'center',
+        color: fg,
+      }
+    : { background: slide.bg ?? master?.bg ?? t.bg, color: fg }
+  const abs = (r?: MasterRect): CSSProperties | undefined =>
+    r ? { position: 'absolute', left: pct(r.x), top: pct(r.y), width: pct(r.w), height: pct(r.h) } : undefined
+  const pad: CSSProperties | undefined = master?.titleRect || master?.bodyRect ? { padding: 0 } : undefined
+  return (
+    <div className={cls} style={{ ...style, ...pad }}>
+      {slide.layout === 'title' ? (
+        <div className="ppt-st-title-wrap" style={abs(master?.titleRect)}>
+          <div className="ppt-st-title" style={{ color: accent }}>{slide.title}</div>
+          <div className="ppt-st-sub">{slide.body}</div>
+        </div>
+      ) : (
+        <>
+          {slide.title && (
+            <div className="ppt-st-title" style={{ ...abs(master?.titleRect), color: accent }}>
+              {slide.title}
+            </div>
+          )}
+          <div className="ppt-st-content" style={abs(master?.bodyRect)}>
+            {slide.layout === 'image' && slide.image && (
+              <img className="ppt-st-img" src={slide.image} alt="" />
+            )}
+            {lines.length > 0 && (
+              <ul className="ppt-st-list">
+                {lines.map((l, i) => (
+                  <li key={i}>{l}</li>
+                ))}
+              </ul>
+            )}
+          </div>
+        </>
+      )}
+    </div>
+  )
+})

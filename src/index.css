@@ -1013,6 +1013,47 @@ button {
   justify-content: center;
 }
 
+/* 切页动画：进入放映的第 N 页时按该页 transition 播放 */
+@keyframes ppt-anim-fade {
+  from {
+    opacity: 0;
+  }
+}
+
+@keyframes ppt-anim-push {
+  from {
+    transform: translateX(55%);
+  }
+}
+
+@keyframes ppt-anim-wipe {
+  from {
+    clip-path: inset(0 100% 0 0);
+  }
+}
+
+@keyframes ppt-anim-split {
+  from {
+    clip-path: inset(50% 0 50% 0);
+  }
+}
+
+.ppt-tr-fade {
+  animation: ppt-anim-fade 0.5s ease;
+}
+
+.ppt-tr-push {
+  animation: ppt-anim-push 0.5s ease;
+}
+
+.ppt-tr-wipe {
+  animation: ppt-anim-wipe 0.5s ease;
+}
+
+.ppt-tr-split {
+  animation: ppt-anim-split 0.5s ease;
+}
+
 .ppt-present-bar {
   position: absolute;
   right: 16px;
@@ -1072,6 +1113,122 @@ button {
   white-space: pre-wrap;
   max-height: 32%;
   overflow: auto;
+}
+
+/* ---------- 演讲者视图（第二窗口） ---------- */
+.presenter {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  background: #171a21;
+  color: #e8ecf5;
+  font-size: 14px;
+}
+
+.presenter-wait {
+  margin: auto;
+  color: #9aa2b1;
+}
+
+.presenter-head {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 10px 16px;
+  border-bottom: 1px solid #2a2f3a;
+}
+
+.presenter-title {
+  font-weight: 600;
+}
+
+.presenter-clock,
+.presenter-count {
+  color: #9aa2b1;
+  font-variant-numeric: tabular-nums;
+}
+
+.presenter-main {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  gap: 12px;
+  padding: 12px 16px;
+}
+
+.presenter-cur {
+  flex: 1.7;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 1.9vmin;
+  background: #000;
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.presenter-side {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.presenter-label {
+  display: block;
+  margin-bottom: 4px;
+  color: #9aa2b1;
+  font-size: 12px;
+}
+
+.presenter-next {
+  aspect-ratio: 16 / 9;
+  border: 1px solid #2a2f3a;
+  border-radius: 6px;
+  overflow: hidden;
+  font-size: 1vmin;
+  display: flex;
+}
+
+.presenter-notes-wrap {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.presenter-notes {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  background: #20242e;
+  border: 1px solid #2a2f3a;
+  border-radius: 6px;
+  padding: 10px 12px;
+  line-height: 1.7;
+  white-space: pre-wrap;
+}
+
+.presenter-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 16px;
+  border-top: 1px solid #2a2f3a;
+}
+
+.presenter-hint {
+  color: #6d7480;
+  font-size: 12px;
+}
+
+.presenter .tool-btn {
+  background: #2a2f3a;
+  border-color: #3a4150;
+  color: #e8ecf5;
 }
 
 
