@@ -24,6 +24,7 @@ import {
 } from '../lib/docx'
 import { Comment, addCommentMark, findCommentAnchor, removeCommentMark } from '../lib/comment-extension'
 import { Toc } from '../lib/toc-extension'
+import { odtToHtml, prosemirrorToOdtBytes } from '../lib/odt'
 import { registerSaver } from '../lib/registry'
 
 interface Props {
@@ -65,6 +66,12 @@ function DocEditor({ tab }: Props) {
     onUpdate: () => markDirty(tab.id, true),
     editorProps: { attributes: { class: 'doc-content' } },
   })
+  if (import.meta.env.DEV && editor) {
+    const w = window as unknown as Record<string, unknown>
+    const map = (w.__oofDoc as Record<string, typeof editor> | undefined) ?? {}
+    map[tab.id] = editor
+    w.__oofDoc = map
+  }
 
   // 批注侧栏随文档变更刷新（锚点位置/孤儿判定）
   useEffect(() => {
@@ -95,6 +102,11 @@ function DocEditor({ tab }: Props) {
             setMeta(comments.length ? { ...m, comments } : m)
             if (comments.length) setCmOpen(true)
           }
+        } else if (tab.path.toLowerCase().endsWith('.odt')) {
+          const bytes = await readBytes(tab.path)
+          const { html, meta: m } = await odtToHtml(bytes)
+          if (!disposed) editor.commands.setContent(html, { emitUpdate: false })
+          if (!disposed && Object.keys(m).length) setMeta(m)
         } else {
           const text = await readText(tab.path)
           const parsed = JSON.parse(text) as { content?: PMNode; meta?: DocMeta }
@@ -119,6 +131,12 @@ function DocEditor({ tab }: Props) {
 
   const saveOdoc = async (asNew: boolean) => {
     if (!editor) return
+    // .odt 标签的 Ctrl+S 直接原地导出 ODT，不能把 JSON 写进 odt 路径
+    const cur = tab.path
+    if (!asNew && cur?.toLowerCase().endsWith('.odt')) {
+      await exportOdtTo(cur)
+      return
+    }
     try {
       let path = asNew ? undefined : tab.path
       const name = tab.path ? baseName(tab.path) : '未命名文档'
@@ -134,6 +152,19 @@ function DocEditor({ tab }: Props) {
       setTimeout(() => setStatus(''), 1500)
     } catch (e) {
       await message(String(e), { title: '保存失败', kind: 'error' })
+    }
+  }
+
+  const exportOdtTo = async (path: string) => {
+    if (!editor) return
+    try {
+      const bytes = await prosemirrorToOdtBytes(editor.getJSON() as PMNode, meta)
+      await writeBytes(path, bytes)
+      markRecent(path, 'doc')
+      setStatus('已保存（odt）')
+      setTimeout(() => setStatus(''), 1500)
+    } catch (e) {
+      await message(String(e), { title: '导出 odt 失败', kind: 'error' })
     }
   }
 
@@ -157,6 +188,16 @@ function DocEditor({ tab }: Props) {
     } catch (e) {
       await message(String(e), { title: '导出失败', kind: 'error' })
     }
+  }
+
+  const exportOdt = async () => {
+    if (!editor) return
+    const path = await pickSaveFile(
+      (tab.path ? baseName(tab.path).replace(/\.[^.]+$/, '') : '未命名文档') + '.odt',
+      ['odt'],
+    )
+    if (!path) return
+    await exportOdtTo(path)
   }
 
   // WebView2 原生 PrintToPdf：主窗口按 @media print 样式矢量落盘，需当前文档标签处于激活态
@@ -316,6 +357,7 @@ function DocEditor({ tab }: Props) {
         {btn('保存', () => saveOdoc(false), false, '保存为 .odoc')}
         {btn('另存为', () => saveOdoc(true))}
         {btn('导出 docx', exportDocx)}
+        {btn('导出 odt', exportOdt, false, '导出 OpenDocument 文本（LibreOffice 系通用）')}
         {btn('目录', tocAction, false, '插入/定位目录：按标题实时汇总；导出为 Word 原生 TOC 域')}
         {btn('页眉页脚', () => setHfOpen((v) => !v), hfOpen || !!(meta.headerText || meta.footerText || meta.footerPageNumber), '设置页眉、页脚与页码')}
         {btn('批注', () => setCmOpen((v) => !v), cmOpen || comments.length > 0, '批注侧栏：选中文字后可添加批注，导出为 docx 原生批注')}

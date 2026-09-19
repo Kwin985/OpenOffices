@@ -1,4 +1,5 @@
 mod pdf;
+mod ods;
 mod xlsx;
 mod xlsx_chart;
 mod xlsx_style;
@@ -12,6 +13,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             xlsx::read_xlsx,
             xlsx::write_xlsx,
+            ods::write_ods,
             pdf::export_pdf
         ])
         .run(tauri::generate_context!())

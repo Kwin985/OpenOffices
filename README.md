@@ -8,12 +8,13 @@
 - **应用外壳**：类 WPS 首页、多标签工作区（标签右键菜单）、最近文件（持久化）、新建/打开/另存为、
   快捷键（Ctrl+O/S/Shift+S/W/N/Tab 切换）、拖拽文件到窗口打开、关闭前未保存确认、暗色/亮色主题、
   Workspace 懒加载（主包 8MB → 250KB）
-- **表格（Calc）**：Univer 表格内核（中文界面、公式计算、工具栏），xlsx / xls / ods 读取与 xlsx 写出；
+- **表格（Calc）**：Univer 表格内核（中文界面、公式计算、工具栏），xlsx / xls / ods 读取与 xlsx / ods 写出；
   第二轮新增社区高级预设五件套——**筛选排序、排序、条件格式、数据验证、查找替换**
   （注：Univer `preset-sheets-advanced` 属商业版，本项目只用 Apache-2.0 社区预设）
 - **文档（Writer）**：TipTap 富文本（标题/加粗/斜体/下划线/删除线/对齐/列表/引用/代码块/表格/图片/链接），
   第二轮新增**字色、多色高亮、实时字数统计、打印/导出 PDF（系统打印对话框）**，
-  颜色与高亮映射进 docx（`w:color` / `w:shd`）；docx 导入（mammoth）、docx 导出（docx）、自有 `.odoc`（JSON）存档
+  颜色与高亮映射进 docx（`w:color` / `w:shd`）；docx 导入（mammoth）、docx 导出（docx）、
+  ODT 双向（JSZip 直写/直读 ODF）、自有 `.odoc`（JSON）存档
 - **演示（Impress-lite）**：自研轻量幻灯片编辑器——标题/要点/图片/空白四种版式、6 套主题色、
   页序调整、缩略图侧栏、全屏放映（←/→/空格翻页、N 切换备注、Esc 退出）；
   **pptx 导出**（pptxgenjs）与 **pptx 导入解析**（jszip + DOMParser，含图片提取还原），
@@ -145,6 +146,24 @@
 - **实机回归**：本机 Excel 16.0（COM 只读）打开应用保存的三图表文件——`ChartObjects=3`，
   柱形 51×2 + 饼 5、系列数与标题正确；cargo 12 项测试含列形+饼双图表写读往返断言
 
+## ODF 原生格式（v0.14）
+
+- **ODS 写出**：新增 `ods.rs`——`write_ods` 命令把与 xlsx 共用的工作簿载荷直接生成 ODF 包
+  （mimetype 首条不压缩 + manifest + content.xml/styles.xml），单元格值（文本/数值/布尔）、
+  粗体斜体字号字色底色（自动样式去重 `ce1..`）、合并区（spanned + covered-table-cell）、
+  稀疏行列全部按 ODF 规范落盘
+- **按扩展名分流保存**：修复此前 `.ods` 路径会被写入 xlsx 字节的 bug——表格保存按目标扩展名
+  在 `write_xlsx` / `write_ods` 间路由，另存为对话框同时提供两种过滤器；ODS 不含图表时状态栏提示
+- **ODT 双向**：前端 `lib/odt.ts`（JSZip + DOMParser，零新依赖）实现 ProseMirror JSON ↔ ODT——
+  导出覆盖标题(H1-H4)/粗斜下删/字色高亮等字符样式（`C1..` 去重）/对齐/有序无序列表/代码块/引用/
+  表格合并/图片内嵌（`Pictures/`）/超链接/页眉页脚含 PAGE 页码域；导入按样式表反解析回 HTML 挂进编辑器
+- **范围限制**：ODS 读侧仍走 calamine 值通道（ODF 样式/合并暂不解析回 Univer，ODT 不含批注与目录域）；
+  ODT 导出以应用自身能力子集为准，未覆盖脚注/锚定框架等
+- **验证**：calamine（真实读侧实现）读回自写 ODS 值/布尔/稀疏/转义断言；zip 布局断言（mimetype 首条
+  Stored）；CDP 冒烟全程走应用真实链路——打开夹具 ODS → Univer 改值 → 保存分流 → 解包断言 → 重开显新值；
+  ODT 导出/导入/编辑器加载/原地写回（含图片）全链路；本机无 LibreOffice 且 WPS COM（KWPS）与 Word 一样
+  存在自动化挂起故障，ODF 实机回归以结构断言替代
+
 ## 性能（v0.3）
 
 - **按编辑器分包 + 懒加载**：主包 8MB → 首屏约 300KB；Univer（6.1MB）只在首次激活表格标签时加载，
@@ -165,12 +184,12 @@
 | [mammoth.js](https://github.com/mwilliamson/mammoth.js) | docx → HTML 导入 | BSD-2 |
 | [docx](https://github.com/dolanmiu/docx) | ProseMirror JSON → docx 导出 | MIT |
 | [pptxgenjs](https://gitbrent.github.io/PptxGenJS/) | 幻灯片 → pptx 导出 | MIT |
-| [JSZip](https://github.com/Stuk/jszip) | pptx（zip）解包导入 | MIT |
+| [JSZip](https://github.com/Stuk/jszip) | pptx/odt（zip）解包与 ODT 打包 | MIT |
 | [pdfjs-dist](https://github.com/mozilla/pdf.js) | PDF 查看渲染（worker + cmaps/标准字体） | Apache-2.0 |
 | [webview2-com](https://docs.rs/webview2-com) + [windows](https://github.com/microsoft/windows-rs) | PrintToPdf 原生调用（wry 依赖树内，零体积增量） | MIT / Apache-2.0 |
 | [calamine](https://github.com/tafia/calamine) | Rust xlsx/xls/ods 读取 | MIT |
 | [rust_xlsxwriter](https://github.com/jmcnamara/rust_xlsxwriter) | Rust xlsx 写出（含 Format 样式/合并） | BSD-2 / Artistic-2.0 |
-| [zip](https://github.com/zip-rs/zip) | Rust xlsx 解包（读取样式/合并 XML） | MIT |
+| [zip](https://github.com/zip-rs/zip) | Rust xlsx 解包（读取样式/合并 XML）+ ODS 打包写出 | MIT |
 | [quick-xml](https://github.com/tafia/quick-xml) | Rust OOXML 流式解析 | MIT |
 | [zustand](https://github.com/pmndrs/zustand) | 前端状态管理 | MIT |
 | React 19 + Vite | UI 框架与构建 | MIT |
@@ -182,6 +201,7 @@ src-tauri/            Rust 后端
   src/xlsx.rs         read_xlsx (calamine) / write_xlsx (rust_xlsxwriter) 命令，含样式、合并区与图表往返
   src/xlsx_style.rs   zip + quick-xml 直读 xlsx 的 styles.xml / mergeCells（calamine 无样式 API）
   src/xlsx_chart.rs   zip + quick-xml 直读 chartN.xml + drawing 锚点，系列值按实时网格解析
+  src/ods.rs          write_ods 命令：共用 xlsx 载荷 → ODF zip（mimetype/manifest/content/styles），含样式去重与合并
   src/pdf.rs          export_pdf 命令：with_webview → WebView2 PrintToPdf（cfg windows）
   capabilities/       dialog + fs 权限与路径作用域
 src/                  React 前端
@@ -193,6 +213,7 @@ src/                  React 前端
   lib/docx.ts         docx 导入导出（ProseMirror JSON ↔ docx，字色/高亮/页眉页脚/TOC 域/批注映射；文本节点兼容顶层 text 与 attrs.text）
   lib/toc-extension.ts TipTap 目录原子节点：按标题实时汇总、点击跳转
   lib/comment-extension.ts comment mark（cid 锚定批注）+ 加/删/定位/汇总工具
+  lib/odt.ts          ProseMirror JSON ↔ ODT（JSZip 打包导出 + DOMParser 导入，字符样式/合并表/图片/页码域）
   lib/ppt.ts          .opd 幻灯片数据模型（版式/主题/序列化）
   lib/pptx-export.ts  Deck → pptx（pptxgenjs）
   lib/pptx-import.ts  pptx → Deck（JSZip 解包 + OOXML 解析 + 媒体还原）
@@ -202,8 +223,8 @@ src/                  React 前端
 scripts/              copy-pdfjs-assets.mjs（dev/build 前复制 cmaps/标准字体到 public/pdfjs）
 ```
 
-表格文件流：`xlsx 磁盘 → Rust(calamine 值 + zip/quick-xml 样式合并图表) → JSON 快照 → Univer 渲染（图表经 VChart 出 PNG 浮动图片）`；保存反向经 `rust_xlsxwriter` 落盘（含原生图表部件）。
-文档文件流：`docx → mammoth 正文 + zip 直读页眉页脚/批注 → HTML/元数据 → TipTap`；保存为 `.odoc` JSON（含 meta）或导出 docx。
+表格文件流：`xlsx/ods 磁盘 → Rust(calamine 值 + zip/quick-xml 样式合并图表) → JSON 快照 → Univer 渲染（图表经 VChart 出 PNG 浮动图片）`；保存按扩展名分流——`.xlsx` 经 `rust_xlsxwriter`（含原生图表部件）、`.ods` 经 `ods.rs` 生成 ODF 包。
+文档文件流：`docx → mammoth 正文 + zip 直读页眉页脚/批注 → HTML/元数据 → TipTap`；`.odt` 走 `lib/odt.ts` 双向；保存为 `.odoc` JSON（含 meta）或导出 docx/odt。
 演示文件流：`pptx → JSZip 解包 OOXML → Deck 模型 → 编辑器`；保存为 `.opd` JSON 或经 pptxgenjs 导出 pptx。
 PDF 文件流：查看 `pdf 磁盘 → readBytes → pdfjs-dist（worker + canvas）`；导出 `文档 → @media print 排版 → Rust export_pdf → WebView2 PrintToPdf 落盘`。
 
@@ -238,7 +259,7 @@ cargo check        # Rust 后端检查（在 src-tauri 下）
 - [x] 文档：批注（锚点标记 + 侧栏面板 + docx comments 往返）
 - [x] PDF 查看（pdf.js）与文档导出（WebView2 PrintToPdf）
 - [ ] PDF：表格/演示导出
-- [ ] ODF（ods/odt）原生格式
+- [x] ODF（ods/odt）原生格式
 - [ ] 本地文件关联与"最近项目"跨设备同步（可选、端到端加密）
 
 ## License

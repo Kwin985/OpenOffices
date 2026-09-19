@@ -6,7 +6,7 @@ import type { Tab } from '../store'
 import { useApp } from '../store'
 import { createSheetApp } from '../lib/univer'
 import { payloadToWorkbook, workbookToPayload } from '../lib/univer-io'
-import { baseName, pickSaveFile, readXlsx, writeXlsx } from '../lib/fs'
+import { baseName, pickSaveFile, readXlsx, writeOds, writeXlsx } from '../lib/fs'
 import type { ChartPayload, ChartRangeRef, ChartSeriesPayload, WorkbookPayload } from '../lib/fs'
 import { renderChartPng } from '../lib/chart'
 import { registerSaver } from '../lib/registry'
@@ -343,13 +343,20 @@ function SheetEditor({ tab }: Props) {
       setChartCount(chartsRef.current.size)
       let path = asNew ? undefined : tab.path
       if (!path) {
-        path = (await pickSaveFile(`${snapshot.name || '工作簿'}.xlsx`, ['xlsx'])) ?? undefined
+        path = (await pickSaveFile(`${snapshot.name || '工作簿'}.xlsx`, ['xlsx', 'ods'])) ?? undefined
         if (!path) return
       }
-      await writeXlsx(path, payload)
+      // 按目标扩展名分流：.ods 走 ODF 写出，避免把 xlsx 字节写进 ods 路径
+      const isOds = path.toLowerCase().endsWith('.ods')
+      if (isOds) {
+        await writeOds(path, payload)
+      } else {
+        await writeXlsx(path, payload)
+      }
       renameTab(tab.id, baseName(path), path)
       markRecent(path, 'sheet')
-      setStatus('已保存')
+      const hasCharts = payload.sheets.some((s) => s.charts?.length)
+      setStatus(isOds && hasCharts ? '已保存（ODS 暂不含图表）' : '已保存')
       setTimeout(() => setStatus(''), 1500)
     } catch (e) {
       await message(String(e), { title: '保存失败', kind: 'error' })

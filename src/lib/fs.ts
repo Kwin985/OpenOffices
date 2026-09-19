@@ -66,7 +66,7 @@ export interface WorkbookPayload {
 }
 
 const SHEET_EXTS = ['xlsx', 'xls', 'ods', 'csv']
-const DOC_EXTS = ['docx', 'odoc']
+const DOC_EXTS = ['docx', 'odoc', 'odt']
 const PPT_EXTS = ['pptx', 'ppt', 'opd']
 const PDF_EXTS = ['pdf']
 
@@ -129,4 +129,8 @@ export async function readXlsx(path: string): Promise<WorkbookPayload> {
 
 export async function writeXlsx(path: string, workbook: WorkbookPayload): Promise<void> {
   await invoke('write_xlsx', { path, workbook })
+}
+
+export async function writeOds(path: string, workbook: WorkbookPayload): Promise<void> {
+  await invoke('write_ods', { path, workbook })
 }
