@@ -79,6 +79,21 @@
   保留全部 6 个 clickEffect、`presetSubtype="8"`、`build="p"`、`advTm`——方向与出场被
   PowerPoint 原生接受；该重存文件再经我们的导入器仍识别 fly/left/fade，双向往返闭环
 
+## 文档页眉页脚与目录（v0.10）
+
+- **页眉页脚设置**：工具栏「页眉页脚」面板——页眉/页脚文本 + 页码开关，随 `.odoc` 的 `meta`
+  存储；编辑界面在纸面上/下缘实时渲染预览条（页码显示占位 `[页码]`）
+- **docx 导出**：页眉写入 section `headerReference`（右带细线），页脚含页码时生成原生
+  `PAGE` 域（"第 X 页"）；`features.updateFields` 让 Word 打开即刷新域
+- **目录节点**：TipTap 原子节点（NodeView 不存正文），按标题 1-4 实时汇总、点击滚动跳转；
+  导出映射为 Word 原生 TOC 域（`\o "1-4" \u` + 标题段落大纲级别），本机 Word 16.0 实机确认
+  更新域后生成"第一章 起源 · 第 1 页"式条目；另配 `settings.xml` updateFields
+- **docx 导入**：mammoth 不读页眉页脚，用 JSZip 直读 `sectPr` 的 `headerReference`/
+  `footerReference`（取 `w:type="default"` 项）抽文本并识别 PAGE 域；Word 重存的规范化
+  docx 亦被容错解析，双向闭环
+- **许可注记**：表格图表经调研确认 Univer 图表插件属 `@univerjs-pro` 商业授权，社区版
+  不可用，故图表继续单列并评估 VChart（Apache-2.0）自绘路线
+
 ## 性能（v0.3）
 
 - **按编辑器分包 + 懒加载**：主包 8MB → 首屏约 300KB；Univer（6.1MB）只在首次激活表格标签时加载，
@@ -118,7 +133,8 @@ src/                  React 前端
   App.tsx             全局快捷键、拖拽打开、关闭确认、懒加载路由
   lib/univer.ts       Univer 实例工厂（公式 worker + 五个社区高级预设）
   lib/univer-io.ts    xlsx 数据+样式/合并 ↔ Univer 快照 转换（样式去重注册）
-  lib/docx.ts         docx 导入导出（ProseMirror JSON ↔ docx，含字色/高亮映射）
+  lib/docx.ts         docx 导入导出（ProseMirror JSON ↔ docx，字色/高亮/页眉页脚/TOC 域映射）
+  lib/toc-extension.ts TipTap 目录原子节点：按标题实时汇总、点击跳转
   lib/ppt.ts          .opd 幻灯片数据模型（版式/主题/序列化）
   lib/pptx-export.ts  Deck → pptx（pptxgenjs）
   lib/pptx-import.ts  pptx → Deck（JSZip 解包 + OOXML 解析 + 媒体还原）
@@ -128,7 +144,7 @@ src/                  React 前端
 ```
 
 表格文件流：`xlsx 磁盘 → Rust(calamine 值 + zip/quick-xml 样式合并) → JSON 快照 → Univer 渲染`；保存反向经 `rust_xlsxwriter` 落盘。
-文档文件流：`docx → mammoth → HTML → TipTap`；保存为 `.odoc` JSON 或导出 docx。
+文档文件流：`docx → mammoth 正文 + zip 直读页眉页脚 → HTML/元数据 → TipTap`；保存为 `.odoc` JSON（含 meta）或导出 docx。
 演示文件流：`pptx → JSZip 解包 OOXML → Deck 模型 → 编辑器`；保存为 `.opd` JSON 或经 pptxgenjs 导出 pptx。
 
 ## 开发
@@ -150,8 +166,9 @@ cargo check        # Rust 后端检查（在 src-tauri 下）
 - [x] 演示：动画映射 PowerPoint 原生 timing 树（元素级跨端保真）
 - [x] 演示：动画方向/出场效果补全 + PowerPoint 实机回放回归确认
 - [x] 表格：样式（字体/颜色/合并）随 xlsx 往返
-- [ ] 表格：图表（Univer plugins，需先调研社区/商业许可边界）
-- [ ] 文档：页眉页脚、批注、目录
+- [ ] 表格：图表（调研结论：Univer 图表插件属 @univerjs-pro 商业授权，社区版不可用；待评估 VChart/Apache 自绘方案）
+- [x] 文档：页眉页脚（含 PAGE 页码域）与目录（原生 TOC 域）docx 往返，Word 实机回归
+- [ ] 文档：批注（锚点标记 + 侧栏面板 + docx comments 往返）
 - [ ] PDF 查看（pdf.js）与导出
 - [ ] ODF（ods/odt）原生格式
 - [ ] 本地文件关联与"最近项目"跨设备同步（可选、端到端加密）

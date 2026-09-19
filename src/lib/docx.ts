@@ -3,12 +3,16 @@ import {
   BorderStyle,
   Document,
   ExternalHyperlink,
+  Footer,
+  Header,
   HeadingLevel,
   ImageRun,
+  PageNumber,
   Packer,
   Paragraph,
   Table,
   TableCell,
+  TableOfContents,
   TableRow,
   TextRun,
   WidthType,
@@ -21,11 +25,67 @@ export interface PMNode {
   marks?: { type: string; attrs?: Record<string, unknown> }[]
 }
 
+// 页眉页脚设置：随 .odoc meta 存储，导出写入 OOXML section header/footer
+export interface DocMeta {
+  headerText?: string
+  footerText?: string
+  footerPageNumber?: boolean
+}
+
 export async function docxToHtml(bytes: Uint8Array): Promise<string> {
   const arrayBuffer = bytes.slice().buffer
   const mammoth = (await import('mammoth')).default
   const result = await mammoth.convertToHtml({ arrayBuffer })
   return result.value
+}
+
+// mammoth 不读页眉页脚：直接解 zip 里 sectPr 引用的 header/footer XML，抽文本与 PAGE 页码域
+export async function docxToDocMeta(bytes: Uint8Array): Promise<DocMeta> {
+  const { default: JSZip } = await import('jszip')
+  const zip = await JSZip.loadAsync(bytes)
+  const docXml = (await zip.file('word/document.xml')?.async('string')) ?? ''
+  const relsText = (await zip.file('word/_rels/document.xml.rels')?.async('string')) ?? ''
+  const relFor = (rid: string) =>
+    relsText.match(new RegExp(`Id="${rid}"[^>]*Target="([^"]+)"`))?.[1] ??
+    relsText.match(new RegExp(`Target="([^"]+)"[^>]*Id="${rid}"`))?.[1]
+  const refOf = (tag: string) => {
+    // Word 可能同时写 even/default/first 三个引用，取 default（无 type 属性时取首个）
+    const rid =
+      docXml.match(new RegExp(`<w:${tag}Reference[^>]*w:type="default"[^>]*r:id="(rId\\d+)"`))?.[1] ??
+      docXml.match(new RegExp(`<w:${tag}Reference[^>]*r:id="(rId\\d+)"`))?.[1]
+    if (!rid) return undefined
+    const target = relFor(rid)
+    if (!target) return undefined
+    return zip.file(target.startsWith('/') ? target.slice(1) : `word/${target.replace(/^\.\//, '')}`)
+  }
+  const readPart = async (tag: string): Promise<{ text?: string; hasPage: boolean }> => {
+    const f = refOf(tag)
+    if (!f) return { hasPage: false }
+    const xml = await f.async('string')
+    // 段落里文本按 w:t 顺序拼接（Word 会保留节点内空格，不要额外插空格）
+    const text = (xml.match(/<w:t[^>]*>([^<]*)<\/w:t>/g) ?? [])
+      .map((m) => m.replace(/<[^>]+>/g, ''))
+      .join('')
+      .trim()
+    // 页码域形态多样：fldSimple instr / fldChar+instrText / instrText 含 PAGE
+    const hasPage = /PAGE(\s|\*|"|'|<)/.test(xml)
+    return { text: text || undefined, hasPage }
+  }
+  const [head, foot] = await Promise.all([readPart('header'), readPart('footer')])
+  // 页码域的缓存值（数字/第/页/共）混在 w:t 里，带页码域时把这些剔掉
+  const stripPageTokens = (t: string) =>
+    t
+      .split(/\s+/)
+      .filter((x) => x && x !== '第' && x !== '页' && x !== '共' && x !== '·' && !/^\d+$/.test(x))
+      .join(' ')
+  const out: DocMeta = {}
+  if (head.text) out.headerText = head.text
+  if (foot.text) {
+    const rest = foot.hasPage ? stripPageTokens(foot.text) : foot.text
+    if (rest) out.footerText = rest
+  }
+  if (foot.hasPage) out.footerPageNumber = true
+  return out
 }
 
 function textOf(node: PMNode): string {
@@ -154,8 +214,8 @@ function alignOf(node: PMNode): (typeof AlignmentType)[keyof typeof AlignmentTyp
   }
 }
 
-function blocksOf(nodes: PMNode[], depth = 0): (Paragraph | Table)[] {
-  const out: (Paragraph | Table)[] = []
+function blocksOf(nodes: PMNode[], depth = 0): (Paragraph | Table | TableOfContents)[] {
+  const out: (Paragraph | Table | TableOfContents)[] = []
   for (const node of nodes) {
     if (node.type === 'bulletList' || node.type === 'orderedList') {
       const ordered = node.type === 'orderedList'
@@ -186,6 +246,7 @@ function blocksOf(nodes: PMNode[], depth = 0): (Paragraph | Table)[] {
       out.push(
         new Paragraph({
           children: inlineToChildren(node),
+          outlineLevel: Math.max(0, Math.min(8, level - 1)),
           heading:
             level === 1 ? HeadingLevel.HEADING_1
             : level === 2 ? HeadingLevel.HEADING_2
@@ -224,6 +285,17 @@ function blocksOf(nodes: PMNode[], depth = 0): (Paragraph | Table)[] {
       )
       continue
     }
+    if (node.type === 'toc') {
+      // \o 按内置标题样式 + \u 按段落大纲级别收集；Word 打开后"更新域"重生成
+      out.push(
+        new TableOfContents('目录', {
+          hyperlink: true,
+          headingStyleRange: '1-4',
+          useAppliedParagraphOutlineLevel: true,
+        }),
+      )
+      continue
+    }
     if (node.type === 'table') {
       const rows = (node.content ?? []).filter((r) => r.type === 'tableRow')
       if (rows.length === 0) continue
@@ -256,11 +328,54 @@ function blocksOf(nodes: PMNode[], depth = 0): (Paragraph | Table)[] {
   return out
 }
 
-export async function prosemirrorToDocxBytes(json: PMNode): Promise<Uint8Array> {
+export async function prosemirrorToDocxBytes(json: PMNode, meta?: DocMeta): Promise<Uint8Array> {
+  const section: {
+    children: (Paragraph | Table | TableOfContents)[]
+    headers?: { default: Header }
+    footers?: { default: Footer }
+  } = { children: blocksOf(json.content ?? []) }
+  if (meta?.headerText?.trim()) {
+    section.headers = {
+      default: new Header({
+        children: [
+          new Paragraph({
+            children: [new TextRun({ text: meta.headerText.trim(), size: 18, color: '6B7280' })],
+            alignment: AlignmentType.RIGHT,
+            border: { bottom: { style: BorderStyle.SINGLE, size: 4, color: 'D1D5DB', space: 2 } },
+          }),
+        ],
+      }),
+    }
+  }
+  const footText = meta?.footerText?.trim()
+  if (footText || meta?.footerPageNumber) {
+    section.footers = {
+      default: new Footer({
+        children: [
+          new Paragraph({
+            children: [
+              new TextRun({
+                ...(footText && meta?.footerPageNumber
+                  ? { children: [`${footText} · 第 `, PageNumber.CURRENT, ' 页'] }
+                  : meta?.footerPageNumber
+                    ? { children: ['第 ', PageNumber.CURRENT, ' 页'] }
+                    : { text: footText }),
+                size: 18,
+                color: '6B7280',
+              }),
+            ],
+            alignment: AlignmentType.CENTER,
+            border: { top: { style: BorderStyle.SINGLE, size: 4, color: 'D1D5DB', space: 2 } },
+          }),
+        ],
+      }),
+    }
+  }
   const doc = new Document({
     creator: 'OpenOffices',
     title: 'OpenOffices 文档',
-    sections: [{ children: blocksOf(json.content ?? []) }],
+    features: { updateFields: true },
+    sections: [section],
   })
   const buf = await Packer.toBuffer(doc)
   return new Uint8Array(buf)

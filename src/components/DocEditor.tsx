@@ -12,7 +12,14 @@ import { message, open } from '@tauri-apps/plugin-dialog'
 import type { Tab } from '../store'
 import { useApp } from '../store'
 import { baseName, pickSaveFile, readBytes, readText, writeBytes, writeText } from '../lib/fs'
-import { docxToHtml, prosemirrorToDocxBytes, type PMNode } from '../lib/docx'
+import {
+  docxToDocMeta,
+  docxToHtml,
+  prosemirrorToDocxBytes,
+  type DocMeta,
+  type PMNode,
+} from '../lib/docx'
+import { Toc } from '../lib/toc-extension'
 import { registerSaver } from '../lib/registry'
 
 interface Props {
@@ -29,6 +36,8 @@ function DocEditor({ tab }: Props) {
   const markRecent = useApp((s) => s.markRecent)
   const [status, setStatus] = useState<string>(tab.path ? '正在加载…' : '')
   const [linkDraft, setLinkDraft] = useState<string | null>(null)
+  const [meta, setMeta] = useState<DocMeta>({})
+  const [hfOpen, setHfOpen] = useState(false)
 
   const editor = useEditor({
     extensions: [
@@ -42,6 +51,7 @@ function DocEditor({ tab }: Props) {
       Color,
       Highlight.configure({ multicolor: true }),
       CharacterCount,
+      Toc,
     ],
     content: '<p></p>',
     onUpdate: () => markDirty(tab.id, true),
@@ -60,11 +70,18 @@ function DocEditor({ tab }: Props) {
         if (tab.path.toLowerCase().endsWith('.docx')) {
           const bytes = await readBytes(tab.path)
           const html = await docxToHtml(bytes)
-          if (!disposed) editor.commands.setContent(html)
+          const m = await docxToDocMeta(bytes)
+          if (!disposed) {
+            editor.commands.setContent(html)
+            setMeta(m)
+          }
         } else {
           const text = await readText(tab.path)
-          const parsed = JSON.parse(text) as { content?: PMNode }
-          if (!disposed) editor.commands.setContent(parsed.content ?? { type: 'doc', content: [] })
+          const parsed = JSON.parse(text) as { content?: PMNode; meta?: DocMeta }
+          if (!disposed) {
+            editor.commands.setContent(parsed.content ?? { type: 'doc', content: [] })
+            setMeta(parsed.meta ?? {})
+          }
         }
         if (!disposed) setStatus('')
         markDirty(tab.id, false)
@@ -88,7 +105,7 @@ function DocEditor({ tab }: Props) {
         path = (await pickSaveFile(name.replace(/\.docx$/i, '') + '.odoc', ['odoc'])) ?? undefined
         if (!path) return
       }
-      const content = JSON.stringify({ ...ODOC_HEADER, content: editor.getJSON() })
+      const content = JSON.stringify({ ...ODOC_HEADER, content: editor.getJSON(), meta })
       await writeText(path, content)
       renameTab(tab.id, baseName(path), path)
       markRecent(path, 'doc')
@@ -111,7 +128,7 @@ function DocEditor({ tab }: Props) {
         ['docx'],
       )
       if (!path) return
-      const bytes = await prosemirrorToDocxBytes(editor.getJSON() as PMNode)
+      const bytes = await prosemirrorToDocxBytes(editor.getJSON() as PMNode, meta)
       await writeBytes(path, bytes)
       markRecent(path, 'doc')
       setStatus('已导出 docx')
@@ -158,6 +175,26 @@ function DocEditor({ tab }: Props) {
     setLinkDraft(null)
   }
 
+  const patchMeta = (p: Partial<DocMeta>) => {
+    setMeta((m) => ({ ...m, ...p }))
+    markDirty(tab.id, true)
+  }
+
+  // 已有目录则滚动定位，否则在光标处插入（目录内容按标题实时汇总）
+  const tocAction = () => {
+    if (!editor) return
+    let pos = -1
+    editor.state.doc.descendants((n, p) => {
+      if (pos < 0 && n.type.name === 'toc') pos = p
+    })
+    if (pos >= 0) {
+      ;(editor.view.nodeDOM(pos) as HTMLElement | null)?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+      return
+    }
+    editor.chain().focus().insertContent({ type: 'toc' }).run()
+    markDirty(tab.id, true)
+  }
+
   if (!editor) return null
   const cc = editor.storage.characterCount as { words: () => number; characters: () => number }
   const btn = (label: string, onClick: () => void, active = false, title?: string) => (
@@ -177,6 +214,8 @@ function DocEditor({ tab }: Props) {
         {btn('保存', () => saveOdoc(false), false, '保存为 .odoc')}
         {btn('另存为', () => saveOdoc(true))}
         {btn('导出 docx', exportDocx)}
+        {btn('目录', tocAction, false, '插入/定位目录：按标题实时汇总；导出为 Word 原生 TOC 域')}
+        {btn('页眉页脚', () => setHfOpen((v) => !v), hfOpen || !!(meta.headerText || meta.footerText || meta.footerPageNumber), '设置页眉、页脚与页码')}
         {btn('打印 / PDF', () => window.print(), false, '调用系统打印，可选择另存为 PDF')}
         {status && <span className="editor-status">{status}</span>}
         <span className="editor-hint">
@@ -268,9 +307,52 @@ function DocEditor({ tab }: Props) {
         {btn('撤销', () => editor.chain().focus().undo().run())}
         {btn('重做', () => editor.chain().focus().redo().run())}
       </div>
+      {hfOpen && (
+        <div className="doc-hf-panel">
+          <label className="doc-hf-field">
+            页眉
+            <input
+              className="tb-input"
+              value={meta.headerText ?? ''}
+              placeholder="如：OpenOffices 内部资料（留空则无页眉）"
+              onChange={(e) => patchMeta({ headerText: e.target.value || undefined })}
+            />
+          </label>
+          <label className="doc-hf-field">
+            页脚
+            <input
+              className="tb-input"
+              value={meta.footerText ?? ''}
+              placeholder="如：机密 · 仅供评审"
+              onChange={(e) => patchMeta({ footerText: e.target.value || undefined })}
+            />
+          </label>
+          <label className="doc-hf-check" title="导出为 Word PAGE 域，每页自动编号">
+            <input
+              type="checkbox"
+              checked={!!meta.footerPageNumber}
+              onChange={(e) => patchMeta({ footerPageNumber: e.target.checked || undefined })}
+            />
+            页码
+          </label>
+          {(meta.headerText || meta.footerText || meta.footerPageNumber) && (
+            <button className="tb-btn" onClick={() => patchMeta({ headerText: undefined, footerText: undefined, footerPageNumber: undefined })}>
+              清空
+            </button>
+          )}
+        </div>
+      )}
       <div className="doc-scroll">
         <div className="doc-page">
+          {meta.headerText && <div className="doc-hf doc-hf-head">{meta.headerText}</div>}
           <EditorContent editor={editor} />
+          {(meta.footerText || meta.footerPageNumber) && (
+            <div className="doc-hf doc-hf-foot">
+              {meta.footerText}
+              {meta.footerText && meta.footerPageNumber ? ' · ' : ''}
+              {meta.footerPageNumber && <span className="doc-hf-page">第 [页码] 页</span>}
+            </div>
+          )}
         </div>
       </div>
     </div>
