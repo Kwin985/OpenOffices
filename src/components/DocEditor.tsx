@@ -13,12 +13,15 @@ import type { Tab } from '../store'
 import { useApp } from '../store'
 import { baseName, pickSaveFile, readBytes, readText, writeBytes, writeText } from '../lib/fs'
 import {
+  docxToCommentHtml,
   docxToDocMeta,
   docxToHtml,
   prosemirrorToDocxBytes,
+  type DocComment,
   type DocMeta,
   type PMNode,
 } from '../lib/docx'
+import { Comment, addCommentMark, findCommentAnchor, removeCommentMark } from '../lib/comment-extension'
 import { Toc } from '../lib/toc-extension'
 import { registerSaver } from '../lib/registry'
 
@@ -38,6 +41,9 @@ function DocEditor({ tab }: Props) {
   const [linkDraft, setLinkDraft] = useState<string | null>(null)
   const [meta, setMeta] = useState<DocMeta>({})
   const [hfOpen, setHfOpen] = useState(false)
+  const [cmOpen, setCmOpen] = useState(false)
+  const [draft, setDraft] = useState<{ cid: number; text: string } | null>(null)
+  const [, setTick] = useState(0)
 
   const editor = useEditor({
     extensions: [
@@ -52,11 +58,22 @@ function DocEditor({ tab }: Props) {
       Highlight.configure({ multicolor: true }),
       CharacterCount,
       Toc,
+      Comment,
     ],
     content: '<p></p>',
     onUpdate: () => markDirty(tab.id, true),
     editorProps: { attributes: { class: 'doc-content' } },
   })
+
+  // 批注侧栏随文档变更刷新（锚点位置/孤儿判定）
+  useEffect(() => {
+    if (!editor) return
+    const h = () => setTick((t) => t + 1)
+    editor.on('update', h)
+    return () => {
+      editor.off('update', h)
+    }
+  }, [editor])
 
   useEffect(() => {
     if (!editor) return
@@ -69,11 +86,13 @@ function DocEditor({ tab }: Props) {
       try {
         if (tab.path.toLowerCase().endsWith('.docx')) {
           const bytes = await readBytes(tab.path)
-          const html = await docxToHtml(bytes)
+          const baseHtml = await docxToHtml(bytes)
           const m = await docxToDocMeta(bytes)
+          const { html, comments } = await docxToCommentHtml(bytes, baseHtml)
           if (!disposed) {
             editor.commands.setContent(html)
-            setMeta(m)
+            setMeta(comments.length ? { ...m, comments } : m)
+            if (comments.length) setCmOpen(true)
           }
         } else {
           const text = await readText(tab.path)
@@ -81,6 +100,7 @@ function DocEditor({ tab }: Props) {
           if (!disposed) {
             editor.commands.setContent(parsed.content ?? { type: 'doc', content: [] })
             setMeta(parsed.meta ?? {})
+            if (parsed.meta?.comments?.length) setCmOpen(true)
           }
         }
         if (!disposed) setStatus('')
@@ -195,6 +215,68 @@ function DocEditor({ tab }: Props) {
     markDirty(tab.id, true)
   }
 
+  const comments = meta.comments ?? []
+  const nextCid = () => comments.reduce((m, c) => Math.max(m, c.id), 0) + 1
+
+  const startComment = () => {
+    if (!editor) return
+    if (editor.state.selection.empty) {
+      setStatus('请先在正文中选中要批注的文字')
+      setTimeout(() => setStatus(''), 1800)
+      return
+    }
+    const cid = nextCid()
+    if (!addCommentMark(editor, cid)) return
+    setDraft({ cid, text: '' })
+    setCmOpen(true)
+    markDirty(tab.id, true)
+  }
+
+  const confirmDraft = () => {
+    if (!editor || !draft) return
+    const text = draft.text.trim()
+    if (!text) {
+      removeCommentMark(editor, draft.cid)
+      setDraft(null)
+      return
+    }
+    const c: DocComment = { id: draft.cid, date: new Date().toISOString(), text }
+    patchMeta({ comments: [...(meta.comments ?? []), c] })
+    setDraft(null)
+  }
+
+  const cancelDraft = () => {
+    if (!editor || !draft) return
+    removeCommentMark(editor, draft.cid)
+    setDraft(null)
+  }
+
+  const deleteComment = (cid: number) => {
+    if (!editor) return
+    removeCommentMark(editor, cid)
+    patchMeta({ comments: (meta.comments ?? []).filter((c) => c.id !== cid) })
+    if (draft?.cid === cid) setDraft(null)
+  }
+
+  const toggleResolved = (cid: number) => {
+    patchMeta({
+      comments: (meta.comments ?? []).map((c) => (c.id === cid ? { ...c, resolved: !c.resolved } : c)),
+    })
+  }
+
+  const locateComment = (cid: number) => {
+    if (!editor) return
+    const anchor = findCommentAnchor(editor, cid)
+    if (!anchor) {
+      setStatus('该批注的原文已被删除')
+      setTimeout(() => setStatus(''), 1800)
+      return
+    }
+    const dom = editor.view.domAtPos(anchor.pos).node
+    const el = dom instanceof HTMLElement ? dom : dom.parentElement
+    el?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+  }
+
   if (!editor) return null
   const cc = editor.storage.characterCount as { words: () => number; characters: () => number }
   const btn = (label: string, onClick: () => void, active = false, title?: string) => (
@@ -216,6 +298,8 @@ function DocEditor({ tab }: Props) {
         {btn('导出 docx', exportDocx)}
         {btn('目录', tocAction, false, '插入/定位目录：按标题实时汇总；导出为 Word 原生 TOC 域')}
         {btn('页眉页脚', () => setHfOpen((v) => !v), hfOpen || !!(meta.headerText || meta.footerText || meta.footerPageNumber), '设置页眉、页脚与页码')}
+        {btn('批注', () => setCmOpen((v) => !v), cmOpen || comments.length > 0, '批注侧栏：选中文字后可添加批注，导出为 docx 原生批注')}
+        {btn('新建批注', startComment, !!draft, '选中正文文字后点击，为其添加一条批注')}
         {btn('打印 / PDF', () => window.print(), false, '调用系统打印，可选择另存为 PDF')}
         {status && <span className="editor-status">{status}</span>}
         <span className="editor-hint">
@@ -342,18 +426,80 @@ function DocEditor({ tab }: Props) {
           )}
         </div>
       )}
-      <div className="doc-scroll">
-        <div className="doc-page">
-          {meta.headerText && <div className="doc-hf doc-hf-head">{meta.headerText}</div>}
-          <EditorContent editor={editor} />
-          {(meta.footerText || meta.footerPageNumber) && (
-            <div className="doc-hf doc-hf-foot">
-              {meta.footerText}
-              {meta.footerText && meta.footerPageNumber ? ' · ' : ''}
-              {meta.footerPageNumber && <span className="doc-hf-page">第 [页码] 页</span>}
-            </div>
-          )}
+      <div className="doc-body">
+        <div className="doc-scroll">
+          <div className="doc-page">
+            {meta.headerText && <div className="doc-hf doc-hf-head">{meta.headerText}</div>}
+            <EditorContent editor={editor} />
+            {(meta.footerText || meta.footerPageNumber) && (
+              <div className="doc-hf doc-hf-foot">
+                {meta.footerText}
+                {meta.footerText && meta.footerPageNumber ? ' · ' : ''}
+                {meta.footerPageNumber && <span className="doc-hf-page">第 [页码] 页</span>}
+              </div>
+            )}
+          </div>
         </div>
+        {cmOpen && (
+          <aside className="doc-comments">
+            <div className="doc-comments-head">
+              <span>批注 {comments.length}</span>
+              <button className="tb-btn" onClick={() => setCmOpen(false)}>收起</button>
+            </div>
+            {draft && (
+              <div className="doc-comment-card doc-comment-draft">
+                <textarea
+                  autoFocus
+                  className="doc-comment-input"
+                  placeholder="批注内容，Ctrl+Enter 确定，Esc 取消"
+                  value={draft.text}
+                  onChange={(e) => setDraft({ ...draft, text: e.target.value })}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) confirmDraft()
+                    if (e.key === 'Escape') cancelDraft()
+                  }}
+                />
+                <div className="doc-comment-actions">
+                  <button className="tb-btn" onClick={confirmDraft}>确定</button>
+                  <button className="tb-btn" onClick={cancelDraft}>取消</button>
+                </div>
+              </div>
+            )}
+            {comments.length === 0 && !draft && (
+              <div className="doc-comment-empty">选中正文文字后点「新建批注」</div>
+            )}
+            {[...comments]
+              .sort(
+                (a, b) =>
+                  (findCommentAnchor(editor, a.id)?.pos ?? Number.MAX_SAFE_INTEGER) -
+                  (findCommentAnchor(editor, b.id)?.pos ?? Number.MAX_SAFE_INTEGER),
+              )
+              .map((c) => {
+                const anchor = findCommentAnchor(editor, c.id)
+                return (
+                  <div key={c.id} className={`doc-comment-card${c.resolved ? ' doc-comment-done' : ''}`}>
+                    <div className="doc-comment-meta">
+                      {c.author || '我'}
+                      {c.date ? ` · ${c.date.slice(0, 10)}` : ''}
+                    </div>
+                    <div className="doc-comment-text">{c.text}</div>
+                    {!anchor && <div className="doc-comment-orphan">原文已删除</div>}
+                    <div className="doc-comment-actions">
+                      <button className="tb-btn" onClick={() => locateComment(c.id)} disabled={!anchor}>
+                        定位
+                      </button>
+                      <button className="tb-btn" onClick={() => toggleResolved(c.id)}>
+                        {c.resolved ? '重新打开' : '解决'}
+                      </button>
+                      <button className="tb-btn" onClick={() => deleteComment(c.id)}>
+                        删除
+                      </button>
+                    </div>
+                  </div>
+                )
+              })}
+          </aside>
+        )}
       </div>
     </div>
   )

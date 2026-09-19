@@ -94,6 +94,23 @@
 - **许可注记**：表格图表经调研确认 Univer 图表插件属 `@univerjs-pro` 商业授权，社区版
   不可用，故图表继续单列并评估 VChart（Apache-2.0）自绘路线
 
+## 文档批注（v0.11）
+
+- **批注模型**：`meta.comments`（id/作者/日期/内容/已解决）+ 正文 `comment` mark 按 `cid`
+  锚定选区；随 `.odoc` 持久化，侧栏实时汇总
+- **批注侧栏**：选中文字「新建批注」→ 输入内容确定；卡片支持定位滚动、解决/重新打开、删除
+  （同步移除正文锚点）；原文被删的孤儿批注标注"原文已删除"；正文锚点黄色高亮
+- **docx 导出**：写原生 `word/comments.xml` 批注部件 + 正文 `w:commentRangeStart/End`（
+  `commentReference` 须包在 `w:r` 内）；`resolved` 经 `commentsExtended.xml` 落盘（docx 库要求
+  存在 `parentId` 才生成该部件，以 `-1` 触发且不产出伪造父链接）；每个批注全局只写一组 range
+  ——同 id 多组 range 会被 Word 判定文档损坏；孤儿批注不写入 docx
+- **docx 导入**：JSZip 直读 `comments.xml`（内容/作者/日期）与 `document.xml` 的单段落
+  range 锚文本，在 mammoth HTML 中把锚点包成 `span[data-oo-comment]` 还原为 mark；
+  跨段/被格式打断的锚点降级为侧栏未定位条目；`w14:paraId` 属性式与 `w15` 式都容错
+- **实机回归**：本机 Word 16.0（COM）打开导出文件不修复，`Comments.Count=3`，作者、
+  批注正文、`Scope.Text` 锚文本（含 `&` 实体）全部正确；规范重存回测因当日 Word COM
+  SaveAs 环境故障顺延（见开发备注）
+
 ## 性能（v0.3）
 
 - **按编辑器分包 + 懒加载**：主包 8MB → 首屏约 300KB；Univer（6.1MB）只在首次激活表格标签时加载，
@@ -133,8 +150,9 @@ src/                  React 前端
   App.tsx             全局快捷键、拖拽打开、关闭确认、懒加载路由
   lib/univer.ts       Univer 实例工厂（公式 worker + 五个社区高级预设）
   lib/univer-io.ts    xlsx 数据+样式/合并 ↔ Univer 快照 转换（样式去重注册）
-  lib/docx.ts         docx 导入导出（ProseMirror JSON ↔ docx，字色/高亮/页眉页脚/TOC 域映射）
+  lib/docx.ts         docx 导入导出（ProseMirror JSON ↔ docx，字色/高亮/页眉页脚/TOC 域/批注映射）
   lib/toc-extension.ts TipTap 目录原子节点：按标题实时汇总、点击跳转
+  lib/comment-extension.ts comment mark（cid 锚定批注）+ 加/删/定位/汇总工具
   lib/ppt.ts          .opd 幻灯片数据模型（版式/主题/序列化）
   lib/pptx-export.ts  Deck → pptx（pptxgenjs）
   lib/pptx-import.ts  pptx → Deck（JSZip 解包 + OOXML 解析 + 媒体还原）
@@ -144,7 +162,7 @@ src/                  React 前端
 ```
 
 表格文件流：`xlsx 磁盘 → Rust(calamine 值 + zip/quick-xml 样式合并) → JSON 快照 → Univer 渲染`；保存反向经 `rust_xlsxwriter` 落盘。
-文档文件流：`docx → mammoth 正文 + zip 直读页眉页脚 → HTML/元数据 → TipTap`；保存为 `.odoc` JSON（含 meta）或导出 docx。
+文档文件流：`docx → mammoth 正文 + zip 直读页眉页脚/批注 → HTML/元数据 → TipTap`；保存为 `.odoc` JSON（含 meta）或导出 docx。
 演示文件流：`pptx → JSZip 解包 OOXML → Deck 模型 → 编辑器`；保存为 `.opd` JSON 或经 pptxgenjs 导出 pptx。
 
 ## 开发
@@ -158,6 +176,10 @@ cargo check        # Rust 后端检查（在 src-tauri 下）
 
 环境要求：Rust (MSVC)、Node ≥ 20、WebView2 运行时。
 
+> 开发备注（2026-09-19）：本机 Word COM 出现任意文档 `SaveAs/SaveAs2` 均挂起的环境故障
+> （新建空白也卡、无对话框、与文件内容和落盘位置无关），只读回归（Open + 批注枚举）不受影响；
+> v0.11 批注的"Word 规范重存回测"顺延，恢复前先跑新建空白文档保存探针验证 COM 可写。
+
 ## 路线图
 
 - [x] 演示：pptx 母版/背景图还原、演讲者备注
@@ -168,7 +190,7 @@ cargo check        # Rust 后端检查（在 src-tauri 下）
 - [x] 表格：样式（字体/颜色/合并）随 xlsx 往返
 - [ ] 表格：图表（调研结论：Univer 图表插件属 @univerjs-pro 商业授权，社区版不可用；待评估 VChart/Apache 自绘方案）
 - [x] 文档：页眉页脚（含 PAGE 页码域）与目录（原生 TOC 域）docx 往返，Word 实机回归
-- [ ] 文档：批注（锚点标记 + 侧栏面板 + docx comments 往返）
+- [x] 文档：批注（锚点标记 + 侧栏面板 + docx comments 往返）
 - [ ] PDF 查看（pdf.js）与导出
 - [ ] ODF（ods/odt）原生格式
 - [ ] 本地文件关联与"最近项目"跨设备同步（可选、端到端加密）

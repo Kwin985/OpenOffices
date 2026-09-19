@@ -716,6 +716,100 @@ button {
   gap: 4px;
 }
 
+/* 正文 + 批注侧栏并排 */
+.doc-body {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+}
+
+.doc-comments {
+  width: 268px;
+  flex-shrink: 0;
+  overflow-y: auto;
+  border-left: 1px solid var(--border);
+  background: var(--panel);
+  padding: 10px;
+}
+
+.doc-comments-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-weight: 600;
+  font-size: 13px;
+  margin-bottom: 8px;
+}
+
+.doc-comment-empty {
+  color: var(--text-2);
+  font-size: 12px;
+  padding: 8px 2px;
+}
+
+.doc-comment-card {
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 8px 10px;
+  margin-bottom: 8px;
+  font-size: 13px;
+}
+
+.doc-comment-done {
+  opacity: 0.6;
+}
+
+.doc-comment-draft {
+  border-color: var(--accent);
+}
+
+.doc-comment-meta {
+  color: var(--text-2);
+  font-size: 12px;
+  margin-bottom: 4px;
+}
+
+.doc-comment-text {
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.doc-comment-orphan {
+  color: #b45309;
+  font-size: 12px;
+  margin-top: 4px;
+}
+
+.doc-comment-input {
+  width: 100%;
+  min-height: 64px;
+  resize: vertical;
+  background: var(--bg);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 6px 8px;
+  font-size: 13px;
+  font-family: inherit;
+}
+
+.doc-comment-input:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+.doc-comment-actions {
+  display: flex;
+  gap: 6px;
+  margin-top: 6px;
+}
+
+/* 批注锚点高亮 */
+.doc-content span[data-oo-comment] {
+  background: rgba(240, 180, 41, 0.24);
+  border-bottom: 2px solid #f0b429;
+}
+
 .doc-content blockquote {
   border-left: 3px solid var(--accent);
   margin: 10px 0;

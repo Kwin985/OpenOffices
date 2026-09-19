@@ -1,6 +1,9 @@
 import {
   AlignmentType,
   BorderStyle,
+  CommentRangeEnd,
+  CommentRangeStart,
+  CommentReference,
   Document,
   ExternalHyperlink,
   Footer,
@@ -25,11 +28,21 @@ export interface PMNode {
   marks?: { type: string; attrs?: Record<string, unknown> }[]
 }
 
-// 页眉页脚设置：随 .odoc meta 存储，导出写入 OOXML section header/footer
+// 批注条目：text 为批注内容，正文用 comment mark(cid) 锚定；docx 往返写 word/comments.xml
+export interface DocComment {
+  id: number
+  author?: string
+  date?: string
+  text: string
+  resolved?: boolean
+}
+
+// 页眉页脚设置 + 批注列表：随 .odoc meta 存储，导出写入 OOXML
 export interface DocMeta {
   headerText?: string
   footerText?: string
   footerPageNumber?: boolean
+  comments?: DocComment[]
 }
 
 export async function docxToHtml(bytes: Uint8Array): Promise<string> {
@@ -88,6 +101,91 @@ export async function docxToDocMeta(bytes: Uint8Array): Promise<DocMeta> {
   return out
 }
 
+// mammoth 会丢弃批注：直读 word/comments.xml 取内容/作者，document.xml 里 commentRangeStart/End 取锚文本，
+// 在 HTML 中把锚文本包成 <span data-oo-comment>，由 Comment mark 还原
+export async function docxToCommentHtml(
+  bytes: Uint8Array,
+  html: string,
+): Promise<{ html: string; comments: DocComment[] }> {
+  const { default: JSZip } = await import('jszip')
+  const zip = await JSZip.loadAsync(bytes)
+  const part = zip.file('word/comments.xml')
+  if (!part) return { html, comments: [] }
+  const [docXml, commentsXml, extXml] = await Promise.all([
+    zip.file('word/document.xml')?.async('string') ?? Promise.resolve(''),
+    part.async('string'),
+    zip.file('word/commentsExtended.xml')?.async('string') ?? Promise.resolve(''),
+  ])
+  const joinT = (xml: string) =>
+    (xml.match(/<w:t[^>]*>([^<]*)<\/w:t>/g) ?? [])
+      .map((m) => m.replace(/<[^>]+>/g, ''))
+      .join('')
+  const decode = (s: string) =>
+    s
+      .replace(/&lt;/g, '<')
+      .replace(/&gt;/g, '>')
+      .replace(/&quot;/g, '"')
+      .replace(/&apos;/g, "'")
+      .replace(/&amp;/g, '&')
+  const esc = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+  // commentsExtended 里 done="1" 的 paraId 集合（docx 写属性式，Word 写 w15:val 元素式，都兼容）
+  const doneParaIds = new Set<string>()
+  for (const m of extXml.matchAll(/<w15:commentEx[^>]*w15:paraId="([0-9A-Fa-f]+)"[^>]*w15:done="1"/g)) {
+    doneParaIds.add(m[1].toUpperCase())
+  }
+  for (const m of extXml.matchAll(/<w15:commentEx[^>]*w15:done="1"[^>]*w15:paraId="([0-9A-Fa-f]+)"/g)) {
+    doneParaIds.add(m[1].toUpperCase())
+  }
+  // 锚文本限定在单段落内；跨段批注不重锚（侧栏仍显示，标记为未定位）
+  const anchorOf = (id: number): string | undefined => {
+    const startRe = new RegExp(`<w:commentRangeStart[^>]*w:id="${id}"[^>]*>`)
+    const sm = startRe.exec(docXml)
+    if (!sm) return undefined
+    const bodyStart = sm.index + sm[0].length
+    const endRe = new RegExp(`<w:commentRangeEnd[^>]*w:id="${id}"[^>]*>`)
+    const em = endRe.exec(docXml.slice(bodyStart))
+    if (!em) return undefined
+    const endIdx = bodyStart + em.index
+    if (docXml.indexOf('</w:p>', bodyStart) < endIdx) return undefined
+    const text = decode(joinT(docXml.slice(bodyStart, endIdx)))
+    return text || undefined
+  }
+  let outHtml = html
+  const comments: DocComment[] = []
+  const rows = [...commentsXml.matchAll(/<w:comment\b([^>]*)>([\s\S]*?)<\/w:comment>/g)]
+    .map((m) => ({ attrs: m[1], body: m[2] }))
+    .sort((a, b) => Number(a.attrs.match(/w:id="(\d+)"/)?.[1] ?? 0) - Number(b.attrs.match(/w:id="(\d+)"/)?.[1] ?? 0))
+  for (const { attrs, body } of rows) {
+    const id = Number(attrs.match(/w:id="(\d+)"/)?.[1])
+    if (!Number.isFinite(id)) continue
+    const author = attrs.match(/w:author="([^"]*)"/)?.[1]
+    const date = attrs.match(/w:date="([^"]*)"/)?.[1]
+    // docx 库与 Word 都把 paraId 写成 w:p 上的 w14:paraId 属性；兼容 w15 写法
+    const paraIdM =
+      body.match(/w14:paraId="([0-9A-Fa-f]+)"/) ??
+      body.match(/w15:paraId="([0-9A-Fa-f]+)"/) ??
+      body.match(/<w15:paraId w15:val="([0-9A-Fa-f]+)"/)
+    const comment: DocComment = {
+      id,
+      text: decode(joinT(body)),
+      ...(author ? { author: decode(author) } : {}),
+      ...(date ? { date } : {}),
+      ...(paraIdM && doneParaIds.has(paraIdM[1].toUpperCase()) ? { resolved: true } : {}),
+    }
+    comments.push(comment)
+    const anchor = anchorOf(id)
+    if (!anchor) continue
+    const needle = esc(anchor)
+    const idx = outHtml.indexOf(needle)
+    if (idx < 0) continue
+    outHtml =
+      outHtml.slice(0, idx) +
+      `<span data-oo-comment="${id}">${needle}</span>` +
+      outHtml.slice(idx + needle.length)
+  }
+  return { html: outHtml, comments }
+}
+
 function textOf(node: PMNode): string {
   if (node.type === 'text') return (node.attrs?.text as string) ?? ''
   if (node.type === 'hardBreak') return '\n'
@@ -132,16 +230,57 @@ interface Inherited {
   mono?: boolean
 }
 
+// 当前批注区间状态：cur 为段落内正在打开的 cid，used 汇总全文出现过的 cid（决定 comments part 收录谁）
+interface CommentTrack {
+  cur: number | null
+  used: Set<number>
+  ranges: Set<number>
+  skipped: Set<number>
+}
+
+function commentCidOf(node: PMNode): number | null {
+  const raw = node.marks?.find((m) => m.type === 'comment')?.attrs?.cid
+  return raw === undefined ? null : Number(raw)
+}
+
+function closeComment(out: ParagraphChildLike[], cs: CommentTrack) {
+  if (cs.cur === null) return
+  // commentReference 必须在 w:r 内（schema），不能像 rangeStart/End 那样裸放段落级
+  out.push(new CommentRangeEnd(cs.cur), new TextRun({ children: [new CommentReference(cs.cur)] }))
+  cs.cur = null
+}
+
+function openComment(out: ParagraphChildLike[], cs: CommentTrack, cid: number) {
+  if (cs.cur === cid) return
+  closeComment(out, cs)
+  // Word 不接受同一 w:id 的多组 commentRange（判定文档损坏）：每个 cid 只在首个出现处写一组区间
+  if (!cs.ranges.has(cid)) {
+    out.push(new CommentRangeStart(cid))
+    cs.ranges.add(cid)
+    cs.used.add(cid)
+    cs.cur = cid
+  } else {
+    cs.skipped.add(cid)
+  }
+}
+
+type ParagraphChildLike = TextRun | ExternalHyperlink | CommentRangeStart | CommentRangeEnd | CommentReference
+
 function markAttr(node: PMNode, mark: string, attr: string): string | undefined {
   const m = node.marks?.find((x) => x.type === mark)
   const v = m?.attrs?.[attr]
   return typeof v === 'string' ? v : undefined
 }
 
-function inlineToChildren(node: PMNode, inherited: Inherited = {}): (TextRun | ExternalHyperlink)[] {
-  const out: (TextRun | ExternalHyperlink)[] = []
+function inlineToChildren(node: PMNode, inherited: Inherited = {}, cs?: CommentTrack): ParagraphChildLike[] {
+  const out: ParagraphChildLike[] = []
   for (const child of node.content ?? []) {
     if (child.type === 'text') {
+      if (cs) {
+        const cid = commentCidOf(child)
+        if (cid === null) closeComment(out, cs)
+        else openComment(out, cs, cid)
+      }
       const text = (child.attrs?.text as string) ?? ''
       const bold = inherited.bold || hasMark(child, 'bold')
       const italic = inherited.italic || hasMark(child, 'italic')
@@ -195,10 +334,18 @@ function inlineToChildren(node: PMNode, inherited: Inherited = {}): (TextRun | E
         out.push(new TextRun({ text: `[图片: ${src}]`, italics: true }))
       }
     } else {
-      out.push(...inlineToChildren(child, inherited))
+      out.push(...inlineToChildren(child, inherited, cs))
     }
   }
   return out
+}
+
+// 每个 cid 全局只写一组区间（Word 对同 id 多组 commentRange 判定文档损坏）；块间独立开闭
+function inlineBlockChildren(node: PMNode, dt: DocTrack): ParagraphChildLike[] {
+  const cs: CommentTrack = { cur: null, used: dt.used, ranges: dt.ranges, skipped: dt.skipped }
+  const arr = inlineToChildren(node, {}, cs)
+  closeComment(arr, cs)
+  return arr
 }
 
 function alignOf(node: PMNode): (typeof AlignmentType)[keyof typeof AlignmentType] | undefined {
@@ -214,7 +361,13 @@ function alignOf(node: PMNode): (typeof AlignmentType)[keyof typeof AlignmentTyp
   }
 }
 
-function blocksOf(nodes: PMNode[], depth = 0): (Paragraph | Table | TableOfContents)[] {
+interface DocTrack {
+  used: Set<number>
+  ranges: Set<number>
+  skipped: Set<number>
+}
+
+function blocksOf(nodes: PMNode[], depth = 0, dt: DocTrack = { used: new Set(), ranges: new Set(), skipped: new Set() }): (Paragraph | Table | TableOfContents)[] {
   const out: (Paragraph | Table | TableOfContents)[] = []
   for (const node of nodes) {
     if (node.type === 'bulletList' || node.type === 'orderedList') {
@@ -229,15 +382,15 @@ function blocksOf(nodes: PMNode[], depth = 0): (Paragraph | Table | TableOfConte
           new Paragraph({
             children: [
               ...(ordered ? [new TextRun({ text: `${counter}. ` })] : []),
-              ...inlineToChildren(main),
+              ...inlineBlockChildren(main, dt),
             ],
             bullet: ordered ? undefined : { level: depth },
             indent: ordered ? { left: 480 + depth * 360 } : undefined,
             spacing: { after: 60 },
           }),
         )
-        out.push(...blocksOf(blocks.slice(1), depth))
-        out.push(...blocksOf(nested, depth + 1))
+        out.push(...blocksOf(blocks.slice(1), depth, dt))
+        out.push(...blocksOf(nested, depth + 1, dt))
       }
       continue
     }
@@ -245,7 +398,7 @@ function blocksOf(nodes: PMNode[], depth = 0): (Paragraph | Table | TableOfConte
       const level = Number(node.attrs?.level ?? 1)
       out.push(
         new Paragraph({
-          children: inlineToChildren(node),
+          children: inlineBlockChildren(node, dt),
           outlineLevel: Math.max(0, Math.min(8, level - 1)),
           heading:
             level === 1 ? HeadingLevel.HEADING_1
@@ -277,7 +430,7 @@ function blocksOf(nodes: PMNode[], depth = 0): (Paragraph | Table | TableOfConte
     if (node.type === 'blockquote') {
       out.push(
         new Paragraph({
-          children: inlineToChildren(node),
+          children: inlineBlockChildren(node, dt),
           indent: { left: 480 },
           border: { left: { style: BorderStyle.SINGLE, size: 12, color: '9CA3AF', space: 8 } },
           spacing: { after: 120 },
@@ -308,7 +461,7 @@ function blocksOf(nodes: PMNode[], depth = 0): (Paragraph | Table | TableOfConte
                 children: (r.content ?? []).map(
                   (cell) =>
                     new TableCell({
-                      children: [new Paragraph({ children: inlineToChildren(cell) })],
+                      children: [new Paragraph({ children: inlineBlockChildren(cell, dt) })],
                     }),
                 ),
               }),
@@ -319,7 +472,7 @@ function blocksOf(nodes: PMNode[], depth = 0): (Paragraph | Table | TableOfConte
     }
     out.push(
       new Paragraph({
-        children: inlineToChildren(node),
+        children: inlineBlockChildren(node, dt),
         alignment: alignOf(node),
         spacing: { after: 120 },
       }),
@@ -329,11 +482,12 @@ function blocksOf(nodes: PMNode[], depth = 0): (Paragraph | Table | TableOfConte
 }
 
 export async function prosemirrorToDocxBytes(json: PMNode, meta?: DocMeta): Promise<Uint8Array> {
+  const dt: DocTrack = { used: new Set(), ranges: new Set(), skipped: new Set() }
   const section: {
     children: (Paragraph | Table | TableOfContents)[]
     headers?: { default: Header }
     footers?: { default: Footer }
-  } = { children: blocksOf(json.content ?? []) }
+  } = { children: blocksOf(json.content ?? [], 0, dt) }
   if (meta?.headerText?.trim()) {
     section.headers = {
       default: new Header({
@@ -371,10 +525,32 @@ export async function prosemirrorToDocxBytes(json: PMNode, meta?: DocMeta): Prom
       }),
     }
   }
+  // 只导出正文中仍有锚点的批注；孤儿条目（原文被删）保留在 .odoc，不写进 docx
+  const anchored = (meta?.comments ?? []).filter((c) => dt.used.has(c.id))
+  // docx 只有在存在 parentId 时才生成 commentsExtended.xml（resolved 标志随它落盘），
+  // 给 -1 触发该分支且 idToParaId.get(-1) 为 undefined，不会写出伪造的 parentParaId
+  const anyResolved = anchored.some((c) => c.resolved)
   const doc = new Document({
     creator: 'OpenOffices',
     title: 'OpenOffices 文档',
     features: { updateFields: true },
+    ...(anchored.length
+      ? {
+          comments: {
+            children: anchored.map((c) => {
+              const d = c.date ? new Date(c.date) : new Date()
+              return {
+                id: c.id,
+                author: c.author || 'OpenOffices',
+                date: Number.isNaN(d.getTime()) ? new Date() : d,
+                ...(anyResolved ? { parentId: -1 } : {}),
+                ...(c.resolved ? { resolved: true } : {}),
+                children: [new Paragraph({ children: [new TextRun(c.text)] })],
+              }
+            }),
+          },
+        }
+      : {}),
     sections: [section],
   })
   const buf = await Packer.toBuffer(doc)
