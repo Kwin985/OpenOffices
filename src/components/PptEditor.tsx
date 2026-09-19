@@ -6,6 +6,7 @@ import type { Tab } from '../store'
 import { useApp } from '../store'
 import { readBytes, readText, writeBytes, writeText, pickSaveFile, baseName } from '../lib/fs'
 import {
+  bodyLines,
   emptyDeck,
   newSlide,
   parseDeck,
@@ -13,8 +14,10 @@ import {
   themeOf,
   LAYOUT_NAMES,
   TRANSITION_NAMES,
+  BULLET_ANIM_NAMES,
   THEMES,
   type Deck,
+  type BulletAnim,
   type Slide,
   type SlideLayout,
   type SlideTransition,
@@ -43,6 +46,8 @@ function PptEditor({ tab }: Props) {
   const [cur, setCur] = useState(0)
   const [present, setPresent] = useState(false)
   const [presentIdx, setPresentIdx] = useState(0)
+  const [revealed, setRevealed] = useState(1) // 逐条揭示：当前页已显示的要点数
+  const revealedRef = useRef(1)
   const [showNotes, setShowNotes] = useState(false)
   const [status, setStatus] = useState<string>(tab.path ? '正在加载…' : '')
   const [loaded, setLoaded] = useState(!tab.path)
@@ -93,6 +98,27 @@ function PptEditor({ tab }: Props) {
 
   const slide = deck.slides[cur]
 
+  // 逐条揭示 / 翻页：anim 页先揭示下一条，满了才换页
+  const revealNext = () => {
+    const s = snapRef.current.deck.slides[snapRef.current.idx]
+    const total = s ? bodyLines(s).length : 0
+    if (s?.anim && revealedRef.current < total) {
+      revealedRef.current += 1
+      setRevealed(revealedRef.current)
+      return
+    }
+    if (snapRef.current.idx < snapRef.current.deck.slides.length - 1) {
+      revealedRef.current = 1
+      setRevealed(1)
+      setPresentIdx(snapRef.current.idx + 1)
+    }
+  }
+  const revealPrev = () => {
+    revealedRef.current = 1
+    setRevealed(1)
+    setPresentIdx((i) => Math.max(i - 1, 0))
+  }
+
   // 放映按键
   useEffect(() => {
     if (!present) return
@@ -100,10 +126,8 @@ function PptEditor({ tab }: Props) {
       if (e.key === 'Escape') setPresent(false)
       else if (e.key === 'n' || e.key === 'N') setShowNotes((v) => !v)
       else if (e.key === 'p' || e.key === 'P') void togglePresenter()
-      else if (e.key === 'ArrowRight' || e.key === ' ' || e.key === 'Enter')
-        setPresentIdx((i) => Math.min(i + 1, deck.slides.length - 1))
-      else if (e.key === 'ArrowLeft' || e.key === 'Backspace')
-        setPresentIdx((i) => Math.max(i - 1, 0))
+      else if (e.key === 'ArrowRight' || e.key === ' ' || e.key === 'Enter') revealNext()
+      else if (e.key === 'ArrowLeft' || e.key === 'Backspace') revealPrev()
       else return
       e.preventDefault()
     }
@@ -112,23 +136,36 @@ function PptEditor({ tab }: Props) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [present, deck.slides.length])
 
+  // 自动换页计时（advTm 同源字段）
+  useEffect(() => {
+    if (!present) return
+    const s = deck.slides[presentIdx]
+    if (!s?.autoAdvance || presentIdx >= deck.slides.length - 1) return
+    const t = setTimeout(() => {
+      revealedRef.current = 1
+      setRevealed(1)
+      setPresentIdx((i) => Math.min(i + 1, deck.slides.length - 1))
+    }, s.autoAdvance * 1000)
+    return () => clearTimeout(t)
+  }, [present, presentIdx, deck])
+
   // 演讲者视图：第二窗口 + 事件同步
-  const snapRef = useRef({ present, idx: presentIdx, deck })
-  snapRef.current = { present, idx: presentIdx, deck }
+  const snapRef = useRef({ present, idx: presentIdx, deck, revealed })
+  snapRef.current = { present, idx: presentIdx, deck, revealed }
 
   useEffect(() => {
     if (!present) {
       void emit('present:closed')
       return
     }
-    void emit('present:sync', { deck, idx: presentIdx })
-  }, [present, presentIdx, deck])
+    void emit('present:sync', { deck, idx: presentIdx, revealed })
+  }, [present, presentIdx, deck, revealed])
 
   useEffect(() => {
     const un: Array<() => void> = []
     void listen('presenter:ready', () => {
       const s = snapRef.current
-      if (s.present) void emit('present:sync', { deck: s.deck, idx: s.idx })
+      if (s.present) void emit('present:sync', { deck: s.deck, idx: s.idx, revealed: s.revealed })
     }).then((fn) => un.push(fn))
     void listen('present:quit', () => setPresent(false)).then((fn) => un.push(fn))
     return () => un.forEach((f) => f())
@@ -306,11 +343,45 @@ function PptEditor({ tab }: Props) {
             <option key={k} value={k}>切换 · {n}</option>
           ))}
         </select>
+        <select
+          className="tool-select"
+          value={slide.anim ?? ''}
+          onChange={(e) =>
+            editSlide(cur, (s) => {
+              s.anim = (e.target.value || undefined) as BulletAnim | undefined
+            })
+          }
+          title="本页要点逐条入场动画（放映时点击逐条揭示）"
+        >
+          <option value="">逐条 · 无</option>
+          {(Object.entries(BULLET_ANIM_NAMES) as [BulletAnim, string][]).map(([k, n]) => (
+            <option key={k} value={k}>逐条 · {n}</option>
+          ))}
+        </select>
+        <label className="tool-num" title="放映时到秒自动换页；随 pptx advTm 往返">
+          换页
+          <input
+            className="tool-num-input"
+            type="number"
+            min={1}
+            max={3600}
+            value={slide.autoAdvance ?? ''}
+            onChange={(e) =>
+              editSlide(cur, (s) => {
+                const v = Number(e.target.value)
+                s.autoAdvance = Number.isFinite(v) && v > 0 ? Math.min(3600, Math.round(v)) : undefined
+              })
+            }
+          />
+          秒
+        </label>
         <button
           className="tool-btn tool-btn-primary"
           onClick={() => {
             setPresentIdx(cur)
             setShowNotes(false)
+            revealedRef.current = 1
+            setRevealed(1)
             setPresent(true)
           }}
         >
@@ -423,7 +494,14 @@ function PptEditor({ tab }: Props) {
             }`}
             key={presentIdx}
           >
-            <StaticSlide big slide={deck.slides[presentIdx]} themeId={deck.theme} master={deck.master} />
+            <StaticSlide
+              big
+              slide={deck.slides[presentIdx]}
+              themeId={deck.theme}
+              master={deck.master}
+              visibleLines={deck.slides[presentIdx]?.anim ? revealed : undefined}
+              anim={deck.slides[presentIdx]?.anim}
+            />
           </div>
           {showNotes && deck.slides[presentIdx]?.notes && (
             <div className="ppt-present-notes" onClick={(e) => e.stopPropagation()}>

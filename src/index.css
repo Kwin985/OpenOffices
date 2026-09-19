@@ -694,6 +694,25 @@ button {
   background: var(--panel);
 }
 
+.tool-num {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 13px;
+  color: var(--text-2);
+}
+
+.tool-num-input {
+  width: 56px;
+  font: inherit;
+  font-size: 13px;
+  padding: 4px 6px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--panel);
+  color: var(--text);
+}
+
 .tool-sep {
   width: 1px;
   height: 18px;
@@ -1052,6 +1071,43 @@ button {
 
 .ppt-tr-split {
   animation: ppt-anim-split 0.5s ease;
+}
+
+/* 要点逐条入场（放映/演讲者视图揭示） */
+@keyframes ppt-in-item-fade {
+  from {
+    opacity: 0;
+  }
+}
+
+@keyframes ppt-in-item-fly {
+  from {
+    opacity: 0;
+    transform: translateY(0.8em);
+  }
+}
+
+@keyframes ppt-in-item-wipe {
+  from {
+    clip-path: inset(0 100% 0 0);
+  }
+}
+
+.ppt-item-in {
+  animation-duration: 0.45s;
+  animation-timing-function: ease;
+}
+
+.ppt-in-fade {
+  animation-name: ppt-in-item-fade;
+}
+
+.ppt-in-fly {
+  animation-name: ppt-in-item-fly;
+}
+
+.ppt-in-wipe {
+  animation-name: ppt-in-item-wipe;
 }
 
 .ppt-present-bar {

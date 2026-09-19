@@ -271,15 +271,24 @@ async function parseNotes(zip: JSZip, slideName: string): Promise<string | undef
   return text || undefined
 }
 
-// <p:transition spd="med"><p:fade/></p:transition> 的首个子元素即切换效果名
-function parseTransition(root: Element): SlideTransition | undefined {
+// <p:transition spd="med" advTm="5000"><p:fade/></p:transition>：效果名 + 自动换页毫秒数
+function parseTransition(root: Element): {
+  transition?: SlideTransition
+  autoAdvance?: number
+} {
   const tr = descendantsByName(root, 'transition')[0]
-  if (!tr) return undefined
+  if (!tr) return {}
+  const out: { transition?: SlideTransition; autoAdvance?: number } = {}
+  const advTm = Number(tr.getAttribute('advTm') ?? 0)
+  if (Number.isFinite(advTm) && advTm >= 1000 && advTm <= 3_600_000)
+    out.autoAdvance = Math.round(advTm / 1000)
   for (const c of kids(tr)) {
-    if (c.localName === 'fade' || c.localName === 'push' || c.localName === 'wipe' || c.localName === 'split')
-      return c.localName as SlideTransition
+    if (c.localName === 'fade' || c.localName === 'push' || c.localName === 'wipe' || c.localName === 'split') {
+      out.transition = c.localName as SlideTransition
+      break
+    }
   }
-  return undefined
+  return out
 }
 
 async function slideToDeckSlide(
@@ -352,10 +361,11 @@ async function slideToDeckSlide(
     layout = 'title'
   }
 
-  // 单页背景覆盖 + 演讲者备注 + 切页动画
+  // 单页背景覆盖 + 演讲者备注 + 切页动画/自动换页
   let bg: string | undefined
   let notes: string | undefined
   let transition: SlideTransition | undefined
+  let autoAdvance: number | undefined
   try {
     const relsText = await zip
       .file(slideXml.name.replace(/slides\/(slide\d+\.xml)$/, 'slides/_rels/$1.rels'))
@@ -363,7 +373,7 @@ async function slideToDeckSlide(
     const slideBg = await bgOf(root, zip, relsText, 'ppt/slides', env.colors, env.clrMap)
     bg = slideBg.bg
     notes = await parseNotes(zip, slideXml.name)
-    transition = parseTransition(root)
+    ;({ transition, autoAdvance } = parseTransition(root))
     if (slideBg.bgImage && !image) {
       // 单页背景图当作整页图片还原
       image = slideBg.bgImage
@@ -373,7 +383,17 @@ async function slideToDeckSlide(
     console.warn('页背景/备注解析失败，忽略', e)
   }
 
-  return { id: newId(), layout, title, body: bodyLines.join('\n'), image, notes, bg, transition }
+  return {
+    id: newId(),
+    layout,
+    title,
+    body: bodyLines.join('\n'),
+    image,
+    notes,
+    bg,
+    transition,
+    autoAdvance,
+  }
 }
 
 export async function pptxBytesToDeck(bytes: Uint8Array): Promise<Deck> {

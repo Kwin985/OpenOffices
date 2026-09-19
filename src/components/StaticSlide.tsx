@@ -1,5 +1,12 @@
 import { memo, type CSSProperties } from 'react'
-import { bodyLines, themeOf, type MasterRect, type MasterStyle, type Slide } from '../lib/ppt'
+import {
+  bodyLines,
+  themeOf,
+  type BulletAnim,
+  type MasterRect,
+  type MasterStyle,
+  type Slide,
+} from '../lib/ppt'
 
 const pct = (v: number) => `${(v * 100).toFixed(2)}%`
 
@@ -8,14 +15,19 @@ export default memo(function StaticSlide({
   themeId,
   master,
   big,
+  visibleLines,
+  anim,
 }: {
   slide: Slide
   themeId: string
   master?: MasterStyle
   big?: boolean
+  visibleLines?: number // 仅显示前 N 条要点（放映逐条揭示）
+  anim?: BulletAnim // 最新揭示那条的入场效果
 }) {
   const t = themeOf(themeId)
   const lines = bodyLines(slide)
+  const shown = visibleLines === undefined ? lines : lines.slice(0, visibleLines)
   const cls = `ppt-slide-static${big ? ' ppt-slide-big' : ''} ppt-sl-${slide.layout}`
   const fg = master?.bodyColor ?? t.fg
   const accent = master?.titleColor ?? t.accent
@@ -48,10 +60,19 @@ export default memo(function StaticSlide({
             {slide.layout === 'image' && slide.image && (
               <img className="ppt-st-img" src={slide.image} alt="" />
             )}
-            {lines.length > 0 && (
+            {shown.length > 0 && (
               <ul className="ppt-st-list">
-                {lines.map((l, i) => (
-                  <li key={i}>{l}</li>
+                {shown.map((l, i) => (
+                  <li
+                    key={i}
+                    className={
+                      visibleLines !== undefined && anim && i === shown.length - 1
+                        ? `ppt-item-in ppt-in-${anim}`
+                        : undefined
+                    }
+                  >
+                    {l}
+                  </li>
                 ))}
               </ul>
             )}

@@ -134,18 +134,18 @@ export async function deckToPptxBytes(deck: Deck): Promise<Uint8Array> {
 
   const out = (await pptx.write({ outputType: 'arraybuffer' })) as ArrayBuffer
 
-  // pptxgenjs 不支持切换动画：解包后向 slideN.xml 注入 <p:transition>（schema 顺序在末尾即可）
-  if (deck.slides.some((s) => s.transition)) {
+  // pptxgenjs 不支持切换/换页计时：解包后向 slideN.xml 注入 <p:transition>（schema 顺序在末尾即可）
+  if (deck.slides.some((s) => s.transition || s.autoAdvance)) {
     const { default: JSZip } = await import('jszip')
     const zip = await JSZip.loadAsync(out)
     for (let i = 0; i < deck.slides.length; i++) {
-      const tr = deck.slides[i].transition
-      if (!tr) continue
+      const s = deck.slides[i]
+      if (!s.transition && !s.autoAdvance) continue
       const name = `ppt/slides/slide${i + 1}.xml`
       const file = zip.file(name)
       if (!file) continue
       const xml = await file.async('string')
-      zip.file(name, xml.replace('</p:sld>', `${transitionXml(tr)}</p:sld>`))
+      zip.file(name, xml.replace('</p:sld>', `${transitionXml(s.transition, s.autoAdvance)}</p:sld>`))
     }
     const buf = (await zip.generateAsync({ type: 'arraybuffer' })) as ArrayBuffer
     return new Uint8Array(buf)
@@ -153,7 +153,7 @@ export async function deckToPptxBytes(deck: Deck): Promise<Uint8Array> {
   return new Uint8Array(out)
 }
 
-function transitionXml(tr: SlideTransition): string {
+function transitionXml(tr: SlideTransition | undefined, autoAdvance: number | undefined): string {
   const inner =
     tr === 'fade'
       ? '<p:fade/>'
@@ -161,6 +161,9 @@ function transitionXml(tr: SlideTransition): string {
         ? '<p:push dir="l"/>'
         : tr === 'wipe'
           ? '<p:wipe dir="l"/>'
-          : '<p:split orient="vert" dir="d"/>'
-  return `<p:transition spd="med" advClick="1">${inner}</p:transition>`
+          : tr === 'split'
+            ? '<p:split orient="vert" dir="d"/>'
+            : ''
+  const advTm = autoAdvance ? ` advTm="${Math.round(autoAdvance * 1000)}"` : ''
+  return `<p:transition spd="med" advClick="1"${advTm}>${inner}</p:transition>`
 }

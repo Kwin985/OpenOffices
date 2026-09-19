@@ -7,6 +7,7 @@ import StaticSlide from './StaticSlide'
 interface Snap {
   deck: Deck
   idx: number
+  revealed?: number
 }
 
 const fmt = (s: number) =>
@@ -56,7 +57,14 @@ export default function Presenter() {
       </header>
       <div className="presenter-main">
         <div className="presenter-cur">
-          <StaticSlide big slide={cur} themeId={deck.theme} master={deck.master} />
+          <StaticSlide
+            big
+            slide={cur}
+            themeId={deck.theme}
+            master={deck.master}
+            visibleLines={cur.anim ? snap.revealed : undefined}
+            anim={cur.anim}
+          />
         </div>
         <div className="presenter-side">
           <div className="presenter-next-wrap">

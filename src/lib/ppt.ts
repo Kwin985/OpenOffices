@@ -9,6 +9,14 @@ export const TRANSITION_NAMES: Record<SlideTransition, string> = {
   split: '劈开',
 }
 
+export type BulletAnim = 'fade' | 'fly' | 'wipe'
+
+export const BULLET_ANIM_NAMES: Record<BulletAnim, string> = {
+  fade: '淡入',
+  fly: '飞入',
+  wipe: '擦除',
+}
+
 export interface MasterRect {
   x: number
   y: number
@@ -34,6 +42,8 @@ export interface Slide {
   notes?: string // 演讲者备注
   bg?: string // 单页纯色背景覆盖
   transition?: SlideTransition // 切页动画，未设=无
+  anim?: BulletAnim // 要点逐条入场动画（本地放映播放，pptx 不导出）
+  autoAdvance?: number // 自动换页秒数；导出为 OOXML advTm
 }
 
 export interface DeckTheme {
@@ -108,6 +118,10 @@ function isTransition(v: unknown): v is SlideTransition {
   return typeof v === 'string' && v in TRANSITION_NAMES
 }
 
+function isBulletAnim(v: unknown): v is BulletAnim {
+  return typeof v === 'string' && v in BULLET_ANIM_NAMES
+}
+
 export function serializeDeck(deck: Deck): string {
   return JSON.stringify(deck, null, 2)
 }
@@ -156,6 +170,11 @@ export function parseDeck(text: string): Deck {
       notes: typeof s.notes === 'string' ? s.notes : undefined,
       bg: typeof s.bg === 'string' ? s.bg : undefined,
       transition: isTransition(s.transition) ? s.transition : undefined,
+      anim: isBulletAnim(s.anim) ? s.anim : undefined,
+      autoAdvance:
+        typeof s.autoAdvance === 'number' && s.autoAdvance > 0 && s.autoAdvance <= 3600
+          ? s.autoAdvance
+          : undefined,
     })),
   }
   const master = parseMaster(raw.master)
