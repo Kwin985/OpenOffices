@@ -292,6 +292,28 @@ button {
   text-decoration: underline;
 }
 
+.recents-sync {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 10px;
+}
+
+.sync-pass {
+  flex: 0 0 220px;
+  padding: 5px 9px;
+  font-size: 12px;
+  color: var(--text-1);
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 7px;
+}
+
+.sync-status {
+  color: var(--text-2);
+  font-size: 12px;
+}
+
 .recents-empty {
   color: var(--text-2);
   padding: 18px;

@@ -1,6 +1,6 @@
 [package]
 name = "openoffices"
-version = "0.15.0"
+version = "0.16.0"
 description = "A Tauri App"
 authors = ["you"]
 edition = "2021"
@@ -24,6 +24,8 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tauri-plugin-dialog = "2.7.3"
 tauri-plugin-fs = "2.5.2"
+# 文件关联二次启动把路径转发给已开实例（MIT/Apache，Tauri 官方插件）
+tauri-plugin-single-instance = "2"
 calamine = "0.36.1"
 rust_xlsxwriter = "0.99.1"
 # 直接依赖以读取 xlsx 单元格样式/合并（calamine 不公开样式 API）；两者均已在依赖树中，零体积增量

@@ -1,5 +1,8 @@
+import { useState } from 'react'
+import { open } from '@tauri-apps/plugin-dialog'
 import { useApp, type DocKind } from '../store'
-import { pickOpenFile } from '../lib/fs'
+import { pickOpenFile, pickSaveFile, readText, writeText } from '../lib/fs'
+import { encryptRecents, decryptRecents } from '../lib/sync'
 import { openPath } from '../lib/open'
 
 const KIND_META: Record<DocKind, { label: string; icon: string; cls: string; desc: string; sample: string }> = {
@@ -29,6 +32,41 @@ export default function Home() {
   const recents = useApp((s) => s.recents)
   const markRecent = useApp((s) => s.markRecent)
   const clearRecents = useApp((s) => s.clearRecents)
+  const mergeRecents = useApp((s) => s.mergeRecents)
+  const [pass, setPass] = useState('')
+  const [syncStatus, setSyncStatus] = useState('')
+
+  const exportSync = async () => {
+    if (!pass) {
+      setSyncStatus('请先输入同步口令')
+      return
+    }
+    const path = await pickSaveFile('recents.oosync', ['oosync'])
+    if (!path) return
+    try {
+      const { recents } = useApp.getState()
+      await writeText(path, await encryptRecents(recents, pass))
+      setSyncStatus(`已导出加密副本：${path.split(/[\\/]/).pop()}（${recents.length} 条）`)
+    } catch (e) {
+      setSyncStatus(`导出失败：${e instanceof Error ? e.message : String(e)}`)
+    }
+  }
+
+  const importSync = async () => {
+    if (!pass) {
+      setSyncStatus('请先输入同步口令')
+      return
+    }
+    const selected = await open({ multiple: false, filters: [{ name: '同步文件', extensions: ['oosync'] }] })
+    if (typeof selected !== 'string') return
+    try {
+      const incoming = await decryptRecents(await readText(selected), pass)
+      const added = mergeRecents(incoming)
+      setSyncStatus(`合并完成：导入 ${incoming.length} 条，新增 ${added} 条`)
+    } catch (e) {
+      setSyncStatus(`导入失败：${e instanceof Error ? e.message : String(e)}`)
+    }
+  }
 
   const createNew = (kind: DocKind) => {
     openTab({ kind, title: KIND_META[kind].sample })
@@ -83,6 +121,18 @@ export default function Home() {
           {recents.length > 0 && (
             <button className="link-btn" onClick={clearRecents}>清空记录</button>
           )}
+        </div>
+        <div className="recents-sync">
+          <input
+            type="password"
+            className="sync-pass"
+            placeholder="同步口令（端到端加密）"
+            value={pass}
+            onChange={(e) => setPass(e.target.value)}
+          />
+          <button className="link-btn" onClick={() => void exportSync()}>导出加密副本</button>
+          <button className="link-btn" onClick={() => void importSync()}>从加密副本合并</button>
+          {syncStatus && <span className="sync-status">{syncStatus}</span>}
         </div>
         {recents.length === 0 ? (
           <p className="recents-empty">暂无记录，打开或新建文件后会显示在这里</p>

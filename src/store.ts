@@ -29,6 +29,7 @@ interface AppState {
   renameTab: (id: string, title: string, path?: string) => void
   markDirty: (id: string, dirty: boolean) => void
   markRecent: (path: string, kind: DocKind) => void
+  mergeRecents: (incoming: RecentFile[]) => number
   clearRecents: () => void
   toggleTheme: () => void
 }
@@ -103,6 +104,22 @@ export const useApp = create<AppState>((set, get) => ({
       localStorage.setItem(RECENTS_KEY, JSON.stringify(recents))
       return { recents }
     }),
+  mergeRecents: (incoming) => {
+    const { recents } = get()
+    const known = new Set(recents.map((r) => r.path))
+    const added = incoming.filter((r) => !known.has(r.path)).length
+    const byPath = new Map<string, RecentFile>()
+    for (const r of [...recents, ...incoming]) {
+      const prev = byPath.get(r.path)
+      if (!prev || r.openedAt > prev.openedAt) byPath.set(r.path, r)
+    }
+    const merged = [...byPath.values()]
+      .sort((a, b) => b.openedAt - a.openedAt)
+      .slice(0, 30)
+    localStorage.setItem(RECENTS_KEY, JSON.stringify(merged))
+    set({ recents: merged })
+    return added
+  },
   clearRecents: () => {
     localStorage.removeItem(RECENTS_KEY)
     set({ recents: [] })

@@ -188,6 +188,26 @@
   表格夹具值/样式/合并 HTML 断言 + 导出 841.9×595（A4 横向）+ 填满后 3 页分页、
   文档导出（不传新参数）None 分支回归通过
 
+## 文件关联与端到端加密同步（v0.16）
+
+- **文件关联**：`bundle.fileAssociations` 声明四组扩展名（表格/文档/演示/PDF，PDF 为 Viewer
+  只读语义），Windows 安装器写注册表后双击即把文件路径作为进程参数传给应用
+- **单实例转发**：接入 `tauri-plugin-single-instance`——二次启动不再开新进程，把 argv 中
+  过滤出的文件路径 emit `oof://open-paths` 给已开窗口并还原聚焦主窗；首启路径则进启动状态，
+  前端挂载时经 `take_startup_files` 一次取走（与拖拽打开、最近文件共用同一 `openPath` 链路）
+- **argv 过滤纯函数**：只认 `OPEN_EXTS`（与前端 `kindOfPath` 保持一致）匹配的扩展名、去引号、
+  大小写不敏感，拒绝无扩展名与 `--flag` 类参数；Rust 3 项单测覆盖
+- **端到端加密同步**：新增 `lib/sync.ts`，纯 WebCrypto 零新依赖——口令经 PBKDF2-SHA256
+  （15 万次迭代 + 16B 随机盐）派生 AES-256-GCM 密钥，把「最近打开」密封成 `.oosync`
+  JSON 文本信封（salt/iv/data 均 base64），丢进任何网盘即可完成跨设备搬运；解密校验
+  app/kind/v 字段，口令错误或文件被篡改由 GCM tag 兜底报「解密失败」，条目按形状过滤；
+  `mergeRecents` 按路径去重保新、时间倒序截 30 条落盘。口令不落盘、应用无密钥，真端到端
+- **首页操作**：最近打开区新增口令输入框与「导出加密副本 / 从加密副本合并」按钮及状态行
+- **验证**：cargo 18 项测试全绿（含 3 个新单测）；tsc 与 `pnpm build` 全绿；CDP 冒烟——
+  信封形状、加解密往返、错误口令拒绝、非法条目过滤、非同步文件识别、mergeRecents 去重
+  计数与持久化共 7 断言全 true；双实例真实冒烟——二次 `openoffices.exe <文件>` 启动后自行
+  退出，主窗口标签与最近记录出现该文件，连开两文件两标签，期间 CDP page 目标与进程数恒 1
+
 ## 性能（v0.3）
 
 - **按编辑器分包 + 懒加载**：主包 8MB → 首屏约 300KB；Univer（6.1MB）只在首次激活表格标签时加载，
@@ -216,6 +236,7 @@
 | [zip](https://github.com/zip-rs/zip) | Rust xlsx 解包（读取样式/合并 XML）+ ODS 打包写出 | MIT |
 | [quick-xml](https://github.com/tafia/quick-xml) | Rust OOXML 流式解析 | MIT |
 | [zustand](https://github.com/pmndrs/zustand) | 前端状态管理 | MIT |
+| [tauri-plugin-single-instance](https://github.com/tauri-apps/plugins-workspace) | 单实例启动 + 二次启动 argv 转发（文件关联体验） | MIT / Apache-2.0 |
 | React 19 + Vite | UI 框架与构建 | MIT |
 
 ## 架构
@@ -227,10 +248,11 @@ src-tauri/            Rust 后端
   src/xlsx_chart.rs   zip + quick-xml 直读 chartN.xml + drawing 锚点，系列值按实时网格解析
   src/ods.rs          write_ods 命令：共用 xlsx 载荷 → ODF zip（mimetype/manifest/content/styles），含样式去重与合并
   src/pdf.rs          export_pdf 命令：with_webview → WebView2 PrintToPdf（边距/纸张尺寸参数，cfg windows）
+  src/lib.rs          OPEN_EXTS 与 argv 文件过滤纯函数、take_startup_files 命令、single-instance 文件转发
   capabilities/       dialog + fs 权限与路径作用域
 src/                  React 前端
   store.ts            标签页 / 最近文件 / 主题（zustand）
-  App.tsx             全局快捷键、拖拽打开、关闭确认、懒加载路由
+  App.tsx             全局快捷键、拖拽打开、文件关联打开（启动 argv + 单实例转发）、关闭确认、懒加载路由
   lib/univer.ts       Univer 实例工厂（公式 worker + 六个社区预设，含绘图 FOverGridImage）
   lib/univer-io.ts    xlsx 数据+样式/合并/图表 ↔ Univer 快照 转换（样式去重注册）
   lib/chart.ts        ChartPayload → VChart spec → 离屏 canvas PNG dataURL（动态导入分包）
@@ -245,6 +267,7 @@ src/                  React 前端
   lib/pptx-import.ts  pptx → Deck（JSZip 解包 + OOXML 解析 + 媒体还原）
   lib/registry.ts     跨组件保存器注册表（Ctrl+S 路由到当前标签）
   lib/open.ts         路径→标签 打开 / 带确认关闭
+  lib/sync.ts         最近文件端到端加密同步（WebCrypto PBKDF2-SHA256 → AES-256-GCM，.oosync 信封）
   components/         Home / Workspace / SheetEditor / DocEditor / PptEditor / PdfViewer（pdfjs-dist 懒加载）
 scripts/              copy-pdfjs-assets.mjs（dev/build 前复制 cmaps/标准字体到 public/pdfjs）
 ```
@@ -286,7 +309,7 @@ cargo check        # Rust 后端检查（在 src-tauri 下）
 - [x] PDF 查看（pdf.js）与文档导出（WebView2 PrintToPdf）
 - [x] PDF：表格/演示导出
 - [x] ODF（ods/odt）原生格式
-- [ ] 本地文件关联与"最近项目"跨设备同步（可选、端到端加密）
+- [x] 本地文件关联与"最近项目"跨设备同步（可选、端到端加密）
 
 ## License
 

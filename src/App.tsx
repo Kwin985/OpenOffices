@@ -1,4 +1,6 @@
 import { Suspense, lazy, useEffect } from 'react'
+import { invoke } from '@tauri-apps/api/core'
+import { listen } from '@tauri-apps/api/event'
 import { getCurrentWebview } from '@tauri-apps/api/webview'
 import { getCurrentWindow } from '@tauri-apps/api/window'
 import { message, confirm } from '@tauri-apps/plugin-dialog'
@@ -92,6 +94,27 @@ function MainApp() {
         if (disposed) fn()
         else unlisten = fn
       })
+    return () => {
+      disposed = true
+      unlisten?.()
+    }
+  }, [])
+
+  // 文件关联：启动 argv 里的路径一次性取走；后续双击由单实例插件转发过来
+  useEffect(() => {
+    void invoke<string[]>('take_startup_files')
+      .then((paths) => {
+        for (const p of paths) openPath(p)
+      })
+      .catch(() => {})
+    let unlisten: (() => void) | undefined
+    let disposed = false
+    void listen<string[]>('oof://open-paths', (ev) => {
+      for (const p of ev.payload) openPath(p)
+    }).then((fn) => {
+      if (disposed) fn()
+      else unlisten = fn
+    })
     return () => {
       disposed = true
       unlisten?.()
