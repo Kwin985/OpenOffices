@@ -277,7 +277,9 @@ pub fn read_xlsx(path: String) -> Result<WorkbookPayload, Error> {
                         r,
                         c,
                         v: Some(v),
-                        f: None,
+                        f: fmt
+                            .and_then(|f| f.formulas.get(&(r, c)).cloned())
+                            .map(|t| format!("={t}")),
                         s: fmt.and_then(|f| f.styles.get(&(r, c)).cloned()),
                     });
                 }
@@ -289,12 +291,27 @@ pub fn read_xlsx(path: String) -> Result<WorkbookPayload, Error> {
                 if seen.contains(&(r, c)) {
                     continue;
                 }
+                seen.insert((r, c));
                 cells.push(CellPayload {
                     r,
                     c,
                     v: None,
-                    f: None,
+                    f: f.formulas.get(&(r, c)).map(|t| format!("={t}")),
                     s: Some(style.clone()),
+                });
+            }
+            // 无缓存值的公式格 calamine 也不吐，按公式表补回
+            for (&(r, c), t) in &f.formulas {
+                if seen.contains(&(r, c)) {
+                    continue;
+                }
+                seen.insert((r, c));
+                cells.push(CellPayload {
+                    r,
+                    c,
+                    v: None,
+                    f: Some(format!("={t}")),
+                    s: None,
                 });
             }
         }
@@ -474,12 +491,17 @@ pub fn write_xlsx(path: String, workbook: WorkbookPayload) -> Result<(), Error> 
             }
             let fmt = format_for(cell.s.as_ref());
             if let Some(formula) = &cell.f {
-                let formula = if formula.starts_with('=') {
-                    formula.clone()
-                } else {
-                    format!("={formula}")
-                };
-                let _ = ws.write_formula_with_format(row, col, formula.as_str(), &fmt);
+                // Formula::new 自剥 '='；缓存值随 <v> 落盘，重开（calamine 不算式）不丢数
+                let mut f = rust_xlsxwriter::Formula::new(formula);
+                if let Some(Value::Number(n)) = &cell.v {
+                    let s = if n.as_f64().map(|v| v.fract() == 0.0 && v.abs() < (i64::MAX as f64)) == Some(true) {
+                        format!("{}", n.as_f64().unwrap() as i64)
+                    } else {
+                        n.to_string()
+                    };
+                    f = f.set_result(s);
+                }
+                let _ = ws.write_formula_with_format(row, col, f, &fmt);
                 continue;
             }
             match &cell.v {
@@ -976,6 +998,57 @@ mod tests {
             Some((1, 0)),
             "冻结首行往返"
         );
+    }
+
+    #[test]
+    fn formula_roundtrip_with_cached_value() {
+        let path = tmp_path("formula");
+        let wb = WorkbookPayload {
+            sheets: vec![SheetPayload {
+                name: "算".into(),
+                cells: vec![
+                    CellPayload { r: 0, c: 0, v: Some(json!(10)), ..Default::default() },
+                    CellPayload { r: 1, c: 0, v: Some(json!(32)), ..Default::default() },
+                    // 带缓存值的公式 + 含 <> 比较（XML 转义回归）
+                    CellPayload {
+                        r: 0,
+                        c: 1,
+                        v: Some(json!(42)),
+                        f: Some("=A1+A2".into()),
+                        ..Default::default()
+                    },
+                    CellPayload {
+                        r: 1,
+                        c: 1,
+                        v: Some(json!(1)),
+                        f: Some("=IF(A1<A2,1,0)".into()),
+                        ..Default::default()
+                    },
+                    // 无缓存值公式格：写侧默认 0，重开至少公式不丢
+                    CellPayload {
+                        r: 2,
+                        c: 1,
+                        v: None,
+                        f: Some("=SUM(A1:B1)".into()),
+                        ..Default::default()
+                    },
+                ],
+                ..Default::default()
+            }],
+        };
+        write_xlsx(path.clone(), wb).expect("write_xlsx");
+        let back = read_xlsx(path.clone()).expect("读回失败");
+        std::fs::remove_file(&path).ok();
+        let sheet = &back.sheets[0];
+        let at = |r: u32, c: u32| sheet.cells.iter().find(|x| x.r == r && x.c == c);
+        assert_eq!(at(0, 1).and_then(|x| x.f.as_deref()), Some("=A1+A2"), "公式往返");
+        assert_eq!(at(0, 1).and_then(|x| x.v.clone()), Some(json!(42)), "缓存值随公式落盘");
+        assert_eq!(
+            at(1, 1).and_then(|x| x.f.as_deref()),
+            Some("=IF(A1<A2,1,0)"),
+            "含 < 比较式的公式经 unescape 还原"
+        );
+        assert_eq!(at(2, 1).and_then(|x| x.f.as_deref()), Some("=SUM(A1:B1)"), "无值公式格补回");
     }
 
     // CDP 冒烟夹具：手动 `cargo test gen_smoke_fixture -- --ignored` 生成带图表 xlsx

@@ -22,6 +22,8 @@ pub struct SheetFmt {
     pub hidden_cols: Vec<u32>,
     /// 冻结窗格 (rows, cols)
     pub freeze: Option<(u32, u32)>,
+    /// (行,列) → 公式文本（OOXML 原生不带 '=' 前缀；shared 从格无文本不落表）
+    pub formulas: HashMap<(u32, u32), String>,
 }
 
 /// xlsx 列宽（字符数，MDW=7 + 5px padding）→ 像素
@@ -335,18 +337,26 @@ fn bool_attr(e: &quick_xml::events::BytesStart<'_>) -> bool {
 fn parse_sheet(xml: &str, book: &StyleBook) -> SheetFmt {
     let mut out = SheetFmt::default();
     let mut reader = Reader::from_str(xml);
+    let mut cur_cell: Option<(u32, u32)> = None;
+    let mut f_buf: Option<String> = None;
     while let Ok(ev) = reader.read_event() {
         if let Event::Empty(e) | Event::Start(e) = &ev {
             let nm = e.local_name();
             let nm = nm.as_ref();
             if nm == "c" {
+                cur_cell = attr_str(e, "r").as_deref().and_then(a1_to_rc);
                 let xf: u32 = attr_str(e, "s").and_then(|v| v.parse().ok()).unwrap_or(0);
                 if xf > 0 {
-                    if let Some((r, c)) = attr_str(e, "r").as_deref().and_then(a1_to_rc) {
+                    if let Some((r, c)) = cur_cell {
                         if let Some(style) = style_for(xf as usize, book) {
                             out.styles.insert((r, c), style);
                         }
                     }
+                }
+            } else if nm == "f" {
+                // 仅 Start 收集文本；Empty 的 <f/> 是 shared 从格/无缓存数组式，跳过
+                if matches!(ev, Event::Start(_)) {
+                    f_buf = Some(String::new());
                 }
             } else if nm == "mergeCell" {
                 if let Some(range) = attr_str(e, "ref").as_deref().and_then(parse_range) {
@@ -390,6 +400,36 @@ fn parse_sheet(xml: &str, book: &StyleBook) -> SheetFmt {
                         out.freeze = Some((rows, cols));
                     }
                 }
+            }
+        } else if let Event::Text(t) = &ev {
+            if let Some(buf) = f_buf.as_mut() {
+                buf.push_str(t.as_ref());
+            }
+        } else if let Event::GeneralRef(r) = &ev {
+            // quick-xml 0.42 把 &lt; 等实体拆成独立事件（不带 &;），还原后再统一 unescape
+            if let Some(buf) = f_buf.as_mut() {
+                buf.push('&');
+                buf.push_str(r.as_ref());
+                buf.push(';');
+            }
+        } else if let Event::End(e) = &ev {
+            match e.local_name().as_ref() {
+                "f" => {
+                    if let Some(buf) = f_buf.take() {
+                        let un = match quick_xml::escape::unescape(&buf) {
+                            Ok(cow) => cow.into_owned(),
+                            Err(_) => buf,
+                        };
+                        let f = un.trim_start_matches('=').to_string();
+                        if !f.is_empty() {
+                            if let Some((r, c)) = cur_cell {
+                                out.formulas.insert((r, c), f);
+                            }
+                        }
+                    }
+                }
+                "c" => cur_cell = None,
+                _ => {}
             }
         }
         if matches!(ev, Event::Eof) {

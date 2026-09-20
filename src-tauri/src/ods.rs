@@ -13,11 +13,18 @@ use serde_json::Value;
 use zip::write::SimpleFileOptions;
 use zip::{CompressionMethod, ZipWriter};
 
-use crate::xlsx::{BorderSide, CellBorder, CellStyle, Error, MergeRange, SheetPayload, WorkbookPayload};
+use crate::xlsx::{
+    BorderSide, CellBorder, CellPayload, CellStyle, Error, MergeRange, SheetPayload, WorkbookPayload,
+};
 use crate::xlsx_style::{attr_str, read_entry, SheetFmt};
 
 fn esc(s: &str) -> String {
     escape(s).to_string()
+}
+
+/// quick_xml 的 escape 不动引号；属性里的 " 会截断 XML，必须再转一道
+fn esc_attr(s: &str) -> String {
+    esc(s).replace('"', "&quot;")
 }
 
 /// 边框样式名 → ODF fo:border-* 值的线宽/线型近似（读侧按同表反推）
@@ -485,6 +492,15 @@ pub fn read_ods_styles(path: &str) -> HashMap<String, SheetFmt> {
                                     fmt.styles.insert((row_idx, col_idx + i), name.clone());
                                 }
                             }
+                            // 公式：table:formula 的 of:= 式换算回 OOXML 约定（不带 '='）
+                            if repeat == 1 {
+                                if let Some(raw) = attr_str(e, "formula") {
+                                    let x = odf_to_xlsx_formula(&raw);
+                                    if !x.is_empty() {
+                                        fmt.formulas.insert((row_idx, col_idx), x);
+                                    }
+                                }
+                            }
                             if cs > 1 || rs > 1 {
                                 fmt.merges.push(MergeRange {
                                     start_row: row_idx,
@@ -612,6 +628,210 @@ fn cell_in_merge(m: &MergeRange, r: u32, c: u32) -> bool {
     r >= m.start_row && r <= m.end_row && c >= m.start_column && c <= m.end_column
 }
 
+/// 公式属性；无缓存值时补 float 0，保证 LO 打开后有合法显示
+fn cell_content_attrs(x: &CellPayload) -> (String, String, String) {
+    let (vt, text) = match x.v.as_ref() {
+        Some(v) => cell_value_xml(v),
+        None if x.f.is_some() => (
+            "office:value-type=\"float\" office:value=\"0\"".into(),
+            "0".into(),
+        ),
+        None => ("office:value-type=\"string\"".into(), String::new()),
+    };
+    let fattr = x
+        .f
+        .as_deref()
+        .map(|t| format!(" table:formula=\"{}\"", esc_attr(&xlsx_to_odf_formula(t))))
+        .unwrap_or_default();
+    (vt, text, fattr)
+}
+
+// ---- 公式语法换算：xlsx A1 式 ⇄ ODF of:= 式（同表 [.A1]/[.A1:.B2]，参数分隔 ; ）----
+
+/// 读侧只需还原成 A1 式；shared/数组细节与跨表绝对引用取最小支持面。
+fn is_simple_sheet(name: &str) -> bool {
+    !name.is_empty()
+        && name.starts_with(|c: char| c.is_ascii_alphabetic() || c == '_')
+        && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
+}
+
+/// 从 i 起解析 A1 引用（可带 $），成功返回 (新位置, "A1")；后接 ( . _ 或字母数字则不算。
+fn skip_cellref(src: &[char], i: usize) -> Option<(usize, String)> {
+    let mut j = i;
+    if src.get(j) == Some(&'$') {
+        j += 1;
+    }
+    let l0 = j;
+    while j < src.len() && src[j].is_ascii_alphabetic() && j - l0 < 3 {
+        j += 1;
+    }
+    if j == l0 {
+        return None;
+    }
+    let letters: String = src[l0..j].iter().collect();
+    if src.get(j) == Some(&'$') {
+        j += 1;
+    }
+    let d0 = j;
+    while j < src.len() && src[j].is_ascii_digit() {
+        j += 1;
+    }
+    if j == d0 {
+        return None;
+    }
+    let digits: String = src[d0..j].iter().collect();
+    if let Some(&n) = src.get(j) {
+        if n == '(' || n == '.' || n == '_' || n.is_ascii_alphanumeric() {
+            return None;
+        }
+    }
+    Some((j, format!("{}{}", letters.to_uppercase(), digits)))
+}
+
+/// 从 i 起解析 sheet 限定（标识符 + '.'），返回 (新位置, sheet 名)
+fn skip_sheet_prefix(src: &[char], i: usize) -> Option<(usize, String)> {
+    let mut j = i;
+    if !src.get(j).map_or(false, |c| c.is_ascii_alphabetic() || *c == '_') {
+        return None;
+    }
+    let s0 = j;
+    while j < src.len() && (src[j].is_ascii_alphanumeric() || src[j] == '_') {
+        j += 1;
+    }
+    if src.get(j) != Some(&'.') {
+        return None;
+    }
+    Some((j + 1, src[s0..j].iter().collect()))
+}
+
+fn odf_ref_side(sheet: Option<&str>, r: &str) -> String {
+    match sheet {
+        Some(s) if !is_simple_sheet(s) => format!("'{s}.{r}"),
+        Some(s) => format!("{s}.{r}"),
+        None => r.to_string(),
+    }
+}
+
+/// xlsx "=SUM(A1:B2,C1)" → "of:=SUM([.A1:.B2];[.C1])"
+fn xlsx_to_odf_formula(f: &str) -> String {
+    let src: Vec<char> = f.trim_start_matches('=').chars().collect();
+    let mut out = String::from("of:=");
+    let mut i = 0;
+    let mut instr = false;
+    while i < src.len() {
+        let ch = src[i];
+        if instr {
+            out.push(ch);
+            if ch == '"' {
+                instr = false;
+            }
+            i += 1;
+            continue;
+        }
+        match ch {
+            '"' => {
+                instr = true;
+                out.push(ch);
+                i += 1;
+            }
+            ',' => {
+                out.push(';');
+                i += 1;
+            }
+            '$' | 'A'..='Z' | 'a'..='z' => {
+                // sheet 限定优先，其次同表引用（含区间），都不中就原样吐一个字符
+                let (base, sheet) = match skip_sheet_prefix(&src, i) {
+                    Some((j, s)) => (j, Some(s)),
+                    None => (i, None),
+                };
+                if let Some((mut j, a)) = skip_cellref(&src, base) {
+                    if let Some((k, b)) = skip_cellref(&src, j + 1).filter(|_| src.get(j) == Some(&':')) {
+                        j = k;
+                        out.push_str(&format!("[.{}:.{}]", odf_ref_side(sheet.as_deref(), &a), b));
+                    } else {
+                        out.push_str(&format!("[.{}]", odf_ref_side(sheet.as_deref(), &a)));
+                    }
+                    i = j;
+                    continue;
+                }
+                out.push(ch);
+                i += 1;
+            }
+            _ => {
+                out.push(ch);
+                i += 1;
+            }
+        }
+    }
+    out
+}
+
+/// "of:=SUM([.A1:.A2]);…" → "SUM(A1:A2),…"（不带 '='，落 SheetFmt.formulas 的 OOXML 约定）
+fn odf_to_xlsx_formula(f: &str) -> String {
+    let t = f.trim();
+    let t = match t.strip_prefix("of:=") {
+        Some(s) => s,
+        None => t.strip_prefix('=').unwrap_or(t),
+    };
+    let src: Vec<char> = t.chars().collect();
+    let mut out = String::new();
+    let mut i = 0;
+    let mut instr = false;
+    while i < src.len() {
+        let ch = src[i];
+        if instr {
+            out.push(ch);
+            if ch == '"' {
+                instr = false;
+            }
+            i += 1;
+            continue;
+        }
+        match ch {
+            '"' => {
+                instr = true;
+                out.push(ch);
+                i += 1;
+            }
+            ';' => {
+                out.push(',');
+                i += 1;
+            }
+            '[' => {
+                let close = src[i + 1..]
+                    .iter()
+                    .position(|&c| c == ']')
+                    .map(|p| p + i + 1)
+                    .unwrap_or(src.len());
+                let inner: String = src[i + 1..close].iter().filter(|&&c| c != '$').collect();
+                let inner = inner.strip_prefix('.').unwrap_or(&inner).to_string();
+                let mut sides: Vec<String> = Vec::new();
+                for side in inner.split(':') {
+                    let side = side.strip_prefix('.').unwrap_or(side);
+                    let dot = side.rfind('.');
+                    sides.push(match dot {
+                        // 写侧把带空格的表名输出成 ['My Sheet.A1]，读回补成 xlsx 的 'My Sheet'.A1
+                        Some(p) if p > 0 && side.starts_with('\'') => {
+                            format!("'{}'.{}", &side[1..p], &side[p + 1..])
+                        }
+                        Some(p) if p > 0 => format!("{}.{}", &side[..p], &side[p + 1..]),
+                        None => side.to_string(),
+                        Some(_) => side.to_string(),
+                    });
+                }
+                out.push_str(&sides.join(":"));
+                i = close + 1;
+            }
+            _ => {
+                out.push(ch);
+                i += 1;
+            }
+        }
+    }
+    out
+}
+
+
 fn render_sheet(
     sheet: &SheetPayload,
     style_names: &HashMap<String, String>,
@@ -677,7 +897,7 @@ fn render_sheet(
             || sheet
                 .cells
                 .iter()
-                .any(|x| x.r == r && (x.v.is_some() || x.s.is_some()));
+                .any(|x| x.r == r && (x.v.is_some() || x.f.is_some() || x.s.is_some()));
         if !row_used {
             gap += 1;
             continue;
@@ -720,16 +940,15 @@ fn render_sheet(
                 let col_span = m.end_column - m.start_column + 1;
                 let row_span = m.end_row - m.start_row + 1;
                 let top = cell_at(r, c);
-                let (vt, text) = top
-                    .and_then(|x| x.v.as_ref())
-                    .map(cell_value_xml)
-                    .unwrap_or_else(|| ("office:value-type=\"string\"".into(), String::new()));
+                let (vt, text, fattr) = top
+                    .map(cell_content_attrs)
+                    .unwrap_or_else(|| ("office:value-type=\"string\"".into(), String::new(), String::new()));
                 let style = style_key(top.and_then(|x| x.s.as_ref()))
                     .and_then(|k| style_names.get(&k))
                     .map(|n| format!(" table:style-name=\"{n}\""))
                     .unwrap_or_default();
                 row_buf.push_str(&format!(
-                    "<table:table-cell{style} {vt} table:number-columns-spanned=\"{col_span}\" table:number-rows-spanned=\"{row_span}\"><text:p>{}</text:p></table:table-cell>",
+                    "<table:table-cell{style} {vt}{fattr} table:number-columns-spanned=\"{col_span}\" table:number-rows-spanned=\"{row_span}\"><text:p>{}</text:p></table:table-cell>",
                     esc(&text)
                 ));
                 c = m.end_column + 1;
@@ -760,7 +979,7 @@ fn render_sheet(
             }
             let cell = cell_at(r, c);
             let has_content = cell
-                .map(|x| x.v.is_some() || style_key(x.s.as_ref()).is_some())
+                .map(|x| x.v.is_some() || x.f.is_some() || style_key(x.s.as_ref()).is_some())
                 .unwrap_or(false);
             if !has_content {
                 pending_empty += 1;
@@ -775,17 +994,13 @@ fn render_sheet(
                 pending_empty = 0;
             }
             let x = cell.unwrap();
-            let (vt, text) = x
-                .v
-                .as_ref()
-                .map(cell_value_xml)
-                .unwrap_or_else(|| ("office:value-type=\"string\"".into(), String::new()));
+            let (vt, text, fattr) = cell_content_attrs(x);
             let style = style_key(x.s.as_ref())
                 .and_then(|k| style_names.get(&k))
                 .map(|n| format!(" table:style-name=\"{n}\""))
                 .unwrap_or_default();
             row_buf.push_str(&format!(
-                "<table:table-cell{style} {vt}><text:p>{}</text:p></table:table-cell>",
+                "<table:table-cell{style} {vt}{fattr}><text:p>{}</text:p></table:table-cell>",
                 esc(&text)
             ));
             c += 1;
@@ -930,6 +1145,104 @@ mod tests {
             v: Some(v),
             ..Default::default()
         }
+    }
+
+    #[test]
+    fn odf_formula_syntax_converts() {
+        assert_eq!(
+            xlsx_to_odf_formula("=SUM(A1:B2,C1)"),
+            "of:=SUM([.A1:.B2];[.C1])"
+        );
+        assert_eq!(
+            xlsx_to_odf_formula("=IF(A1<B2,1,0)"),
+            "of:=IF([.A1]<[.B2];1;0)"
+        );
+        // 字符串字面量内的逗号/引用样文本不换算
+        assert_eq!(
+            xlsx_to_odf_formula("=CONCAT(A1,\"x,y\")"),
+            "of:=CONCAT([.A1];\"x,y\")"
+        );
+        // 跨表引用（简名）
+        assert_eq!(
+            xlsx_to_odf_formula("=Sheet2.A1+1"),
+            "of:=[.Sheet2.A1]+1"
+        );
+        assert_eq!(
+            odf_to_xlsx_formula("of:=SUM([.A1:.A2];1;0)"),
+            "SUM(A1:A2,1,0)"
+        );
+        assert_eq!(
+            odf_to_xlsx_formula("of:=IF([.A1]<[.B2];1;0)"),
+            "IF(A1<B2,1,0)"
+        );
+        assert_eq!(
+            odf_to_xlsx_formula("of:=[.Sheet2.A1:.A3]"),
+            "Sheet2.A1:A3"
+        );
+        assert_eq!(
+            odf_to_xlsx_formula("of:=[.'My Sheet.A1]"),
+            "'My Sheet'.A1"
+        );
+    }
+
+    #[test]
+    fn ods_formula_roundtrip() {
+        let wb = WorkbookPayload {
+            sheets: vec![SheetPayload {
+                name: "算".into(),
+                cells: vec![
+                    cell(0, 0, json!(10)),
+                    cell(1, 0, json!(32)),
+                    CellPayload {
+                        r: 0,
+                        c: 1,
+                        v: Some(json!(42)),
+                        f: Some("=A1+A2".into()),
+                        ..Default::default()
+                    },
+                    CellPayload {
+                        r: 1,
+                        c: 1,
+                        v: Some(json!(1)),
+                        f: Some("=IF(A1<A2,1,0)".into()),
+                        ..Default::default()
+                    },
+                    CellPayload {
+                        r: 2,
+                        c: 1,
+                        v: None,
+                        f: Some("=SUM(A1:B1)".into()),
+                        ..Default::default()
+                    },
+                ],
+                ..Default::default()
+            }],
+        };
+        let path = std::env::temp_dir()
+            .join(format!("openoffices-ods-f-{}.ods", std::process::id()))
+            .to_string_lossy()
+            .to_string();
+        std::fs::write(&path, ods_bytes(&wb).expect("ods bytes")).expect("write");
+        let back = crate::xlsx::read_xlsx(path.clone()).expect("读回失败");
+        std::fs::remove_file(&path).ok();
+        let sheet = &back.sheets[0];
+        let find = |r: u32, c: u32| sheet.cells.iter().find(|x| x.r == r && x.c == c);
+        assert_eq!(
+            find(0, 1).and_then(|x| x.f.as_deref()),
+            Some("=A1+A2"),
+            "公式往返"
+        );
+        assert_eq!(find(0, 1).and_then(|x| x.v.as_ref()), Some(&json!(42)), "缓存值");
+        assert_eq!(
+            find(1, 1).and_then(|x| x.f.as_deref()),
+            Some("=IF(A1<A2,1,0)"),
+            "含 < 比较式经属性转义往返"
+        );
+        assert_eq!(
+            find(2, 1).and_then(|x| x.f.as_deref()),
+            Some("=SUM(A1:B1)"),
+            "区间式往返"
+        );
     }
 
     #[test]
