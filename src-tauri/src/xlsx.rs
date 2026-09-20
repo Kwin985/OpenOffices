@@ -11,6 +11,44 @@ fn is_false(v: &bool) -> bool {
     !*v
 }
 
+/// 单元格边框的一条边：s 为 OOXML 样式名（thin/medium/dashed/...），c 为 #rrggbb
+#[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct BorderSide {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub s: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub c: Option<String>,
+}
+
+impl BorderSide {
+    pub(crate) fn is_empty(&self) -> bool {
+        self.s.is_none() && self.c.is_none()
+    }
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct CellBorder {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub t: Option<BorderSide>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub r: Option<BorderSide>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub b: Option<BorderSide>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub l: Option<BorderSide>,
+}
+
+impl CellBorder {
+    pub(crate) fn is_empty(&self) -> bool {
+        self.t.as_ref().is_none_or(BorderSide::is_empty)
+            && self.r.as_ref().is_none_or(BorderSide::is_empty)
+            && self.b.as_ref().is_none_or(BorderSide::is_empty)
+            && self.l.as_ref().is_none_or(BorderSide::is_empty)
+    }
+}
+
 #[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct CellStyle {
@@ -24,11 +62,35 @@ pub struct CellStyle {
     pub cl: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub bg: Option<String>,
+    /// 四边边框
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bd: Option<CellBorder>,
+    /// 水平对齐：left|center|right|justify
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ho: Option<String>,
+    /// 垂直对齐：top|middle|bottom
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub vo: Option<String>,
+    /// 自动换行
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub wb: bool,
+    /// 数字格式模式串（如 #,##0.00、0.00%、@）
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub nf: Option<String>,
 }
 
 impl CellStyle {
     pub fn has_any(&self) -> bool {
-        self.bl || self.it || self.fs.is_some() || self.cl.is_some() || self.bg.is_some()
+        self.bl
+            || self.it
+            || self.fs.is_some()
+            || self.cl.is_some()
+            || self.bg.is_some()
+            || self.bd.as_ref().is_some_and(|b| !b.is_empty())
+            || self.ho.is_some()
+            || self.vo.is_some()
+            || self.wb
+            || self.nf.is_some()
     }
 }
 
@@ -162,7 +224,12 @@ pub fn read_xlsx(path: String) -> Result<WorkbookPayload, Error> {
     }
     let mut workbook =
         open_workbook_auto(&path).map_err(|e| Error(format!("无法打开文件: {e}")))?;
-    let fmts = xlsx_style::read_xlsx_styles(&path);
+    // 样式/合并读侧按格式分流：xlsx 直解 zip；ods 走 content.xml 直解；xls/csv 无样式通道
+    let fmts = if path.to_ascii_lowercase().ends_with(".ods") {
+        crate::ods::read_ods_styles(&path)
+    } else {
+        xlsx_style::read_xlsx_styles(&path)
+    };
     let mut sheets = Vec::new();
     let mut grids: std::collections::HashMap<String, xlsx_chart::Grid> =
         std::collections::HashMap::new();
@@ -223,6 +290,25 @@ pub fn read_xlsx(path: String) -> Result<WorkbookPayload, Error> {
     Ok(WorkbookPayload { sheets })
 }
 
+fn border_type(s: &str) -> Option<rust_xlsxwriter::FormatBorder> {
+    use rust_xlsxwriter::FormatBorder as B;
+    Some(match s {
+        "thin" => B::Thin,
+        "medium" => B::Medium,
+        "dashed" => B::Dashed,
+        "dotted" => B::Dotted,
+        "double" => B::Double,
+        "hair" => B::Hair,
+        "thick" => B::Thick,
+        "mediumDashed" => B::MediumDashed,
+        "dashDot" => B::DashDot,
+        "mediumDashDot" => B::MediumDashDot,
+        "dashDotDot" => B::DashDotDot,
+        "slantDashDot" => B::SlantDashDot,
+        _ => return None,
+    })
+}
+
 fn format_for(s: Option<&CellStyle>) -> Format {
     let mut f = Format::new();
     if let Some(st) = s {
@@ -240,6 +326,47 @@ fn format_for(s: Option<&CellStyle>) -> Format {
         }
         if let Some(bg) = &st.bg {
             f = f.set_background_color(Color::from(bg.as_str()));
+        }
+        if let Some(bd) = &st.bd {
+            let sides: [(&Option<BorderSide>, fn(Format, rust_xlsxwriter::FormatBorder) -> Format, fn(Format, Color) -> Format); 4] = [
+                (&bd.l, Format::set_border_left, Format::set_border_left_color),
+                (&bd.r, Format::set_border_right, Format::set_border_right_color),
+                (&bd.t, Format::set_border_top, Format::set_border_top_color),
+                (&bd.b, Format::set_border_bottom, Format::set_border_bottom_color),
+            ];
+            for (line, set_border, set_color) in sides {
+                if let Some(line) = line {
+                    if let Some(bt) = line.s.as_deref().and_then(border_type) {
+                        f = set_border(f, bt);
+                    }
+                    if let Some(c) = line.c.as_deref() {
+                        f = set_color(f, Color::from(c));
+                    }
+                }
+            }
+        }
+        if let Some(ho) = st.ho.as_deref().and_then(|h| match h {
+            "left" => Some(rust_xlsxwriter::FormatAlign::Left),
+            "center" => Some(rust_xlsxwriter::FormatAlign::Center),
+            "right" => Some(rust_xlsxwriter::FormatAlign::Right),
+            "justify" => Some(rust_xlsxwriter::FormatAlign::Justify),
+            _ => None,
+        }) {
+            f = f.set_align(ho);
+        }
+        if let Some(vo) = st.vo.as_deref().and_then(|v| match v {
+            "top" => Some(rust_xlsxwriter::FormatAlign::Top),
+            "middle" => Some(rust_xlsxwriter::FormatAlign::VerticalCenter),
+            "bottom" => Some(rust_xlsxwriter::FormatAlign::Bottom),
+            _ => None,
+        }) {
+            f = f.set_align(vo);
+        }
+        if st.wb {
+            f = f.set_text_wrap();
+        }
+        if let Some(nf) = &st.nf {
+            f = f.set_num_format(nf.as_str());
         }
     }
     f
@@ -545,6 +672,78 @@ mod tests {
         );
     }
 
+    #[test]
+    fn border_align_numfmt_roundtrip() {
+        let path = tmp_path("fmt");
+        let wb = WorkbookPayload {
+            sheets: vec![SheetPayload {
+                name: "格式".into(),
+                cells: vec![
+                    CellPayload {
+                        r: 0,
+                        c: 0,
+                        v: Some(json!("边框居中")),
+                        s: Some(CellStyle {
+                            bd: Some(CellBorder {
+                                t: Some(BorderSide { s: Some("thin".into()), c: None }),
+                                r: Some(BorderSide { s: Some("medium".into()), c: Some("#3366cc".into()) }),
+                                b: Some(BorderSide { s: Some("dashed".into()), c: None }),
+                                l: Some(BorderSide { s: Some("thin".into()), c: None }),
+                            }),
+                            ho: Some("center".into()),
+                            vo: Some("middle".into()),
+                            ..Default::default()
+                        }),
+                        ..Default::default()
+                    },
+                    CellPayload {
+                        r: 1,
+                        c: 0,
+                        v: Some(json!(1234.5)),
+                        s: Some(CellStyle {
+                            nf: Some("#,##0.00".into()),
+                            ..Default::default()
+                        }),
+                        ..Default::default()
+                    },
+                    CellPayload {
+                        r: 2,
+                        c: 0,
+                        v: Some(json!(0.25)),
+                        s: Some(CellStyle {
+                            nf: Some("0.00%".into()),
+                            ho: Some("right".into()),
+                            wb: true,
+                            ..Default::default()
+                        }),
+                        ..Default::default()
+                    },
+                ],
+                ..Default::default()
+            }],
+        };
+        write_xlsx(path.clone(), wb).expect("write failed");
+        let back = read_xlsx(path.clone()).expect("read failed");
+        std::fs::remove_file(&path).ok();
+
+        let sheet = &back.sheets[0];
+        let find = |r: u32, c: u32| sheet.cells.iter().find(|x| x.r == r && x.c == c);
+        let st0 = find(0, 0).and_then(|x| x.s.clone()).expect("A1 样式");
+        let bd = st0.bd.expect("A1 边框");
+        assert_eq!(bd.t.as_ref().and_then(|x| x.s.as_deref()), Some("thin"));
+        assert_eq!(bd.r.as_ref().and_then(|x| x.s.as_deref()), Some("medium"));
+        assert_eq!(bd.r.as_ref().and_then(|x| x.c.as_deref()), Some("#3366cc"));
+        assert_eq!(bd.b.as_ref().and_then(|x| x.s.as_deref()), Some("dashed"));
+        assert_eq!(st0.ho.as_deref(), Some("center"));
+        assert_eq!(st0.vo.as_deref(), Some("middle"));
+        let st1 = find(1, 0).and_then(|x| x.s.clone()).expect("A2 样式");
+        assert_eq!(st1.nf.as_deref(), Some("#,##0.00"), "数字格式往返");
+        let st2 = find(2, 0).and_then(|x| x.s.clone()).expect("A3 样式");
+        assert_eq!(st2.nf.as_deref(), Some("0.00%"));
+        assert_eq!(st2.ho.as_deref(), Some("right"));
+        assert!(st2.wb, "自动换行往返");
+    }
+
     fn rf(sheet: &str, r1: u32, c1: u32, r2: u32, c2: u32) -> RangeRef {
         RangeRef {
             sheet: sheet.into(),
@@ -663,12 +862,39 @@ mod tests {
             v: Some(v),
             ..Default::default()
         };
+        let all_thin = || CellBorder {
+            t: Some(BorderSide { s: Some("thin".into()), c: Some("#000000".into()) }),
+            r: Some(BorderSide { s: Some("thin".into()), c: Some("#000000".into()) }),
+            b: Some(BorderSide { s: Some("thin".into()), c: Some("#000000".into()) }),
+            l: Some(BorderSide { s: Some("thin".into()), c: Some("#000000".into()) }),
+        };
         let wb = WorkbookPayload {
             sheets: vec![SheetPayload {
                 name: "销售".into(),
                 cells: vec![
-                    mk(0, 0, json!("月")),
-                    mk(0, 1, json!("销量")),
+                    CellPayload {
+                        r: 0,
+                        c: 0,
+                        v: Some(json!("月")),
+                        s: Some(CellStyle {
+                            bl: true,
+                            bd: Some(all_thin()),
+                            ho: Some("center".into()),
+                            vo: Some("middle".into()),
+                            ..Default::default()
+                        }),
+                        ..Default::default()
+                    },
+                    CellPayload {
+                        r: 0,
+                        c: 1,
+                        v: Some(json!("销量")),
+                        s: Some(CellStyle {
+                            bd: Some(all_thin()),
+                            ..Default::default()
+                        }),
+                        ..Default::default()
+                    },
                     mk(0, 2, json!("利润")),
                     mk(1, 0, json!("一月")),
                     mk(1, 1, json!(10)),
@@ -680,7 +906,18 @@ mod tests {
                     mk(3, 1, json!(35)),
                     mk(3, 2, json!(12)),
                     mk(4, 0, json!("四月")),
-                    mk(4, 1, json!(28)),
+                    CellPayload {
+                        r: 4,
+                        c: 1,
+                        v: Some(json!(1234.5)),
+                        s: Some(CellStyle {
+                            nf: Some("#,##0.00".into()),
+                            ho: Some("right".into()),
+                            wb: true,
+                            ..Default::default()
+                        }),
+                        ..Default::default()
+                    },
                     mk(4, 2, json!(9)),
                 ],
                 merges: vec![],

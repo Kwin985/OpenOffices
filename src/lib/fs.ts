@@ -3,12 +3,31 @@ import { open, save } from '@tauri-apps/plugin-dialog'
 import { readTextFile, writeTextFile, readFile, writeFile } from '@tauri-apps/plugin-fs'
 import type { DocKind } from '../store'
 
+// s=OOXML 边框样式名（thin/medium/dashed/dotted/double/hair/thick/…），c=#rrggbb
+export interface BorderLine {
+  s?: string
+  c?: string
+}
+
+export interface CellBorder {
+  t?: BorderLine | null
+  r?: BorderLine | null
+  b?: BorderLine | null
+  l?: BorderLine | null
+}
+
 export interface CellStyle {
   bl?: boolean
   it?: boolean
   fs?: number
   cl?: string
   bg?: string
+  bd?: CellBorder
+  ho?: 'left' | 'center' | 'right' | 'justify'
+  vo?: 'top' | 'middle' | 'bottom'
+  wb?: boolean
+  /** 数字格式模式串，如 #,##0.00 / 0.00% / @ */
+  nf?: string
 }
 
 export interface MergeRange {

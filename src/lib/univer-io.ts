@@ -1,6 +1,6 @@
 import { CellValueType, LocaleType } from '@univerjs/presets'
 import type { IWorkbookData, IWorksheetData, IObjectMatrixPrimitiveType, ICellData } from '@univerjs/presets'
-import type { CellStyle, MergeRange, WorkbookPayload } from './fs'
+import type { BorderLine, CellBorder, CellStyle, MergeRange, WorkbookPayload } from './fs'
 
 const MIN_ROWS = 100
 const MIN_COLS = 26
@@ -24,8 +24,32 @@ function ensureHash(rgb: string): string {
   return rgb.startsWith('#') ? rgb : `#${rgb}`
 }
 
+// 数值取自 @univerjs/core 的 BorderStyleTypes / HorizontalAlign / VerticalAlign / WrapStrategy 枚举
+const BORDER_STYLE_NUM: Record<string, number> = {
+  thin: 1, hair: 2, dotted: 3, dashed: 4, dashDot: 5, dashDotDot: 6, double: 7,
+  medium: 8, mediumDashed: 9, mediumDashDot: 10, mediumDashDotDot: 11, slantDashDot: 12, thick: 13,
+}
+const BORDER_STYLE_NAME: Record<number, string> = Object.fromEntries(
+  Object.entries(BORDER_STYLE_NUM).map(([k, v]) => [v, k]),
+)
+const HO_NUM: Record<string, number> = { left: 1, center: 2, right: 3, justify: 4 }
+const HO_NAME: Record<number, CellStyle['ho']> = { 1: 'left', 2: 'center', 3: 'right', 4: 'justify', 5: 'justify' }
+const VO_NUM: Record<string, number> = { top: 1, middle: 2, bottom: 3 }
+const VO_NAME: Record<number, CellStyle['vo']> = { 1: 'top', 2: 'middle', 3: 'bottom' }
+// WrapStrategy.WRAP = 3
+const WRAP = 3
+
+function borderKey(b: CellBorder | undefined): string {
+  if (!b) return ''
+  const side = (x: BorderLine | null | undefined) => (x?.s ? `${x.s}:${x.c ?? ''}` : '')
+  return [side(b.t), side(b.r), side(b.b), side(b.l)].join(',')
+}
+
 function styleKey(s: CellStyle): string {
-  return JSON.stringify([!!s.bl, !!s.it, s.fs ?? 0, s.cl ?? '', s.bg ?? ''])
+  return JSON.stringify([
+    !!s.bl, !!s.it, s.fs ?? 0, s.cl ?? '', s.bg ?? '',
+    s.ho ?? '', s.vo ?? '', !!s.wb, s.nf ?? '', borderKey(s.bd),
+  ])
 }
 
 function toUniverStyle(s: CellStyle): Record<string, unknown> {
@@ -35,7 +59,26 @@ function toUniverStyle(s: CellStyle): Record<string, unknown> {
   if (s.fs != null) out.fs = s.fs
   if (s.cl) out.cl = { rgb: ensureHash(s.cl) }
   if (s.bg) out.bg = { rgb: ensureHash(s.bg) }
+  if (s.bd) {
+    const bd: Record<string, unknown> = {}
+    for (const [key, line] of [['t', s.bd.t], ['r', s.bd.r], ['b', s.bd.b], ['l', s.bd.l]] as const) {
+      if (line?.s) {
+        const num = BORDER_STYLE_NUM[line.s]
+        if (num) bd[key] = { s: num, cl: { rgb: ensureHash(line.c ?? '#000000') } }
+      }    }
+    if (Object.keys(bd).length) out.bd = bd
+  }
+  if (s.ho && HO_NUM[s.ho]) out.ht = HO_NUM[s.ho]
+  if (s.vo && VO_NUM[s.vo]) out.vt = VO_NUM[s.vo]
+  if (s.wb) out.tb = WRAP
+  if (s.nf) out.n = { pattern: s.nf }
   return out
+}
+
+function readColor(v: unknown): string | undefined {
+  if (typeof v === 'string') return v || undefined
+  const rgb = (v as { rgb?: string } | null | undefined)?.rgb
+  return rgb || undefined
 }
 
 function flattenStyle(sd: Record<string, unknown> | undefined | null): CellStyle | null {
@@ -45,10 +88,29 @@ function flattenStyle(sd: Record<string, unknown> | undefined | null): CellStyle
   if (sd.it) out.it = true
   const fs = sd.fs
   if (typeof fs === 'number' && fs > 0 && fs !== 11) out.fs = fs
-  const cl = typeof sd.cl === 'string' ? sd.cl : (sd.cl as { rgb?: string } | undefined)?.rgb
+  const cl = readColor(sd.cl)
   if (cl) out.cl = ensureHash(cl)
-  const bg = typeof sd.bg === 'string' ? sd.bg : (sd.bg as { rgb?: string } | undefined)?.rgb
+  const bg = readColor(sd.bg)
   if (bg) out.bg = ensureHash(bg)
+  const bd = sd.bd as Record<string, { s?: number; cl?: unknown } | null | undefined> | undefined
+  if (bd) {
+    const cellBd: CellBorder = {}
+    for (const key of ['t', 'r', 'b', 'l'] as const) {
+      const line = bd[key]
+      if (!line || line.s == null) continue
+      const name = BORDER_STYLE_NAME[line.s]
+      if (name) {
+        const c = readColor(line.cl)
+        cellBd[key] = c ? { s: name, c: ensureHash(c) } : { s: name }
+      }
+    }
+    if (cellBd.t || cellBd.r || cellBd.b || cellBd.l) out.bd = cellBd
+  }
+  if (typeof sd.ht === 'number' && HO_NAME[sd.ht]) out.ho = HO_NAME[sd.ht]
+  if (typeof sd.vt === 'number' && VO_NAME[sd.vt]) out.vo = VO_NAME[sd.vt]
+  if (sd.tb === WRAP) out.wb = true
+  const n = sd.n as { pattern?: string } | undefined
+  if (n?.pattern) out.nf = n.pattern
   return Object.keys(out).length > 0 ? out : null
 }
 

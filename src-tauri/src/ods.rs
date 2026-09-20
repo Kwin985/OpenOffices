@@ -7,14 +7,33 @@ use std::io::{Cursor, Write};
 use std::path::Path;
 
 use quick_xml::escape::escape;
+use quick_xml::events::Event;
+use quick_xml::Reader;
 use serde_json::Value;
 use zip::write::SimpleFileOptions;
 use zip::{CompressionMethod, ZipWriter};
 
-use crate::xlsx::{CellStyle, Error, MergeRange, SheetPayload, WorkbookPayload};
+use crate::xlsx::{BorderSide, CellBorder, CellStyle, Error, MergeRange, SheetPayload, WorkbookPayload};
+use crate::xlsx_style::{attr_str, read_entry, SheetFmt};
 
 fn esc(s: &str) -> String {
     escape(s).to_string()
+}
+
+/// 边框样式名 → ODF fo:border-* 值的线宽/线型近似（读侧按同表反推）
+fn odf_border_line(side: &BorderSide) -> Option<String> {
+    let (width, kind) = match side.s.as_deref()? {
+        "hair" => ("0.1pt", "solid"),
+        "thin" => ("0.5pt", "solid"),
+        "medium" => ("1.5pt", "solid"),
+        "thick" => ("2.5pt", "solid"),
+        "dashed" | "mediumDashed" => ("0.5pt", "dashed"),
+        "dotted" => ("0.5pt", "dotted"),
+        "double" => ("0.5pt", "double"),
+        _ => ("0.5pt", "solid"),
+    };
+    let color = side.c.clone().unwrap_or_else(|| "#000000".into());
+    Some(format!("{width} {kind} {color}"))
 }
 
 fn io_err(e: std::io::Error) -> Error {
@@ -23,6 +42,33 @@ fn io_err(e: std::io::Error) -> Error {
 
 fn zip_err(e: zip::result::ZipError) -> Error {
     Error(format!("ODS 打包失败: {e}"))
+}
+
+/// 样式去重键：nf（数字格式）ODS 通道暂不支持，不入键
+fn style_key_of(st: &CellStyle) -> String {
+    let bd = st
+        .bd
+        .as_ref()
+        .map(|b| {
+            let side = |x: &Option<BorderSide>| match x {
+                Some(s) => format!("{}:{}", s.s.clone().unwrap_or_default(), s.c.clone().unwrap_or_default()),
+                None => String::new(),
+            };
+            format!("{};{};{};{}", side(&b.t), side(&b.r), side(&b.b), side(&b.l))
+        })
+        .unwrap_or_default();
+    format!(
+        "{}|{}|{}|{}|{}|{}|{}|{}|{}",
+        st.bl,
+        st.it,
+        st.fs.map(|f| f.to_string()).unwrap_or_default(),
+        st.cl.clone().unwrap_or_default(),
+        st.bg.clone().unwrap_or_default(),
+        bd,
+        st.ho.clone().unwrap_or_default(),
+        st.vo.clone().unwrap_or_default(),
+        st.wb,
+    )
 }
 
 /// 去重注册单元格样式，返回 (样式名, automatic-styles XML)；无样式返回 None
@@ -35,24 +81,39 @@ fn build_styles(sheets: &[SheetPayload]) -> (HashMap<String, String>, String) {
             if !st.has_any() {
                 continue;
             }
-            let key = format!(
-                "{}|{}|{}|{}|{}",
-                st.bl,
-                st.it,
-                st.fs.map(|f| f.to_string()).unwrap_or_default(),
-                st.cl.clone().unwrap_or_default(),
-                st.bg.clone().unwrap_or_default()
-            );
+            let key = style_key_of(st);
             if names.contains_key(&key) {
                 continue;
             }
             let name = format!("ce{}", names.len() + 1);
             let mut body = String::new();
+            let mut tcp = String::new();
             if let Some(bg) = &st.bg {
-                body.push_str(&format!(
-                    "<style:table-cell-properties fo:background-color=\"{}\"/>",
-                    esc(bg)
-                ));
+                tcp.push_str(&format!(" fo:background-color=\"{}\"", esc(bg)));
+            }
+            if let Some(bd) = &st.bd {
+                for (attr, side) in [
+                    ("fo:border-left", &bd.l),
+                    ("fo:border-right", &bd.r),
+                    ("fo:border-top", &bd.t),
+                    ("fo:border-bottom", &bd.b),
+                ] {
+                    if let Some(v) = side.as_ref().and_then(odf_border_line) {
+                        tcp.push_str(&format!(" {attr}=\"{}\"", esc(&v)));
+                    }
+                }
+            }
+            if let Some(ho) = &st.ho {
+                tcp.push_str(&format!(" style:align=\"{}\"", esc(ho)));
+            }
+            if let Some(vo) = &st.vo {
+                tcp.push_str(&format!(" style:vertical-align=\"{}\"", esc(vo)));
+            }
+            if st.wb {
+                tcp.push_str(" style:cell-wrapping=\"wrap\"");
+            }
+            if !tcp.is_empty() {
+                body.push_str(&format!("<style:table-cell-properties{tcp}/>"));
             }
             let mut tp = String::new();
             if st.bl {
@@ -84,14 +145,210 @@ fn style_key(s: Option<&CellStyle>) -> Option<String> {
     if !st.has_any() {
         return None;
     }
-    Some(format!(
-        "{}|{}|{}|{}|{}",
-        st.bl,
-        st.it,
-        st.fs.map(|f| f.to_string()).unwrap_or_default(),
-        st.cl.clone().unwrap_or_default(),
-        st.bg.clone().unwrap_or_default()
-    ))
+    Some(style_key_of(st))
+}
+
+// ---------- 读侧：直解 content.xml 的 automatic-styles 与表格结构 ----------
+// calamine 对 ODS 只提供值通道；样式与合并区由本节补齐（覆盖本应用写出的 ODS
+// 以及 LibreOffice 常见输出：线型/底色/对齐/换行/粗斜字号字色 + spanned 合并）。
+
+/// "0.5pt solid #000000" → BorderSide；LibreOffice 细边框常见 0.26pt，归入 thin
+fn border_side_from_odf(v: &str) -> Option<BorderSide> {
+    let mut tokens = v.split_whitespace();
+    let width = tokens.next()?;
+    let kind = tokens.next()?;
+    let color = tokens.next();
+    let w: f64 = width.trim_end_matches("pt").parse().unwrap_or(0.5);
+    let name = match kind {
+        "dashed" => "dashed",
+        "dotted" => "dotted",
+        "double" => "double",
+        _ if w < 0.2 => "hair",
+        _ if w <= 1.0 => "thin",
+        _ if w <= 2.0 => "medium",
+        _ => "thick",
+    };
+    let c = color
+        .filter(|v| v.starts_with('#') && *v != "transparent")
+        .map(|v| v.to_string());
+    Some(BorderSide { s: Some(name.to_string()), c })
+}
+
+fn color_attr(v: Option<String>) -> Option<String> {
+    let v = v?;
+    if v == "inherit" || v == "transparent" || !v.starts_with('#') {
+        return None;
+    }
+    Some(v)
+}
+
+// 注意：attr_str / local_name 均按**去前缀的局部名**比较（"fo:border-left" → "border-left"）
+fn apply_table_cell_props(st: &mut CellStyle, e: &quick_xml::events::BytesStart<'_>) {
+    if let Some(bg) = color_attr(attr_str(e, "background-color")) {
+        st.bg = Some(bg);
+    }
+    if let Some(h) = attr_str(e, "align").filter(|v| matches!(v.as_str(), "left" | "center" | "right" | "justify")) {
+        st.ho = Some(h);
+    }
+    if let Some(v) = attr_str(e, "vertical-align").filter(|v| matches!(v.as_str(), "top" | "middle" | "bottom")) {
+        st.vo = Some(v);
+    }
+    let wrap = matches!(attr_str(e, "cell-wrapping").as_deref(), Some("wrap"))
+        || matches!(attr_str(e, "wrap-option").as_deref(), Some("wrap"));
+    if wrap {
+        st.wb = true;
+    }
+    for (attr, key) in [
+        ("border-left", 0),
+        ("border-right", 1),
+        ("border-top", 2),
+        ("border-bottom", 3),
+    ] {
+        if let Some(v) = attr_str(e, attr) {
+            if let Some(side) = border_side_from_odf(&v) {
+                let bd = st.bd.get_or_insert_with(CellBorder::default);
+                match key {
+                    0 => bd.l = Some(side),
+                    1 => bd.r = Some(side),
+                    2 => bd.t = Some(side),
+                    _ => bd.b = Some(side),
+                }
+            }
+        }
+    }
+}
+
+fn apply_text_props(st: &mut CellStyle, e: &quick_xml::events::BytesStart<'_>) {
+    if let Some(w) = attr_str(e, "font-weight") {
+        if w == "bold" || w.parse::<f64>().map(|v| v >= 600.0).unwrap_or(false) {
+            st.bl = true;
+        }
+    }
+    if attr_str(e, "font-style").as_deref() == Some("italic") {
+        st.it = true;
+    }
+    if let Some(sz) = attr_str(e, "font-size") {
+        if let Ok(v) = sz.trim_end_matches("pt").parse::<f64>() {
+            st.fs = Some(v);
+        }
+    }
+    if let Some(c) = color_attr(attr_str(e, "color")) {
+        st.cl = Some(c);
+    }
+}
+
+fn clamped_repeat(e: &quick_xml::events::BytesStart<'_>, attr: &str) -> u32 {
+    attr_str(e, attr)
+        .and_then(|v| v.parse::<u32>().ok())
+        .unwrap_or(1)
+        .clamp(1, 20000)
+}
+
+/// 任何失败退化为空表；键为 sheet 名（与 calamine 的 table:name 一致）
+pub fn read_ods_styles(path: &str) -> HashMap<String, SheetFmt> {
+    let mut out: HashMap<String, SheetFmt> = HashMap::new();
+    let Ok(file) = std::fs::File::open(path) else { return out };
+    let Ok(mut zip) = zip::ZipArchive::new(file) else { return out };
+    let Some(xml) = read_entry(&mut zip, "content.xml") else { return out };
+
+    let mut styles: HashMap<String, CellStyle> = HashMap::new();
+    let mut sec = String::new(); // automatic-styles | spreadsheet
+    let mut cur_style: Option<String> = None;
+    let mut cur_def = CellStyle::default();
+    let mut fmt = SheetFmt::default();
+    let mut table_name: Option<String> = None;
+    let mut row_idx = 0u32;
+    let mut row_repeat = 1u32;
+    let mut col_idx = 0u32;
+
+    let mut reader = Reader::from_str(&xml);
+    while let Ok(ev) = reader.read_event() {
+        match &ev {
+            Event::Start(e) | Event::Empty(e) => {
+                let ln = e.local_name();
+                let nm = ln.as_ref();
+                let is_start = matches!(ev, Event::Start(_));
+                match nm {
+                    "automatic-styles" if is_start => sec = "automatic-styles".into(),
+                    "style" if is_start && sec == "automatic-styles" => {
+                        let family = attr_str(e, "family").unwrap_or_default();
+                        if family == "table-cell" || family == "cell" {
+                            cur_style = attr_str(e, "name");
+                            cur_def = CellStyle::default();
+                        }
+                    }
+                    "table-cell-properties" if cur_style.is_some() => apply_table_cell_props(&mut cur_def, e),
+                    "text-properties" if cur_style.is_some() => apply_text_props(&mut cur_def, e),
+                    "spreadsheet" if is_start => sec = "spreadsheet".into(),
+                    "table" if sec == "spreadsheet" => {
+                        table_name = attr_str(e, "name");
+                        fmt = SheetFmt::default();
+                        row_idx = 0;
+                        if !is_start {
+                            if let Some(name) = table_name.take() {
+                                out.insert(name, std::mem::take(&mut fmt));
+                            }
+                        }
+                    }
+                    "table-row" => {
+                        col_idx = 0;
+                        row_repeat = clamped_repeat(e, "number-rows-repeated");
+                        if !is_start {
+                            row_idx += row_repeat;
+                        }
+                    }
+                    "table-cell" | "covered-table-cell" => {
+                        let covered = nm == "covered-table-cell";
+                        let repeat = clamped_repeat(e, "number-columns-repeated");
+                        let cs = clamped_repeat(e, "number-columns-spanned");
+                        let rs = clamped_repeat(e, "number-rows-spanned");
+                        let sty = attr_str(e, "style-name");
+                        if !covered {
+                            if let Some(name) = sty.as_deref().and_then(|n| styles.get(n)) {
+                                for i in 0..repeat.min(1024) {
+                                    fmt.styles.insert((row_idx, col_idx + i), name.clone());
+                                }
+                            }
+                            if cs > 1 || rs > 1 {
+                                fmt.merges.push(MergeRange {
+                                    start_row: row_idx,
+                                    start_column: col_idx,
+                                    end_row: row_idx + rs - 1,
+                                    end_column: col_idx + cs - 1,
+                                });
+                            }
+                        }
+                        col_idx += repeat;
+                    }
+                    _ => {}
+                }
+            }
+            Event::End(e) => {
+                let ln = e.local_name();
+                let nm = ln.as_ref();
+                match nm {
+                    "automatic-styles" => sec.clear(),
+                    "style" => {
+                        if let Some(name) = cur_style.take() {
+                            if cur_def.has_any() {
+                                styles.insert(name, cur_def.clone());
+                            }
+                        }
+                    }
+                    "table-row" => row_idx += row_repeat,
+                    "table" => {
+                        if let Some(name) = table_name.take() {
+                            out.insert(name, std::mem::take(&mut fmt));
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            Event::Eof => break,
+            _ => {}
+        }
+    }
+    out
 }
 
 /// 值 → (office 类型属性, 内容文本)
@@ -474,6 +731,109 @@ mod tests {
     }
 
     #[test]
+    fn odf_border_values_map_back() {
+        let s = border_side_from_odf("0.5pt solid #000000").expect("solid");
+        assert_eq!(s.s.as_deref(), Some("thin"));
+        assert_eq!(s.c.as_deref(), Some("#000000"));
+        assert_eq!(
+            border_side_from_odf("0.26pt solid #000000").and_then(|x| x.s),
+            Some("thin".into()),
+            "LibreOffice 默认细线归入 thin"
+        );
+        let m = border_side_from_odf("1.5pt solid #3366cc").expect("medium");
+        assert_eq!((m.s.as_deref(), m.c.as_deref()), (Some("medium"), Some("#3366cc")));
+        let d = border_side_from_odf("0.5pt dashed").expect("dashed");
+        assert_eq!((d.s.as_deref(), d.c.as_deref()), (Some("dashed"), None));
+        assert_eq!(border_side_from_odf("0.1pt solid").and_then(|x| x.s), Some("hair".into()));
+        assert_eq!(border_side_from_odf("0.5pt double #ff0000").and_then(|x| x.s), Some("double".into()));
+        assert!(border_side_from_odf("").is_none());
+    }
+
+    #[test]
+    fn ods_style_merge_readback() {
+        let wb = WorkbookPayload {
+            sheets: vec![SheetPayload {
+                name: "样式".into(),
+                cells: vec![
+                    CellPayload {
+                        r: 0,
+                        c: 0,
+                        v: Some(json!("边框居中")),
+                        s: Some(CellStyle {
+                            bd: Some(CellBorder {
+                                t: Some(BorderSide { s: Some("thin".into()), c: None }),
+                                r: None,
+                                b: Some(BorderSide { s: Some("dashed".into()), c: None }),
+                                l: Some(BorderSide { s: Some("medium".into()), c: Some("#3366cc".into()) }),
+                            }),
+                            ho: Some("center".into()),
+                            vo: Some("middle".into()),
+                            ..Default::default()
+                        }),
+                        ..Default::default()
+                    },
+                    CellPayload {
+                        r: 1,
+                        c: 0,
+                        v: Some(json!(7)),
+                        s: Some(CellStyle {
+                            bl: true,
+                            bg: Some("#ffff00".into()),
+                            wb: true,
+                            ..Default::default()
+                        }),
+                        ..Default::default()
+                    },
+                    CellPayload {
+                        r: 3,
+                        c: 0,
+                        v: Some(json!("合并区")),
+                        s: Some(CellStyle {
+                            it: true,
+                            ..Default::default()
+                        }),
+                        ..Default::default()
+                    },
+                ],
+                merges: vec![MergeRange {
+                    start_row: 3,
+                    start_column: 0,
+                    end_row: 4,
+                    end_column: 1,
+                }],
+                charts: vec![],
+            }],
+        };
+        let path = std::env::temp_dir()
+            .join(format!("openoffices-odsfmt-{}.ods", std::process::id()))
+            .to_string_lossy()
+            .to_string();
+        std::fs::write(&path, ods_bytes(&wb).expect("ods bytes")).expect("write");
+        let back = crate::xlsx::read_xlsx(path.clone()).expect("read_xlsx 读回失败");
+        std::fs::remove_file(&path).ok();
+
+        let sheet = &back.sheets[0];
+        let find = |r: u32, c: u32| sheet.cells.iter().find(|x| x.r == r && x.c == c);
+        let st0 = find(0, 0).and_then(|x| x.s.clone()).expect("A1 样式读回");
+        let bd = st0.bd.expect("A1 边框");
+        assert_eq!(bd.t.as_ref().and_then(|x| x.s.as_deref()), Some("thin"));
+        assert_eq!(bd.b.as_ref().and_then(|x| x.s.as_deref()), Some("dashed"));
+        assert_eq!(bd.l.as_ref().and_then(|x| x.s.as_deref()), Some("medium"));
+        assert_eq!(bd.l.as_ref().and_then(|x| x.c.as_deref()), Some("#3366cc"));
+        assert_eq!(st0.ho.as_deref(), Some("center"));
+        assert_eq!(st0.vo.as_deref(), Some("middle"));
+        let st1 = find(1, 0).and_then(|x| x.s.clone()).expect("A2 样式读回");
+        assert!(st1.bl && st1.wb);
+        assert_eq!(st1.bg.as_deref(), Some("#ffff00"));
+        assert_eq!(find(3, 0).and_then(|x| x.s.clone()).map(|s| s.it), Some(true));
+        assert_eq!(
+            sheet.merges,
+            vec![MergeRange { start_row: 3, start_column: 0, end_row: 4, end_column: 1 }],
+            "ODS 合并区读回"
+        );
+    }
+
+    #[test]
     fn ods_zip_layout() {
         let wb = WorkbookPayload {
             sheets: vec![SheetPayload {
@@ -519,6 +879,15 @@ mod tests {
                         s: Some(CellStyle {
                             bl: true,
                             cl: Some("#ff0000".into()),
+                            bd: Some(CellBorder {
+                                t: Some(BorderSide { s: Some("thin".into()), c: Some("#000000".into()) }),
+                                r: Some(BorderSide { s: Some("thin".into()), c: Some("#000000".into()) }),
+                                b: Some(BorderSide { s: Some("thin".into()), c: Some("#000000".into()) }),
+                                l: Some(BorderSide { s: Some("thin".into()), c: Some("#000000".into()) }),
+                            }),
+                            ho: Some("center".into()),
+                            vo: Some("middle".into()),
+                            wb: true,
                             ..Default::default()
                         }),
                         ..Default::default()

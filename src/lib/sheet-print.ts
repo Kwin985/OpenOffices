@@ -1,6 +1,7 @@
 // 表格 PDF 导出的数据侧：Univer 是 canvas 渲染，PrintToPdf 抓不到整表，
-// 故从保存用的 WorkbookPayload 自绘 HTML 网格（值/粗斜/字号/字色/底色/合并）。
-import type { CellPayload, CellStyle, SheetPayload, WorkbookPayload } from './fs'
+// 故从保存用的 WorkbookPayload 自绘 HTML 网格
+// （值/数字格式/粗斜/字号/字色/底色/边框/对齐/换行/合并）。
+import type { BorderLine, CellPayload, CellStyle, SheetPayload, WorkbookPayload } from './fs'
 
 const MAX_ROWS = 2000
 const MAX_COLS = 120
@@ -14,6 +15,44 @@ function esc(s: string): string {
     .replace(/"/g, '&quot;')
 }
 
+// 边框样式名 → CSS（近似宽度/线型）
+function borderCss(line: BorderLine | null | undefined): string | undefined {
+  if (!line?.s) return undefined
+  const color = line.c ?? '#000000'
+  const map: Record<string, string> = {
+    hair: `0.5px solid ${color}`,
+    thin: `1px solid ${color}`,
+    medium: `2px solid ${color}`,
+    thick: `3px solid ${color}`,
+    dashed: `1px dashed ${color}`,
+    mediumDashed: `2px dashed ${color}`,
+    dashDot: `1px dashed ${color}`,
+    mediumDashDot: `2px dashed ${color}`,
+    dashDotDot: `1px dashed ${color}`,
+    mediumDashDotDot: `2px dashed ${color}`,
+    slantDashDot: `1px dashed ${color}`,
+    dotted: `1px dotted ${color}`,
+    double: `3px double ${color}`,
+  }
+  return map[line.s] ?? `1px solid ${color}`
+}
+
+// 数字格式最小实现：千分位 / 小数位 / 百分比 / 文本 @，其余模式原样显示
+export function formatNumberValue(v: number, pattern: string): string {
+  if (pattern === '@') return String(v)
+  const percent = pattern.includes('%')
+  const dec = pattern.match(/\.([0#]+)/)
+  const thousands = pattern.includes(',#') || /^#?,/.test(pattern)
+  let n = v
+  if (percent) n *= 100
+  let out = dec ? n.toFixed(Math.min(dec[1].length, 20)) : String(n)
+  if (thousands) {
+    const [i, d] = out.split('.')
+    out = i.replace(/\B(?=(\d{3})+(?!\d))/g, ',') + (d != null ? `.${d}` : '')
+  }
+  return percent ? `${out}%` : out
+}
+
 function styleAttr(s: CellStyle | null | undefined): string {
   if (!s) return ''
   const parts: string[] = []
@@ -22,11 +61,27 @@ function styleAttr(s: CellStyle | null | undefined): string {
   if (s.fs) parts.push(`font-size:${Math.round(s.fs * 1.333)}px`) // pt→px
   if (s.cl) parts.push(`color:${esc(s.cl)}`)
   if (s.bg) parts.push(`background-color:${esc(s.bg)}`)
+  if (s.ho) parts.push(`text-align:${s.ho === 'justify' ? 'justify' : s.ho}`)
+  if (s.vo) parts.push(`vertical-align:${s.vo}`)
+  if (s.wb) parts.push('white-space:normal')
+  const bd = s.bd
+  if (bd) {
+    for (const [prop, line] of [
+      ['border-left', bd.l],
+      ['border-right', bd.r],
+      ['border-top', bd.t],
+      ['border-bottom', bd.b],
+    ] as const) {
+      const css = borderCss(line)
+      if (css) parts.push(`${prop}:${css}`)
+    }
+  }
   return parts.length ? ` style="${parts.join(';')}"` : ''
 }
 
-function cellValue(v: CellPayload['v']): string {
+function cellValue(v: CellPayload['v'], s: CellStyle | null | undefined): string {
   if (v === undefined || v === null) return ''
+  if (typeof v === 'number' && s?.nf) return esc(formatNumberValue(v, s.nf))
   return esc(String(v))
 }
 
@@ -72,7 +127,7 @@ function sheetHtml(sheet: SheetPayload, first: boolean): string {
       const cell = grid.get(key)
       const sp = spanAt.get(key)
       const span = sp ? ` colspan="${sp.cs}" rowspan="${sp.rs}"` : ''
-      tds += `<td${span}${styleAttr(cell?.s)}>${cellValue(cell?.v)}</td>`
+      tds += `<td${span}${styleAttr(cell?.s)}>${cellValue(cell?.v, cell?.s)}</td>`
     }
     rows += `<tr>${tds}</tr>`
   }

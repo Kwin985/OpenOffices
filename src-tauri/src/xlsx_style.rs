@@ -8,9 +8,9 @@ use std::io::Read;
 use quick_xml::events::Event;
 use quick_xml::Reader;
 
-use crate::xlsx::{CellStyle, MergeRange};
+use crate::xlsx::{BorderSide, CellBorder, CellStyle, MergeRange};
 
-#[derive(Default)]
+#[derive(Default, Debug)]
 pub struct SheetFmt {
     pub styles: HashMap<(u32, u32), CellStyle>,
     pub merges: Vec<MergeRange>,
@@ -22,6 +22,40 @@ struct FontInfo {
     it: bool,
     fs: Option<f64>,
     cl: Option<String>,
+}
+
+#[derive(Default, Clone)]
+struct BSide {
+    s: Option<String>,
+    c: Option<String>,
+}
+
+#[derive(Default, Clone)]
+struct BorderRec {
+    l: BSide,
+    r: BSide,
+    t: BSide,
+    b: BSide,
+}
+
+#[derive(Default, Clone)]
+struct XfRec {
+    font: u32,
+    fill: u32,
+    border: u32,
+    numfmt: u32,
+    ho: Option<String>,
+    vo: Option<String>,
+    wrap: bool,
+}
+
+#[derive(Default)]
+struct StyleBook {
+    fonts: Vec<FontInfo>,
+    fills: Vec<Option<String>>,
+    xfs: Vec<XfRec>,
+    borders: Vec<BorderRec>,
+    numfmts: HashMap<u32, String>,
 }
 
 pub(crate) fn attr_str(e: &quick_xml::events::BytesStart<'_>, key: &str) -> Option<String> {
@@ -117,15 +151,58 @@ pub(crate) fn sheet_paths(zip: &mut zip::ZipArchive<File>) -> Vec<(String, Strin
     out
 }
 
-type StylesTable = (Vec<FontInfo>, Vec<Option<String>>, Vec<(u32, u32)>);
+/// 常用内建数字格式 id → 模式串（日期类 id 不映射：calamine 已把日期转成字符串值）
+fn builtin_numfmt(id: u32) -> Option<&'static str> {
+    Some(match id {
+        1 => "0",
+        2 => "0.00",
+        3 => "#,##0",
+        4 => "#,##0.00",
+        9 => "0%",
+        10 => "0.00%",
+        11 => "0.00E+00",
+        39 => "0.00",
+        40 => "#,##0.00",
+        49 => "@",
+        _ => return None,
+    })
+}
 
-fn parse_styles(xml: &str) -> StylesTable {
-    let mut fonts: Vec<FontInfo> = Vec::new();
-    let mut fills: Vec<Option<String>> = Vec::new();
-    let mut xfs: Vec<(u32, u32)> = Vec::new();
+fn xf_from_attrs(e: &quick_xml::events::BytesStart<'_>) -> XfRec {
+    XfRec {
+        font: attr_str(e, "fontId").and_then(|v| v.parse().ok()).unwrap_or(0),
+        fill: attr_str(e, "fillId").and_then(|v| v.parse().ok()).unwrap_or(0),
+        border: attr_str(e, "borderId").and_then(|v| v.parse().ok()).unwrap_or(0),
+        numfmt: attr_str(e, "numFmtId").and_then(|v| v.parse().ok()).unwrap_or(0),
+        ..Default::default()
+    }
+}
+
+fn apply_alignment(rec: &mut XfRec, e: &quick_xml::events::BytesStart<'_>) {
+    rec.ho = attr_str(e, "horizontal").and_then(|h| match h.as_str() {
+        "left" | "center" | "right" | "justify" => Some(h),
+        _ => None,
+    });
+    rec.vo = attr_str(e, "vertical").and_then(|v| match v.as_str() {
+        "top" => Some("top".to_string()),
+        "center" => Some("middle".to_string()),
+        "bottom" => Some("bottom".to_string()),
+        _ => None,
+    });
+    rec.wrap = matches!(
+        attr_str(e, "wrapText").as_deref(),
+        Some("1") | Some("true")
+    );
+}
+
+fn parse_styles(xml: &str) -> StyleBook {
+    let mut book = StyleBook::default();
     let mut cur_font = FontInfo::default();
     let mut cur_fill: Option<String> = None;
-    let mut sec = String::new(); // fonts | fills | cellXfs
+    let mut cur_border = BorderRec::default();
+    let mut cur_side: Option<(String, BSide)> = None;
+    let mut cur_xf: Option<XfRec> = None;
+    let mut sec = String::new(); // fonts | fills | borders | cellXfs | numFmts
     let mut reader = Reader::from_str(xml);
     while let Ok(ev) = reader.read_event() {
         match &ev {
@@ -133,38 +210,62 @@ fn parse_styles(xml: &str) -> StylesTable {
                 let nm = e.local_name();
                 let nm = nm.as_ref();
                 match nm {
-                    "fonts" | "fills" | "cellXfs" => sec = nm.to_string(),
+                    "fonts" | "fills" | "borders" | "cellXfs" | "numFmts" => sec = nm.to_string(),
                     "font" => cur_font = FontInfo::default(),
                     "fill" => cur_fill = None,
+                    "border" if sec == "borders" => cur_border = BorderRec::default(),
+                    "left" | "right" | "top" | "bottom" if sec == "borders" => {
+                        cur_side = Some((
+                            nm.to_string(),
+                            BSide { s: attr_str(e, "style"), c: None },
+                        ));
+                    }
+                    "xf" if sec == "cellXfs" => cur_xf = Some(xf_from_attrs(e)),
                     _ => {}
                 }
             }
             Event::Empty(e) => {
                 let nm = e.local_name();
                 let nm = nm.as_ref();
-                match sec.as_str() {
-                    "fonts" => match nm {
-                        "b" => cur_font.bl = bool_attr(e),
-                        "i" => cur_font.it = bool_attr(e),
-                        "sz" => cur_font.fs = attr_str(e, "val").and_then(|v| v.parse().ok()),
-                        "color" if cur_font.cl.is_none() => {
-                            cur_font.cl = attr_str(e, "rgb").as_deref().and_then(argb_to_hex);
-                        }
-                        _ => {}
-                    },
-                    "fills" => {
-                        if nm == "fgColor" || nm == "bgColor" {
-                            if let Some(hex) = attr_str(e, "rgb").as_deref().and_then(argb_to_hex) {
-                                if nm == "fgColor" || cur_fill.is_none() {
-                                    cur_fill = Some(hex);
-                                }
+                match (sec.as_str(), nm) {
+                    ("fonts", "b") => cur_font.bl = bool_attr(e),
+                    ("fonts", "i") => cur_font.it = bool_attr(e),
+                    ("fonts", "sz") => cur_font.fs = attr_str(e, "val").and_then(|v| v.parse().ok()),
+                    ("fonts", "color") if cur_font.cl.is_none() => {
+                        cur_font.cl = attr_str(e, "rgb").as_deref().and_then(argb_to_hex);
+                    }
+                    ("fonts", "font") => book.fonts.push(FontInfo::default()),
+                    ("fills", "fill") => book.fills.push(None),
+                    ("fills", "fgColor") | ("fills", "bgColor") => {
+                        if let Some(hex) = attr_str(e, "rgb").as_deref().and_then(argb_to_hex) {
+                            if nm == "fgColor" || cur_fill.is_none() {
+                                cur_fill = Some(hex);
                             }
                         }
                     }
-                    "cellXfs" if nm == "xf" => {
-                        let font = attr_str(e, "fontId").and_then(|v| v.parse().ok()).unwrap_or(0);
-                        let fill = attr_str(e, "fillId").and_then(|v| v.parse().ok()).unwrap_or(0);
-                        xfs.push((font, fill));
+                    ("borders", "border") => book.borders.push(BorderRec::default()),
+                    ("borders", "left" | "right" | "top" | "bottom") => {
+                        let side = BSide { s: attr_str(e, "style"), c: None };
+                        set_border_side(&mut cur_border, nm, side);
+                    }
+                    ("borders", "color") => {
+                        if let Some((_, side)) = &mut cur_side {
+                            side.c = attr_str(e, "rgb").as_deref().and_then(argb_to_hex);
+                        }
+                    }
+                    ("cellXfs", "xf") => book.xfs.push(xf_from_attrs(e)),
+                    ("cellXfs", "alignment") => {
+                        if let Some(rec) = &mut cur_xf {
+                            apply_alignment(rec, e);
+                        }
+                    }
+                    ("numFmts", "numFmt") => {
+                        if let (Some(id), Some(code)) = (
+                            attr_str(e, "numFmtId").and_then(|v| v.parse().ok()),
+                            attr_str(e, "formatCode"),
+                        ) {
+                            book.numfmts.insert(id, code);
+                        }
                     }
                     _ => {}
                 }
@@ -173,9 +274,20 @@ fn parse_styles(xml: &str) -> StylesTable {
                 let nm = e.local_name();
                 let nm = nm.as_ref();
                 match nm {
-                    "font" => fonts.push(std::mem::take(&mut cur_font)),
-                    "fill" => fills.push(cur_fill.take()),
-                    "fonts" | "fills" | "cellXfs" => sec.clear(),
+                    "font" => book.fonts.push(std::mem::take(&mut cur_font)),
+                    "fill" => book.fills.push(cur_fill.take()),
+                    "left" | "right" | "top" | "bottom" if sec == "borders" => {
+                        if let Some((key, side)) = cur_side.take() {
+                            set_border_side(&mut cur_border, &key, side);
+                        }
+                    }
+                    "border" if sec == "borders" => book.borders.push(std::mem::take(&mut cur_border)),
+                    "xf" if sec == "cellXfs" => {
+                        if let Some(rec) = cur_xf.take() {
+                            book.xfs.push(rec);
+                        }
+                    }
+                    "fonts" | "fills" | "borders" | "cellXfs" | "numFmts" => sec.clear(),
                     _ => {}
                 }
             }
@@ -183,19 +295,24 @@ fn parse_styles(xml: &str) -> StylesTable {
             _ => {}
         }
     }
-    (fonts, fills, xfs)
+    book
+}
+
+fn set_border_side(rec: &mut BorderRec, key: &str, side: BSide) {
+    match key {
+        "left" => rec.l = side,
+        "right" => rec.r = side,
+        "top" => rec.t = side,
+        "bottom" => rec.b = side,
+        _ => {}
+    }
 }
 
 fn bool_attr(e: &quick_xml::events::BytesStart<'_>) -> bool {
     attr_str(e, "val").map(|v| v != "0" && v != "false").unwrap_or(true)
 }
 
-fn parse_sheet(
-    xml: &str,
-    fonts: &[FontInfo],
-    fills: &[Option<String>],
-    xfs: &[(u32, u32)],
-) -> SheetFmt {
+fn parse_sheet(xml: &str, book: &StyleBook) -> SheetFmt {
     let mut out = SheetFmt::default();
     let mut reader = Reader::from_str(xml);
     while let Ok(ev) = reader.read_event() {
@@ -206,7 +323,7 @@ fn parse_sheet(
                 let xf: u32 = attr_str(e, "s").and_then(|v| v.parse().ok()).unwrap_or(0);
                 if xf > 0 {
                     if let Some((r, c)) = attr_str(e, "r").as_deref().and_then(a1_to_rc) {
-                        if let Some(style) = style_for(xf as usize, fonts, fills, xfs) {
+                        if let Some(style) = style_for(xf as usize, book) {
                             out.styles.insert((r, c), style);
                         }
                     }
@@ -224,21 +341,45 @@ fn parse_sheet(
     out
 }
 
-fn style_for(
-    xf: usize,
-    fonts: &[FontInfo],
-    fills: &[Option<String>],
-    xfs: &[(u32, u32)],
-) -> Option<CellStyle> {
-    let (font_id, fill_id) = *xfs.get(xf)?;
-    let f = fonts.get(font_id as usize).cloned().unwrap_or_default();
-    let bg = fills.get(fill_id as usize).cloned().flatten();
+fn side_to_payload(side: &BSide) -> Option<BorderSide> {
+    if side.s.is_none() && side.c.is_none() {
+        return None;
+    }
+    Some(BorderSide {
+        s: side.s.clone().filter(|v| v != "none"),
+        c: side.c.clone(),
+    })
+}
+
+fn style_for(xf: usize, book: &StyleBook) -> Option<CellStyle> {
+    let rec = book.xfs.get(xf)?;
+    let f = book.fonts.get(rec.font as usize).cloned().unwrap_or_default();
+    let bg = book.fills.get(rec.fill as usize).cloned().flatten();
+    let bd = book.borders.get(rec.border as usize).and_then(|b| {
+        let cell_bd = CellBorder {
+            t: side_to_payload(&b.t),
+            r: side_to_payload(&b.r),
+            b: side_to_payload(&b.b),
+            l: side_to_payload(&b.l),
+        };
+        (!cell_bd.is_empty()).then_some(cell_bd)
+    });
+    let nf = book
+        .numfmts
+        .get(&rec.numfmt)
+        .cloned()
+        .or_else(|| builtin_numfmt(rec.numfmt).map(String::from));
     let style = CellStyle {
         bl: f.bl,
         it: f.it,
         fs: f.fs.filter(|v| *v > 0.0 && (*v - 11.0).abs() > f64::EPSILON),
         cl: f.cl,
         bg,
+        bd,
+        ho: rec.ho.clone(),
+        vo: rec.vo.clone(),
+        wb: rec.wrap,
+        nf,
     };
     style.has_any().then_some(style)
 }
@@ -255,7 +396,7 @@ fn parse_range(s: &str) -> Option<MergeRange> {
     })
 }
 
-/// 任何失败都退化为空表（非 zip 格式：xls/ods/csv 无样式可读）
+/// 任何失败都退化为空表（非 xlsx 格式：xls/csv 无样式可读；ods 走 ods.rs 自己的读侧）
 pub fn read_xlsx_styles(path: &str) -> HashMap<String, SheetFmt> {
     let mut out = HashMap::new();
     let Ok(file) = File::open(path) else { return out };
@@ -263,10 +404,10 @@ pub fn read_xlsx_styles(path: &str) -> HashMap<String, SheetFmt> {
     let Some(styles_xml) = read_entry(&mut zip, "xl/styles.xml") else {
         return out;
     };
-    let (fonts, fills, xfs) = parse_styles(&styles_xml);
+    let book = parse_styles(&styles_xml);
     for (name, p) in sheet_paths(&mut zip) {
         if let Some(xml) = read_entry(&mut zip, &p) {
-            out.insert(name, parse_sheet(&xml, &fonts, &fills, &xfs));
+            out.insert(name, parse_sheet(&xml, &book));
         }
     }
     out
@@ -305,24 +446,55 @@ mod tests {
     #[test]
     fn styles_table_parses() {
         let xml = r#"<?xml version="1.0"?><styleSheet xmlns="x">
+          <numFmts count="1"><numFmt numFmtId="164" formatCode="0.0_;-0.0_"/></numFmts>
           <fonts count="2"><font><sz val="11"/><name val="Calibri"/></font>
           <font><b/><i/><sz val="14"/><color rgb="FFFF0000"/></font></fonts>
           <fills count="3"><fill><patternFill patternType="none"/></fill>
           <fill><patternFill patternType="gray125"/></fill>
           <fill><patternFill patternType="solid"><fgColor rgb="FF00FF00"/></patternFill></fill></fills>
-          <cellXfs count="2"><xf fontId="0" fillId="0"/><xf fontId="1" fillId="2" applyFont="1"/></cellXfs>
+          <borders count="2"><border/>
+          <border><left style="thin"><color rgb="FF3366CC"/></left><right style="dashed"/>
+          <top style="medium"/><bottom style="hair"><color rgb="FF000000"/></bottom></border></borders>
+          <cellXfs count="2"><xf fontId="0" fillId="0"/>
+          <xf fontId="1" fillId="2" borderId="1" numFmtId="164" applyFont="1"><alignment horizontal="center" vertical="center" wrapText="1"/></xf></cellXfs>
         </styleSheet>"#;
-        let (fonts, fills, xfs) = parse_styles(xml);
-        assert_eq!(fonts.len(), 2);
-        assert!(fonts[1].bl && fonts[1].it);
-        assert_eq!(fonts[1].cl.as_deref(), Some("#ff0000"));
-        assert_eq!(fills.len(), 3);
-        assert_eq!(fills[2].as_deref(), Some("#00ff00"));
-        assert_eq!(xfs, vec![(0, 0), (1, 2)]);
-        let st = style_for(1, &fonts, &fills, &xfs).expect("样式存在");
-        assert!(st.bl && st.it);
+        let book = parse_styles(xml);
+        assert_eq!(book.fonts.len(), 2);
+        assert!(book.fonts[1].bl && book.fonts[1].it);
+        assert_eq!(book.fonts[1].cl.as_deref(), Some("#ff0000"));
+        assert_eq!(book.fills.len(), 3);
+        assert_eq!(book.fills[2].as_deref(), Some("#00ff00"));
+        assert_eq!(book.borders.len(), 2);
+        assert_eq!(book.borders[1].l.s.as_deref(), Some("thin"));
+        assert_eq!(book.borders[1].l.c.as_deref(), Some("#3366cc"));
+        assert_eq!(book.borders[1].r.s.as_deref(), Some("dashed"));
+        assert_eq!(book.borders[1].b.s.as_deref(), Some("hair"));
+        assert_eq!(book.xfs.len(), 2);
+        assert_eq!((book.xfs[1].font, book.xfs[1].fill), (1, 2));
+        assert_eq!((book.xfs[1].border, book.xfs[1].numfmt), (1, 164));
+        assert_eq!(book.xfs[1].ho.as_deref(), Some("center"));
+        assert_eq!(book.xfs[1].vo.as_deref(), Some("middle"));
+        assert!(book.xfs[1].wrap);
+        let st = style_for(1, &book).expect("样式存在");
+        assert!(st.bl && st.it && st.wb);
         assert_eq!(st.fs, Some(14.0));
         assert_eq!(st.bg.as_deref(), Some("#00ff00"));
-        assert!(style_for(0, &fonts, &fills, &xfs).is_none());
+        assert_eq!(st.ho.as_deref(), Some("center"));
+        assert_eq!(st.vo.as_deref(), Some("middle"));
+        assert_eq!(st.nf.as_deref(), Some("0.0_;-0.0_"), "自定义 numFmt");
+        let bd = st.bd.expect("边框存在");
+        assert_eq!(bd.l.as_ref().and_then(|x| x.s.as_deref()), Some("thin"));
+        assert_eq!(bd.l.as_ref().and_then(|x| x.c.as_deref()), Some("#3366cc"));
+        assert_eq!(bd.r.as_ref().and_then(|x| x.s.as_deref()), Some("dashed"));
+        assert!(bd.t.as_ref().expect("top").c.is_none(), "未写 color 则无颜色");
+        assert!(style_for(0, &book).is_none());
+    }
+
+    #[test]
+    fn builtin_numfmt_maps() {
+        assert_eq!(builtin_numfmt(9), Some("0%"));
+        assert_eq!(builtin_numfmt(3), Some("#,##0"));
+        assert_eq!(builtin_numfmt(14), None, "日期 id 不映射");
+        assert_eq!(builtin_numfmt(0), None);
     }
 }

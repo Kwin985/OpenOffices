@@ -225,6 +225,26 @@
   否则"未保存确认"形同虚设
 - **后续发布项**：自动更新通道（私有仓库无公开 metadata URL，须先定公开或另托管）、macOS 打包
 
+## 表格保真补全（v0.18）
+
+- **xlsx 读侧样式扩展**：`styles.xml` 直解器升级为 StyleBook（fonts/fills/borders/cellXfs/numFmts
+  五段联动，`<xf>` 的 Start+子元素 alignment 两种形态都吃），边框四边线型+颜色、水平/垂直对齐、
+  自动换行、数字格式 pattern 全读回；写侧 rust_xlsxwriter Format 对齐双设（`FormatAlign` 水平/垂直
+  两次 `set_align` 互不覆盖）+ 逐边边框 + `set_num_format`；numFmt 覆盖 builtin id 表
+  （`0%`/`0.00%`/`#,##0.00`/`@` 等）与自定义段（日期 id 跳过——calamine 已把日期字符串化）
+- **ODS 读侧样式/合并**：`ods.rs` 新增 `read_ods_styles` 直解 content.xml 的 automatic-styles +
+  表格遍历——单元格边框 `0.5pt solid #hex` 按关键字/宽度带映射回线型（hair<0.2pt、thin≤1.0、
+  medium≤2.0、thick 以上，LibreOffice 的 0.26pt thin 可原样读回）、字色/底色/对齐/换行，
+  以及 `number-columns-repeated`/`covered-table-cell`/`number-*-spanned` 合并语义；
+  `read_xlsx` 命令按扩展名分流两套直解器，calamine 继续只负责值
+- **前端全链路接入**：`CellStyle` 载荷扩 `bd/ho/vo/wb/nf` 五字段；`univer-io` 与 Univer 快照双向桥
+  （BorderStyleTypes 1~13 ↔ 线型名、对齐枚举换算——Univer 的 RIGHT=3 并非 xlsx 顺序）；
+  `sheet-print` 打印网格消费新字段：逐边 border CSS、水平/垂直对齐、换行、数字格式实排
+  （`@` 透传、`%` 乘百后缀、小数位/千分位），导出 PDF 的表格自此带上边框/对齐/格式化数字
+- **验证**：cargo 22 测全过（新增 xlsx 边框/对齐/数字格式往返、ODF 边框宽度映射、ODS 样式合并
+  经真实 `read_xlsx` 拼合读回等 4 项）+ Node 打印纯函数 15 断言 + CDP 14 断言全链路
+  （夹具文件 → Rust 读样式 → payload → Univer 快照 → 换回 payload → 打印 HTML）全绿
+
 ## 性能（v0.3）
 
 - **按编辑器分包 + 懒加载**：主包 8MB → 首屏约 300KB；Univer（6.1MB）只在首次激活表格标签时加载，
@@ -261,9 +281,9 @@
 ```
 src-tauri/            Rust 后端
   src/xlsx.rs         read_xlsx (calamine) / write_xlsx (rust_xlsxwriter) 命令，含样式、合并区与图表往返
-  src/xlsx_style.rs   zip + quick-xml 直读 xlsx 的 styles.xml / mergeCells（calamine 无样式 API）
+  src/xlsx_style.rs   zip + quick-xml 直读 xlsx 的 styles.xml（StyleBook：fonts/fills/borders/cellXfs/numFmts）/ mergeCells（calamine 无样式 API）
   src/xlsx_chart.rs   zip + quick-xml 直读 chartN.xml + drawing 锚点，系列值按实时网格解析
-  src/ods.rs          write_ods 命令：共用 xlsx 载荷 → ODF zip（mimetype/manifest/content/styles），含样式去重与合并
+  src/ods.rs          ODS 双向：write_ods（共用 xlsx 载荷 → ODF zip，样式去重与合并）+ read_ods_styles（直解边框/对齐/换行/重复单元格/合并跨度）
   src/pdf.rs          export_pdf 命令：with_webview → WebView2 PrintToPdf（边距/纸张尺寸参数，cfg windows）
   src/lib.rs          OPEN_EXTS 与 argv 文件过滤纯函数、take_startup_files 命令、single-instance 文件转发
   capabilities/       dialog + fs 权限与路径作用域
@@ -271,7 +291,7 @@ src/                  React 前端
   store.ts            标签页 / 最近文件 / 主题（zustand）
   App.tsx             全局快捷键、拖拽打开、文件关联打开（启动 argv + 单实例转发）、关闭确认、懒加载路由
   lib/univer.ts       Univer 实例工厂（公式 worker + 六个社区预设，含绘图 FOverGridImage）
-  lib/univer-io.ts    xlsx 数据+样式/合并/图表 ↔ Univer 快照 转换（样式去重注册）
+  lib/univer-io.ts    xlsx 数据+样式（粗斜/颜色/边框/对齐/换行/数字格式）/合并/图表 ↔ Univer 快照 转换（样式去重注册）
   lib/chart.ts        ChartPayload → VChart spec → 离屏 canvas PNG dataURL（动态导入分包）
   lib/docx.ts         docx 导入导出（ProseMirror JSON ↔ docx，字色/高亮/页眉页脚/TOC 域/批注映射；文本节点兼容顶层 text 与 attrs.text）
   lib/toc-extension.ts TipTap 目录原子节点：按标题实时汇总、点击跳转
@@ -279,7 +299,7 @@ src/                  React 前端
   lib/odt.ts          ProseMirror JSON ↔ ODT（JSZip 打包导出 + DOMParser 导入，字符样式/合并表/图片/页码域）
   lib/ppt.ts          .opd 幻灯片数据模型（版式/主题/序列化）
   lib/pdfprint.ts     打印覆盖层：挂 DOM → 注入打印样式 → export_pdf → 清理
-  lib/sheet-print.ts  WorkbookPayload → 打印 HTML 网格（值/样式子集/合并/分页/截断）
+  lib/sheet-print.ts  WorkbookPayload → 打印 HTML 网格（值/边框/对齐/换行/数字格式/合并/分页/截断）
   lib/pptx-export.ts  Deck → pptx（pptxgenjs）
   lib/pptx-import.ts  pptx → Deck（JSZip 解包 + OOXML 解析 + 媒体还原）
   lib/registry.ts     跨组件保存器注册表（Ctrl+S 路由到当前标签）
@@ -290,7 +310,7 @@ scripts/              copy-pdfjs-assets.mjs（dev/build 前复制 cmaps/标准�
 .github/workflows/    release.yml——tag v* 触发：门禁→win/linux 矩阵打包→GitHub Release
 ```
 
-表格文件流：`xlsx/ods 磁盘 → Rust(calamine 值 + zip/quick-xml 样式合并图表) → JSON 快照 → Univer 渲染（图表经 VChart 出 PNG 浮动图片）`；保存按扩展名分流——`.xlsx` 经 `rust_xlsxwriter`（含原生图表部件）、`.ods` 经 `ods.rs` 生成 ODF 包。
+表格文件流：`xlsx/ods 磁盘 → Rust(calamine 值 + xlsx/ods 各自 zip/quick-xml 直解样式·合并·图表) → JSON 快照 → Univer 渲染（图表经 VChart 出 PNG 浮动图片）`；保存按扩展名分流——`.xlsx` 经 `rust_xlsxwriter`（含原生图表部件）、`.ods` 经 `ods.rs` 生成 ODF 包。
 文档文件流：`docx → mammoth 正文 + zip 直读页眉页脚/批注 → HTML/元数据 → TipTap`；`.odt` 走 `lib/odt.ts` 双向；保存为 `.odoc` JSON（含 meta）或导出 docx/odt。
 演示文件流：`pptx → JSZip 解包 OOXML → Deck 模型 → 编辑器`；保存为 `.opd` JSON 或经 pptxgenjs 导出 pptx。
 PDF 文件流：查看 `pdf 磁盘 → readBytes → pdfjs-dist（worker + canvas）`；文档导出 `@media print 排版 → Rust export_pdf → WebView2 PrintToPdf 落盘`；演示导出 `Deck → createRoot 离屏挂载 StaticSlide 分页 → 同上`；表格导出 `Univer 快照 → WorkbookPayload → lib/sheet-print.ts 自绘 HTML 网格 → 同上（canvas 抓不到故走数据侧重排）`。
@@ -321,6 +341,7 @@ cargo check        # Rust 后端检查（在 src-tauri 下）
 - [x] 演示：动画映射 PowerPoint 原生 timing 树（元素级跨端保真）
 - [x] 演示：动画方向/出场效果补全 + PowerPoint 实机回放回归确认
 - [x] 表格：样式（字体/颜色/合并）随 xlsx 往返
+- [x] 表格：边框/对齐/数字格式 xlsx 往返 + ODS 读侧样式/合并 + PDF 打印保真
 - [x] 表格：图表（VChart 渲染 PNG + Univer 社区浮动图片 + xlsx 原生图表往返，Excel 实机确认）
 - [x] 文档：页眉页脚（含 PAGE 页码域）与目录（原生 TOC 域）docx 往返，Word 实机回归
 - [x] 文档：批注（锚点标记 + 侧栏面板 + docx comments 往返）
