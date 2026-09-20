@@ -18,6 +18,10 @@ pub struct SheetFmt {
     pub col_widths: HashMap<u32, f64>,
     /// 行号 → 高度像素（xlsx 存磅，按 4/3 换算）
     pub row_heights: HashMap<u32, f64>,
+    pub hidden_rows: Vec<u32>,
+    pub hidden_cols: Vec<u32>,
+    /// 冻结窗格 (rows, cols)
+    pub freeze: Option<(u32, u32)>,
 }
 
 /// xlsx 列宽（字符数，MDW=7 + 5px padding）→ 像素
@@ -349,24 +353,41 @@ fn parse_sheet(xml: &str, book: &StyleBook) -> SheetFmt {
                     out.merges.push(range);
                 }
             } else if nm == "col" {
-                // <col min max width customWidth>：Excel/LO 只要显式写了 col 段就视为自定义宽度
-                if let Some(w) = attr_str(e, "width").and_then(|v| v.parse::<f64>().ok()) {
-                    let min = attr_str(e, "min").and_then(|v| v.parse::<u32>().ok()).unwrap_or(1);
-                    let max = attr_str(e, "max").and_then(|v| v.parse::<u32>().ok()).unwrap_or(min);
+                // <col min max width customWidth hidden>：Excel/LO 只要显式写了 col 段就视为自定义宽度
+                let min = attr_str(e, "min").and_then(|v| v.parse::<u32>().ok()).unwrap_or(1);
+                let max = attr_str(e, "max").and_then(|v| v.parse::<u32>().ok()).unwrap_or(min);
+                let range = min..=max.max(min).min(min + 2047);
+                if matches!(attr_str(e, "hidden").as_deref(), Some("1") | Some("true")) {
+                    out.hidden_cols.extend(range.filter(|c| *c >= 1).map(|c| c - 1));
+                } else if let Some(w) = attr_str(e, "width").and_then(|v| v.parse::<f64>().ok()) {
                     let px = chars_to_px(w);
-                    for c in min..=max.max(min).min(min + 2047) {
+                    for c in range {
                         if c >= 1 {
                             out.col_widths.insert(c - 1, px);
                         }
                     }
                 }
             } else if nm == "row" {
-                if let (Some(r), Some(ht)) = (
-                    attr_str(e, "r").and_then(|v| v.parse::<u32>().ok()),
-                    attr_str(e, "ht").and_then(|v| v.parse::<f64>().ok()),
-                ) {
-                    if r >= 1 {
-                        out.row_heights.insert(r - 1, pt_to_px(ht));
+                if let Some(r) = attr_str(e, "r").and_then(|v| v.parse::<u32>().ok()) {
+                    if matches!(attr_str(e, "hidden").as_deref(), Some("1") | Some("true")) {
+                        if r >= 1 {
+                            out.hidden_rows.push(r - 1);
+                        }
+                    } else if let Some(ht) =
+                        attr_str(e, "ht").and_then(|v| v.parse::<f64>().ok())
+                    {
+                        if r >= 1 {
+                            out.row_heights.insert(r - 1, pt_to_px(ht));
+                        }
+                    }
+                }
+            } else if nm == "pane" {
+                // <pane xSplit ySplit state="frozen">：仅冻结语义（split 滚动条不算）
+                if attr_str(e, "state").as_deref() == Some("frozen") {
+                    let rows = attr_str(e, "ySplit").and_then(|v| v.parse::<u32>().ok()).unwrap_or(0);
+                    let cols = attr_str(e, "xSplit").and_then(|v| v.parse::<u32>().ok()).unwrap_or(0);
+                    if rows > 0 || cols > 0 {
+                        out.freeze = Some((rows, cols));
                     }
                 }
             }

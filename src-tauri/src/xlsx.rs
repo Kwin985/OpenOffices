@@ -157,6 +157,14 @@ pub struct ChartPayload {
     pub series: Vec<ChartSeries>,
 }
 
+/// 冻结窗格：顶部 rows 行 + 左侧 cols 列
+#[derive(Serialize, Deserialize, Clone, Copy, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct Freeze {
+    pub rows: u32,
+    pub cols: u32,
+}
+
 #[derive(Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct SheetPayload {
@@ -172,6 +180,12 @@ pub struct SheetPayload {
     /// 行号 → 高度像素
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
     pub row_heights: HashMap<u32, f64>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub hidden_rows: Vec<u32>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub hidden_cols: Vec<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub freeze: Option<Freeze>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -291,6 +305,9 @@ pub fn read_xlsx(path: String) -> Result<WorkbookPayload, Error> {
             charts: Vec::new(),
             col_widths: fmt.map(|f| f.col_widths.clone()).unwrap_or_default(),
             row_heights: fmt.map(|f| f.row_heights.clone()).unwrap_or_default(),
+            hidden_rows: fmt.map(|f| f.hidden_rows.clone()).unwrap_or_default(),
+            hidden_cols: fmt.map(|f| f.hidden_cols.clone()).unwrap_or_default(),
+            freeze: fmt.and_then(|f| f.freeze).map(|(rows, cols)| Freeze { rows, cols }),
         });
     }
     // 图表部件单独解析：值按引用从上面已建好的网格取
@@ -495,6 +512,20 @@ pub fn write_xlsx(path: String, workbook: WorkbookPayload) -> Result<(), Error> 
         }
         for (r, px) in &sheet.row_heights {
             let _ = ws.set_row_height_pixels(*r, (*px as u32).max(1));
+        }
+        // 隐藏行列与冻结窗格（set_freeze_panes 参数即冻结带行列数）
+        for r in &sheet.hidden_rows {
+            let _ = ws.set_row_hidden(*r);
+        }
+        for c in &sheet.hidden_cols {
+            if let Ok(col) = u16::try_from(*c) {
+                let _ = ws.set_column_hidden(col);
+            }
+        }
+        if let Some(fz) = &sheet.freeze {
+            if let Ok(cols) = u16::try_from(fz.cols) {
+                let _ = ws.set_freeze_panes(fz.rows, cols);
+            }
         }
         // 原生图表：系列引用直接映射为单元格区域公式，Excel 打开即活图
         for chart in &sheet.charts {
@@ -895,6 +926,7 @@ mod tests {
                 charts: vec![],
                 col_widths: [(0u32, 140.0), (2u32, 60.0)].into_iter().collect(),
                 row_heights: [(1u32, 36.0)].into_iter().collect(),
+                ..Default::default()
             }],
         };
         write_xlsx(path.clone(), wb).expect("write_xlsx");
@@ -911,6 +943,39 @@ mod tests {
             .and_then(|x| x.s.as_ref())
             .and_then(|s| s.ff.clone());
         assert_eq!(ff.as_deref(), Some("微软雅黑"), "字体族往返");
+    }
+
+    #[test]
+    fn hidden_and_freeze_roundtrip() {
+        let path = tmp_path("hid");
+        let wb = WorkbookPayload {
+            sheets: vec![SheetPayload {
+                name: "隐藏".into(),
+                cells: vec![
+                    CellPayload { r: 0, c: 0, v: Some(json!("keep")), ..Default::default() },
+                    CellPayload { r: 0, c: 1, v: Some(json!("gone")), ..Default::default() },
+                    CellPayload { r: 1, c: 0, v: Some(json!("h")), ..Default::default() },
+                ],
+                merges: vec![],
+                charts: vec![],
+                col_widths: HashMap::new(),
+                row_heights: HashMap::new(),
+                hidden_rows: vec![1],
+                hidden_cols: vec![1],
+                freeze: Some(Freeze { rows: 1, cols: 0 }),
+            }],
+        };
+        write_xlsx(path.clone(), wb).expect("write_xlsx");
+        let back = read_xlsx(path.clone()).expect("读回失败");
+        std::fs::remove_file(&path).ok();
+        let sheet = &back.sheets[0];
+        assert_eq!(sheet.hidden_cols, vec![1], "隐藏列往返");
+        assert_eq!(sheet.hidden_rows, vec![1], "隐藏行往返");
+        assert_eq!(
+            sheet.freeze.map(|f| (f.rows, f.cols)),
+            Some((1, 0)),
+            "冻结首行往返"
+        );
     }
 
     // CDP 冒烟夹具：手动 `cargo test gen_smoke_fixture -- --ignored` 生成带图表 xlsx
@@ -1031,6 +1096,7 @@ mod tests {
                 ],
                 col_widths: [(0u32, 140.0)].into_iter().collect(),
                 row_heights: [(0u32, 32.0)].into_iter().collect(),
+                ..Default::default()
             }],
         };
         write_xlsx(path.clone(), wb).expect("写夹具失败");

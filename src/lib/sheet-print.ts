@@ -120,6 +120,9 @@ function sheetHtml(sheet: SheetPayload, first: boolean): string {
       for (let c = m.startColumn; c <= Math.min(m.endColumn, maxCol); c++)
         if (r !== m.startRow || c !== m.startColumn) covered.add(`${r},${c}`)
   }
+  // 隐藏行列打印时整列/整行剔除（合并区跨隐藏列的 colspan 按近似保留）
+  const hidR = new Set(sheet.hiddenRows ?? [])
+  const hidC = new Set(sheet.hiddenCols ?? [])
   // 列宽：colWidths 即像素，未设定的列用默认宽
   const colAt = (c: number) => {
     const px = sheet.colWidths?.[String(c)]
@@ -128,12 +131,17 @@ function sheetHtml(sheet: SheetPayload, first: boolean): string {
       : COL_WIDTH_PX
   }
   let colgroup = '<colgroup>'
-  for (let c = 0; c <= maxCol; c++) colgroup += `<col style="width:${colAt(c)}px"/>`
+  for (let c = 0; c <= maxCol; c++) {
+    if (hidC.has(c)) continue
+    colgroup += `<col style="width:${colAt(c)}px"/>`
+  }
   colgroup += '</colgroup>'
   let rows = ''
   for (let r = 0; r <= maxRow; r++) {
+    if (hidR.has(r)) continue
     let tds = ''
     for (let c = 0; c <= maxCol; c++) {
+      if (hidC.has(c)) continue
       const key = `${r},${c}`
       if (covered.has(key)) continue
       const cell = grid.get(key)

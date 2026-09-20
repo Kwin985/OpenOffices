@@ -156,23 +156,40 @@ export function payloadToWorkbook(payload: WorkbookPayload, name: string): IWork
       if (cell.c > maxC) maxC = cell.c
     }
     ws.cellData = cellData
-    // 列宽/行高：载荷像素与 Univer columnData.w / rowData.h 同单位，直接映射
-    const columnData: Record<string, { w: number }> = {}
+    // 列宽/行高/隐藏：载荷像素与 Univer columnData.w / rowData.h 同单位；hd=1 即隐藏
+    type ColDatum = { w?: number; hd?: number }
+    type RowDatum = { h?: number; hd?: number }
+    const columnData: Record<string, ColDatum> = {}
     for (const [k, px] of Object.entries(sheet.colWidths ?? {})) {
       const c = Number(k)
       if (!Number.isInteger(c) || c < 0 || !(px > 0)) continue
       columnData[k] = { w: Math.round(px) }
       if (c > maxC) maxC = c
     }
-    const rowData: Record<string, { h: number }> = {}
+    for (const c of sheet.hiddenCols ?? []) {
+      if (!Number.isInteger(c) || c < 0) continue
+      columnData[String(c)] = { ...columnData[String(c)], hd: 1 }
+      if (c > maxC) maxC = c
+    }
+    const rowData: Record<string, RowDatum> = {}
     for (const [k, px] of Object.entries(sheet.rowHeights ?? {})) {
       const r = Number(k)
       if (!Number.isInteger(r) || r < 0 || !(px > 0)) continue
       rowData[k] = { h: Math.round(px) }
       if (r > maxR) maxR = r
     }
+    for (const r of sheet.hiddenRows ?? []) {
+      if (!Number.isInteger(r) || r < 0) continue
+      rowData[String(r)] = { ...rowData[String(r)], hd: 1 }
+      if (r > maxR) maxR = r
+    }
     if (Object.keys(columnData).length) ws.columnData = columnData
     if (Object.keys(rowData).length) ws.rowData = rowData
+    // 冻结窗格：xSplit/ySplit 是冻结带列/行数，startRow/startColumn 是可视区起点
+    const fz = sheet.freeze
+    if (fz && (fz.rows > 0 || fz.cols > 0)) {
+      ws.freeze = { xSplit: fz.cols, ySplit: fz.rows, startRow: fz.rows, startColumn: fz.cols }
+    }
     ws.rowCount = Math.max(MIN_ROWS, maxR + 20)
     ws.columnCount = Math.max(MIN_COLS, maxC + 5)
     const merges = (sheet.merges ?? []).filter(
@@ -238,25 +255,45 @@ export function workbookToPayload(data: IWorkbookData): WorkbookPayload {
       endColumn: m.endColumn,
     }))
     const colWidths: Record<string, number> = {}
+    const hiddenCols: number[] = []
     for (const [k, v] of Object.entries(
-      (sheet.columnData ?? {}) as Record<string, { w?: number } | null | undefined>,
+      (sheet.columnData ?? {}) as Record<string, { w?: number; hd?: number } | null | undefined>,
     )) {
       if (typeof v?.w === 'number' && v.w > 0) colWidths[k] = v.w
+      if (v?.hd === 1) {
+        const c = Number(k)
+        if (Number.isInteger(c) && c >= 0) hiddenCols.push(c)
+      }
     }
+    hiddenCols.sort((a, b) => a - b)
     const rowHeights: Record<string, number> = {}
+    const hiddenRows: number[] = []
     for (const [k, v] of Object.entries(
-      (sheet.rowData ?? {}) as Record<string, { h?: number; ah?: number; ia?: number } | null | undefined>,
+      (sheet.rowData ?? {}) as Record<string, { h?: number; ah?: number; ia?: number; hd?: number } | null | undefined>,
     )) {
       // ia=1 表示行高自适应内容，实际渲染高度记在 ah
       const px = v?.ia ? v.ah : v?.h
       if (typeof px === 'number' && px > 0) rowHeights[k] = px
+      if (v?.hd === 1) {
+        const r = Number(k)
+        if (Number.isInteger(r) && r >= 0) hiddenRows.push(r)
+      }
     }
+    hiddenRows.sort((a, b) => a - b)
+    // 冻结窗格：xSplit=冻结列数、ySplit=冻结行数（startRow/startColumn 是可视区起点，不用）
+    const fr = (sheet.freeze ?? {}) as { xSplit?: number; ySplit?: number }
+    const rows = typeof fr.ySplit === 'number' ? fr.ySplit : 0
+    const cols = typeof fr.xSplit === 'number' ? fr.xSplit : 0
+    const freeze = rows > 0 || cols > 0 ? { rows, cols } : undefined
     sheets.push({
       name: sheet.name ?? `Sheet${sheets.length + 1}`,
       cells,
       merges,
       ...(Object.keys(colWidths).length ? { colWidths } : {}),
       ...(Object.keys(rowHeights).length ? { rowHeights } : {}),
+      ...(hiddenCols.length ? { hiddenCols } : {}),
+      ...(hiddenRows.length ? { hiddenRows } : {}),
+      ...(freeze ? { freeze } : {}),
     })
   }
   return { sheets }

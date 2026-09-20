@@ -161,43 +161,77 @@ fn px_to_odf_len(px: f64) -> String {
     format!("{:.4}cm", px * 2.54 / 96.0)
 }
 
-/// 自定义列宽/行高注册为 table-column/table-row 自动样式。
-/// 返回 (样式 XML, 像素值字符串 → 样式名)；值去重且按大小排序保证输出确定性。
+/// (宽度像素, 是否隐藏) → 维度样式注册键；无宽度且不隐藏返回 None（用默认样式）
+fn dim_key(px: Option<f64>, hidden: bool) -> Option<String> {
+    match (px, hidden) {
+        (Some(p), false) => Some(format!("{p}|0")),
+        (Some(p), true) => Some(format!("{p}|1")),
+        (None, true) => Some("h|1".into()),
+        (None, false) => None,
+    }
+}
+
+/// 自定义列宽/行高与隐藏行列注册为 table-column/table-row 自动样式。
+/// 返回 (样式 XML, 注册键 → 样式名)；键去重排序保证输出确定性。
 fn build_dim_styles(
     sheets: &[SheetPayload],
 ) -> (String, HashMap<String, String>, HashMap<String, String>) {
-    let mut col_px: Vec<f64> = sheets
-        .iter()
-        .flat_map(|s| s.col_widths.values().copied())
-        .collect();
-    let mut row_px: Vec<f64> = sheets
-        .iter()
-        .flat_map(|s| s.row_heights.values().copied())
-        .collect();
-    let sort_dedup = |v: &mut Vec<f64>| {
-        v.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
-        v.dedup();
-    };
-    sort_dedup(&mut col_px);
-    sort_dedup(&mut row_px);
+    let mut col_keys: Vec<String> = Vec::new();
+    let mut row_keys: Vec<String> = Vec::new();
+    for s in sheets {
+        let hid_c: std::collections::HashSet<u32> = s.hidden_cols.iter().copied().collect();
+        let hid_r: std::collections::HashSet<u32> = s.hidden_rows.iter().copied().collect();
+        for (c, px) in &s.col_widths {
+            if let Some(k) = dim_key(Some(*px), hid_c.contains(c)) {
+                col_keys.push(k);
+            }
+        }
+        if hid_c.iter().any(|c| !s.col_widths.contains_key(c)) {
+            col_keys.push("h|1".into());
+        }
+        for (r, px) in &s.row_heights {
+            if let Some(k) = dim_key(Some(*px), hid_r.contains(r)) {
+                row_keys.push(k);
+            }
+        }
+        if hid_r.iter().any(|r| !s.row_heights.contains_key(r)) {
+            row_keys.push("h|1".into());
+        }
+    }
+    col_keys.sort();
+    col_keys.dedup();
+    row_keys.sort();
+    row_keys.dedup();
     let mut xml = String::new();
     let mut cols: HashMap<String, String> = HashMap::new();
     let mut rows: HashMap<String, String> = HashMap::new();
-    for (i, px) in col_px.iter().enumerate() {
+    for (i, k) in col_keys.iter().enumerate() {
         let name = format!("co{}", i + 1);
+        let vis = if k.ends_with("|1") { " style:visibility=\"collapse\"" } else { "" };
+        let width = if k.starts_with("h|") {
+            String::new()
+        } else {
+            let px: f64 = k.split('|').next().and_then(|s| s.parse().ok()).unwrap_or(0.0);
+            format!(" style:column-width=\"{}\"", px_to_odf_len(px))
+        };
         xml.push_str(&format!(
-            "<style:style style:name=\"{name}\" style:family=\"table-column\"><style:table-column-properties fo:break-before=\"auto\" style:column-width=\"{}\"/></style:style>",
-            px_to_odf_len(*px)
+            "<style:style style:name=\"{name}\" style:family=\"table-column\"><style:table-column-properties fo:break-before=\"auto\"{width}{vis}/></style:style>"
         ));
-        cols.insert(format!("{px}"), name);
+        cols.insert(k.clone(), name);
     }
-    for (i, px) in row_px.iter().enumerate() {
+    for (i, k) in row_keys.iter().enumerate() {
         let name = format!("ro{}", i + 1);
+        let vis = if k.ends_with("|1") { " style:visibility=\"collapse\"" } else { "" };
+        let height = if k.starts_with("h|") {
+            String::new()
+        } else {
+            let px: f64 = k.split('|').next().and_then(|s| s.parse().ok()).unwrap_or(0.0);
+            format!("style:row-height=\"{}\"", px_to_odf_len(px))
+        };
         xml.push_str(&format!(
-            "<style:style style:name=\"{name}\" style:family=\"table-row\"><style:table-row-properties style:row-height=\"{}\" fo:break-before=\"auto\" table:use-optimal-row-height=\"false\"/></style:style>",
-            px_to_odf_len(*px)
+            "<style:style style:name=\"{name}\" style:family=\"table-row\"><style:table-row-properties {height} fo:break-before=\"auto\" table:use-optimal-row-height=\"false\"{vis}/></style:style>"
         ));
-        rows.insert(format!("{px}"), name);
+        rows.insert(k.clone(), name);
     }
     (xml, cols, rows)
 }
@@ -330,6 +364,8 @@ pub fn read_ods_styles(path: &str) -> HashMap<String, SheetFmt> {
     let mut styles: HashMap<String, CellStyle> = HashMap::new();
     let mut col_styles: HashMap<String, f64> = HashMap::new();
     let mut row_styles: HashMap<String, f64> = HashMap::new();
+    let mut col_hid_styles: std::collections::HashSet<String> = std::collections::HashSet::new();
+    let mut row_hid_styles: std::collections::HashSet<String> = std::collections::HashSet::new();
     let mut sec = String::new(); // automatic-styles | spreadsheet
     let mut cur_style: Option<String> = None;
     let mut cur_col_style: Option<String> = None;
@@ -341,6 +377,7 @@ pub fn read_ods_styles(path: &str) -> HashMap<String, SheetFmt> {
     let mut row_repeat = 1u32;
     let mut col_idx = 0u32;
     let mut dim_col = 0u32;
+    let mut order: Vec<String> = Vec::new(); // 表序，供 settings.xml 冻结按索引回填
 
     let mut reader = Reader::from_str(&xml);
     while let Ok(ev) = reader.read_event() {
@@ -365,19 +402,25 @@ pub fn read_ods_styles(path: &str) -> HashMap<String, SheetFmt> {
                     "table-cell-properties" if cur_style.is_some() => apply_table_cell_props(&mut cur_def, e),
                     "text-properties" if cur_style.is_some() => apply_text_props(&mut cur_def, e),
                     "table-column-properties" if cur_col_style.is_some() => {
-                        if let (Some(n), Some(px)) = (
-                            cur_col_style.clone(),
-                            attr_str(e, "column-width").as_deref().and_then(odf_len_to_px),
-                        ) {
-                            col_styles.insert(n, px);
+                        let n = cur_col_style.clone().unwrap();
+                        if let Some(px) =
+                            attr_str(e, "column-width").as_deref().and_then(odf_len_to_px)
+                        {
+                            col_styles.insert(n.clone(), px);
+                        }
+                        if attr_str(e, "visibility").as_deref() == Some("collapse") {
+                            col_hid_styles.insert(n);
                         }
                     }
                     "table-row-properties" if cur_row_style.is_some() => {
-                        if let (Some(n), Some(px)) = (
-                            cur_row_style.clone(),
-                            attr_str(e, "row-height").as_deref().and_then(odf_len_to_px),
-                        ) {
-                            row_styles.insert(n, px);
+                        let n = cur_row_style.clone().unwrap();
+                        if let Some(px) =
+                            attr_str(e, "row-height").as_deref().and_then(odf_len_to_px)
+                        {
+                            row_styles.insert(n.clone(), px);
+                        }
+                        if attr_str(e, "visibility").as_deref() == Some("collapse") {
+                            row_hid_styles.insert(n);
                         }
                     }
                     "spreadsheet" if is_start => sec = "spreadsheet".into(),
@@ -388,17 +431,24 @@ pub fn read_ods_styles(path: &str) -> HashMap<String, SheetFmt> {
                         dim_col = 0;
                         if !is_start {
                             if let Some(name) = table_name.take() {
+                                order.push(name.clone());
                                 out.insert(name, std::mem::take(&mut fmt));
                             }
                         }
                     }
                     "table-column" if sec == "spreadsheet" => {
                         let repeat = clamped_repeat(e, "number-columns-repeated");
+                        let sty = attr_str(e, "style-name");
                         if let Some(px) =
-                            attr_str(e, "style-name").and_then(|n| col_styles.get(&n)).copied()
+                            sty.as_deref().and_then(|n| col_styles.get(n)).copied()
                         {
                             for i in 0..repeat.min(2048) {
                                 fmt.col_widths.insert(dim_col + i, px);
+                            }
+                        }
+                        if sty.as_deref().map_or(false, |n| col_hid_styles.contains(n)) {
+                            for i in 0..repeat.min(2048) {
+                                fmt.hidden_cols.push(dim_col + i);
                             }
                         }
                         dim_col += repeat;
@@ -406,11 +456,17 @@ pub fn read_ods_styles(path: &str) -> HashMap<String, SheetFmt> {
                     "table-row" => {
                         col_idx = 0;
                         row_repeat = clamped_repeat(e, "number-rows-repeated");
+                        let sty = attr_str(e, "style-name");
                         if let Some(px) =
-                            attr_str(e, "style-name").and_then(|n| row_styles.get(&n)).copied()
+                            sty.as_deref().and_then(|n| row_styles.get(n)).copied()
                         {
                             for i in 0..row_repeat.min(2048) {
                                 fmt.row_heights.insert(row_idx + i, px);
+                            }
+                        }
+                        if sty.as_deref().map_or(false, |n| row_hid_styles.contains(n)) {
+                            for i in 0..row_repeat.min(2048) {
+                                fmt.hidden_rows.push(row_idx + i);
                             }
                         }
                         if !is_start {
@@ -460,8 +516,63 @@ pub fn read_ods_styles(path: &str) -> HashMap<String, SheetFmt> {
                     "table-row" => row_idx += row_repeat,
                     "table" => {
                         if let Some(name) = table_name.take() {
+                            order.push(name.clone());
                             out.insert(name, std::mem::take(&mut fmt));
                         }
+                    }
+                    _ => {}
+                }
+            }
+            Event::Eof => break,
+            _ => {}
+        }
+    }
+    // 冻结窗格在 styles.xml 的 ViewSettings/Tables，map-entry 与 content 表序一一对应
+    if let Some(sx) = read_entry(&mut zip, "styles.xml") {
+        for (i, (rows, cols)) in parse_ods_freezes(&sx).into_iter().enumerate() {
+            if rows + cols == 0 {
+                continue;
+            }
+            if let Some(f) = order.get(i).and_then(|n| out.get_mut(n)) {
+                f.freeze = Some((rows, cols));
+            }
+        }
+    }
+    out
+}
+
+/// styles.xml 的 config-item-map-indexed "Tables" → 每表 (rows, cols)，未冻结为 (0,0)
+fn parse_ods_freezes(xml: &str) -> Vec<(u32, u32)> {
+    let mut out = Vec::new();
+    let mut cur = String::new();
+    let mut val = String::new();
+    let mut rows = 0u32;
+    let mut cols = 0u32;
+    let mut frozen = false;
+    let mut reader = Reader::from_str(xml);
+    while let Ok(ev) = reader.read_event() {
+        match &ev {
+            Event::Start(e) if e.local_name().as_ref() == "config-item" => {
+                cur = attr_str(e, "name").unwrap_or_default();
+                val.clear();
+            }
+            Event::Text(t) if !cur.is_empty() => {
+                val = t.as_ref().to_string();
+            }
+            Event::End(e) => {
+                let ln = e.local_name();
+                match ln.as_ref() {
+                    "config-item" => match cur.as_str() {
+                        "Columns" => cols = val.trim().parse().unwrap_or(0),
+                        "Rows" => rows = val.trim().parse().unwrap_or(0),
+                        "IsFrozen" => frozen = val.trim() == "true",
+                        _ => {}
+                    },
+                    "config-item-map-entry" => {
+                        out.push(if frozen { (rows, cols) } else { (0, 0) });
+                        rows = 0;
+                        cols = 0;
+                        frozen = false;
                     }
                     _ => {}
                 }
@@ -512,11 +623,14 @@ fn render_sheet(
         "<table:table table:name=\"{}\">",
         esc(&sheet.name)
     ));
+    let hid_c: std::collections::HashSet<u32> = sheet.hidden_cols.iter().copied().collect();
+    let hid_r: std::collections::HashSet<u32> = sheet.hidden_rows.iter().copied().collect();
     let max_row = sheet
         .cells
         .iter()
         .map(|x| x.r)
         .chain(sheet.merges.iter().map(|m| m.end_row))
+        .chain(sheet.hidden_rows.iter().copied())
         .max()
         .unwrap_or(0);
     let max_col = sheet
@@ -524,14 +638,12 @@ fn render_sheet(
         .iter()
         .map(|x| x.c)
         .chain(sheet.merges.iter().map(|m| m.end_column))
+        .chain(sheet.hidden_cols.iter().copied())
         .max()
         .unwrap_or(0);
     let col_style_at = |c: u32| {
-        sheet
-            .col_widths
-            .get(&c)
-            .and_then(|px| col_reg.get(&format!("{px}")))
-            .cloned()
+        dim_key(sheet.col_widths.get(&c).copied(), hid_c.contains(&c))
+            .and_then(|k| col_reg.get(&k).cloned())
     };
     // 列元素：同宽度的连续列合并为一次 repeated
     let mut c = 0u32;
@@ -549,11 +661,8 @@ fn render_sheet(
     }
 
     let row_style_at = |r: u32| {
-        sheet
-            .row_heights
-            .get(&r)
-            .and_then(|px| row_reg.get(&format!("{px}")))
-            .cloned()
+        dim_key(sheet.row_heights.get(&r).copied(), hid_r.contains(&r))
+            .and_then(|k| row_reg.get(&k).cloned())
     };
     let cell_at = |r: u32, c: u32| sheet.cells.iter().find(|x| x.r == r && x.c == c);
     let mut gap = 0u32;
@@ -694,6 +803,36 @@ fn render_sheet(
     out.push_str("</table:table>");
 }
 
+/// 冻结窗格写进 styles.xml 的 office:settings（LibreOffice 的 ViewSettings 结构）；
+/// 每表一条 map-entry 保持与 content.xml 表序对齐，无冻结时整节省略。
+fn settings_xml(sheets: &[SheetPayload]) -> Option<String> {
+    if sheets
+        .iter()
+        .all(|s| s.freeze.map_or(true, |f| f.rows + f.cols == 0))
+    {
+        return None;
+    }
+    let mut s = String::from(
+        "<office:settings><config:config-item-set config:name=\"ooo:view-settings\">\
+         <config:config-item-map-indexed config:name=\"Tables\">",
+    );
+    for sheet in sheets {
+        let (rows, cols) = sheet.freeze.map(|f| (f.rows, f.cols)).unwrap_or((0, 0));
+        let frozen = rows + cols > 0;
+        s.push_str(&format!(
+            "<config:config-item-map-entry>\
+             <config:config-item config:name=\"ActiveCol\" config:type=\"int\">0</config:config-item>\
+             <config:config-item config:name=\"ActiveRow\" config:type=\"int\">0</config:config-item>\
+             <config:config-item config:name=\"Columns\" config:type=\"int\">{cols}</config:config-item>\
+             <config:config-item config:name=\"Rows\" config:type=\"int\">{rows}</config:config-item>\
+             <config:config-item config:name=\"IsFrozen\" config:type=\"boolean\">{frozen}</config:config-item>\
+             </config:config-item-map-entry>"
+        ));
+    }
+    s.push_str("</config:config-item-map-indexed></config:config-item-set></office:settings>");
+    Some(s)
+}
+
 pub fn ods_xml(workbook: &WorkbookPayload) -> (String, String) {
     let (style_names, styles_xml) = build_styles(&workbook.sheets);
     let (dim_xml, col_reg, row_reg) = build_dim_styles(&workbook.sheets);
@@ -717,15 +856,18 @@ pub fn ods_xml(workbook: &WorkbookPayload) -> (String, String) {
     }
     content.push_str("</office:spreadsheet></office:body></office:document-content>");
 
-    let styles = String::from(
+    let styles = format!(
         "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\
          <office:document-styles \
          xmlns:office=\"urn:oasis:names:tc:opendocument:xmlns:office:1.0\" \
+         xmlns:config=\"urn:oasis:names:tc:opendocument:xmlns:config:1.0\" \
          xmlns:style=\"urn:oasis:names:tc:opendocument:xmlns:style:1.0\" \
          xmlns:fo=\"urn:oasis:names:tc:opendocument:xmlns:xsl-fo-compatible:1.0\" \
-         office:version=\"1.2\"><office:styles>\
+         office:version=\"1.2\">{}\
+         <office:styles>\
          <style:style style:name=\"Default\" style:family=\"table-cell\"/>\
          </office:styles></office:document-styles>",
+        settings_xml(&workbook.sheets).unwrap_or_default()
     );
     (content, styles)
 }
@@ -832,6 +974,42 @@ mod tests {
         assert_eq!(find(2, 1), Some(json!(88.5)));
         assert_eq!(find(2, 2), Some(json!(true)));
         assert_eq!(find(9, 4), Some(json!("远处<b>&值")), "稀疏行 + XML 转义");
+    }
+
+    #[test]
+    fn ods_hidden_and_freeze_roundtrip() {
+        use crate::xlsx::Freeze;
+        let wb = WorkbookPayload {
+            sheets: vec![SheetPayload {
+                name: "隐藏".into(),
+                cells: vec![cell(0, 0, json!("标题")), cell(3, 3, json!("数据"))],
+                // 列 1 隐藏且带宽度（"{px}|1" 复合样式），列 2 只隐藏（"h|1" 哨兵）
+                col_widths: HashMap::from([(1, 140.0)]),
+                hidden_cols: vec![1, 2],
+                // 行 2 隐藏且带高度，行 3 只隐藏
+                row_heights: HashMap::from([(2, 32.0)]),
+                hidden_rows: vec![2, 3],
+                freeze: Some(Freeze { rows: 1, cols: 0 }),
+                ..Default::default()
+            }],
+        };
+        let path = std::env::temp_dir()
+            .join(format!("openoffices-ods-hid-{}.ods", std::process::id()))
+            .to_string_lossy()
+            .to_string();
+        std::fs::write(&path, ods_bytes(&wb).expect("ods bytes")).expect("write");
+        let back = crate::xlsx::read_xlsx(path.clone()).expect("读回失败");
+        std::fs::remove_file(&path).ok();
+
+        let s = &back.sheets[0];
+        assert_eq!(s.hidden_cols, vec![1, 2], "隐藏列（含带宽度复合样式）");
+        assert_eq!(s.hidden_rows, vec![2, 3], "隐藏行（含带高度复合样式）");
+        assert_eq!(s.col_widths.get(&1), Some(&140.0), "隐藏列宽度保留");
+        assert_eq!(s.row_heights.get(&2), Some(&32.0), "隐藏行高度保留");
+        assert!(
+            matches!(s.freeze, Some(f) if f.rows == 1 && f.cols == 0),
+            "冻结窗格经 settings.xml 往返"
+        );
     }
 
     #[test]
@@ -1023,6 +1201,7 @@ mod tests {
                 charts: vec![],
                 col_widths: [(0u32, 140.0), (1u32, 140.0)].into_iter().collect(),
                 row_heights: [(0u32, 32.0)].into_iter().collect(),
+                ..Default::default()
             }],
         };
         let path = std::env::temp_dir()
@@ -1133,6 +1312,7 @@ mod tests {
                 charts: vec![],
                 col_widths: [(0u32, 140.0)].into_iter().collect(),
                 row_heights: [(0u32, 32.0)].into_iter().collect(),
+                ..Default::default()
             }],
         };
         write_ods(path.clone(), wb).expect("生成夹具 ods 失败");

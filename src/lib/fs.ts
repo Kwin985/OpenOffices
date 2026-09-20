@@ -84,6 +84,12 @@ export interface SheetPayload {
   colWidths?: Record<string, number>
   /** 行号 → 高度像素 */
   rowHeights?: Record<string, number>
+  /** 隐藏列索引（0 基） */
+  hiddenCols?: number[]
+  /** 隐藏行索引（0 基） */
+  hiddenRows?: number[]
+  /** 冻结窗格：顶部 rows 行 + 左侧 cols 列 */
+  freeze?: { rows: number; cols: number }
 }
 
 export interface WorkbookPayload {
