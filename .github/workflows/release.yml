@@ -58,3 +58,10 @@ jobs:
         uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          # tag push 触发时 tauri-action 不自动推断标签（默认只认 release 事件），
+          # 不传 tagName 会静默跳过上传；workflow_dispatch 传空 = 只构建不发布
+          tagName: ${{ github.event_name != 'workflow_dispatch' && github.ref_name || '' }}
+          releaseName: 'OpenOffices ${{ github.ref_name }}'
+          releaseCommitish: ${{ github.sha }}
+          releaseDraft: false
