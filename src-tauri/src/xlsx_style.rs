@@ -14,12 +14,27 @@ use crate::xlsx::{BorderSide, CellBorder, CellStyle, MergeRange};
 pub struct SheetFmt {
     pub styles: HashMap<(u32, u32), CellStyle>,
     pub merges: Vec<MergeRange>,
+    /// 列号 → 宽度像素（与 Univer 快照同单位；xlsx 存字符宽，按 round(w*7+5) 换算）
+    pub col_widths: HashMap<u32, f64>,
+    /// 行号 → 高度像素（xlsx 存磅，按 4/3 换算）
+    pub row_heights: HashMap<u32, f64>,
+}
+
+/// xlsx 列宽（字符数，MDW=7 + 5px padding）→ 像素
+pub(crate) fn chars_to_px(chars: f64) -> f64 {
+    (chars * 7.0 + 5.0).round()
+}
+
+/// xlsx 行高（磅）→ 像素（96dpi）
+pub(crate) fn pt_to_px(pt: f64) -> f64 {
+    (pt * 4.0 / 3.0).round()
 }
 
 #[derive(Default, Clone)]
 struct FontInfo {
     bl: bool,
     it: bool,
+    ff: Option<String>,
     fs: Option<f64>,
     cl: Option<String>,
 }
@@ -230,6 +245,7 @@ fn parse_styles(xml: &str) -> StyleBook {
                 match (sec.as_str(), nm) {
                     ("fonts", "b") => cur_font.bl = bool_attr(e),
                     ("fonts", "i") => cur_font.it = bool_attr(e),
+                    ("fonts", "name") => cur_font.ff = attr_str(e, "val"),
                     ("fonts", "sz") => cur_font.fs = attr_str(e, "val").and_then(|v| v.parse().ok()),
                     ("fonts", "color") if cur_font.cl.is_none() => {
                         cur_font.cl = attr_str(e, "rgb").as_deref().and_then(argb_to_hex);
@@ -332,6 +348,27 @@ fn parse_sheet(xml: &str, book: &StyleBook) -> SheetFmt {
                 if let Some(range) = attr_str(e, "ref").as_deref().and_then(parse_range) {
                     out.merges.push(range);
                 }
+            } else if nm == "col" {
+                // <col min max width customWidth>：Excel/LO 只要显式写了 col 段就视为自定义宽度
+                if let Some(w) = attr_str(e, "width").and_then(|v| v.parse::<f64>().ok()) {
+                    let min = attr_str(e, "min").and_then(|v| v.parse::<u32>().ok()).unwrap_or(1);
+                    let max = attr_str(e, "max").and_then(|v| v.parse::<u32>().ok()).unwrap_or(min);
+                    let px = chars_to_px(w);
+                    for c in min..=max.max(min).min(min + 2047) {
+                        if c >= 1 {
+                            out.col_widths.insert(c - 1, px);
+                        }
+                    }
+                }
+            } else if nm == "row" {
+                if let (Some(r), Some(ht)) = (
+                    attr_str(e, "r").and_then(|v| v.parse::<u32>().ok()),
+                    attr_str(e, "ht").and_then(|v| v.parse::<f64>().ok()),
+                ) {
+                    if r >= 1 {
+                        out.row_heights.insert(r - 1, pt_to_px(ht));
+                    }
+                }
             }
         }
         if matches!(ev, Event::Eof) {
@@ -372,6 +409,9 @@ fn style_for(xf: usize, book: &StyleBook) -> Option<CellStyle> {
     let style = CellStyle {
         bl: f.bl,
         it: f.it,
+        ff: f
+            .ff
+            .filter(|n| !n.is_empty() && n != "Calibri" && n != "等线"),
         fs: f.fs.filter(|v| *v > 0.0 && (*v - 11.0).abs() > f64::EPSILON),
         cl: f.cl,
         bg,

@@ -47,7 +47,7 @@ function borderKey(b: CellBorder | undefined): string {
 
 function styleKey(s: CellStyle): string {
   return JSON.stringify([
-    !!s.bl, !!s.it, s.fs ?? 0, s.cl ?? '', s.bg ?? '',
+    !!s.bl, !!s.it, s.fs ?? 0, s.ff ?? '', s.cl ?? '', s.bg ?? '',
     s.ho ?? '', s.vo ?? '', !!s.wb, s.nf ?? '', borderKey(s.bd),
   ])
 }
@@ -57,6 +57,7 @@ function toUniverStyle(s: CellStyle): Record<string, unknown> {
   if (s.bl) out.bl = 1
   if (s.it) out.it = 1
   if (s.fs != null) out.fs = s.fs
+  if (s.ff) out.ff = s.ff
   if (s.cl) out.cl = { rgb: ensureHash(s.cl) }
   if (s.bg) out.bg = { rgb: ensureHash(s.bg) }
   if (s.bd) {
@@ -88,6 +89,7 @@ function flattenStyle(sd: Record<string, unknown> | undefined | null): CellStyle
   if (sd.it) out.it = true
   const fs = sd.fs
   if (typeof fs === 'number' && fs > 0 && fs !== 11) out.fs = fs
+  if (typeof sd.ff === 'string' && sd.ff && sd.ff !== 'Calibri' && sd.ff !== '等线') out.ff = sd.ff
   const cl = readColor(sd.cl)
   if (cl) out.cl = ensureHash(cl)
   const bg = readColor(sd.bg)
@@ -154,6 +156,23 @@ export function payloadToWorkbook(payload: WorkbookPayload, name: string): IWork
       if (cell.c > maxC) maxC = cell.c
     }
     ws.cellData = cellData
+    // 列宽/行高：载荷像素与 Univer columnData.w / rowData.h 同单位，直接映射
+    const columnData: Record<string, { w: number }> = {}
+    for (const [k, px] of Object.entries(sheet.colWidths ?? {})) {
+      const c = Number(k)
+      if (!Number.isInteger(c) || c < 0 || !(px > 0)) continue
+      columnData[k] = { w: Math.round(px) }
+      if (c > maxC) maxC = c
+    }
+    const rowData: Record<string, { h: number }> = {}
+    for (const [k, px] of Object.entries(sheet.rowHeights ?? {})) {
+      const r = Number(k)
+      if (!Number.isInteger(r) || r < 0 || !(px > 0)) continue
+      rowData[k] = { h: Math.round(px) }
+      if (r > maxR) maxR = r
+    }
+    if (Object.keys(columnData).length) ws.columnData = columnData
+    if (Object.keys(rowData).length) ws.rowData = rowData
     ws.rowCount = Math.max(MIN_ROWS, maxR + 20)
     ws.columnCount = Math.max(MIN_COLS, maxC + 5)
     const merges = (sheet.merges ?? []).filter(
@@ -218,7 +237,27 @@ export function workbookToPayload(data: IWorkbookData): WorkbookPayload {
       endRow: m.endRow,
       endColumn: m.endColumn,
     }))
-    sheets.push({ name: sheet.name ?? `Sheet${sheets.length + 1}`, cells, merges })
+    const colWidths: Record<string, number> = {}
+    for (const [k, v] of Object.entries(
+      (sheet.columnData ?? {}) as Record<string, { w?: number } | null | undefined>,
+    )) {
+      if (typeof v?.w === 'number' && v.w > 0) colWidths[k] = v.w
+    }
+    const rowHeights: Record<string, number> = {}
+    for (const [k, v] of Object.entries(
+      (sheet.rowData ?? {}) as Record<string, { h?: number; ah?: number; ia?: number } | null | undefined>,
+    )) {
+      // ia=1 表示行高自适应内容，实际渲染高度记在 ah
+      const px = v?.ia ? v.ah : v?.h
+      if (typeof px === 'number' && px > 0) rowHeights[k] = px
+    }
+    sheets.push({
+      name: sheet.name ?? `Sheet${sheets.length + 1}`,
+      cells,
+      merges,
+      ...(Object.keys(colWidths).length ? { colWidths } : {}),
+      ...(Object.keys(rowHeights).length ? { rowHeights } : {}),
+    })
   }
   return { sheets }
 }

@@ -58,10 +58,11 @@ fn style_key_of(st: &CellStyle) -> String {
         })
         .unwrap_or_default();
     format!(
-        "{}|{}|{}|{}|{}|{}|{}|{}|{}",
+        "{}|{}|{}|{}|{}|{}|{}|{}|{}|{}",
         st.bl,
         st.it,
         st.fs.map(|f| f.to_string()).unwrap_or_default(),
+        st.ff.clone().unwrap_or_default(),
         st.cl.clone().unwrap_or_default(),
         st.bg.clone().unwrap_or_default(),
         bd,
@@ -122,6 +123,13 @@ fn build_styles(sheets: &[SheetPayload]) -> (HashMap<String, String>, String) {
             if st.it {
                 tp.push_str(" fo:font-style=\"italic\"");
             }
+            if let Some(ff) = &st.ff {
+                tp.push_str(&format!(
+                    " style:font-name=\"{}\" fo:font-family=\"{}\"",
+                    esc(ff),
+                    esc(ff)
+                ));
+            }
             if let Some(fs) = st.fs {
                 tp.push_str(&format!(" fo:font-size=\"{fs}pt\""));
             }
@@ -146,6 +154,52 @@ fn style_key(s: Option<&CellStyle>) -> Option<String> {
         return None;
     }
     Some(style_key_of(st))
+}
+
+/// 像素 → ODF 长度（cm，4 位小数；读侧按同式换回并取整）
+fn px_to_odf_len(px: f64) -> String {
+    format!("{:.4}cm", px * 2.54 / 96.0)
+}
+
+/// 自定义列宽/行高注册为 table-column/table-row 自动样式。
+/// 返回 (样式 XML, 像素值字符串 → 样式名)；值去重且按大小排序保证输出确定性。
+fn build_dim_styles(
+    sheets: &[SheetPayload],
+) -> (String, HashMap<String, String>, HashMap<String, String>) {
+    let mut col_px: Vec<f64> = sheets
+        .iter()
+        .flat_map(|s| s.col_widths.values().copied())
+        .collect();
+    let mut row_px: Vec<f64> = sheets
+        .iter()
+        .flat_map(|s| s.row_heights.values().copied())
+        .collect();
+    let sort_dedup = |v: &mut Vec<f64>| {
+        v.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+        v.dedup();
+    };
+    sort_dedup(&mut col_px);
+    sort_dedup(&mut row_px);
+    let mut xml = String::new();
+    let mut cols: HashMap<String, String> = HashMap::new();
+    let mut rows: HashMap<String, String> = HashMap::new();
+    for (i, px) in col_px.iter().enumerate() {
+        let name = format!("co{}", i + 1);
+        xml.push_str(&format!(
+            "<style:style style:name=\"{name}\" style:family=\"table-column\"><style:table-column-properties fo:break-before=\"auto\" style:column-width=\"{}\"/></style:style>",
+            px_to_odf_len(*px)
+        ));
+        cols.insert(format!("{px}"), name);
+    }
+    for (i, px) in row_px.iter().enumerate() {
+        let name = format!("ro{}", i + 1);
+        xml.push_str(&format!(
+            "<style:style style:name=\"{name}\" style:family=\"table-row\"><style:table-row-properties style:row-height=\"{}\" fo:break-before=\"auto\" table:use-optimal-row-height=\"false\"/></style:style>",
+            px_to_odf_len(*px)
+        ));
+        rows.insert(format!("{px}"), name);
+    }
+    (xml, cols, rows)
 }
 
 // ---------- 读侧：直解 content.xml 的 automatic-styles 与表格结构 ----------
@@ -227,6 +281,11 @@ fn apply_text_props(st: &mut CellStyle, e: &quick_xml::events::BytesStart<'_>) {
     if attr_str(e, "font-style").as_deref() == Some("italic") {
         st.it = true;
     }
+    if let Some(fam) = attr_str(e, "font-name").or_else(|| attr_str(e, "font-family")) {
+        if !fam.is_empty() && fam != "Calibri" && fam != "等线" {
+            st.ff = Some(fam);
+        }
+    }
     if let Some(sz) = attr_str(e, "font-size") {
         if let Ok(v) = sz.trim_end_matches("pt").parse::<f64>() {
             st.fs = Some(v);
@@ -244,6 +303,23 @@ fn clamped_repeat(e: &quick_xml::events::BytesStart<'_>, attr: &str) -> u32 {
         .clamp(1, 20000)
 }
 
+/// ODF 长度值（"2.26cm"/"12.5pt"/"0.5in"…）→ 像素（96dpi，取整）
+fn odf_len_to_px(v: &str) -> Option<f64> {
+    let v = v.trim();
+    let cut = v.find(|c: char| !c.is_ascii_digit() && c != '.' && c != '-' && c != '+')?;
+    let n: f64 = v[..cut].parse().ok()?;
+    let px = match &v[cut..] {
+        "cm" => n * 96.0 / 2.54,
+        "mm" => n * 96.0 / 25.4,
+        "pt" => n * 96.0 / 72.0,
+        "in" => n * 96.0,
+        "pc" => n * 96.0 / 6.0,
+        "px" => n,
+        _ => return None,
+    };
+    Some(px.round())
+}
+
 /// 任何失败退化为空表；键为 sheet 名（与 calamine 的 table:name 一致）
 pub fn read_ods_styles(path: &str) -> HashMap<String, SheetFmt> {
     let mut out: HashMap<String, SheetFmt> = HashMap::new();
@@ -252,14 +328,19 @@ pub fn read_ods_styles(path: &str) -> HashMap<String, SheetFmt> {
     let Some(xml) = read_entry(&mut zip, "content.xml") else { return out };
 
     let mut styles: HashMap<String, CellStyle> = HashMap::new();
+    let mut col_styles: HashMap<String, f64> = HashMap::new();
+    let mut row_styles: HashMap<String, f64> = HashMap::new();
     let mut sec = String::new(); // automatic-styles | spreadsheet
     let mut cur_style: Option<String> = None;
+    let mut cur_col_style: Option<String> = None;
+    let mut cur_row_style: Option<String> = None;
     let mut cur_def = CellStyle::default();
     let mut fmt = SheetFmt::default();
     let mut table_name: Option<String> = None;
     let mut row_idx = 0u32;
     let mut row_repeat = 1u32;
     let mut col_idx = 0u32;
+    let mut dim_col = 0u32;
 
     let mut reader = Reader::from_str(&xml);
     while let Ok(ev) = reader.read_event() {
@@ -275,24 +356,63 @@ pub fn read_ods_styles(path: &str) -> HashMap<String, SheetFmt> {
                         if family == "table-cell" || family == "cell" {
                             cur_style = attr_str(e, "name");
                             cur_def = CellStyle::default();
+                        } else if family == "table-column" {
+                            cur_col_style = attr_str(e, "name");
+                        } else if family == "table-row" {
+                            cur_row_style = attr_str(e, "name");
                         }
                     }
                     "table-cell-properties" if cur_style.is_some() => apply_table_cell_props(&mut cur_def, e),
                     "text-properties" if cur_style.is_some() => apply_text_props(&mut cur_def, e),
+                    "table-column-properties" if cur_col_style.is_some() => {
+                        if let (Some(n), Some(px)) = (
+                            cur_col_style.clone(),
+                            attr_str(e, "column-width").as_deref().and_then(odf_len_to_px),
+                        ) {
+                            col_styles.insert(n, px);
+                        }
+                    }
+                    "table-row-properties" if cur_row_style.is_some() => {
+                        if let (Some(n), Some(px)) = (
+                            cur_row_style.clone(),
+                            attr_str(e, "row-height").as_deref().and_then(odf_len_to_px),
+                        ) {
+                            row_styles.insert(n, px);
+                        }
+                    }
                     "spreadsheet" if is_start => sec = "spreadsheet".into(),
                     "table" if sec == "spreadsheet" => {
                         table_name = attr_str(e, "name");
                         fmt = SheetFmt::default();
                         row_idx = 0;
+                        dim_col = 0;
                         if !is_start {
                             if let Some(name) = table_name.take() {
                                 out.insert(name, std::mem::take(&mut fmt));
                             }
                         }
                     }
+                    "table-column" if sec == "spreadsheet" => {
+                        let repeat = clamped_repeat(e, "number-columns-repeated");
+                        if let Some(px) =
+                            attr_str(e, "style-name").and_then(|n| col_styles.get(&n)).copied()
+                        {
+                            for i in 0..repeat.min(2048) {
+                                fmt.col_widths.insert(dim_col + i, px);
+                            }
+                        }
+                        dim_col += repeat;
+                    }
                     "table-row" => {
                         col_idx = 0;
                         row_repeat = clamped_repeat(e, "number-rows-repeated");
+                        if let Some(px) =
+                            attr_str(e, "style-name").and_then(|n| row_styles.get(&n)).copied()
+                        {
+                            for i in 0..row_repeat.min(2048) {
+                                fmt.row_heights.insert(row_idx + i, px);
+                            }
+                        }
                         if !is_start {
                             row_idx += row_repeat;
                         }
@@ -329,6 +449,8 @@ pub fn read_ods_styles(path: &str) -> HashMap<String, SheetFmt> {
                 match nm {
                     "automatic-styles" => sec.clear(),
                     "style" => {
+                        cur_col_style = None;
+                        cur_row_style = None;
                         if let Some(name) = cur_style.take() {
                             if cur_def.has_any() {
                                 styles.insert(name, cur_def.clone());
@@ -382,6 +504,8 @@ fn cell_in_merge(m: &MergeRange, r: u32, c: u32) -> bool {
 fn render_sheet(
     sheet: &SheetPayload,
     style_names: &HashMap<String, String>,
+    col_reg: &HashMap<String, String>,
+    row_reg: &HashMap<String, String>,
     out: &mut String,
 ) {
     out.push_str(&format!(
@@ -402,20 +526,45 @@ fn render_sheet(
         .chain(sheet.merges.iter().map(|m| m.end_column))
         .max()
         .unwrap_or(0);
-    out.push_str(&format!(
-        "<table:table-column table:number-columns-repeated=\"{}\"/>",
-        max_col + 1
-    ));
+    let col_style_at = |c: u32| {
+        sheet
+            .col_widths
+            .get(&c)
+            .and_then(|px| col_reg.get(&format!("{px}")))
+            .cloned()
+    };
+    // 列元素：同宽度的连续列合并为一次 repeated
+    let mut c = 0u32;
+    while c <= max_col {
+        let name = col_style_at(c);
+        let mut n = 1u32;
+        while c + n <= max_col && col_style_at(c + n) == name {
+            n += 1;
+        }
+        let sty = name.map(|x| format!(" table:style-name=\"{x}\"")).unwrap_or_default();
+        out.push_str(&format!(
+            "<table:table-column{sty} table:number-columns-repeated=\"{n}\"/>"
+        ));
+        c += n;
+    }
 
+    let row_style_at = |r: u32| {
+        sheet
+            .row_heights
+            .get(&r)
+            .and_then(|px| row_reg.get(&format!("{px}")))
+            .cloned()
+    };
     let cell_at = |r: u32, c: u32| sheet.cells.iter().find(|x| x.r == r && x.c == c);
-
     let mut gap = 0u32;
     let mut row_buf = String::new();
     for r in 0..=max_row {
-        let row_used = sheet
-            .merges
-            .iter()
-            .any(|m| r >= m.start_row && r <= m.end_row)
+        let row_sty = row_style_at(r);
+        let row_used = row_sty.is_some()
+            || sheet
+                .merges
+                .iter()
+                .any(|m| r >= m.start_row && r <= m.end_row)
             || sheet
                 .cells
                 .iter()
@@ -533,14 +682,21 @@ fn render_sheet(
             c += 1;
         }
         flush_covered(&mut row_buf, &mut pending_covered);
-        // 行尾的普通空格子直接截断不写
-        out.push_str(&format!("<table:table-row>{row_buf}</table:table-row>"));
+        // 行尾的普通空格子直接截断不写；只有自定义行高的空行补占位空格
+        let sty = row_sty.map(|x| format!(" table:style-name=\"{x}\"")).unwrap_or_default();
+        let body = if row_buf.is_empty() {
+            format!("<table:table-cell table:number-columns-repeated=\"{}\"/>", max_col + 1)
+        } else {
+            std::mem::take(&mut row_buf)
+        };
+        out.push_str(&format!("<table:table-row{sty}>{body}</table:table-row>"));
     }
     out.push_str("</table:table>");
 }
 
 pub fn ods_xml(workbook: &WorkbookPayload) -> (String, String) {
     let (style_names, styles_xml) = build_styles(&workbook.sheets);
+    let (dim_xml, col_reg, row_reg) = build_dim_styles(&workbook.sheets);
     let mut content = String::from(
         "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\
          <office:document-content \
@@ -552,11 +708,12 @@ pub fn ods_xml(workbook: &WorkbookPayload) -> (String, String) {
          office:version=\"1.2\"><office:automatic-styles>",
     );
     content.push_str(&styles_xml);
+    content.push_str(&dim_xml);
     content.push_str(
         "</office:automatic-styles><office:body><office:spreadsheet>",
     );
     for sheet in &workbook.sheets {
-        render_sheet(sheet, &style_names, &mut content);
+        render_sheet(sheet, &style_names, &col_reg, &row_reg, &mut content);
     }
     content.push_str("</office:spreadsheet></office:body></office:document-content>");
 
@@ -650,6 +807,7 @@ mod tests {
                 ],
                 merges: vec![],
                 charts: vec![],
+                ..Default::default()
             }],
         };
         let path = std::env::temp_dir()
@@ -711,6 +869,7 @@ mod tests {
                     end_column: 2,
                 }],
                 charts: vec![],
+                ..Default::default()
             }],
         };
         let (content, _styles) = ods_xml(&wb);
@@ -802,6 +961,7 @@ mod tests {
                     end_column: 1,
                 }],
                 charts: vec![],
+                ..Default::default()
             }],
         };
         let path = std::env::temp_dir()
@@ -834,6 +994,58 @@ mod tests {
     }
 
     #[test]
+    fn odf_len_to_px_converts() {
+        assert_eq!(odf_len_to_px("2.26cm"), Some(85.0)); // 85px ≈ 2.26cm
+        assert_eq!(odf_len_to_px("12pt"), Some(16.0));
+        assert_eq!(odf_len_to_px("1in"), Some(96.0));
+        assert_eq!(odf_len_to_px("10mm"), Some(38.0));
+        assert_eq!(odf_len_to_px("80px"), Some(80.0));
+        assert_eq!(odf_len_to_px("auto"), None);
+        assert_eq!(odf_len_to_px("3em"), None);
+    }
+
+    #[test]
+    fn ods_dimensions_and_font_readback() {
+        let wb = WorkbookPayload {
+            sheets: vec![SheetPayload {
+                name: "尺寸".into(),
+                cells: vec![CellPayload {
+                    r: 0,
+                    c: 1,
+                    v: Some(json!("宋体宽列")),
+                    s: Some(CellStyle {
+                        ff: Some("宋体".into()),
+                        ..Default::default()
+                    }),
+                    ..Default::default()
+                }],
+                merges: vec![],
+                charts: vec![],
+                col_widths: [(0u32, 140.0), (1u32, 140.0)].into_iter().collect(),
+                row_heights: [(0u32, 32.0)].into_iter().collect(),
+            }],
+        };
+        let path = std::env::temp_dir()
+            .join(format!("openoffices-odsdim-{}.ods", std::process::id()))
+            .to_string_lossy()
+            .to_string();
+        std::fs::write(&path, ods_bytes(&wb).expect("ods bytes")).expect("write");
+        let back = crate::xlsx::read_xlsx(path.clone()).expect("读回失败");
+        std::fs::remove_file(&path).ok();
+        let sheet = &back.sheets[0];
+        assert_eq!(sheet.col_widths.get(&0), Some(&140.0), "cm 往返列宽");
+        assert_eq!(sheet.col_widths.get(&1), Some(&140.0), "同宽列并入 repeated");
+        assert_eq!(sheet.row_heights.get(&0), Some(&32.0), "行高往返");
+        let ff = sheet
+            .cells
+            .iter()
+            .find(|x| x.r == 0 && x.c == 1)
+            .and_then(|x| x.s.as_ref())
+            .and_then(|s| s.ff.clone());
+        assert_eq!(ff.as_deref(), Some("宋体"), "字体族经 style:font-name 读回");
+    }
+
+    #[test]
     fn ods_zip_layout() {
         let wb = WorkbookPayload {
             sheets: vec![SheetPayload {
@@ -841,6 +1053,7 @@ mod tests {
                 cells: vec![cell(0, 0, json!(1))],
                 merges: vec![],
                 charts: vec![],
+                ..Default::default()
             }],
         };
         let bytes = ods_bytes(&wb).expect("ods bytes");
@@ -879,6 +1092,7 @@ mod tests {
                         s: Some(CellStyle {
                             bl: true,
                             cl: Some("#ff0000".into()),
+                            ff: Some("宋体".into()),
                             bd: Some(CellBorder {
                                 t: Some(BorderSide { s: Some("thin".into()), c: Some("#000000".into()) }),
                                 r: Some(BorderSide { s: Some("thin".into()), c: Some("#000000".into()) }),
@@ -917,6 +1131,8 @@ mod tests {
                     end_column: 1,
                 }],
                 charts: vec![],
+                col_widths: [(0u32, 140.0)].into_iter().collect(),
+                row_heights: [(0u32, 32.0)].into_iter().collect(),
             }],
         };
         write_ods(path.clone(), wb).expect("生成夹具 ods 失败");

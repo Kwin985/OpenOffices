@@ -59,6 +59,10 @@ function styleAttr(s: CellStyle | null | undefined): string {
   if (s.bl) parts.push('font-weight:bold')
   if (s.it) parts.push('font-style:italic')
   if (s.fs) parts.push(`font-size:${Math.round(s.fs * 1.333)}px`) // pt→px
+  if (s.ff) {
+    const fam = s.ff.replace(/["'();<>\\]/g, '')
+    if (fam) parts.push(`font-family:"${fam}"`)
+  }
   if (s.cl) parts.push(`color:${esc(s.cl)}`)
   if (s.bg) parts.push(`background-color:${esc(s.bg)}`)
   if (s.ho) parts.push(`text-align:${s.ho === 'justify' ? 'justify' : s.ho}`)
@@ -116,8 +120,16 @@ function sheetHtml(sheet: SheetPayload, first: boolean): string {
       for (let c = m.startColumn; c <= Math.min(m.endColumn, maxCol); c++)
         if (r !== m.startRow || c !== m.startColumn) covered.add(`${r},${c}`)
   }
-  const col = `<col style="width:${COL_WIDTH_PX}px"/>`
-  const colgroup = `<colgroup>${col.repeat(maxCol + 1)}</colgroup>`
+  // 列宽：colWidths 即像素，未设定的列用默认宽
+  const colAt = (c: number) => {
+    const px = sheet.colWidths?.[String(c)]
+    return typeof px === 'number' && px > 0 && Number.isFinite(px)
+      ? Math.round(px)
+      : COL_WIDTH_PX
+  }
+  let colgroup = '<colgroup>'
+  for (let c = 0; c <= maxCol; c++) colgroup += `<col style="width:${colAt(c)}px"/>`
+  colgroup += '</colgroup>'
   let rows = ''
   for (let r = 0; r <= maxRow; r++) {
     let tds = ''
@@ -129,7 +141,9 @@ function sheetHtml(sheet: SheetPayload, first: boolean): string {
       const span = sp ? ` colspan="${sp.cs}" rowspan="${sp.rs}"` : ''
       tds += `<td${span}${styleAttr(cell?.s)}>${cellValue(cell?.v, cell?.s)}</td>`
     }
-    rows += `<tr>${tds}</tr>`
+    const rh = sheet.rowHeights?.[String(r)]
+    const h = typeof rh === 'number' && rh > 0 && Number.isFinite(rh) ? ` style="height:${Math.round(rh)}px"` : ''
+    rows += `<tr${h}>${tds}</tr>`
   }
   const note = truncated
     ? `<p class="sheet-print-note">（内容超出打印上限 ${MAX_ROWS} 行 × ${MAX_COLS} 列，已截断）</p>`

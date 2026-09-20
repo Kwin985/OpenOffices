@@ -28,6 +28,8 @@ export interface CellStyle {
   wb?: boolean
   /** 数字格式模式串，如 #,##0.00 / 0.00% / @ */
   nf?: string
+  /** 字体族名（默认 Calibri/等线 不写入） */
+  ff?: string
 }
 
 export interface MergeRange {
@@ -78,6 +80,10 @@ export interface SheetPayload {
   cells: CellPayload[]
   merges?: MergeRange[]
   charts?: ChartPayload[]
+  /** 列号 → 宽度像素（与 Univer 快照同单位；HashMap 序列化为字符串键） */
+  colWidths?: Record<string, number>
+  /** 行号 → 高度像素 */
+  rowHeights?: Record<string, number>
 }
 
 export interface WorkbookPayload {

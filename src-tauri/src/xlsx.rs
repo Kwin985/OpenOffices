@@ -2,6 +2,7 @@ use calamine::{open_workbook_auto, Data, Reader};
 use rust_xlsxwriter::{Color, Format, Workbook};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use std::collections::HashMap;
 use std::path::Path;
 
 use crate::xlsx_chart;
@@ -58,6 +59,9 @@ pub struct CellStyle {
     pub it: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub fs: Option<f64>,
+    /// 字体族名（默认 Calibri/等线 不写入，减噪）
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ff: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cl: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -84,6 +88,7 @@ impl CellStyle {
         self.bl
             || self.it
             || self.fs.is_some()
+            || self.ff.is_some()
             || self.cl.is_some()
             || self.bg.is_some()
             || self.bd.as_ref().is_some_and(|b| !b.is_empty())
@@ -161,6 +166,12 @@ pub struct SheetPayload {
     pub merges: Vec<MergeRange>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub charts: Vec<ChartPayload>,
+    /// 列号 → 宽度像素（与 Univer 快照同单位；xlsx 字符宽/pt 在文件边界换算）
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub col_widths: HashMap<u32, f64>,
+    /// 行号 → 高度像素
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub row_heights: HashMap<u32, f64>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -278,6 +289,8 @@ pub fn read_xlsx(path: String) -> Result<WorkbookPayload, Error> {
             cells,
             merges: fmt.map(|f| f.merges.clone()).unwrap_or_default(),
             charts: Vec::new(),
+            col_widths: fmt.map(|f| f.col_widths.clone()).unwrap_or_default(),
+            row_heights: fmt.map(|f| f.row_heights.clone()).unwrap_or_default(),
         });
     }
     // 图表部件单独解析：值按引用从上面已建好的网格取
@@ -320,6 +333,9 @@ fn format_for(s: Option<&CellStyle>) -> Format {
         }
         if let Some(fs) = st.fs {
             f = f.set_font_size(fs);
+        }
+        if let Some(ff) = &st.ff {
+            f = f.set_font_name(ff.as_str());
         }
         if let Some(cl) = &st.cl {
             f = f.set_font_color(Color::from(cl.as_str()));
@@ -470,6 +486,15 @@ pub fn write_xlsx(path: String, workbook: WorkbookPayload) -> Result<(), Error> 
                     }
                 }
             }
+        }
+        // 列宽/行高：载荷即像素。crate 序列化按 chars=px/7 不扣 5px 填充，
+        // 与读侧 round(chars*7+5) 互为逆运算须先减填充；行高 px↔pt 3/4 对 4/3 无损
+        for (c, px) in &sheet.col_widths {
+            let Ok(col) = u16::try_from(*c) else { continue };
+            let _ = ws.set_column_width_pixels(col, (*px - 5.0).round().max(1.0) as u32);
+        }
+        for (r, px) in &sheet.row_heights {
+            let _ = ws.set_row_height_pixels(*r, (*px as u32).max(1));
         }
         // 原生图表：系列引用直接映射为单元格区域公式，Excel 打开即活图
         for chart in &sheet.charts {
@@ -824,6 +849,7 @@ mod tests {
                         }],
                     },
                 ],
+                ..Default::default()
             }],
         };
         write_xlsx(path.clone(), wb).expect("write failed");
@@ -847,6 +873,44 @@ mod tests {
         assert_eq!(pie.chart_type, "pie");
         assert_eq!((pie.anchor_row, pie.anchor_col), (16, 5));
         assert_eq!(pie.series[0].vals, vec![10.0, 20.0, 30.0]);
+    }
+
+    #[test]
+    fn dimensions_and_font_roundtrip() {
+        let path = tmp_path("dim");
+        let wb = WorkbookPayload {
+            sheets: vec![SheetPayload {
+                name: "尺寸".into(),
+                cells: vec![CellPayload {
+                    r: 0,
+                    c: 0,
+                    v: Some(json!("字族")),
+                    s: Some(CellStyle {
+                        ff: Some("微软雅黑".into()),
+                        ..Default::default()
+                    }),
+                    ..Default::default()
+                }],
+                merges: vec![],
+                charts: vec![],
+                col_widths: [(0u32, 140.0), (2u32, 60.0)].into_iter().collect(),
+                row_heights: [(1u32, 36.0)].into_iter().collect(),
+            }],
+        };
+        write_xlsx(path.clone(), wb).expect("write_xlsx");
+        let back = read_xlsx(path.clone()).expect("读回失败");
+        std::fs::remove_file(&path).ok();
+        let sheet = &back.sheets[0];
+        assert_eq!(sheet.col_widths.get(&0), Some(&140.0), "列 0 宽 140px");
+        assert_eq!(sheet.col_widths.get(&2), Some(&60.0), "列 2 宽 60px");
+        assert_eq!(sheet.row_heights.get(&1), Some(&36.0), "行 1 高 36px");
+        let ff = sheet
+            .cells
+            .iter()
+            .find(|x| x.r == 0 && x.c == 0)
+            .and_then(|x| x.s.as_ref())
+            .and_then(|s| s.ff.clone());
+        assert_eq!(ff.as_deref(), Some("微软雅黑"), "字体族往返");
     }
 
     // CDP 冒烟夹具：手动 `cargo test gen_smoke_fixture -- --ignored` 生成带图表 xlsx
@@ -878,6 +942,7 @@ mod tests {
                         v: Some(json!("月")),
                         s: Some(CellStyle {
                             bl: true,
+                            ff: Some("微软雅黑".into()),
                             bd: Some(all_thin()),
                             ho: Some("center".into()),
                             vo: Some("middle".into()),
@@ -964,6 +1029,8 @@ mod tests {
                         }],
                     },
                 ],
+                col_widths: [(0u32, 140.0)].into_iter().collect(),
+                row_heights: [(0u32, 32.0)].into_iter().collect(),
             }],
         };
         write_xlsx(path.clone(), wb).expect("写夹具失败");
