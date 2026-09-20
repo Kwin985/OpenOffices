@@ -126,7 +126,7 @@
   `attrs.text`，docx 导出此前只读后者——应用真实保存的文档导出 docx 正文全空；历史结构测试
   用同错格式造夹具故未暴露。现两者兼容、夹具改用应用真实产物格式重建，本机 Word 16.0 只读
   回归通过（Pages=3、批注锚文本与正文正确）
-- **范围**：表格/演示导出 PDF 暂未纳入；查看器的文字选择复制与全文搜索未做
+- **范围**：表格/演示导出 PDF 暂未纳入；文字选择复制已由 v0.23 TextLayer 补齐，全文搜索见 v0.24
 
 ## 表格图表（v0.13）
 
@@ -331,6 +331,19 @@
 - **验证**：CDP 冒烟 7 断言全绿（合成 3 页带文字 PDF：文字层内容与逐页重建、程序化
   选择取字、缩放后层与画布对齐、滚轮不被吞）；tsc/build 绿，Rust 零改动
 
+## PDF 全文搜索（v0.24）
+
+- **搜索链路**：`getTextContent()` 按页惰性建文本索引（items 拼接串 + 项起点表，缓存于
+  Map），查询小写化全页扫命中（上限 500 防大文档卡死），全局偏移换算回（项下标, 项内
+  偏移）定位到文字层 span 区间；Enter/Shift+Enter 或 ▲▼ 循环上下跳转，自动换页
+- **高亮零侵入**：用 CSS Custom Highlight API（`::highlight()` + Range）上色，不复制
+  DOM 不改文字层布局；活动命中单独一色并 `scrollIntoView` 居中；翻页/缩放重建文字层后
+  在 render 完成回调里重挂高亮
+- **交互**：Ctrl+F 打开搜索条并聚焦、Esc 关闭清空、🔍 按钮开关、计数 `x/y` 与"无匹配"
+  提示；组件只在 PDF 标签挂载，不劫持其它编辑器的 Ctrl+F
+- **验证**：CDP 冒烟 11 断言全绿（'page' 三页全命中、跳页后高亮重挂、上下循环导航、
+  大小写不敏感、无匹配 UI、Esc 清空、v0.23 选择功能回归）；tsc/build 绿，Rust 零改动
+
 ## 性能（v0.3）
 
 - **按编辑器分包 + 懒加载**：主包 8MB → 首屏约 300KB；Univer（6.1MB）只在首次激活表格标签时加载，
@@ -391,7 +404,7 @@ src/                  React 前端
   lib/registry.ts     跨组件保存器注册表（Ctrl+S 路由到当前标签）
   lib/open.ts         路径→标签 打开 / 带确认关闭
   lib/sync.ts         最近文件端到端加密同步（WebCrypto PBKDF2-SHA256 → AES-256-GCM，.oosync 信封）
-  components/         Home / Workspace / SheetEditor / DocEditor / PptEditor / PdfViewer（pdfjs-dist 懒加载，滚轮翻页+Ctrl 缩放+TextLayer 文字选择）
+  components/         Home / Workspace / SheetEditor / DocEditor / PptEditor / PdfViewer（pdfjs-dist 懒加载，滚轮翻页+Ctrl 缩放+TextLayer 文字选择+全文搜索）
 scripts/              copy-pdfjs-assets.mjs（dev/build 前复制 cmaps/标准字体到 public/pdfjs）
 .github/workflows/    release.yml——tag v* 触发：门禁→win/linux 矩阵打包→GitHub Release
 ```
@@ -441,6 +454,7 @@ cargo check        # Rust 后端检查（在 src-tauri 下）
 - [x] 发布工程：CI 矩阵打包（win+linux）与 GitHub Release
 - [x] PDF 查看：滚轮翻页（溢出先滚动、触边再翻）+ Ctrl 滚轮缩放
 - [x] PDF 查看：文字选择复制（TextLayer 透明字层叠加）
+- [x] PDF 查看：全文搜索（命中定位 + Custom Highlight 高亮 + 上下导航）
 - [ ] 自动更新通道（须先决策：公开仓库或独立托管 update metadata）
 - [ ] macOS 打包（需签名/公证凭据）
 

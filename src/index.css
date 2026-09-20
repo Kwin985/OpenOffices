@@ -1890,3 +1890,30 @@ button {
 .pdf-textlayer ::selection {
   background: rgba(59, 130, 246, 0.35);
 }
+
+/* 搜索命中：CSS Custom Highlight API 上色，不动文字层布局 */
+::highlight(pdf-find) {
+  background-color: rgba(250, 204, 21, 0.45);
+}
+
+::highlight(pdf-find-active) {
+  background-color: rgba(249, 115, 22, 0.8);
+}
+
+.pdf-search {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-left: 8px;
+}
+
+.pdf-search-input {
+  width: 160px;
+}
+
+.pdf-search-count {
+  min-width: 48px;
+  font-size: 12px;
+  color: var(--text-2);
+  white-space: nowrap;
+}
