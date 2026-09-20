@@ -319,6 +319,18 @@
   `WheelEvent` 验证触底翻页、单格不足阈值不翻、未触边不翻、触顶回翻、首页钳制、
   冷却吞连翻、Ctrl 缩放复原、0.5 倍不溢出时直接翻页
 
+## PDF 文字选择复制（v0.23）
+
+- **文字层叠加**：canvas 渲染完成后挂 pdf.js `TextLayer`——透明字形盖在页面上，拖选、
+  双击选词、Ctrl+C 复制全走浏览器原生选择，零新增权限；滚轮翻页与文字层互不干扰
+- **随翻页/缩放重建**：`streamTextContent()` 流式建层，切页与缩放时 cancel 旧层并重建，
+  层尺寸跟随 scale
+- **坑：`--scale-factor`**：v4 文字层容器的内联尺寸写作
+  `round(down, var(--scale-factor)×页宽, …)`，该变量由官方 viewer 负责设置；宿主不设
+  则层塌成 0×0，span 虽在 DOM 但被 overflow 裁剪、肉眼不可选
+- **验证**：CDP 冒烟 7 断言全绿（合成 3 页带文字 PDF：文字层内容与逐页重建、程序化
+  选择取字、缩放后层与画布对齐、滚轮不被吞）；tsc/build 绿，Rust 零改动
+
 ## 性能（v0.3）
 
 - **按编辑器分包 + 懒加载**：主包 8MB → 首屏约 300KB；Univer（6.1MB）只在首次激活表格标签时加载，
@@ -379,7 +391,7 @@ src/                  React 前端
   lib/registry.ts     跨组件保存器注册表（Ctrl+S 路由到当前标签）
   lib/open.ts         路径→标签 打开 / 带确认关闭
   lib/sync.ts         最近文件端到端加密同步（WebCrypto PBKDF2-SHA256 → AES-256-GCM，.oosync 信封）
-  components/         Home / Workspace / SheetEditor / DocEditor / PptEditor / PdfViewer（pdfjs-dist 懒加载，滚轮翻页+Ctrl 缩放）
+  components/         Home / Workspace / SheetEditor / DocEditor / PptEditor / PdfViewer（pdfjs-dist 懒加载，滚轮翻页+Ctrl 缩放+TextLayer 文字选择）
 scripts/              copy-pdfjs-assets.mjs（dev/build 前复制 cmaps/标准字体到 public/pdfjs）
 .github/workflows/    release.yml——tag v* 触发：门禁→win/linux 矩阵打包→GitHub Release
 ```
@@ -428,6 +440,7 @@ cargo check        # Rust 后端检查（在 src-tauri 下）
 - [x] 本地文件关联与"最近项目"跨设备同步（可选、端到端加密）
 - [x] 发布工程：CI 矩阵打包（win+linux）与 GitHub Release
 - [x] PDF 查看：滚轮翻页（溢出先滚动、触边再翻）+ Ctrl 滚轮缩放
+- [x] PDF 查看：文字选择复制（TextLayer 透明字层叠加）
 - [ ] 自动更新通道（须先决策：公开仓库或独立托管 update metadata）
 - [ ] macOS 打包（需签名/公证凭据）
 

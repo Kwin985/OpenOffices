@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import * as pdfjsLib from 'pdfjs-dist'
+import { TextLayer } from 'pdfjs-dist'
 import type { PDFDocumentProxy, RenderTask } from 'pdfjs-dist'
 import workerUrl from 'pdfjs-dist/build/pdf.worker.min.mjs?url'
 import type { Tab } from '../store'
@@ -24,6 +25,7 @@ function PdfViewer({ tab }: Props) {
   const [page, setPage] = useState(1)
   const [scale, setScale] = useState(1.25)
   const canvasRef = useRef<HTMLCanvasElement>(null)
+  const textLayerRef = useRef<HTMLDivElement>(null)
   const scrollRef = useRef<HTMLDivElement>(null)
   const docRef = useRef<PDFDocumentProxy | null>(null)
   docRef.current = doc
@@ -66,6 +68,7 @@ function PdfViewer({ tab }: Props) {
     if (!doc) return
     let cancelled = false
     let renderTask: RenderTask | null = null
+    let textLayer: TextLayer | null = null
     ;(async () => {
       try {
         const p = await doc.getPage(page)
@@ -85,6 +88,19 @@ function PdfViewer({ tab }: Props) {
           transform: dpr === 1 ? undefined : [dpr, 0, 0, dpr, 0, 0],
         })
         await renderTask.promise
+        // 文字层盖在 canvas 上：透明字形可选可复制（双击选词/Ctrl+C 走浏览器原生）
+        const layerEl = textLayerRef.current
+        if (layerEl && !cancelled) {
+          layerEl.replaceChildren()
+          // pdf.js 给层写的内联尺寸是 var(--scale-factor)*pageW px，变量须由宿主提供（同官方 viewer）
+          layerEl.style.setProperty('--scale-factor', String(viewport.scale))
+          textLayer = new TextLayer({
+            textContentSource: p.streamTextContent(),
+            container: layerEl,
+            viewport,
+          })
+          await textLayer.render()
+        }
       } catch (e) {
         // 翻页/缩放会主动 cancel 上一任务，不是错误
         const name = e instanceof Error ? e.name : ''
@@ -97,6 +113,11 @@ function PdfViewer({ tab }: Props) {
     return () => {
       cancelled = true
       renderTask?.cancel()
+      try {
+        textLayer?.cancel()
+      } catch {
+        /* v4 在流未完成时 cancel 可能抛错，容器马上会被重建，忽略 */
+      }
     }
   }, [doc, page, scale])
 
@@ -171,7 +192,7 @@ function PdfViewer({ tab }: Props) {
     <div className="editor-pane">
       <div className="editor-toolbar">
         <span className="editor-status">{status}</span>
-        <span className="editor-hint">PDF 为只读查看 · 滚轮翻页 · Ctrl+滚轮缩放</span>
+        <span className="editor-hint">PDF 只读 · 滚轮翻页 · 文字可选可复制 · Ctrl+滚轮缩放</span>
       </div>
       <div className="pdf-toolbar">
         {btn('◀', () => setPage((p) => Math.max(1, p - 1)), page <= 1, '上一页')}
@@ -197,7 +218,10 @@ function PdfViewer({ tab }: Props) {
         {btn('100%', () => setScale(1))}
       </div>
       <div className="pdf-scroll" ref={scrollRef}>
-        <canvas ref={canvasRef} className="pdf-canvas" />
+        <div className="pdf-page">
+          <canvas ref={canvasRef} className="pdf-canvas" />
+          <div ref={textLayerRef} className="pdf-textlayer" />
+        </div>
       </div>
     </div>
   )
