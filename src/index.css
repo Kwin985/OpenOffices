@@ -1655,6 +1655,54 @@ button {
   }
 }
 
+/* ---------- PDF 导出打印覆盖层（表格/演示） ---------- */
+.ppt-print-page {
+  position: relative;
+  width: 1280px;
+  height: 720px;
+  font-size: 17px; /* 与放映视图同比例的 em 基准（17.3px/1280px 屏） */
+  overflow: hidden;
+  page-break-after: always;
+  break-after: page;
+}
+
+.ppt-print-page .ppt-slide-static {
+  padding: 4.5% 5.5%;
+}
+
+.sheet-print-title {
+  font-size: 15px;
+  font-weight: 600;
+  margin: 0 0 6px;
+}
+
+.sheet-print-table {
+  border-collapse: collapse;
+  table-layout: fixed;
+  margin-bottom: 16px;
+}
+
+.sheet-print-table td {
+  border: 1px solid #c9ced6;
+  padding: 2px 6px;
+  font-size: 11px;
+  line-height: 1.45;
+  height: 18px;
+  overflow: hidden;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
+.sheet-print-break {
+  page-break-before: always;
+  break-before: page;
+}
+
+.sheet-print-note {
+  color: #b91c1c;
+  font-size: 11px;
+}
+
 /* ---------- 暗色主题 ---------- */
 :root[data-theme='dark'] {
   --bg: #17181c;

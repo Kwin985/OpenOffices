@@ -8,7 +8,8 @@
 - **应用外壳**：类 WPS 首页、多标签工作区（标签右键菜单）、最近文件（持久化）、新建/打开/另存为、
   快捷键（Ctrl+O/S/Shift+S/W/N/Tab 切换）、拖拽文件到窗口打开、关闭前未保存确认、暗色/亮色主题、
   Workspace 懒加载（主包 8MB → 250KB）
-- **表格（Calc）**：Univer 表格内核（中文界面、公式计算、工具栏），xlsx / xls / ods 读取与 xlsx / ods 写出；
+- **表格（Calc）**：Univer 表格内核（中文界面、公式计算、工具栏），xlsx / xls / ods 读取与 xlsx / ods 写出，
+  并支持导出 PDF（A4 横向，数据侧重排自绘网格）；
   第二轮新增社区高级预设五件套——**筛选排序、排序、条件格式、数据验证、查找替换**
   （注：Univer `preset-sheets-advanced` 属商业版，本项目只用 Apache-2.0 社区预设）
 - **文档（Writer）**：TipTap 富文本（标题/加粗/斜体/下划线/删除线/对齐/列表/引用/代码块/表格/图片/链接），
@@ -18,7 +19,7 @@
 - **演示（Impress-lite）**：自研轻量幻灯片编辑器——标题/要点/图片/空白四种版式、6 套主题色、
   页序调整、缩略图侧栏、全屏放映（←/→/空格翻页、N 切换备注、Esc 退出）；
   **pptx 导出**（pptxgenjs）与 **pptx 导入解析**（jszip + DOMParser，含图片提取还原），
-  自有 `.opd`（JSON）存档格式
+  自有 `.opd`（JSON）存档格式；v0.15 起支持导出 PDF（每页一张全出血）
 
 ## 母版与备注（v0.4）
 
@@ -164,6 +165,29 @@
   ODT 导出/导入/编辑器加载/原地写回（含图片）全链路；本机无 LibreOffice 且 WPS COM（KWPS）与 Word 一样
   存在自动化挂起故障，ODF 实机回归以结构断言替代
 
+## PDF：表格与演示导出（v0.15）
+
+- **共享打印覆盖层**：新增 `lib/pdfprint.ts`——把任意 DOM 挂成 `#oof-print-host` 打印覆盖层，
+  临时注入打印样式后调 `export_pdf` 落盘再清理；关键一处是打印时必须放开外壳的
+  `html,body{height:100%;overflow:hidden}`，否则整个应用被裁成一屏、多页内容全丢
+- **export_pdf 支持纸张与边距**：Rust 侧新增 `margins`（英寸，`None` 用默认 0.5/0.6）与
+  `page`（纸张宽高）参数，走 `ICoreWebView2PrintSettings`；实测 `@page size` 在 PrintToPdf
+  下不生效，且 PageWidth/PageHeight 语义是「纵向纸」边长、`Orientation` 再整体转置，
+  故横向须先交换宽高
+- **演示导出**：`PptEditor` 用 `createRoot` 把每张幻灯片挂进离屏容器，`StaticSlide` 复用
+  放映版式，每页 1280×720px 对应 338.7×190.5mm 零边距纸，出片即 960×540pt 全出血，
+  与放映视图同字号比例（em 基准 17px）；图片幻灯片等解码完成后再打印
+- **表格导出**：Univer 是 canvas 渲染，PrintToPdf 抓不到，改走保存同源的工作簿载荷——
+  `lib/sheet-print.ts` 纯函数把 `WorkbookPayload` 自绘成 HTML 网格（值、粗体/斜体/字号
+  pt→px/字色/底色、合并 `rowspan/colspan` 覆盖矩阵、`colgroup` 列宽、每表分页），A4 横向输出；
+  超过 2000 行 × 120 列截断并在页尾提示
+- **范围限制**：表格 PDF 不含图表（浮动图片不在载荷里）与边框/数字格式/对齐等样式子集之外
+  的属性；演示 PDF 不经 pptx 中转，直接以网页排印复刻放映比例
+- **验证**：cargo 15 项测试；tsc 与 `pnpm build` 全绿；CDP 冒烟用 pdf.js 读回导出文件断言——
+  样张三页 960×540 全出血、演示三页标题与要点齐全、图片幻灯片 image 算子仅落在图页、
+  表格夹具值/样式/合并 HTML 断言 + 导出 841.9×595（A4 横向）+ 填满后 3 页分页、
+  文档导出（不传新参数）None 分支回归通过
+
 ## 性能（v0.3）
 
 - **按编辑器分包 + 懒加载**：主包 8MB → 首屏约 300KB；Univer（6.1MB）只在首次激活表格标签时加载，
@@ -202,7 +226,7 @@ src-tauri/            Rust 后端
   src/xlsx_style.rs   zip + quick-xml 直读 xlsx 的 styles.xml / mergeCells（calamine 无样式 API）
   src/xlsx_chart.rs   zip + quick-xml 直读 chartN.xml + drawing 锚点，系列值按实时网格解析
   src/ods.rs          write_ods 命令：共用 xlsx 载荷 → ODF zip（mimetype/manifest/content/styles），含样式去重与合并
-  src/pdf.rs          export_pdf 命令：with_webview → WebView2 PrintToPdf（cfg windows）
+  src/pdf.rs          export_pdf 命令：with_webview → WebView2 PrintToPdf（边距/纸张尺寸参数，cfg windows）
   capabilities/       dialog + fs 权限与路径作用域
 src/                  React 前端
   store.ts            标签页 / 最近文件 / 主题（zustand）
@@ -215,6 +239,8 @@ src/                  React 前端
   lib/comment-extension.ts comment mark（cid 锚定批注）+ 加/删/定位/汇总工具
   lib/odt.ts          ProseMirror JSON ↔ ODT（JSZip 打包导出 + DOMParser 导入，字符样式/合并表/图片/页码域）
   lib/ppt.ts          .opd 幻灯片数据模型（版式/主题/序列化）
+  lib/pdfprint.ts     打印覆盖层：挂 DOM → 注入打印样式 → export_pdf → 清理
+  lib/sheet-print.ts  WorkbookPayload → 打印 HTML 网格（值/样式子集/合并/分页/截断）
   lib/pptx-export.ts  Deck → pptx（pptxgenjs）
   lib/pptx-import.ts  pptx → Deck（JSZip 解包 + OOXML 解析 + 媒体还原）
   lib/registry.ts     跨组件保存器注册表（Ctrl+S 路由到当前标签）
@@ -226,7 +252,7 @@ scripts/              copy-pdfjs-assets.mjs（dev/build 前复制 cmaps/标准�
 表格文件流：`xlsx/ods 磁盘 → Rust(calamine 值 + zip/quick-xml 样式合并图表) → JSON 快照 → Univer 渲染（图表经 VChart 出 PNG 浮动图片）`；保存按扩展名分流——`.xlsx` 经 `rust_xlsxwriter`（含原生图表部件）、`.ods` 经 `ods.rs` 生成 ODF 包。
 文档文件流：`docx → mammoth 正文 + zip 直读页眉页脚/批注 → HTML/元数据 → TipTap`；`.odt` 走 `lib/odt.ts` 双向；保存为 `.odoc` JSON（含 meta）或导出 docx/odt。
 演示文件流：`pptx → JSZip 解包 OOXML → Deck 模型 → 编辑器`；保存为 `.opd` JSON 或经 pptxgenjs 导出 pptx。
-PDF 文件流：查看 `pdf 磁盘 → readBytes → pdfjs-dist（worker + canvas）`；导出 `文档 → @media print 排版 → Rust export_pdf → WebView2 PrintToPdf 落盘`。
+PDF 文件流：查看 `pdf 磁盘 → readBytes → pdfjs-dist（worker + canvas）`；文档导出 `@media print 排版 → Rust export_pdf → WebView2 PrintToPdf 落盘`；演示导出 `Deck → createRoot 离屏挂载 StaticSlide 分页 → 同上`；表格导出 `Univer 快照 → WorkbookPayload → lib/sheet-print.ts 自绘 HTML 网格 → 同上（canvas 抓不到故走数据侧重排）`。
 
 ## 开发
 
@@ -258,7 +284,7 @@ cargo check        # Rust 后端检查（在 src-tauri 下）
 - [x] 文档：页眉页脚（含 PAGE 页码域）与目录（原生 TOC 域）docx 往返，Word 实机回归
 - [x] 文档：批注（锚点标记 + 侧栏面板 + docx comments 往返）
 - [x] PDF 查看（pdf.js）与文档导出（WebView2 PrintToPdf）
-- [ ] PDF：表格/演示导出
+- [x] PDF：表格/演示导出
 - [x] ODF（ods/odt）原生格式
 - [ ] 本地文件关联与"最近项目"跨设备同步（可选、端到端加密）
 

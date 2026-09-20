@@ -10,6 +10,8 @@ import { baseName, pickSaveFile, readXlsx, writeOds, writeXlsx } from '../lib/fs
 import type { ChartPayload, ChartRangeRef, ChartSeriesPayload, WorkbookPayload } from '../lib/fs'
 import { renderChartPng } from '../lib/chart'
 import { registerSaver } from '../lib/registry'
+import { exportPdfWithOverlay } from '../lib/pdfprint'
+import { sheetsToPrintHtml } from '../lib/sheet-print'
 
 type FWorkbook = NonNullable<ReturnType<FUniver['getActiveWorkbook']>>
 type FWorksheet = NonNullable<ReturnType<FWorkbook['getSheetByName']>>
@@ -367,12 +369,55 @@ function SheetEditor({ tab }: Props) {
   saveRef.current = save
   useEffect(() => registerSaver(tab.id, (asNew) => saveRef.current(asNew)), [tab.id])
 
+  // Univer 是 canvas 渲染：PDF 走保存同源的工作簿载荷自绘 HTML 网格再打印
+  const exportPdfTo = async (path: string) => {
+    const wb = apiRef.current?.getActiveWorkbook()
+    if (!wb) throw new Error('表格尚未就绪')
+    const payload = workbookToPayload(wb.save() as IWorkbookData)
+    const box = document.createElement('div')
+    box.innerHTML = sheetsToPrintHtml(payload)
+    try {
+      await exportPdfWithOverlay(path, box, {
+        // A4 横向（11.69×8.27 英寸），边距用 Rust 默认
+        pageSizeInches: [11.69, 8.27],
+      })
+      markRecent(path, 'pdf')
+      setStatus('已导出 PDF')
+      setTimeout(() => setStatus(''), 1500)
+    } finally {
+      box.innerHTML = ''
+    }
+  }
+  const exportPdfToRef = useRef(exportPdfTo)
+  exportPdfToRef.current = exportPdfTo
+
+  const exportPdf = async () => {
+    try {
+      const path = await pickSaveFile(
+        (tab.path ? baseName(tab.path).replace(/\.[^.]+$/, '') : '工作簿') + '.pdf',
+        ['pdf'],
+      )
+      if (!path) return
+      setStatus('正在生成 PDF…')
+      await exportPdfToRef.current(path)
+    } catch (e) {
+      setStatus('')
+      await message(String(e), { title: '导出 PDF 失败', kind: 'error' })
+    }
+  }
+
+  if (import.meta.env.DEV) {
+    const w = window as unknown as Record<string, unknown>
+    w.__oofSheet = { exportPdfTo: (p: string) => exportPdfToRef.current(p) }
+  }
+
   return (
     <div className="editor-pane">
       <div className="editor-toolbar">
         <button className="tool-btn" onClick={() => save(false)}>保存</button>
         <button className="tool-btn" onClick={() => save(true)}>另存为…</button>
         <button className="tool-btn" onClick={() => setDialogOpen((v) => !v)}>插入图表</button>
+        <button className="tool-btn" onClick={() => void exportPdf()} title="A4 横向自绘网格">导出 PDF</button>
         {chartCount > 0 && (
           <button className="tool-btn" onClick={refreshCharts}>刷新图表 ({chartCount})</button>
         )}

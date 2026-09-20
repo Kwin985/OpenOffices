@@ -1,4 +1,5 @@
 import { memo, useEffect, useRef, useState, type CSSProperties } from 'react'
+import { createRoot } from 'react-dom/client'
 import { message } from '@tauri-apps/plugin-dialog'
 import { emit, listen } from '@tauri-apps/api/event'
 import { WebviewWindow } from '@tauri-apps/api/webviewWindow'
@@ -29,6 +30,7 @@ import {
 } from '../lib/ppt'
 import { deckToPptxBytes } from '../lib/pptx-export'
 import { pptxBytesToDeck } from '../lib/pptx-import'
+import { exportPdfWithOverlay } from '../lib/pdfprint'
 import { registerSaver } from '../lib/registry'
 import StaticSlide from './StaticSlide'
 
@@ -229,6 +231,54 @@ function PptEditor({ tab }: Props) {
     }
   }
 
+  // 每张幻灯片一页（1280×720 = 338.7mm×190.5mm 零边距），StaticSlide 离屏挂载走打印覆盖层
+  const exportPdfTo = async (path: string) => {
+    const box = document.createElement('div')
+    const slides = deck.slides
+    const root = createRoot(box)
+    root.render(
+      slides.map((s) => (
+        <div className="ppt-print-page" key={s.id}>
+          <StaticSlide slide={s} themeId={deck.theme} master={deck.master} />
+        </div>
+      )),
+    )
+    try {
+      await exportPdfWithOverlay(path, box, {
+        pageStyle: '@page{ margin: 0; }',
+        marginsInches: 0,
+        pageSizeInches: [13.335, 7.5], // 338.7×190.5mm，正好容纳 1280×720px 幻灯片
+      })
+      markRecent(path, 'pdf')
+      setStatus('已导出 PDF')
+    } finally {
+      root.unmount()
+      setTimeout(() => setStatus(''), 1500)
+    }
+  }
+  const exportPdfToRef = useRef(exportPdfTo)
+  exportPdfToRef.current = exportPdfTo
+
+  const exportPdf = async () => {
+    try {
+      const path = await pickSaveFile(
+        (tab.path ? baseName(tab.path).replace(/\.[^.]+$/, '') : deck.title || '演示') + '.pdf',
+        ['pdf'],
+      )
+      if (!path) return
+      setStatus('正在生成 PDF…')
+      await exportPdfTo(path)
+    } catch (e) {
+      setStatus('')
+      await message(String(e), { title: '导出 PDF 失败', kind: 'error' })
+    }
+  }
+
+  if (import.meta.env.DEV) {
+    const w = window as unknown as Record<string, unknown>
+    w.__oofPpt = { exportPdfTo: (p: string) => exportPdfToRef.current(p), setDeck }
+  }
+
   const addSlide = (layout: SlideLayout) => {
     edit((d) => {
       d.slides.splice(cur + 1, 0, newSlide(layout))
@@ -306,6 +356,7 @@ function PptEditor({ tab }: Props) {
         <button className="tool-btn" onClick={() => save(false)}>保存</button>
         <button className="tool-btn" onClick={() => save(true)}>另存为…</button>
         <button className="tool-btn" onClick={() => void exportPptx()}>导出 pptx…</button>
+        <button className="tool-btn" onClick={() => void exportPdf()} title="每张幻灯片一页横向输出">导出 PDF</button>
         <span className="tool-sep" />
         <select
           className="tool-select"

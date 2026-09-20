@@ -3,7 +3,12 @@
 use tauri::WebviewWindow;
 
 #[tauri::command]
-pub async fn export_pdf(window: WebviewWindow, file_path: String) -> Result<(), String> {
+pub async fn export_pdf(
+    window: WebviewWindow,
+    file_path: String,
+    margins: Option<f64>,
+    page: Option<(f64, f64)>,
+) -> Result<(), String> {
     let _ = (&window, &file_path);
     #[cfg(windows)]
     {
@@ -12,7 +17,7 @@ pub async fn export_pdf(window: WebviewWindow, file_path: String) -> Result<(), 
         let (tx, rx) = channel::<Result<(), String>>();
         window
             .with_webview(move |webview| {
-                let r = unsafe { kick_print(webview, &file_path, tx.clone()) };
+                let r = unsafe { kick_print(webview, &file_path, margins, page, tx.clone()) };
                 if let Err(e) = r {
                     let _ = tx.send(Err(e));
                 }
@@ -24,6 +29,7 @@ pub async fn export_pdf(window: WebviewWindow, file_path: String) -> Result<(), 
     }
     #[cfg(not(windows))]
     {
+        let _ = (margins, page);
         Err("当前平台暂不支持导出 PDF".into())
     }
 }
@@ -32,10 +38,13 @@ pub async fn export_pdf(window: WebviewWindow, file_path: String) -> Result<(), 
 unsafe fn kick_print(
     webview: tauri::webview::PlatformWebview,
     path: &str,
+    margins: Option<f64>,
+    page: Option<(f64, f64)>,
     tx: std::sync::mpsc::Sender<Result<(), String>>,
 ) -> Result<(), String> {
     use webview2_com::Microsoft::Web::WebView2::Win32::{
-        ICoreWebView2Environment6, ICoreWebView2_7,
+        ICoreWebView2Environment6, ICoreWebView2_7, COREWEBVIEW2_PRINT_ORIENTATION_LANDSCAPE,
+        COREWEBVIEW2_PRINT_ORIENTATION_PORTRAIT,
     };
     use webview2_com::PrintToPdfCompletedHandler;
     use windows::core::{Interface, PCWSTR};
@@ -49,10 +58,39 @@ unsafe fn kick_print(
         // 失败即用默认设置（例如旧运行时不支持某项）
         settings.SetShouldPrintBackgrounds(true).map_err(|e| e.to_string())?;
         settings.SetShouldPrintHeaderAndFooter(false).map_err(|e| e.to_string())?;
-        settings.SetMarginTop(0.5).map_err(|e| e.to_string())?;
-        settings.SetMarginBottom(0.5).map_err(|e| e.to_string())?;
-        settings.SetMarginLeft(0.6).map_err(|e| e.to_string())?;
-        settings.SetMarginRight(0.6).map_err(|e| e.to_string())?;
+        match margins {
+            // 幻灯片全出血用 0 边距（英寸）
+            Some(m) => {
+                settings.SetMarginTop(m).map_err(|e| e.to_string())?;
+                settings.SetMarginBottom(m).map_err(|e| e.to_string())?;
+                settings.SetMarginLeft(m).map_err(|e| e.to_string())?;
+                settings.SetMarginRight(m).map_err(|e| e.to_string())?;
+            }
+            None => {
+                settings.SetMarginTop(0.5).map_err(|e| e.to_string())?;
+                settings.SetMarginBottom(0.5).map_err(|e| e.to_string())?;
+                settings.SetMarginLeft(0.6).map_err(|e| e.to_string())?;
+                settings.SetMarginRight(0.6).map_err(|e| e.to_string())?;
+            }
+        }
+        // CSS @page size 在 PrintToPdf 里定不了纸张，须显式给宽高（英寸）。
+        // PageWidth/Height 语义是"纵向纸"的边长，Orientation 再整体转置，故横向要先交换。
+        if let Some((w, h)) = page {
+            let landscape = w > h;
+            settings
+                .SetPageWidth(if landscape { h } else { w })
+                .map_err(|e| e.to_string())?;
+            settings
+                .SetPageHeight(if landscape { w } else { h })
+                .map_err(|e| e.to_string())?;
+            settings
+                .SetOrientation(if landscape {
+                    COREWEBVIEW2_PRINT_ORIENTATION_LANDSCAPE
+                } else {
+                    COREWEBVIEW2_PRINT_ORIENTATION_PORTRAIT
+                })
+                .map_err(|e| e.to_string())?;
+        }
         Ok(())
     }();
     let wide: Vec<u16> = path.encode_utf16().chain(std::iter::once(0)).collect();
