@@ -126,14 +126,17 @@ function MainApp() {
     let disposed = false
     void getCurrentWindow()
       .onCloseRequested(async (ev) => {
+        // 确认框是异步的，必须同步拦下关闭，用户同意后再自行 destroy
+        // （Tauri 侧确认不拦后走的就是 destroy，capabilities 须给 core:window:allow-destroy）
+        ev.preventDefault()
         const { tabs } = useApp.getState()
-        if (tabs.some((t) => t.dirty)) {
-          const ok = await confirm('存在未保存的文件，退出将丢失改动。确定退出吗？', {
-            title: '退出 OpenOffices',
-            kind: 'warning',
-          })
-          if (!ok) ev.preventDefault()
-        }
+        const ok = !tabs.some((t) => t.dirty)
+          ? true
+          : await confirm('存在未保存的文件，退出将丢失改动。确定退出吗？', {
+              title: '退出 OpenOffices',
+              kind: 'warning',
+            })
+        if (ok) await getCurrentWindow().destroy()
       })
       .then((fn) => {
         if (disposed) fn()
