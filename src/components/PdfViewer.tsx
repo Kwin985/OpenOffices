@@ -14,6 +14,9 @@ interface Props {
 const SCALE_MIN = 0.5
 const SCALE_MAX = 3
 const SCALE_STEP = 1.2
+// 滚轮翻页：累计 deltaY 超过阈值才翻一页，翻页后短暂冷却，防高惯性滚动连翻
+const WHEEL_PAGE_THRESHOLD = 140
+const WHEEL_COOLDOWN_MS = 350
 
 function PdfViewer({ tab }: Props) {
   const [status, setStatus] = useState<string>(tab.path ? '正在加载…' : '未关联文件')
@@ -21,6 +24,9 @@ function PdfViewer({ tab }: Props) {
   const [page, setPage] = useState(1)
   const [scale, setScale] = useState(1.25)
   const canvasRef = useRef<HTMLCanvasElement>(null)
+  const scrollRef = useRef<HTMLDivElement>(null)
+  const docRef = useRef<PDFDocumentProxy | null>(null)
+  docRef.current = doc
 
   useEffect(() => {
     if (!tab.path) return
@@ -94,6 +100,67 @@ function PdfViewer({ tab }: Props) {
     }
   }, [doc, page, scale])
 
+  useEffect(() => {
+    const el = scrollRef.current
+    if (!el) return
+    // React 的 onWheel 是 passive 监听，无法 preventDefault，故挂原生监听
+    let acc = 0
+    let lastTurn = 0
+    const onWheel = (e: WheelEvent) => {
+      if (e.ctrlKey) {
+        e.preventDefault()
+        setScale((s) => {
+          const next = e.deltaY < 0 ? s * 1.1 : s / 1.1
+          return Math.min(SCALE_MAX, Math.max(SCALE_MIN, +next.toFixed(3)))
+        })
+        return
+      }
+      if (!docRef.current || e.deltaY === 0) return
+      const now = performance.now()
+      if (now - lastTurn < WHEEL_COOLDOWN_MS) {
+        acc = 0
+        return
+      }
+      if (acc > 0 !== e.deltaY > 0) acc = 0
+      // 放大后页面在容器内可滚：先让原生滚，触到顶/底再翻（同浏览器 PDF 查看器习惯）
+      const scrollable = el.scrollHeight - el.clientHeight > 2
+      if (scrollable) {
+        const atTop = el.scrollTop <= 0
+        const atBottom = el.scrollTop + el.clientHeight >= el.scrollHeight - 1
+        if (!((e.deltaY > 0 && atBottom) || (e.deltaY < 0 && atTop))) {
+          acc = 0
+          return
+        }
+      }
+      e.preventDefault()
+      acc += e.deltaY
+      if (Math.abs(acc) >= WHEEL_PAGE_THRESHOLD) {
+        const dir = acc > 0 ? 1 : -1
+        acc = 0
+        lastTurn = now
+        setPage((p) => Math.min(docRef.current?.numPages ?? p, Math.max(1, p + dir)))
+      }
+    }
+    el.addEventListener('wheel', onWheel, { passive: false })
+    return () => el.removeEventListener('wheel', onWheel)
+  }, [])
+
+  // 翻页后视图回到页顶
+  useEffect(() => {
+    const el = scrollRef.current
+    if (el) el.scrollTop = 0
+  }, [page])
+
+  if (import.meta.env.DEV) {
+    const w = window as unknown as Record<string, unknown>
+    w.__oofPdf = {
+      page: () => page,
+      scale: () => scale,
+      numPages: () => doc?.numPages ?? 0,
+      scrollEl: () => scrollRef.current,
+    }
+  }
+
   const btn = (label: string, onClick: () => void, disabled = false, title?: string) => (
     <button key={label + title} className="tb-btn" onClick={onClick} disabled={disabled} title={title}>
       {label}
@@ -104,7 +171,7 @@ function PdfViewer({ tab }: Props) {
     <div className="editor-pane">
       <div className="editor-toolbar">
         <span className="editor-status">{status}</span>
-        <span className="editor-hint">PDF 为只读查看 · 由 pdf.js 渲染</span>
+        <span className="editor-hint">PDF 为只读查看 · 滚轮翻页 · Ctrl+滚轮缩放</span>
       </div>
       <div className="pdf-toolbar">
         {btn('◀', () => setPage((p) => Math.max(1, p - 1)), page <= 1, '上一页')}
@@ -129,7 +196,7 @@ function PdfViewer({ tab }: Props) {
         {btn('＋', () => setScale((s) => Math.min(SCALE_MAX, +(s * SCALE_STEP).toFixed(3))), scale >= SCALE_MAX, '放大')}
         {btn('100%', () => setScale(1))}
       </div>
-      <div className="pdf-scroll">
+      <div className="pdf-scroll" ref={scrollRef}>
         <canvas ref={canvasRef} className="pdf-canvas" />
       </div>
     </div>
