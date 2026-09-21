@@ -4,7 +4,9 @@ import { TextLayer } from 'pdfjs-dist'
 import type { PDFDocumentProxy, RenderTask } from 'pdfjs-dist'
 import workerUrl from 'pdfjs-dist/build/pdf.worker.min.mjs?url'
 import type { Tab } from '../store'
-import { readBytes } from '../lib/fs'
+import { useApp } from '../store'
+import { readBytes, writeBytes } from '../lib/fs'
+import { registerSaver } from '../lib/registry'
 
 pdfjsLib.GlobalWorkerOptions.workerSrc = workerUrl
 
@@ -37,6 +39,46 @@ interface ThumbSlot {
   rendering: boolean
   done: boolean
   task: RenderTask | null
+}
+
+// —— 标注：矩形以 PDF 点为单位、左上原点（渲染 ×scale，写回时翻转 y）——
+const ANNO_COLORS = ['#fde047', '#86efac', '#93c5fd', '#fca5a5']
+
+interface AnnoRect {
+  x: number
+  y: number
+  w: number
+  h: number
+}
+
+interface PdfAnno {
+  id: string
+  kind: 'highlight' | 'note'
+  page: number
+  rects: AnnoRect[]
+  color: string
+  text?: string
+  content?: string
+}
+
+interface AnnoPop {
+  x: number
+  y: number
+  page: number
+  rects: AnnoRect[]
+  text: string
+  mode: 'menu' | 'note'
+  content: string
+}
+
+let annoSeq = 0
+const nid = () => `an${++annoSeq}`
+
+// pdf.js 注解颜色 [0-255×3] → #rrggbb
+function rgbHex(c: number[] | Uint8Array | undefined): string {
+  if (!c || c.length < 3) return ANNO_COLORS[0]
+  const h = (v: number) => Math.max(0, Math.min(255, Math.round(v))).toString(16).padStart(2, '0')
+  return `#${h(c[0])}${h(c[1])}${h(c[2])}`
 }
 
 interface PageBitmap {
@@ -85,8 +127,14 @@ function PdfViewer({ tab }: Props) {
   const [matches, setMatches] = useState<Match[]>([])
   const [activeIdx, setActiveIdx] = useState(-1)
   const [sideOpen, setSideOpen] = useState(false)
-  const [sideTab, setSideTab] = useState<'thumbs' | 'outline'>('thumbs')
+  const [sideTab, setSideTab] = useState<'thumbs' | 'outline' | 'annos'>('thumbs')
   const [outline, setOutline] = useState<OutlineEntry[]>([])
+  const [annos, setAnnos] = useState<PdfAnno[]>([])
+  const [pop, setPop] = useState<AnnoPop | null>(null)
+  const [noteOpen, setNoteOpen] = useState('')
+  const annosRef = useRef(annos)
+  annosRef.current = annos
+  const markDirty = useApp((s) => s.markDirty)
   const scrollRef = useRef<HTMLDivElement>(null)
   const thumbsRef = useRef<HTMLDivElement>(null)
   const searchInputRef = useRef<HTMLInputElement>(null)
@@ -190,6 +238,9 @@ function PdfViewer({ tab }: Props) {
     setSearchOpen(false)
     setOutline([])
     setSideTab('thumbs')
+    setAnnos([])
+    setPop(null)
+    setNoteOpen('')
   }, [doc])
 
   // 大纲：pdfjs getOutline 树递归拍平；目标页经 getDestination/getPageIndex 解析
@@ -223,6 +274,41 @@ function PdfViewer({ tab }: Props) {
       } catch (e) {
         console.error(e)
       }
+    })()
+    return () => {
+      cancelled = true
+    }
+  }, [doc])
+
+  // —— 标注读侧：导入既有 Highlight/Text 注解（PDF 左下原点 rect → 左上原点存储）——
+  useEffect(() => {
+    if (!doc) return
+    let cancelled = false
+    ;(async () => {
+      const out: PdfAnno[] = []
+      for (let n = 1; n <= doc.numPages && !cancelled; n++) {
+        const p = await doc.getPage(n)
+        if (cancelled) return
+        const ph = p.getViewport({ scale: 1 }).height
+        const list = (await p.getAnnotations({ intent: 'display' })) as {
+          subtype?: string
+          rect?: number[]
+          color?: number[]
+          contentsObj?: { str?: string }
+        }[]
+        for (const a of list) {
+          if (!Array.isArray(a.rect) || a.rect.length < 4) continue
+          const [x1, y1, x2, y2] = a.rect
+          const r = { x: x1, y: ph - y2, w: x2 - x1, h: y2 - y1 }
+          const txt = a.contentsObj?.str ?? ''
+          if (a.subtype === 'Highlight') {
+            out.push({ id: nid(), kind: 'highlight', page: n, rects: [r], color: rgbHex(a.color), text: txt })
+          } else if (a.subtype === 'Text') {
+            out.push({ id: nid(), kind: 'note', page: n, rects: [r], color: rgbHex(a.color), content: txt })
+          }
+        }
+      }
+      if (!cancelled) setAnnos(out)
     })()
     return () => {
       cancelled = true
@@ -263,10 +349,12 @@ function PdfViewer({ tab }: Props) {
         ctx.drawImage(hit.canvas, 0, 0)
       } else {
         renderStats.current.full++
+        // annotationMode 0：pdf.js 不画标注，显示完全交给自绘覆盖层（避免双绘+保缓存语义）
         me.task = p.render({
           canvasContext: ctx,
           viewport,
           transform: dpr === 1 ? undefined : [dpr, 0, 0, dpr, 0, 0],
+          annotationMode: 0,
         })
         await me.task.promise
         if (me.cancelled) return
@@ -644,6 +732,178 @@ function PdfViewer({ tab }: Props) {
     return () => window.removeEventListener('keydown', onKey)
   }, [])
 
+  // —— 标注重叠层：固定于页内，PDF pt × scale 换算，缩放天然跟随 ——
+
+  // 选区 → 弹层：仅支持单页选区；行矩形按 rect.top 聚并
+  useEffect(() => {
+    const el = scrollRef.current
+    if (!el) return
+    const onUp = () => {
+      setTimeout(() => {
+        const sel = document.getSelection()
+        if (!sel || sel.rangeCount === 0 || sel.isCollapsed) {
+          return
+        }
+        const range = sel.getRangeAt(0)
+        const sp = (range.startContainer.parentElement ?? (range.startContainer as Element))?.closest?.('[data-page]')
+        const ep = (range.endContainer.parentElement ?? (range.endContainer as Element))?.closest?.('[data-page]')
+        if (!sp || sp !== ep) {
+          setPop(null)
+          return
+        }
+        const pe = sp as HTMLElement
+        const n = Number(pe.dataset.page)
+        const pr = pe.getBoundingClientRect()
+        const sc = scaleRef.current
+        const lines = new Map<number, { l: number; r: number; t: number; b: number }>()
+        for (const r of Array.from(range.getClientRects())) {
+          if (r.width < 0.5 || r.height < 0.5) continue
+          const key = Math.round(r.top)
+          const g = lines.get(key)
+          if (g) {
+            g.l = Math.min(g.l, r.left)
+            g.r = Math.max(g.r, r.right)
+          } else {
+            lines.set(key, { l: r.left, r: r.right, t: r.top, b: r.bottom })
+          }
+        }
+        const gs = [...lines.values()].sort((a, b) => a.t - b.t)
+        if (!gs.length) return
+        const rects: AnnoRect[] = gs.map((g) => ({
+          x: (g.l - pr.left) / sc,
+          y: (g.t - pr.top) / sc,
+          w: (g.r - g.l) / sc,
+          h: (g.b - g.t) / sc,
+        }))
+        setPop({ x: gs[0].l, y: gs[0].t, page: n, rects, text: sel.toString().trim().slice(0, 160), mode: 'menu', content: '' })
+      }, 0)
+    }
+    const onHide = () => setPop(null)
+    el.addEventListener('mouseup', onUp)
+    el.addEventListener('scroll', onHide, { passive: true })
+    return () => {
+      el.removeEventListener('mouseup', onUp)
+      el.removeEventListener('scroll', onHide)
+    }
+  }, [])
+
+  const addHighlight = (color: string) => {
+    if (!pop) return
+    setAnnos((a) => [...a, { id: nid(), kind: 'highlight', page: pop.page, rects: pop.rects, color, text: pop.text }])
+    markDirty(tab.id, true)
+    document.getSelection()?.removeAllRanges()
+    setPop(null)
+  }
+
+  const addNote = () => {
+    if (!pop || !pop.content.trim()) {
+      setPop(null)
+      return
+    }
+    const last = pop.rects[pop.rects.length - 1]
+    const r = { x: last.x + last.w + 2, y: last.y, w: 16, h: 16 }
+    setAnnos((a) => [
+      ...a,
+      { id: nid(), kind: 'note', page: pop.page, rects: [r], color: ANNO_COLORS[0], text: pop.text, content: pop.content.trim() },
+    ])
+    markDirty(tab.id, true)
+    document.getSelection()?.removeAllRanges()
+    setPop(null)
+  }
+
+  const removeAnno = (id: string) => {
+    setAnnos((a) => a.filter((x) => x.id !== id))
+    markDirty(tab.id, true)
+    setNoteOpen('')
+  }
+
+  const updateNote = (id: string, content: string) => {
+    setAnnos((a) => a.map((x) => (x.id === id ? { ...x, content } : x)))
+    markDirty(tab.id, true)
+  }
+
+  // —— 标注写回：pdf-lib 删旧 Highlight/Text（留链接等）→ 按模型重加 → 覆盖原文件 ——
+  useEffect(() => {
+    if (!tab.path) return
+    const path = tab.path
+    return registerSaver(tab.id, async () => {
+      const list = annosRef.current
+      // pdf-lib 1.17 无高层标注 API：用 context 手建 /Annot 字典（Highlight/Text 标准注解，其他阅读器可见）
+      const { PDFDocument, PDFName, PDFDict, PDFHexString } = await import('pdf-lib')
+      const bytes = await readBytes(path)
+      const pdoc = await PDFDocument.load(bytes, { updateMetadata: false })
+      const pages = pdoc.getPages()
+      for (const pg of pages) {
+        const arr = pg.node.Annots()
+        if (!arr) continue
+        for (let i = arr.size() - 1; i >= 0; i--) {
+          const obj = pdoc.context.lookup(arr.get(i))
+          if (!(obj instanceof PDFDict)) continue
+          const st = obj.get(PDFName.of('Subtype'))
+          if (st === PDFName.of('Highlight') || st === PDFName.of('Text')) arr.remove(i)
+        }
+      }
+      const colorArr = (h: string) => [
+        parseInt(h.slice(1, 3), 16) / 255,
+        parseInt(h.slice(3, 5), 16) / 255,
+        parseInt(h.slice(5, 7), 16) / 255,
+      ]
+      for (const a of list) {
+        const pg = pages[a.page - 1]
+        if (!pg) continue
+        const { height } = pg.getSize()
+        let arr = pg.node.Annots()
+        if (!arr) {
+          arr = pdoc.context.obj([])
+          pg.node.set(PDFName.of('Annots'), arr)
+        }
+        if (a.kind === 'highlight') {
+          const x0 = Math.min(...a.rects.map((r) => r.x))
+          const y0 = Math.min(...a.rects.map((r) => r.y))
+          const x1 = Math.max(...a.rects.map((r) => r.x + r.w))
+          const y1 = Math.max(...a.rects.map((r) => r.y + r.h))
+          const quads: number[] = []
+          for (const r of a.rects) {
+            const yt = height - r.y
+            const yb = height - r.y - r.h
+            quads.push(r.x, yt, r.x + r.w, yt, r.x, yb, r.x + r.w, yb)
+          }
+          arr.push(
+            pdoc.context.register(
+              pdoc.context.obj({
+                Type: PDFName.of('Annot'),
+                Subtype: PDFName.of('Highlight'),
+                Rect: [x0, height - y1, x1 - x0, y1 - y0],
+                QuadPoints: quads,
+                C: colorArr(a.color),
+                Contents: PDFHexString.fromText(a.text || ' '),
+              }),
+            ),
+          )
+        } else {
+          const r0 = a.rects[0]
+          const yb = height - r0.y - r0.h
+          arr.push(
+            pdoc.context.register(
+              pdoc.context.obj({
+                Type: PDFName.of('Annot'),
+                Subtype: PDFName.of('Text'),
+                Rect: [r0.x, yb, r0.x + r0.w, yb + r0.h],
+                C: colorArr(a.color),
+                Name: PDFName.of('Comment'),
+                Contents: PDFHexString.fromText(a.content || ' '),
+              }),
+            ),
+          )
+        }
+      }
+      const out = await pdoc.save({ addDefaultPage: false })
+      await writeBytes(path, out)
+      markDirty(tab.id, false)
+    })
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tab.id, tab.path])
+
   if (import.meta.env.DEV) {
     const w = window as unknown as Record<string, unknown>
     w.__oofPdf = {
@@ -656,6 +916,15 @@ function PdfViewer({ tab }: Props) {
       matchPages: () => matches.map((m) => m.page),
       renderedPages: () => [...slots.current.keys()].sort((a, b) => a - b),
       perf: () => ({ ...renderStats.current, cached: [...bmpCache.current.keys()] }),
+      annos: () =>
+        annos.map((a) => ({
+          kind: a.kind,
+          page: a.page,
+          color: a.color,
+          rects: a.rects.length,
+          content: (a.content ?? a.text ?? '').slice(0, 60),
+        })),
+      pop: () => (pop ? { mode: pop.mode, page: pop.page, rects: pop.rects.length } : null),
       sideInfo: () => ({
         open: sideOpen,
         tab: sideTab,
@@ -684,7 +953,7 @@ function PdfViewer({ tab }: Props) {
     <div className="editor-pane">
       <div className="editor-toolbar">
         <span className="editor-status">{status}</span>
-        <span className="editor-hint">PDF 只读 · 连续滚动 · 文字可选可复制 · Ctrl+滚轮缩放 · Ctrl+F 搜索 · ☰ 侧栏</span>
+        <span className="editor-hint">PDF · 连续滚动 · 选文字加高亮/便签（Ctrl+S 存回文件） · Ctrl+滚轮缩放 · Ctrl+F 搜索 · ☰ 侧栏</span>
       </div>
       <div className="pdf-toolbar">
         {btn('◀', () => gotoPage(Math.max(1, curPage - 1)), curPage <= 1, '上一页')}
@@ -758,6 +1027,12 @@ function PdfViewer({ tab }: Props) {
               >
                 大纲
               </button>
+              <button
+                className={`side-tab${sideTab === 'annos' ? ' on' : ''}`}
+                onClick={() => setSideTab('annos')}
+              >
+                标注{annos.length ? ` ${annos.length}` : ''}
+              </button>
             </div>
             {sideTab === 'thumbs' ? (
               <div className="pdf-thumbs" ref={thumbsRef}>
@@ -777,6 +1052,29 @@ function PdfViewer({ tab }: Props) {
                   )
                 })}
               </div>
+            ) : sideTab === 'annos' ? (
+              annos.length ? (
+                <div className="pdf-annos">
+                  {annos.map((a) => (
+                    <div key={a.id} className="pdf-anno-item">
+                      <span className="pdf-anno-dot" style={{ background: a.color }} />
+                      <button
+                        className="pdf-anno-jump"
+                        title={a.kind === 'note' ? a.content ?? '' : a.text ?? ''}
+                        onClick={() => gotoPage(a.page)}
+                      >
+                        <span className="pdf-anno-page">P{a.page}</span>
+                        <span className="pdf-anno-sum">{a.kind === 'note' ? a.content : a.text || '(高亮)'}</span>
+                      </button>
+                      <button className="pdf-anno-del" title="删除标注" onClick={() => removeAnno(a.id)}>
+                        ✕
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <div className="pdf-outline-empty">选中文字后可加高亮或便签</div>
+              )
             ) : outline.length ? (
               <div className="pdf-outline">
                 {outline.map((o, i) => (
@@ -803,6 +1101,7 @@ function PdfViewer({ tab }: Props) {
           {doc &&
             Array.from({ length: numPages }, (_, i) => i + 1).map((n) => {
               const sz = sizes[n] ?? est
+              const pageAnnos = annos.filter((a) => a.page === n)
               return (
                 <div
                   key={n}
@@ -812,11 +1111,87 @@ function PdfViewer({ tab }: Props) {
                 >
                   <canvas className="pdf-canvas" />
                   <div className="pdf-textlayer" />
+                  {pageAnnos.map((a) =>
+                    a.kind === 'highlight' ? (
+                      a.rects.map((r, i) => (
+                        <div
+                          key={a.id + '-' + i}
+                          className="pdf-anno-hl"
+                          data-anno={a.id}
+                          style={{ left: r.x * scale, top: r.y * scale, width: r.w * scale, height: r.h * scale, background: a.color }}
+                        />
+                      ))
+                    ) : (
+                      <div
+                        key={a.id}
+                        data-anno={a.id}
+                        className="pdf-anno-note"
+                        style={{ left: a.rects[0].x * scale, top: a.rects[0].y * scale }}
+                        title={a.content}
+                        onClick={() => setNoteOpen(noteOpen === a.id ? '' : a.id)}
+                      >
+                        🗒
+                        {noteOpen === a.id && (
+                          <div className="pdf-note-pop" onMouseDown={(e) => e.stopPropagation()}>
+                            <textarea
+                              className="pdf-note-ta"
+                              value={a.content ?? ''}
+                              placeholder="便签内容…"
+                              onChange={(e) => updateNote(a.id, e.target.value)}
+                            />
+                            <div className="pdf-note-acts">
+                              {btn('删除', () => removeAnno(a.id))}
+                              {btn('完成', () => setNoteOpen(''))}
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    ),
+                  )}
                 </div>
               )
             })}
         </div>
       </div>
+      {pop && (
+        <div className="pdf-anno-pop" style={{ left: pop.x, top: Math.max(8, pop.y - 46) }} onMouseDown={(e) => e.preventDefault()}>
+          {pop.mode === 'menu' ? (
+            <>
+              {ANNO_COLORS.map((c) => (
+                <button key={c} className="pdf-anno-swatch" style={{ background: c }} title="高亮" onClick={() => addHighlight(c)} />
+              ))}
+              <button className="tb-btn" title="添加便签" onClick={() => setPop({ ...pop, mode: 'note' })}>
+                📝
+              </button>
+              <button className="tb-btn" title="忽略" onClick={() => setPop(null)}>
+                ✕
+              </button>
+            </>
+          ) : (
+            <>
+              <input
+                className="tb-input pdf-note-input"
+                placeholder="便签内容…"
+                value={pop.content}
+                onChange={(e) => setPop({ ...pop, content: e.target.value })}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') {
+                    e.preventDefault()
+                    addNote()
+                  }
+                }}
+                autoFocus
+              />
+              <button className="tb-btn" onClick={addNote}>
+                加
+              </button>
+              <button className="tb-btn" onClick={() => setPop({ ...pop, mode: 'menu' })}>
+                ←
+              </button>
+            </>
+          )}
+        </div>
+      )}
     </div>
   )
 }
