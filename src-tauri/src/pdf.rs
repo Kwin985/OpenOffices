@@ -6,7 +6,8 @@ use tauri::WebviewWindow;
 pub async fn export_pdf(
     window: WebviewWindow,
     file_path: String,
-    margins: Option<f64>,
+    // margins：四边页边距（英寸，top/right/bottom/left），None 走内置默认
+    margins: Option<(f64, f64, f64, f64)>,
     page: Option<(f64, f64)>,
 ) -> Result<(), String> {
     let _ = (&window, &file_path);
@@ -38,7 +39,7 @@ pub async fn export_pdf(
 unsafe fn kick_print(
     webview: tauri::webview::PlatformWebview,
     path: &str,
-    margins: Option<f64>,
+    margins: Option<(f64, f64, f64, f64)>,
     page: Option<(f64, f64)>,
     tx: std::sync::mpsc::Sender<Result<(), String>>,
 ) -> Result<(), String> {
@@ -59,12 +60,12 @@ unsafe fn kick_print(
         settings.SetShouldPrintBackgrounds(true).map_err(|e| e.to_string())?;
         settings.SetShouldPrintHeaderAndFooter(false).map_err(|e| e.to_string())?;
         match margins {
-            // 幻灯片全出血用 0 边距（英寸）
-            Some(m) => {
-                settings.SetMarginTop(m).map_err(|e| e.to_string())?;
-                settings.SetMarginBottom(m).map_err(|e| e.to_string())?;
-                settings.SetMarginLeft(m).map_err(|e| e.to_string())?;
-                settings.SetMarginRight(m).map_err(|e| e.to_string())?;
+            // 四边各自给定（幻灯片全出血传 0，文档传页面设置的 mm→英寸）
+            Some((top, right, bottom, left)) => {
+                settings.SetMarginTop(top).map_err(|e| e.to_string())?;
+                settings.SetMarginRight(right).map_err(|e| e.to_string())?;
+                settings.SetMarginBottom(bottom).map_err(|e| e.to_string())?;
+                settings.SetMarginLeft(left).map_err(|e| e.to_string())?;
             }
             None => {
                 settings.SetMarginTop(0.5).map_err(|e| e.to_string())?;

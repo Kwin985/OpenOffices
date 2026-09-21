@@ -782,6 +782,38 @@ button {
   font-size: 13px;
 }
 
+/* 分页符节点：屏幕上一条居中带标签的虚线，打印/导出 PDF 时真正另起一页 */
+.doc-page-break {
+  position: relative;
+  height: 0;
+  margin: 20px 0;
+  border-top: 1px dashed #b6bcc6;
+}
+
+.doc-page-break::after {
+  content: '分页符';
+  position: absolute;
+  top: -9px;
+  left: 50%;
+  transform: translateX(-50%);
+  padding: 0 8px;
+  font-size: 11px;
+  line-height: 16px;
+  color: #6b7280;
+  background: var(--panel);
+  border: 1px dashed #b6bcc6;
+  border-radius: 999px;
+}
+
+/* 多栏：正文容器按设置分栏，栏间距由内联 column-gap 决定 */
+.doc-cols {
+  column-fill: auto;
+}
+
+.doc-cols > * {
+  break-inside: auto;
+}
+
 .doc-toc-item {
   display: block;
   width: 100%;
@@ -1794,20 +1826,59 @@ button {
     visibility: visible;
   }
 
+  /* 版心几何由 React 内联 style 驱动（屏幕所见），内联优先级高于本块，必须 !important 才让得开；
+     否则页面自身的 padding 会和 PrintSettings 边距叠加成双份边距 */
   .doc-page {
     position: absolute;
     left: 0;
     top: 0;
-    width: 100%;
-    max-width: none;
-    min-height: 0;
-    margin: 0;
+    width: 100% !important;
+    max-width: none !important;
+    min-height: 0 !important;
+    margin: 0 !important;
     border: none;
     border-radius: 0;
     box-shadow: none;
-    padding: 0;
+    padding: 0 !important;
     -webkit-print-color-adjust: exact;
     print-color-adjust: exact;
+  }
+
+  /* 页眉页脚改由 @page margin box 逐页呈现（见 DocEditor 注入的 oo-page-rule），
+     流内那两份只在第一页/末页出现，打印时必须让位；分页参考线也只是屏幕辅助 */
+  .doc-hf,
+  .doc-pg-lines {
+    display: none;
+  }
+
+  .doc-page-break {
+    break-after: page;
+    border-top: none;
+  }
+
+  .doc-page-break::after {
+    content: none;
+  }
+
+  /* 分页控制：标题不与其后正文分离，原子块不跨页折断，段落避免孤行寡行 */
+  .doc-content h1,
+  .doc-content h2,
+  .doc-content h3,
+  .doc-content h4 {
+    break-after: avoid;
+  }
+
+  .doc-content table,
+  .doc-content img,
+  .doc-content pre,
+  .doc-content blockquote,
+  .doc-content .doc-toc {
+    break-inside: avoid;
+  }
+
+  .doc-content p {
+    orphans: 2;
+    widows: 2;
   }
 }
 

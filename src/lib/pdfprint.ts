@@ -6,8 +6,10 @@ import { invoke } from '@tauri-apps/api/core'
 export interface PrintOpts {
   /** 追加的打印专用 CSS，通常是 @page{margin:…}；纸张尺寸请传 pageSizeInches */
   pageStyle?: string
-  /** 页边距（英寸），幻灯片全出血传 0；不传用 Rust 侧默认 */
+  /** 页边距（英寸），四边同值；要逐边不同请传 marginsSides */
   marginsInches?: number
+  /** 四边页边距（英寸，top/right/bottom/left）；PrintSettings 的边距优先于 CSS @page margin */
+  marginsSides?: [number, number, number, number]
   /** 纸张宽高（英寸）；@page size 在 PrintToPdf 里不可靠，须显式指定 */
   pageSizeInches?: [number, number]
 }
@@ -55,7 +57,9 @@ export async function exportPdfWithOverlay(
     await twoFrames()
     await invoke('export_pdf', {
       filePath,
-      margins: opts.marginsInches ?? null,
+      margins:
+        opts.marginsSides ??
+        (opts.marginsInches === undefined ? null : [opts.marginsInches, opts.marginsInches, opts.marginsInches, opts.marginsInches]),
       page: opts.pageSizeInches ?? null,
     })
   } finally {

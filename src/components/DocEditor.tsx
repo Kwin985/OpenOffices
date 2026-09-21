@@ -18,14 +18,18 @@ import {
   docxToDocMeta,
   docxToHtml,
   prosemirrorToDocxBytes,
+  pageNumberParts,
   resolvePage,
   MM_PX,
+  PAGE_NUMBER_FORMATS,
   type DocComment,
   type DocMeta,
+  type PageNumberFormat,
   type PMNode,
 } from '../lib/docx'
 import { Comment, addCommentMark, findCommentAnchor, removeCommentMark } from '../lib/comment-extension'
 import { Toc } from '../lib/toc-extension'
+import { PageBreak } from '../lib/page-break-extension'
 import { FindReplace, frPluginKey, activeIndexOf } from '../lib/find-replace'
 import { docTemplate } from '../lib/templates'
 import { odtToHtml, prosemirrorToOdtBytes } from '../lib/odt'
@@ -110,6 +114,7 @@ function DocEditor({ tab }: Props) {
       Highlight.configure({ multicolor: true }),
       CharacterCount,
       Toc,
+      PageBreak,
       Comment,
       FindReplace,
     ],
@@ -156,15 +161,23 @@ function DocEditor({ tab }: Props) {
     const map = (w.__oofDoc as Record<string, typeof editor> | undefined) ?? {}
     map[tab.id] = editor
     w.__oofDoc = map
-    // 冒烟用：历史快照的推送/查看（闭包读最新渲染的 pushHist/hist）
-    w.__oofDocCtl = {
+    // 冒烟用：历史快照的推送/查看 + 页面设置直写与免对话框导出（箭头体在调用时才求值，避开 TDZ）
+    const ctl = {
       push: (note: string) => pushHist(note),
       list: () => hist.map((h) => h.note),
+      setMeta: (p: Partial<DocMeta>) => patchMeta(p),
+      meta: () => meta,
+      exportPdfTo: (path: string) => exportPdfTo(path),
     }
+    const byTab = (w.__oofDocCtlByTab as Record<string, typeof ctl> | undefined) ?? {}
+    byTab[tab.id] = ctl
+    w.__oofDocCtlByTab = byTab
+    w.__oofDocCtl = ctl
   }
 
   // 生效页面设置：未显式设定走 A4 + 默认边距（与 converter 导出同一 resolve）
   const eff = resolvePage(meta.page)
+  const pnPreview = pageNumberParts(meta.pageNumberFormat)
   const effPx = {
     w: eff.w * MM_PX,
     h: eff.h * MM_PX,
@@ -174,7 +187,8 @@ function DocEditor({ tab }: Props) {
     right: eff.margin.right * MM_PX,
   }
 
-  // 打印 @page 跟随页面设置（PrintToPdf/系统打印均读它）
+  // 打印 @page 跟随页面设置；页眉/页脚/页码走 @page margin box，Chromium 会逐页重绘
+  // （PrintToPdf 忽略 CSS @page size/margin，纸张与四边距另由 export_pdf 的 PrintSettings 决定）
   useEffect(() => {
     let el = document.getElementById('oo-page-rule') as HTMLStyleElement | null
     if (!el) {
@@ -182,8 +196,40 @@ function DocEditor({ tab }: Props) {
       el.id = 'oo-page-rule'
       document.head.appendChild(el)
     }
-    el.textContent = `@media print { @page { size: ${eff.w}mm ${eff.h}mm; margin: ${eff.margin.top}mm ${eff.margin.right}mm ${eff.margin.bottom}mm ${eff.margin.left}mm; } }`
-  }, [eff.w, eff.h, eff.margin.top, eff.margin.right, eff.margin.bottom, eff.margin.left])
+    const boxes: string[] = []
+    const head = meta.headerText?.trim()
+    if (head) boxes.push(`@top-center{content:${JSON.stringify(head)};font-size:9pt;color:#6b7280}`)
+    const foot = meta.footerText?.trim()
+    if (foot || meta.footerPageNumber) {
+      // Blink 只吃空格串接的 content 片段，写成 "a" + counter(page) 会整条声明失效
+      let expr = foot ? JSON.stringify(`${foot}${meta.footerPageNumber ? ' · ' : ''}`) : ''
+      if (meta.footerPageNumber) {
+        const pn = pageNumberParts(meta.pageNumberFormat)
+        const seg: string[] = []
+        if (pn.before) seg.push(JSON.stringify(pn.before))
+        seg.push('counter(page)')
+        if (pn.after) seg.push(JSON.stringify(pn.after))
+        if (pn.total) seg.push('" / "', 'counter(pages)')
+        expr += (expr ? ' ' : '') + seg.join(' ')
+      }
+      boxes.push(`@bottom-center{content:${expr};font-size:9pt;color:#6b7280}`)
+    }
+    el.textContent =
+      `@media print { @page { size: ${eff.w}mm ${eff.h}mm; ` +
+      `margin: ${eff.margin.top}mm ${eff.margin.right}mm ${eff.margin.bottom}mm ${eff.margin.left}mm;` +
+      `${boxes.length ? ' ' + boxes.join(' ') : ''} } }`
+  }, [
+    eff.w,
+    eff.h,
+    eff.margin.top,
+    eff.margin.right,
+    eff.margin.bottom,
+    eff.margin.left,
+    meta.headerText,
+    meta.footerText,
+    meta.footerPageNumber,
+    meta.pageNumberFormat,
+  ])
 
   // 正文高度随事务/输入变化：分页参考线之"约 N 页"由它折算（观察包装 div，避开 view 未挂载期）
   const wrapRef = useRef<HTMLDivElement>(null)
@@ -332,6 +378,17 @@ function DocEditor({ tab }: Props) {
   }
 
   // WebView2 原生 PrintToPdf：主窗口按 @media print 样式矢量落盘，需当前文档标签处于激活态
+  const exportPdfTo = async (path: string) => {
+    setStatus('正在生成 PDF…')
+    // 纸张与四边距走 PrintSettings（CSS @page 在 PrintToPdf 下不生效），与屏幕所见一致
+    const mm2in = (v: number) => v / 25.4
+    await invoke('export_pdf', {
+      filePath: path,
+      page: [mm2in(eff.w), mm2in(eff.h)],
+      margins: [mm2in(eff.margin.top), mm2in(eff.margin.right), mm2in(eff.margin.bottom), mm2in(eff.margin.left)],
+    })
+  }
+
   const exportPdf = async () => {
     try {
       const path = await pickSaveFile(
@@ -339,8 +396,7 @@ function DocEditor({ tab }: Props) {
         ['pdf'],
       )
       if (!path) return
-      setStatus('正在生成 PDF…')
-      await invoke('export_pdf', { filePath: path })
+      await exportPdfTo(path)
       markRecent(path, 'pdf')
       setStatus('已导出 PDF')
       setTimeout(() => setStatus(''), 1500)
@@ -591,6 +647,7 @@ function DocEditor({ tab }: Props) {
         {btn('导出 docx', exportDocx)}
         {btn('导出 odt', exportOdt, false, '导出 OpenDocument 文本（LibreOffice 系通用）')}
         {btn('目录', tocAction, false, '插入/定位目录：按标题实时汇总；导出为 Word 原生 TOC 域')}
+        {btn('分页符', () => editor.chain().focus().insertPageBreak().run(), false, 'Ctrl+Enter：打印与导出 PDF 时从此处另起一页（docx/odt 同步写分页）')}
         {btn('页眉页脚', () => setHfOpen((v) => !v), hfOpen || !!(meta.headerText || meta.footerText || meta.footerPageNumber), '设置页眉、页脚与页码')}
         {btn('页面设置', () => setPgOpen((v) => !v), pgOpen || !!meta.page, '纸张与页边距：同步应用到视图、打印与 docx/odt 导出')}
         {btn('批注', () => setCmOpen((v) => !v), cmOpen || comments.length > 0, '批注侧栏：选中文字后可添加批注，导出为 docx 原生批注')}
@@ -819,7 +876,41 @@ function DocEditor({ tab }: Props) {
               />
             </label>
           ))}
-          {meta.page && btn('重置', () => patchMeta({ page: undefined }), false, '恢复 A4 + 默认边距')}
+          <span className="tb-sep" />
+          <label className="doc-hf-field">
+            分栏
+            <select
+              className="tb-select"
+              value={String(eff.cols)}
+              onChange={(e) => {
+                const v = Number(e.target.value)
+                setPg({ cols: v > 1 ? v : undefined, ...(v > 1 ? {} : { colGap: undefined }) })
+              }}
+            >
+              <option value="1">不分栏</option>
+              <option value="2">两栏</option>
+              <option value="3">三栏</option>
+            </select>
+          </label>
+          {eff.cols > 1 && (
+            <label className="doc-hf-field">
+              栏距
+              <input
+                className="tb-input doc-num"
+                type="number"
+                step="0.5"
+                min="0"
+                value={Math.round(eff.colGap * 10) / 10}
+                onChange={(e) =>
+                  Number.isFinite(e.target.valueAsNumber) &&
+                  e.target.valueAsNumber >= 0 &&
+                  setPg({ colGap: e.target.valueAsNumber })
+                }
+              />
+              mm
+            </label>
+          )}
+          {meta.page && btn('重置', () => patchMeta({ page: undefined }), false, '恢复 A4 + 默认边距 + 不分栏')}
         </div>
       )}
       {frOpen && (
@@ -901,8 +992,26 @@ function DocEditor({ tab }: Props) {
             />
             页码
           </label>
+          {meta.footerPageNumber && (
+            <label className="doc-hf-field">
+              格式
+              <select
+                className="tb-select"
+                value={meta.pageNumberFormat ?? 'cn'}
+                onChange={(e) =>
+                  patchMeta({ pageNumberFormat: (e.target.value as PageNumberFormat) || undefined })
+                }
+              >
+                {PAGE_NUMBER_FORMATS.map((f) => (
+                  <option key={f.id} value={f.id}>
+                    {f.label}
+                  </option>
+                ))}
+              </select>
+            </label>
+          )}
           {(meta.headerText || meta.footerText || meta.footerPageNumber) && (
-            <button className="tb-btn" onClick={() => patchMeta({ headerText: undefined, footerText: undefined, footerPageNumber: undefined })}>
+            <button className="tb-btn" onClick={() => patchMeta({ headerText: undefined, footerText: undefined, footerPageNumber: undefined, pageNumberFormat: undefined })}>
               清空
             </button>
           )}
@@ -921,14 +1030,27 @@ function DocEditor({ tab }: Props) {
           >
             <div className="doc-pg-lines" style={{ '--pgh': `${effPx.h}px` } as CSSProperties} />
             {meta.headerText && <div className="doc-hf doc-hf-head">{meta.headerText}</div>}
-            <div ref={wrapRef}>
+            <div
+              ref={wrapRef}
+              className={eff.cols > 1 ? 'doc-cols' : undefined}
+              style={
+                eff.cols > 1
+                  ? ({ columnCount: eff.cols, columnGap: eff.colGap * MM_PX } as CSSProperties)
+                  : undefined
+              }
+            >
               <EditorContent editor={editor} />
             </div>
             {(meta.footerText || meta.footerPageNumber) && (
               <div className="doc-hf doc-hf-foot">
                 {meta.footerText}
                 {meta.footerText && meta.footerPageNumber ? ' · ' : ''}
-                {meta.footerPageNumber && <span className="doc-hf-page">第 [页码] 页</span>}
+                {meta.footerPageNumber && (
+                  <span className="doc-hf-page">
+                    {pnPreview.before}[页码]{pnPreview.after}
+                    {pnPreview.total ? ' / [总页数]' : ''}
+                  </span>
+                )}
               </div>
             )}
           </div>

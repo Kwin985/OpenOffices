@@ -10,6 +10,7 @@ import {
   Header,
   HeadingLevel,
   ImageRun,
+  PageBreak,
   PageNumber,
   Packer,
   Paragraph,
@@ -56,18 +57,62 @@ export interface PageSetup {
   w?: number
   h?: number
   margin?: Partial<PageMargin>
+  /** 分栏数（1=不分栏）；与 colGap（mm）一起贯穿视图/打印/docx/odt */
+  cols?: number
+  colGap?: number
+}
+
+/** 页码呈现格式：仅影响页脚里的页码域写法（默认 cn=第 N 页，与 v0.30~v0.32 文件兼容） */
+export type PageNumberFormat = 'plain' | 'cn' | 'dash' | 'ofTotal'
+
+export const PAGE_NUMBER_FORMATS: { id: PageNumberFormat; label: string }[] = [
+  { id: 'plain', label: '1' },
+  { id: 'cn', label: '第 1 页' },
+  { id: 'dash', label: '- 1 -' },
+  { id: 'ofTotal', label: '1 / 3（含总页数）' },
+]
+
+// 页码格式的"屏幕/打印"两种渲染：CSS counter 用于 @page margin box，域用于 docx/odt
+export function pageNumberParts(f: PageNumberFormat | undefined): { before: string; after: string; total: boolean } {
+  switch (f) {
+    case 'plain':
+      return { before: '', after: '', total: false }
+    case 'dash':
+      return { before: '- ', after: ' -', total: false }
+    case 'ofTotal':
+      return { before: '', after: '', total: true }
+    default:
+      return { before: '第 ', after: ' 页', total: false }
+  }
+}
+
+// 从页脚文本反推页码格式：页脚里还混着自定义文字，故只看紧邻页码数字的包裹符；判不出走 plain
+export function detectPageFormat(rawText: string, hasNumPages: boolean): PageNumberFormat {
+  const t = rawText.replace(/\s+/g, '')
+  if (hasNumPages || /\d\/\d/.test(t)) return 'ofTotal'
+  if (/第\d+页/.test(t)) return 'cn'
+  if (/(-\d+-|^\d+-$)/.test(t)) return 'dash'
+  return 'plain'
 }
 
 export const PAGE_SIZES_MM = { A4: [210, 297], Letter: [215.9, 279.4] } as const
 export const DEFAULT_PAGE_MARGIN: PageMargin = { top: 20, right: 22, bottom: 20, left: 22 }
+export const DEFAULT_COL_GAP = 8
 export const MM_PX = 96 / 25.4
 const MM_TWIPS = 1440 / 25.4
 
-export function resolvePage(p?: PageSetup): { w: number; h: number; margin: PageMargin } {
+export function resolvePage(p?: PageSetup): {
+  w: number
+  h: number
+  margin: PageMargin
+  cols: number
+  colGap: number
+} {
   const preset = p?.size === 'Letter' ? PAGE_SIZES_MM.Letter : PAGE_SIZES_MM.A4
   const w = p?.size === 'custom' && p.w ? p.w : preset[0]
   const h = p?.size === 'custom' && p.h ? p.h : preset[1]
-  return { w, h, margin: { ...DEFAULT_PAGE_MARGIN, ...p?.margin } }
+  const cols = Math.min(4, Math.max(1, Math.round(p?.cols ?? 1)))
+  return { w, h, margin: { ...DEFAULT_PAGE_MARGIN, ...p?.margin }, cols, colGap: p?.colGap ?? DEFAULT_COL_GAP }
 }
 
 // 页眉页脚设置 + 批注列表 + 页面设置：随 .odoc meta 存储，导出写入 OOXML
@@ -75,6 +120,7 @@ export interface DocMeta {
   headerText?: string
   footerText?: string
   footerPageNumber?: boolean
+  pageNumberFormat?: PageNumberFormat
   comments?: DocComment[]
   page?: PageSetup
 }
@@ -105,9 +151,9 @@ export async function docxToDocMeta(bytes: Uint8Array): Promise<DocMeta> {
     if (!target) return undefined
     return zip.file(target.startsWith('/') ? target.slice(1) : `word/${target.replace(/^\.\//, '')}`)
   }
-  const readPart = async (tag: string): Promise<{ text?: string; hasPage: boolean }> => {
+  const readPart = async (tag: string): Promise<{ text?: string; raw: string; hasPage: boolean; hasNumPages: boolean }> => {
     const f = refOf(tag)
-    if (!f) return { hasPage: false }
+    if (!f) return { raw: '', hasPage: false, hasNumPages: false }
     const xml = await f.async('string')
     // 段落里文本按 w:t 顺序拼接（Word 会保留节点内空格，不要额外插空格）
     const text = (xml.match(/<w:t[^>]*>([^<]*)<\/w:t>/g) ?? [])
@@ -116,14 +162,15 @@ export async function docxToDocMeta(bytes: Uint8Array): Promise<DocMeta> {
       .trim()
     // 页码域形态多样：fldSimple instr / fldChar+instrText / instrText 含 PAGE
     const hasPage = /PAGE(\s|\*|"|'|<)/.test(xml)
-    return { text: text || undefined, hasPage }
+    const hasNumPages = /NUMPAGES|SECTIONPAGES/.test(xml)
+    return { text: text || undefined, raw: text, hasPage, hasNumPages }
   }
   const [head, foot] = await Promise.all([readPart('header'), readPart('footer')])
   // 页码域的缓存值（数字/第/页/共）混在 w:t 里，带页码域时把这些剔掉
   const stripPageTokens = (t: string) =>
     t
       .split(/\s+/)
-      .filter((x) => x && x !== '第' && x !== '页' && x !== '共' && x !== '·' && !/^\d+$/.test(x))
+      .filter((x) => x && x !== '第' && x !== '页' && x !== '共' && x !== '·' && x !== '-' && x !== '/' && !/^\d+$/.test(x))
       .join(' ')
   const out: DocMeta = {}
   if (head.text) out.headerText = head.text
@@ -131,10 +178,14 @@ export async function docxToDocMeta(bytes: Uint8Array): Promise<DocMeta> {
     const rest = foot.hasPage ? stripPageTokens(foot.text) : foot.text
     if (rest) out.footerText = rest
   }
-  if (foot.hasPage) out.footerPageNumber = true
+  if (foot.hasPage) {
+    out.footerPageNumber = true
+    out.pageNumberFormat = detectPageFormat(foot.raw, foot.hasNumPages)
+  }
   // 页面设置：body 末尾 sectPr 的 pgSz/pgMar（twips → mm）
   const pgSz = docXml.match(/<w:pgSz[^>]*>/)?.[0]
   const pgMar = docXml.match(/<w:pgMar[^>]*>/)?.[0]
+  const colsEl = docXml.match(/<w:cols[^>]*>/)?.[0]
   const tw = (xml: string | undefined, attr: string) => {
     const v = Number(xml?.match(new RegExp(`w:${attr}="(\\d+)"`))?.[1])
     return Number.isFinite(v) && v > 0 ? v / MM_TWIPS : undefined
@@ -145,10 +196,11 @@ export async function docxToDocMeta(bytes: Uint8Array): Promise<DocMeta> {
   const mr = tw(pgMar, 'right')
   const mb = tw(pgMar, 'bottom')
   const ml = tw(pgMar, 'left')
+  const r1 = (v?: number) => (v === undefined ? undefined : Math.round(v * 10) / 10)
+  const page: PageSetup = {}
   if (pw && ph) {
     const near = (a: number, b: number) => Math.abs(a - b) < 1
     const size = near(pw, 210) && near(ph, 297) ? 'A4' : near(pw, 215.9) && near(ph, 279.4) ? 'Letter' : 'custom'
-    const r1 = (v?: number) => (v === undefined ? undefined : Math.round(v * 10) / 10)
     const margin: Partial<PageMargin> = {}
     const tm = r1(mt)
     const rm = r1(mr)
@@ -158,12 +210,21 @@ export async function docxToDocMeta(bytes: Uint8Array): Promise<DocMeta> {
     if (rm !== undefined) margin.right = rm
     if (bm !== undefined) margin.bottom = bm
     if (lm !== undefined) margin.left = lm
-    out.page = {
-      size,
-      ...(size === 'custom' ? { w: r1(pw), h: r1(ph) } : {}),
-      ...(Object.keys(margin).length ? { margin } : {}),
+    page.size = size
+    if (size === 'custom') {
+      page.w = r1(pw)
+      page.h = r1(ph)
     }
+    if (Object.keys(margin).length) page.margin = margin
   }
+  // 分栏：w:num>1 才算多栏；栏间距缺省时回退默认而不写进 meta
+  const num = Number(colsEl?.match(/w:num="(\d+)"/)?.[1])
+  if (num > 1) {
+    page.cols = Math.min(4, num)
+    const gap = tw(colsEl, 'space')
+    if (gap && Math.abs(gap - DEFAULT_COL_GAP) > 0.6) page.colGap = r1(gap)
+  }
+  if (Object.keys(page).length) out.page = page
   return out
 }
 
@@ -498,6 +559,10 @@ function blocksOf(nodes: PMNode[], depth = 0, dt: DocTrack = { used: new Set(), 
       out.push(new Paragraph({ children: [], thematicBreak: true }))
       continue
     }
+    if (node.type === 'pageBreak') {
+      out.push(new Paragraph({ children: [new PageBreak()] }))
+      continue
+    }
     if (node.type === 'blockquote') {
       out.push(
         new Paragraph({
@@ -560,7 +625,10 @@ export async function prosemirrorToDocxBytes(json: PMNode, meta?: DocMeta): Prom
   const dt: DocTrack = { used: new Set(), ranges: new Set(), skipped: new Set() }
   const section: {
     children: (Paragraph | Table | TableOfContents)[]
-    properties?: { page: { size: { width: number; height: number; orientation?: 'landscape' | 'portrait' }; margin: Record<string, number> } }
+    properties?: {
+      page: { size: { width: number; height: number; orientation?: 'landscape' | 'portrait' }; margin: Record<string, number> }
+      column?: { count: number; space: number; equalWidth: true; separate: false }
+    }
     headers?: { default: Header }
     footers?: { default: Footer }
   } = { children: blocksOf(json.content ?? [], 0, dt) }
@@ -584,6 +652,10 @@ export async function prosemirrorToDocxBytes(json: PMNode, meta?: DocMeta): Prom
           footer: twips(Math.min(pg.margin.bottom, 12.7)),
         },
       },
+      // 单栏不写 w:cols（Word 默认即单栏，写出来反而让 diff 变噪）
+      ...(pg.cols > 1
+        ? { column: { count: pg.cols, space: twips(pg.colGap), equalWidth: true as const, separate: false } }
+        : {}),
     }
   }
   if (meta?.headerText?.trim()) {
@@ -601,6 +673,12 @@ export async function prosemirrorToDocxBytes(json: PMNode, meta?: DocMeta): Prom
   }
   const footText = meta?.footerText?.trim()
   if (footText || meta?.footerPageNumber) {
+    const pn = pageNumberParts(meta?.pageNumberFormat)
+    // 页码域片段：'第 '/PAGE/' 页' 之类；含总页数时再补 NUMPAGES
+    const pageChildren: (string | (typeof PageNumber)[keyof typeof PageNumber])[] =
+      meta?.footerPageNumber
+        ? [pn.before, PageNumber.CURRENT, pn.after, ...(pn.total ? [' / ', PageNumber.TOTAL_PAGES] : [])]
+        : []
     section.footers = {
       default: new Footer({
         children: [
@@ -608,9 +686,9 @@ export async function prosemirrorToDocxBytes(json: PMNode, meta?: DocMeta): Prom
             children: [
               new TextRun({
                 ...(footText && meta?.footerPageNumber
-                  ? { children: [`${footText} · 第 `, PageNumber.CURRENT, ' 页'] }
+                  ? { children: [`${footText} · `, ...pageChildren] }
                   : meta?.footerPageNumber
-                    ? { children: ['第 ', PageNumber.CURRENT, ' 页'] }
+                    ? { children: pageChildren }
                     : { text: footText }),
                 size: 18,
                 color: '6B7280',

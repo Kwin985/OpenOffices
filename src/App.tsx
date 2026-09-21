@@ -50,6 +50,10 @@ function MainApp() {
     // 冒烟钩子：按路径开标签 + 读标签页状态（不改动任何生产行为）
     w.__oofOpenPath = (p: string) => openPath(p)
     w.__oofTabs = () => useApp.getState().tabs
+    const titles = { doc: '冒烟文档', sheet: '冒烟表格', ppt: '冒烟演示', pdf: '冒烟 PDF' }
+    w.__oofOpenTab = (kind: 'doc' | 'sheet' | 'ppt' | 'pdf') =>
+      useApp.getState().openTab({ kind, title: titles[kind] })
+    w.__oofCloseTab = (id: string) => useApp.getState().closeTab(id)
   }
 
   useEffect(() => {

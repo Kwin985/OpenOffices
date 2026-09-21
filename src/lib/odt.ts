@@ -1,7 +1,16 @@
 // ODT（OpenDocument 文本）导出/导入：ProseMirror JSON ⇄ content.xml，零新依赖（JSZip + DOMParser）。
 // 范围：批注与目录节点不写 ODT；图片以 dataURL 内嵌进 Pictures/；页眉页脚/页码走 master-page。
 
-import { resolvePage, type PMNode, type DocMeta, type PageMargin } from './docx'
+import {
+  DEFAULT_COL_GAP,
+  detectPageFormat,
+  pageNumberParts,
+  resolvePage,
+  type DocMeta,
+  type PageMargin,
+  type PageSetup,
+  type PMNode,
+} from './docx'
 
 const OD_MIME = 'application/vnd.oasis.opendocument.text'
 
@@ -219,6 +228,10 @@ class OdtBuilder {
           // TipTap 允许图片作为顶层节点，包一层段落写出
           out += `<text:p>${this.inline([n])}</text:p>`
           break
+        case 'pageBreak':
+          // 空段落带 fo:break-before="page"：本段落在新页起始，正文随之续排
+          out += `<text:p text:style-name="PBK"/>`
+          break
         case 'toc':
           break // 目录是实时汇总节点，ODT 不写占位
         default:
@@ -306,11 +319,16 @@ class OdtBuilder {
   private stylesXml(): string {
     const footText = this.meta?.footerText?.trim()
     const withPage = this.meta?.footerPageNumber
+    const pn = pageNumberParts(this.meta?.pageNumberFormat)
+    // ODF 页码/总页数字段：缓存值写 1 / 3，应用打开后自行重算
+    const pageField = `<text:page-number text:select-page="current">1</text:page-number>`
+    const totalField = `<text:page-count>3</text:page-count>`
+    const pageRun = `${esc(pn.before)}${pageField}${esc(pn.after)}${pn.total ? ` / ${totalField}` : ''}`
     let footer = ''
     if (footText && withPage) {
-      footer = `<text:p text:style-name="Footer">${esc(footText)} · 第 <text:page-number text:select-page="current">1</text:page-number> 页</text:p>`
+      footer = `<text:p text:style-name="Footer">${esc(footText)} · ${pageRun}</text:p>`
     } else if (withPage) {
-      footer = `<text:p text:style-name="Footer">第 <text:page-number text:select-page="current">1</text:page-number> 页</text:p>`
+      footer = `<text:p text:style-name="Footer">${pageRun}</text:p>`
     } else if (footText) {
       footer = `<text:p text:style-name="Footer">${esc(footText)}</text:p>`
     }
@@ -328,15 +346,22 @@ class OdtBuilder {
       `fo:margin-top="${mm2cm(pg.margin.top)}" fo:margin-bottom="${mm2cm(pg.margin.bottom)}" ` +
       `fo:margin-left="${mm2cm(pg.margin.left)}" fo:margin-right="${mm2cm(pg.margin.right)}" ` +
       `style:num-format="1"/>`
+    // 多栏：ODF 的栏数写在 page-layout 的 style:columns，栏分隔子元素个数 = 栏数-1（等宽用 rel-width="*"）
+    const columns =
+      pg.cols > 1
+        ? `<style:columns fo:column-count="${pg.cols}" fo:column-gap="${mm2cm(pg.colGap)}">` +
+          `<style:column style:rel-width="*" fo:break-before="auto"/></style:columns>`
+        : ''
     return (
       `<?xml version="1.0" encoding="UTF-8"?><office:document-styles ${stylesNS} office:version="1.2">` +
       `<office:styles>` +
       `<style:style style:name="Standard" style:family="paragraph"><style:paragraph-properties fo:margin-top="0cm" fo:margin-bottom="0.2cm"/></style:style>` +
       `<style:style style:name="Text_20_Body" style:family="paragraph" style:parent-style-name="Standard"/>` +
+      `<style:style style:name="PBK" style:family="paragraph" style:parent-style-name="Standard"><style:paragraph-properties fo:break-before="page" fo:margin-top="0cm" fo:margin-bottom="0cm"/></style:style>` +
       `<style:style style:name="Header" style:family="paragraph" style:parent-style-name="Standard"><style:paragraph-properties fo:text-align="end"/><style:text-properties fo:font-size="9pt" fo:color="#6b7280"/></style:style>` +
       `<style:style style:name="Footer" style:family="paragraph" style:parent-style-name="Standard"><style:paragraph-properties fo:text-align="center"/><style:text-properties fo:font-size="9pt" fo:color="#6b7280"/></style:style>` +
       `</office:styles>` +
-      `<office:automatic-styles><style:page-layout style:name="pm1">${pageProps}</style:page-layout></office:automatic-styles>` +
+      `<office:automatic-styles><style:page-layout style:name="pm1">${pageProps}${columns}</style:page-layout></office:automatic-styles>` +
       `<office:master-styles>${master}</office:master-styles>` +
       `</office:document-styles>`
     )
@@ -570,6 +595,11 @@ export async function odtToHtml(bytes: Uint8Array): Promise<{ html: string; meta
         const sn = el.getAttribute('text:style-name')
         if (sn === 'PC') return `<pre><code>${await renderInline(el)}</code></pre>`
         if (sn === 'PQ') return `<blockquote><p>${await renderInline(el)}</p></blockquote>`
+        // 分页符：本编辑器写 PBK，第三方按段落样式里的 break-before 识别
+        const st = sn ? styles.get(sn) : undefined
+        const pp = st ? pick(st, 'paragraph-properties') : null
+        if (sn === 'PBK' || pp?.getAttribute('fo:break-before') === 'page')
+          return `<div data-oo-pagebreak="1"></div>`
         const align = sn === 'AC' ? 'center' : sn === 'AR' ? 'right' : sn === 'AJ' ? 'justify' : ''
         return `<p${align ? ` style="text-align: ${align}"` : ''}>${await renderInline(el)}</p>`
       }
@@ -626,23 +656,27 @@ export async function odtToHtml(bytes: Uint8Array): Promise<{ html: string; meta
     const headText = plain(header ?? undefined)
     if (headText) meta.headerText = headText
     if (footer) {
-      const hasPage = Array.from(footer.getElementsByTagName('*')).some((x) => x.localName === 'page-number')
+      const kids = Array.from(footer.getElementsByTagName('*'))
+      const hasPage = kids.some((x) => x.localName === 'page-number')
+      const hasCount = kids.some((x) => x.localName === 'page-count')
       let foot = plain(footer)
       if (hasPage) {
         meta.footerPageNumber = true
+        meta.pageNumberFormat = detectPageFormat(foot, hasCount)
         foot = foot
           .replace(/第\s*\d+\s*页/g, ' ')
-          .replace(/\d+/g, ' ')
+          .replace(/-?\s*\d+\s*-?/g, ' ')
           .replace(/·/g, ' ')
           .replace(/\s+/g, ' ')
           .trim()
       }
       if (foot) meta.footerText = foot
     }
-    // 页面设置：page-layout-properties 的纸张与四边距
+    // 页面设置：page-layout-properties 的纸张与四边距 + style:columns 的分栏
     const plp = Array.from(sdoc.getElementsByTagName('*')).find((x) => x.localName === 'page-layout-properties')
     const pw = cm2mm(plp?.getAttribute('fo:page-width') ?? null)
     const ph = cm2mm(plp?.getAttribute('fo:page-height') ?? null)
+    const page: PageSetup = {}
     if (pw && ph) {
       const near = (a: number, b: number) => Math.abs(a - b) < 1.5
       const size = near(pw, 210) && near(ph, 297) ? 'A4' : near(pw, 215.9) && near(ph, 279.4) ? 'Letter' : 'custom'
@@ -656,8 +690,22 @@ export async function odtToHtml(bytes: Uint8Array): Promise<{ html: string; meta
       if (mb) margin.bottom = r1(mb)
       if (ml) margin.left = r1(ml)
       if (mr) margin.right = r1(mr)
-      meta.page = { size, ...(size === 'custom' ? { w: r1(pw), h: r1(ph) } : {}), ...(Object.keys(margin).length ? { margin } : {}) }
+      page.size = size
+      if (size === 'custom') {
+        page.w = r1(pw)
+        page.h = r1(ph)
+      }
+      if (Object.keys(margin).length) page.margin = margin
     }
+    const colsEl = Array.from(sdoc.getElementsByTagName('*')).find((x) => x.localName === 'columns')
+    const cn = Number(colsEl?.getAttribute('fo:column-count') ?? 1)
+    if (cn > 1) {
+      page.cols = Math.min(4, cn)
+      // LibreOffice 可能只写 fo:column-gap 或 style:distance（后者为栏间距）
+      const gap = cm2mm(colsEl?.getAttribute('fo:column-gap') ?? colsEl?.getAttribute('style:distance') ?? null)
+      if (gap && Math.abs(gap - DEFAULT_COL_GAP) > 0.6) page.colGap = Math.round(gap * 10) / 10
+    }
+    if (Object.keys(page).length) meta.page = page
   }
   return { html, meta }
 }
