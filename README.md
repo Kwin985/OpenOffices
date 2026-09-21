@@ -309,6 +309,8 @@
 
 ## PDF 查看交互：滚轮翻页 + Ctrl 缩放（v0.22）
 
+> 本节描述 v0.22 当时行为；滚轮翻页已被 v0.25 连续滚动取代，普通滚轮交还原生滚动。
+
 - **滚轮翻页**：`PdfViewer` 查看区挂原生非被动 `wheel` 监听（React `onWheel` 是 passive，
   无法 `preventDefault`）——页面无溢出时滚轮直接翻页；放大溢出时先走原生滚动，滚到页底
   继续下滚才翻下一页、回页顶继续上滚翻上一页（同浏览器 PDF 查看器的滚动链接习惯）
@@ -343,6 +345,25 @@
   提示；组件只在 PDF 标签挂载，不劫持其它编辑器的 Ctrl+F
 - **验证**：CDP 冒烟 11 断言全绿（'page' 三页全命中、跳页后高亮重挂、上下循环导航、
   大小写不敏感、无匹配 UI、Esc 清空、v0.23 选择功能回归）；tsc/build 绿，Rust 零改动
+
+## PDF 连续多页视图（v0.25）
+
+- **连续滚动**：单页画布改为全页占位列（`flex column + gap`，每页 `data-page` 容器按页
+  元数据尺寸给内联宽高）——滚动条长度一开始就正确；尺寸由后台逐页 `getPage` 预取补齐，
+  未到达前用首页/595×842 估算兜底
+- **视口虚拟渲染**：`IntersectionObserver`（root=滚动区，`rootMargin` 上下 800px 预渲染
+  余量）进入即渲染 canvas+文字层、离开即 cancel 任务/清画布释放内存，回视口再重渲染；
+  每页槽位记 `rendering/done/cancelled` 去重，防观察者重复触发双渲染
+- **缩放重绘**：scale 变化时占位宽高随 inline style 重算，可见页先 free 再按新比例重画
+  （否则 done 槽位会被跳过留下旧尺寸）；普通滚轮交还原生滚动（撤 v0.22 翻页劫持），
+  仅 Ctrl+滚轮 `preventDefault` 缩放
+- **页码与导航**：当前页=顶边进入视口的最后一页（scroll+rAF，文档序早断）；◀▶/页码输入
+  改 `scrollIntoView` 跳页；全文搜索命中跳页后高亮重挂照旧，多页同屏时基础高亮可一次
+  挂多个命中区间
+- **验证**：CDP 冒烟 30 页夹具 12 断言全绿（前 3 页带文字后 27 页空白：占位数、初始仅
+  渲染近旁页、滚到底页 30 渲染且页 1 画布归零、回顶重渲染、搜索跳页 3 活动区间命中、
+  'page' 三命中 Enter 落页 2 且 3 区间同挂、Ctrl 缩放文字层宽=canvas CSS 宽±2px、
+  中部页码跟踪、v0.23 选择回归）；tsc/build 绿，Rust 零改动
 
 ## 性能（v0.3）
 
@@ -404,7 +425,7 @@ src/                  React 前端
   lib/registry.ts     跨组件保存器注册表（Ctrl+S 路由到当前标签）
   lib/open.ts         路径→标签 打开 / 带确认关闭
   lib/sync.ts         最近文件端到端加密同步（WebCrypto PBKDF2-SHA256 → AES-256-GCM，.oosync 信封）
-  components/         Home / Workspace / SheetEditor / DocEditor / PptEditor / PdfViewer（pdfjs-dist 懒加载，滚轮翻页+Ctrl 缩放+TextLayer 文字选择+全文搜索）
+  components/         Home / Workspace / SheetEditor / DocEditor / PptEditor / PdfViewer（pdfjs-dist 懒加载，连续多页视口虚拟渲染+Ctrl 缩放+TextLayer 文字选择+全文搜索）
 scripts/              copy-pdfjs-assets.mjs（dev/build 前复制 cmaps/标准字体到 public/pdfjs）
 .github/workflows/    release.yml——tag v* 触发：门禁→win/linux 矩阵打包→GitHub Release
 ```
@@ -455,6 +476,7 @@ cargo check        # Rust 后端检查（在 src-tauri 下）
 - [x] PDF 查看：滚轮翻页（溢出先滚动、触边再翻）+ Ctrl 滚轮缩放
 - [x] PDF 查看：文字选择复制（TextLayer 透明字层叠加）
 - [x] PDF 查看：全文搜索（命中定位 + Custom Highlight 高亮 + 上下导航）
+- [x] PDF 查看：连续多页视图（IntersectionObserver 视口虚拟渲染/离屏释放）
 - [ ] 自动更新通道（须先决策：公开仓库或独立托管 update metadata）
 - [ ] macOS 打包（需签名/公证凭据）
 

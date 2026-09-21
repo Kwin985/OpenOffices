@@ -15,12 +15,11 @@ interface Props {
 const SCALE_MIN = 0.5
 const SCALE_MAX = 3
 const SCALE_STEP = 1.2
-// 滚轮翻页：累计 deltaY 超过阈值才翻一页，翻页后短暂冷却，防高惯性滚动连翻
-const WHEEL_PAGE_THRESHOLD = 140
-const WHEEL_COOLDOWN_MS = 350
 // 全文搜索：命中上限防大文档卡死；输入防抖
 const SEARCH_MAX_HITS = 500
 const SEARCH_DEBOUNCE_MS = 200
+// 视口外预渲染余量：约一屏，滚动方向上的下一页/层提前就绪
+const PRERENDER_MARGIN_PX = 800
 
 interface PageText {
   items: string[]
@@ -36,6 +35,14 @@ interface Match {
   eOff: number
 }
 
+interface PageSlot {
+  cancelled: boolean
+  rendering: boolean
+  done: boolean
+  task: RenderTask | null
+  layer: TextLayer | null
+}
+
 // 全局偏移 →（文本项下标, 项内偏移）
 function locate(t: PageText, pos: number) {
   let i = 0
@@ -46,22 +53,23 @@ function locate(t: PageText, pos: number) {
 function PdfViewer({ tab }: Props) {
   const [status, setStatus] = useState<string>(tab.path ? '正在加载…' : '未关联文件')
   const [doc, setDoc] = useState<PDFDocumentProxy | null>(null)
-  const [page, setPage] = useState(1)
   const [scale, setScale] = useState(1.25)
+  const [sizes, setSizes] = useState<Record<number, { w: number; h: number }>>({})
+  const [curPage, setCurPage] = useState(1)
   const [searchOpen, setSearchOpen] = useState(false)
   const [query, setQuery] = useState('')
   const [matches, setMatches] = useState<Match[]>([])
   const [activeIdx, setActiveIdx] = useState(-1)
-  const canvasRef = useRef<HTMLCanvasElement>(null)
-  const textLayerRef = useRef<HTMLDivElement>(null)
   const scrollRef = useRef<HTMLDivElement>(null)
   const searchInputRef = useRef<HTMLInputElement>(null)
   const docRef = useRef<PDFDocumentProxy | null>(null)
   docRef.current = doc
-  const pageRef = useRef(page)
-  pageRef.current = page
-  const pageTexts = useRef(new Map<number, PageText>())
-  const searchSeq = useRef(0)
+  const scaleRef = useRef(scale)
+  scaleRef.current = scale
+  // 视口调度：每页一个槽位记录渲染任务/文字层/取消标记
+  const slots = useRef(new Map<number, PageSlot>())
+  const curPageRef = useRef(1)
+  curPageRef.current = curPage
 
   useEffect(() => {
     if (!tab.path) return
@@ -82,8 +90,10 @@ function PdfViewer({ tab }: Props) {
           return
         }
         openDoc = d
+        slots.current.clear()
+        setSizes({})
+        setCurPage(1)
         setDoc(d)
-        setPage(1)
         setStatus('')
       } catch (e) {
         console.error(e)
@@ -97,15 +107,171 @@ function PdfViewer({ tab }: Props) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tab.id])
 
+  // 后台补齐每页尺寸（元数据级 getPage，快）：滚动条长度与占位高度尽早精确
   useEffect(() => {
-    pageTexts.current.clear()
+    if (!doc) return
+    let cancelled = false
+    ;(async () => {
+      for (let n = 1; n <= doc.numPages && !cancelled; n++) {
+        const p = await doc.getPage(n)
+        if (cancelled) return
+        const v = p.getViewport({ scale: 1 })
+        setSizes((s) => (s[n] ? s : { ...s, [n]: { w: v.width, h: v.height } }))
+      }
+    })()
+    return () => {
+      cancelled = true
+    }
+  }, [doc])
+
+  useEffect(() => {
+    slots.current.clear()
     setQuery('')
     setMatches([])
     setActiveIdx(-1)
     setSearchOpen(false)
   }, [doc])
 
-  // —— 全文搜索：文本索引按页惰性缓存（getTextContent），命中定位到文字层 span 区间 ——
+  const pageEl = (n: number) =>
+    scrollRef.current?.querySelector<HTMLElement>(`[data-page="${n}"]`) ?? null
+
+  // —— 单页渲染：canvas + 文字层（--scale-factor 必须宿主提供，否则层塌 0×0）——
+  const renderPage = async (n: number) => {
+    const d = docRef.current
+    const el = pageEl(n)
+    if (!d || !el) return
+    let slot = slots.current.get(n)
+    if (slot && (slot.rendering || slot.done)) return
+    slot = { cancelled: false, rendering: true, done: false, task: null, layer: null }
+    slots.current.set(n, slot)
+    const me = slot
+    try {
+      const p = await d.getPage(n)
+      if (me.cancelled) return
+      const viewport = p.getViewport({ scale: scaleRef.current })
+      const canvas = el.querySelector('canvas')
+      const ctx = canvas?.getContext('2d')
+      if (!canvas || !ctx) return
+      const dpr = window.devicePixelRatio || 1
+      canvas.width = Math.floor(viewport.width * dpr)
+      canvas.height = Math.floor(viewport.height * dpr)
+      canvas.style.width = `${Math.floor(viewport.width)}px`
+      canvas.style.height = `${Math.floor(viewport.height)}px`
+      me.task = p.render({
+        canvasContext: ctx,
+        viewport,
+        transform: dpr === 1 ? undefined : [dpr, 0, 0, dpr, 0, 0],
+      })
+      await me.task.promise
+      if (me.cancelled) return
+      const layerEl = el.querySelector<HTMLElement>('.pdf-textlayer')
+      if (layerEl) {
+        layerEl.replaceChildren()
+        layerEl.style.setProperty('--scale-factor', String(viewport.scale))
+        me.layer = new TextLayer({
+          textContentSource: p.streamTextContent(),
+          container: layerEl,
+          viewport,
+        })
+        await me.layer.render()
+      }
+      me.done = true
+      applyRef.current()
+    } catch (e) {
+      const name = e instanceof Error ? e.name : ''
+      if (!me.cancelled && name !== 'RenderingCancelledException' && !(e instanceof DOMException && e.name === 'AbortError')) {
+        console.error(e)
+        setStatus(`渲染失败: ${e instanceof Error ? e.message : String(e)}`)
+      }
+    } finally {
+      me.rendering = false
+      me.task = null
+    }
+  }
+
+  // 远处页释放：取消任务与文字层、清画布，槽位移除，回视即重渲染
+  const freePage = (n: number) => {
+    const slot = slots.current.get(n)
+    if (!slot) return
+    slot.cancelled = true
+    slot.task?.cancel()
+    try {
+      slot.layer?.cancel()
+    } catch {
+      /* 流未完成时 cancel 可能抛错，容器马上会被清空，忽略 */
+    }
+    slot.layer = null
+    slots.current.delete(n)
+    const el = pageEl(n)
+    const canvas = el?.querySelector('canvas')
+    if (canvas) {
+      canvas.width = 0
+      canvas.height = 0
+      canvas.style.width = '0px'
+      canvas.style.height = '0px'
+    }
+    el?.querySelector('.pdf-textlayer')?.replaceChildren()
+  }
+
+  // —— 视口调度：进入（含预渲染余量）即渲染，离开即释放 ——
+  useEffect(() => {
+    if (!doc || !scrollRef.current) return
+    const io = new IntersectionObserver(
+      (entries) => {
+        for (const e of entries) {
+          const n = Number((e.target as HTMLElement).dataset.page)
+          if (!n) continue
+          if (e.isIntersecting) void renderPage(n)
+          else freePage(n)
+        }
+      },
+      { root: scrollRef.current, rootMargin: `${PRERENDER_MARGIN_PX}px 0px` },
+    )
+    scrollRef.current.querySelectorAll<HTMLElement>('[data-page]').forEach((el) => io.observe(el))
+    return () => io.disconnect()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [doc])
+
+  // 缩放变化：占位尺寸由 style 重算；可见页释放后按新 scale 重画（done 槽位不重入，需先 free）
+  useEffect(() => {
+    if (!doc || !scrollRef.current) return
+    const sr = scrollRef.current.getBoundingClientRect()
+    const visible = [...scrollRef.current.querySelectorAll<HTMLElement>('[data-page]')]
+      .filter((el) => {
+        const r = el.getBoundingClientRect()
+        return r.bottom > sr.top - PRERENDER_MARGIN_PX && r.top < sr.bottom + PRERENDER_MARGIN_PX
+      })
+      .map((el) => Number(el.dataset.page))
+    visible.forEach((n) => freePage(n))
+    queueMicrotask(() => visible.forEach((n) => void renderPage(n)))
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [scale, doc])
+
+  // 当前页展示：顶边进入视口的最后一页
+  useEffect(() => {
+    const el = scrollRef.current
+    if (!el || !doc) return
+    let raf = 0
+    const onScroll = () => {
+      cancelAnimationFrame(raf)
+      raf = requestAnimationFrame(() => {
+        const top = el.getBoundingClientRect().top + 2
+        let cur = 1
+        for (const p of el.querySelectorAll<HTMLElement>('[data-page]')) {
+          if (p.getBoundingClientRect().top <= top) cur = Number(p.dataset.page)
+          else break
+        }
+        setCurPage(cur)
+      })
+    }
+    el.addEventListener('scroll', onScroll, { passive: true })
+    return () => {
+      cancelAnimationFrame(raf)
+      el.removeEventListener('scroll', onScroll)
+    }
+  }, [doc])
+
+  // —— 全文搜索：文本索引按页惰性缓存，命中定位到页内文字层 span 区间 ——
   const loadPageText = async (d: PDFDocumentProxy, n: number): Promise<PageText> => {
     const hit = pageTexts.current.get(n)
     if (hit) return hit
@@ -122,6 +288,8 @@ function PdfViewer({ tab }: Props) {
     pageTexts.current.set(n, t)
     return t
   }
+  const pageTexts = useRef(new Map<number, PageText>())
+  const searchSeq = useRef(0)
 
   const runSearch = async (raw: string, seq: number) => {
     const d = docRef.current
@@ -151,35 +319,59 @@ function PdfViewer({ tab }: Props) {
       setActiveIdx(-1)
       return
     }
-    // 从当前页起取第一个命中（循环回绕），并跳过去
-    let idx = found.findIndex((m) => m.page >= pageRef.current)
+    let idx = found.findIndex((m) => m.page >= curPageRef.current)
     if (idx === -1) idx = 0
-    setActiveIdx(idx)
-    if (found[idx].page !== pageRef.current) setPage(found[idx].page)
+    scrollToMatch(found, idx)
   }
 
-  // 文字层 span 与文本项按文档序一一对应（含空串项；带 marked-content 包裹时取叶子 span）
+  const gotoMatch = (delta: number) => {
+    const n = matches.length
+    if (!n) return
+    scrollToMatch(matches, (activeIdx + delta + n) % n)
+  }
+
+  // 激活命中：改状态 + 滚到目标页；页文字层渲染完后 applyRef 补挂并居中
+  const scrollToMatch = (list: Match[], idx: number) => {
+    const m = list[idx]
+    setActiveIdx(idx)
+    pendingFocus.current = idx
+    const el = pageEl(m.page)
+    if (el) el.scrollIntoView({ block: 'start' })
+    else void renderPage(m.page)
+  }
+  const pendingFocus = useRef(-1)
+
+  // 命中项↔span 映射：文字层每文本项一个叶子 span（marked-content 包裹时取文档序叶子）
   const applyHighlights = () => {
     if (typeof Highlight === 'undefined' || !CSS.highlights) return
     CSS.highlights.delete('pdf-find')
     CSS.highlights.delete('pdf-find-active')
-    const layerEl = textLayerRef.current
-    const active = activeRef.current
-    if (!layerEl || active < 0 || active >= matchesRef.current.length) return
-    const spans: HTMLElement[] = []
-    const walk = (el: Element) => {
-      for (const c of el.children) {
-        if (c.childElementCount === 0) spans.push(c as HTMLElement)
-        else walk(c)
+    const ms = matchesRef.current
+    const act = activeRef.current
+    if (!ms.length) return
+    // 每页叶子 span 只走一遍（同页多命中复用）
+    const spanCache = new Map<number, HTMLElement[]>()
+    const spansFor = (n: number): HTMLElement[] => {
+      let sp = spanCache.get(n)
+      if (sp) return sp
+      sp = []
+      const layerEl = pageEl(n)?.querySelector<HTMLElement>('.pdf-textlayer')
+      const walk = (el: Element) => {
+        for (const c of el.children) {
+          if (c.childElementCount === 0) sp!.push(c as HTMLElement)
+          else walk(c)
+        }
       }
+      if (layerEl) walk(layerEl)
+      spanCache.set(n, sp)
+      return sp
     }
-    walk(layerEl)
-    const pageMatches = matchesRef.current
-      .map((m, i) => ({ m, i }))
-      .filter(({ m }) => m.page === pageRef.current)
     const ranges: Range[] = []
     let activeRange: Range | null = null
-    for (const { m, i } of pageMatches) {
+    for (let i = 0; i < ms.length; i++) {
+      const m = ms[i]
+      if (!slots.current.has(m.page)) continue
+      const spans = spansFor(m.page)
       const s0 = spans[m.bItem]
       const s1 = spans[m.eItem]
       if (!s0 || !s1) continue
@@ -191,13 +383,15 @@ function PdfViewer({ tab }: Props) {
         continue
       }
       ranges.push(r)
-      if (i === active) activeRange = r
+      if (i === act) activeRange = r
     }
     if (ranges.length) CSS.highlights.set('pdf-find', new Highlight(...ranges))
     if (activeRange) {
       CSS.highlights.set('pdf-find-active', new Highlight(activeRange))
-      const el = activeRange.startContainer.parentElement
-      el?.scrollIntoView({ block: 'center' })
+      if (pendingFocus.current === act) {
+        pendingFocus.current = -1
+        activeRange.startContainer.parentElement?.scrollIntoView({ block: 'center' })
+      }
     }
   }
   const applyRef = useRef(applyHighlights)
@@ -207,15 +401,6 @@ function PdfViewer({ tab }: Props) {
   const activeRef = useRef(activeIdx)
   activeRef.current = activeIdx
 
-  const gotoMatch = (delta: number) => {
-    const n = matches.length
-    if (!n) return
-    const idx = (activeIdx + delta + n) % n
-    setActiveIdx(idx)
-    if (matches[idx].page !== page) setPage(matches[idx].page)
-  }
-
-  // 输入防抖触发搜索；seq 竞态守卫，旧结果不覆盖新查询
   useEffect(() => {
     if (!doc) return
     const seq = ++searchSeq.current
@@ -224,122 +409,27 @@ function PdfViewer({ tab }: Props) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [query, doc])
 
-  // 同页内切换命中（不触发重渲染文字层）时直接刷高亮
   useEffect(() => {
     applyRef.current()
   }, [activeIdx, matches, searchOpen])
 
-  useEffect(() => {
-    if (!doc) return
-    let cancelled = false
-    let renderTask: RenderTask | null = null
-    let textLayer: TextLayer | null = null
-    ;(async () => {
-      try {
-        const p = await doc.getPage(page)
-        if (cancelled) return
-        const canvas = canvasRef.current
-        const ctx = canvas?.getContext('2d')
-        if (!canvas || !ctx) return
-        const viewport = p.getViewport({ scale })
-        const dpr = window.devicePixelRatio || 1
-        canvas.width = Math.floor(viewport.width * dpr)
-        canvas.height = Math.floor(viewport.height * dpr)
-        canvas.style.width = `${Math.floor(viewport.width)}px`
-        canvas.style.height = `${Math.floor(viewport.height)}px`
-        renderTask = p.render({
-          canvasContext: ctx,
-          viewport,
-          transform: dpr === 1 ? undefined : [dpr, 0, 0, dpr, 0, 0],
-        })
-        await renderTask.promise
-        // 文字层盖在 canvas 上：透明字形可选可复制（双击选词/Ctrl+C 走浏览器原生）
-        const layerEl = textLayerRef.current
-        if (layerEl && !cancelled) {
-          layerEl.replaceChildren()
-          // pdf.js 给层写的内联尺寸是 var(--scale-factor)*pageW px，变量须由宿主提供（同官方 viewer）
-          layerEl.style.setProperty('--scale-factor', String(viewport.scale))
-          textLayer = new TextLayer({
-            textContentSource: p.streamTextContent(),
-            container: layerEl,
-            viewport,
-          })
-          await textLayer.render()
-          // 翻页/缩放重建后补打搜索高亮
-          applyRef.current()
-        }
-      } catch (e) {
-        // 翻页/缩放会主动 cancel 上一任务，不是错误
-        const name = e instanceof Error ? e.name : ''
-        if (!cancelled && name !== 'RenderingCancelledException' && !(e instanceof DOMException && e.name === 'AbortError')) {
-          console.error(e)
-          setStatus(`渲染失败: ${e instanceof Error ? e.message : String(e)}`)
-        }
-      }
-    })()
-    return () => {
-      cancelled = true
-      renderTask?.cancel()
-      try {
-        textLayer?.cancel()
-      } catch {
-        /* v4 在流未完成时 cancel 可能抛错，容器马上会被重建，忽略 */
-      }
-    }
-  }, [doc, page, scale])
-
+  // Ctrl+滚轮缩放（React onWheel 是 passive 不能 preventDefault，挂原生非被动监听）；
+  // 多页连续滚动下普通滚轮交还原生行为，不再劫持翻页
   useEffect(() => {
     const el = scrollRef.current
     if (!el) return
-    // React 的 onWheel 是 passive 监听，无法 preventDefault，故挂原生监听
-    let acc = 0
-    let lastTurn = 0
     const onWheel = (e: WheelEvent) => {
-      if (e.ctrlKey) {
-        e.preventDefault()
-        setScale((s) => {
-          const next = e.deltaY < 0 ? s * 1.1 : s / 1.1
-          return Math.min(SCALE_MAX, Math.max(SCALE_MIN, +next.toFixed(3)))
-        })
-        return
-      }
-      if (!docRef.current || e.deltaY === 0) return
-      const now = performance.now()
-      if (now - lastTurn < WHEEL_COOLDOWN_MS) {
-        acc = 0
-        return
-      }
-      if (acc > 0 !== e.deltaY > 0) acc = 0
-      // 放大后页面在容器内可滚：先让原生滚，触到顶/底再翻（同浏览器 PDF 查看器习惯）
-      const scrollable = el.scrollHeight - el.clientHeight > 2
-      if (scrollable) {
-        const atTop = el.scrollTop <= 0
-        const atBottom = el.scrollTop + el.clientHeight >= el.scrollHeight - 1
-        if (!((e.deltaY > 0 && atBottom) || (e.deltaY < 0 && atTop))) {
-          acc = 0
-          return
-        }
-      }
+      if (!e.ctrlKey) return
       e.preventDefault()
-      acc += e.deltaY
-      if (Math.abs(acc) >= WHEEL_PAGE_THRESHOLD) {
-        const dir = acc > 0 ? 1 : -1
-        acc = 0
-        lastTurn = now
-        setPage((p) => Math.min(docRef.current?.numPages ?? p, Math.max(1, p + dir)))
-      }
+      setScale((s) => {
+        const next = e.deltaY < 0 ? s * 1.1 : s / 1.1
+        return Math.min(SCALE_MAX, Math.max(SCALE_MIN, +next.toFixed(3)))
+      })
     }
     el.addEventListener('wheel', onWheel, { passive: false })
     return () => el.removeEventListener('wheel', onWheel)
   }, [])
 
-  // 翻页后视图回到页顶
-  useEffect(() => {
-    const el = scrollRef.current
-    if (el) el.scrollTop = 0
-  }, [page])
-
-  // Ctrl+F 打开搜索、Esc 关闭清空（组件仅在 PDF 标签激活时挂载，不劫持其它编辑器）
   const searchOpenRef = useRef(searchOpen)
   searchOpenRef.current = searchOpen
   useEffect(() => {
@@ -360,13 +450,14 @@ function PdfViewer({ tab }: Props) {
   if (import.meta.env.DEV) {
     const w = window as unknown as Record<string, unknown>
     w.__oofPdf = {
-      page: () => page,
+      page: () => curPage,
       scale: () => scale,
       numPages: () => doc?.numPages ?? 0,
       scrollEl: () => scrollRef.current,
       matchCount: () => matches.length,
       activeIdx: () => activeIdx,
       matchPages: () => matches.map((m) => m.page),
+      renderedPages: () => [...slots.current.keys()].sort((a, b) => a - b),
     }
   }
 
@@ -376,29 +467,37 @@ function PdfViewer({ tab }: Props) {
     </button>
   )
 
+  const gotoPage = (n: number) => {
+    const el = pageEl(n)
+    el?.scrollIntoView({ block: 'start' })
+  }
+
+  const est = sizes[1] ?? { w: 595, h: 842 }
+  const numPages = doc?.numPages ?? 0
+
   return (
     <div className="editor-pane">
       <div className="editor-toolbar">
         <span className="editor-status">{status}</span>
-        <span className="editor-hint">PDF 只读 · 滚轮翻页 · 文字可选可复制 · Ctrl+滚轮缩放 · Ctrl+F 搜索</span>
+        <span className="editor-hint">PDF 只读 · 连续滚动 · 文字可选可复制 · Ctrl+滚轮缩放 · Ctrl+F 搜索</span>
       </div>
       <div className="pdf-toolbar">
-        {btn('◀', () => setPage((p) => Math.max(1, p - 1)), page <= 1, '上一页')}
+        {btn('◀', () => gotoPage(Math.max(1, curPage - 1)), curPage <= 1, '上一页')}
         <span className="pdf-pageinfo">
           <input
             className="tb-input pdf-page-input"
             type="number"
             min={1}
-            max={doc?.numPages ?? 1}
-            value={page}
+            max={numPages || 1}
+            value={curPage}
             onChange={(e) => {
               const n = Number(e.target.value)
-              if (doc && n >= 1 && n <= doc.numPages) setPage(n)
+              if (doc && n >= 1 && n <= doc.numPages) gotoPage(n)
             }}
           />
-          / {doc?.numPages ?? '-'}
+          / {numPages || '-'}
         </span>
-        {btn('▶', () => setPage((p) => Math.min(doc?.numPages ?? p, p + 1)), !doc || page >= doc.numPages, '下一页')}
+        {btn('▶', () => gotoPage(Math.min(numPages, curPage + 1)), !doc || curPage >= numPages, '下一页')}
         <span className="tb-sep" />
         {btn('－', () => setScale((s) => Math.max(SCALE_MIN, +(s / SCALE_STEP).toFixed(3))), scale <= SCALE_MIN, '缩小')}
         <span className="pdf-zoom">{Math.round(scale * 100)}%</span>
@@ -438,10 +537,21 @@ function PdfViewer({ tab }: Props) {
         )}
       </div>
       <div className="pdf-scroll" ref={scrollRef}>
-        <div className="pdf-page">
-          <canvas ref={canvasRef} className="pdf-canvas" />
-          <div ref={textLayerRef} className="pdf-textlayer" />
-        </div>
+        {doc &&
+          Array.from({ length: numPages }, (_, i) => i + 1).map((n) => {
+            const sz = sizes[n] ?? est
+            return (
+              <div
+                key={n}
+                data-page={n}
+                className="pdf-page"
+                style={{ width: Math.floor(sz.w * scale), height: Math.floor(sz.h * scale) }}
+              >
+                <canvas className="pdf-canvas" />
+                <div className="pdf-textlayer" />
+              </div>
+            )
+          })}
       </div>
     </div>
   )

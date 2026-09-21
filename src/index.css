@@ -1848,12 +1848,14 @@ button {
   background: var(--bg);
   padding: 28px 0 60px;
   display: flex;
-  justify-content: center;
+  flex-direction: column;
+  align-items: center;
+  gap: 16px;
 }
 
 .pdf-page {
-  align-self: flex-start;
   position: relative;
+  flex-shrink: 0;
 }
 
 .pdf-canvas {
