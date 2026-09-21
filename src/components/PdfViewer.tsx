@@ -132,8 +132,17 @@ function PdfViewer({ tab }: Props) {
   const [annos, setAnnos] = useState<PdfAnno[]>([])
   const [pop, setPop] = useState<AnnoPop | null>(null)
   const [noteOpen, setNoteOpen] = useState('')
+  const [tool, setTool] = useState<'text' | 'anno'>('text')
+  const [selAnno, setSelAnno] = useState<string | null>(null)
   const annosRef = useRef(annos)
   annosRef.current = annos
+  const toolRef = useRef(tool)
+  toolRef.current = tool
+  const selRef = useRef(selAnno)
+  selRef.current = selAnno
+  // 拖移中的注解：起点屏幕坐标 + 原始矩形（增量换算 px→PDF pt）
+  const dragRef = useRef<null | { id: string; sx: number; sy: number; orig: AnnoRect[]; moved: boolean }>(null)
+  const suppressClick = useRef('')
   const markDirty = useApp((s) => s.markDirty)
   const scrollRef = useRef<HTMLDivElement>(null)
   const thumbsRef = useRef<HTMLDivElement>(null)
@@ -241,6 +250,8 @@ function PdfViewer({ tab }: Props) {
     setAnnos([])
     setPop(null)
     setNoteOpen('')
+    setTool('text')
+    setSelAnno(null)
   }, [doc])
 
   // 大纲：pdfjs getOutline 树递归拍平；目标页经 getDestination/getPageIndex 解析
@@ -726,6 +737,8 @@ function PdfViewer({ tab }: Props) {
       } else if (e.key === 'Escape' && searchOpenRef.current) {
         setSearchOpen(false)
         setQuery('')
+      } else if (e.key === 'Escape' && selRef.current) {
+        setSelAnno(null)
       }
     }
     window.addEventListener('keydown', onKey)
@@ -739,6 +752,7 @@ function PdfViewer({ tab }: Props) {
     const el = scrollRef.current
     if (!el) return
     const onUp = () => {
+      if (toolRef.current !== 'text') return
       setTimeout(() => {
         const sel = document.getSelection()
         if (!sel || sel.rangeCount === 0 || sel.isCollapsed) {
@@ -815,12 +829,81 @@ function PdfViewer({ tab }: Props) {
     setAnnos((a) => a.filter((x) => x.id !== id))
     markDirty(tab.id, true)
     setNoteOpen('')
+    if (selRef.current === id) setSelAnno(null)
   }
 
   const updateNote = (id: string, content: string) => {
     setAnnos((a) => a.map((x) => (x.id === id ? { ...x, content } : x)))
     markDirty(tab.id, true)
   }
+
+  const recolorAnno = (id: string, color: string) => {
+    setAnnos((a) => a.map((x) => (x.id === id ? { ...x, color } : x)))
+    markDirty(tab.id, true)
+  }
+
+  // 标注工具：pointerdown 即选中并预备拖移；位移超阈值才算拖（否则视作点击）
+  const startAnnoDrag = (e: React.PointerEvent, id: string) => {
+    if (tool !== 'anno' || e.button !== 0) return
+    const a = annos.find((x) => x.id === id)
+    if (!a) return
+    e.stopPropagation()
+    setSelAnno(id)
+    setPop(null)
+    dragRef.current = { id, sx: e.clientX, sy: e.clientY, orig: a.rects.map((r) => ({ ...r })), moved: false }
+  }
+
+  useEffect(() => {
+    const onMove = (e: PointerEvent) => {
+      const d = dragRef.current
+      if (!d) return
+      const dx = e.clientX - d.sx
+      const dy = e.clientY - d.sy
+      if (!d.moved && Math.hypot(dx, dy) < 3) return
+      d.moved = true
+      const sc = scaleRef.current
+      setAnnos((list) =>
+        list.map((a) =>
+          a.id === d.id
+            ? {
+                ...a,
+                rects: d.orig.map((r) => ({ ...r, x: +(r.x + dx / sc).toFixed(2), y: +(r.y + dy / sc).toFixed(2) })),
+              }
+            : a,
+        ),
+      )
+      markDirty(tab.id, true)
+    }
+    const onUp = () => {
+      const d = dragRef.current
+      if (!d) return
+      if (d.moved) suppressClick.current = d.id
+      dragRef.current = null
+    }
+    window.addEventListener('pointermove', onMove)
+    window.addEventListener('pointerup', onUp)
+    return () => {
+      window.removeEventListener('pointermove', onMove)
+      window.removeEventListener('pointerup', onUp)
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  // Delete/Backspace 删除选中注解（输入框内除外）
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== 'Delete' && e.key !== 'Backspace') return
+      const id = selRef.current
+      if (!id) return
+      const t = e.target as HTMLElement
+      if (t instanceof HTMLInputElement || t instanceof HTMLTextAreaElement) return
+      e.preventDefault()
+      removeAnno(id)
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
 
   // —— 标注写回：pdf-lib 删旧 Highlight/Text（留链接等）→ 按模型重加 → 覆盖原文件 ——
   useEffect(() => {
@@ -904,6 +987,8 @@ function PdfViewer({ tab }: Props) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tab.id, tab.path])
 
+  const selA = selAnno ? (annos.find((a) => a.id === selAnno) ?? null) : null
+
   if (import.meta.env.DEV) {
     const w = window as unknown as Record<string, unknown>
     w.__oofPdf = {
@@ -925,6 +1010,11 @@ function PdfViewer({ tab }: Props) {
           content: (a.content ?? a.text ?? '').slice(0, 60),
         })),
       pop: () => (pop ? { mode: pop.mode, page: pop.page, rects: pop.rects.length } : null),
+      tool: () => tool,
+      sel: () =>
+        selA
+          ? { id: selA.id, kind: selA.kind, color: selA.color, page: selA.page, x: +selA.rects[0].x.toFixed(1), y: +selA.rects[0].y.toFixed(1) }
+          : null,
       sideInfo: () => ({
         open: sideOpen,
         tab: sideTab,
@@ -953,7 +1043,7 @@ function PdfViewer({ tab }: Props) {
     <div className="editor-pane">
       <div className="editor-toolbar">
         <span className="editor-status">{status}</span>
-        <span className="editor-hint">PDF · 连续滚动 · 选文字加高亮/便签（Ctrl+S 存回文件） · Ctrl+滚轮缩放 · Ctrl+F 搜索 · ☰ 侧栏</span>
+        <span className="editor-hint">PDF · 选文字加高亮/便签（Ctrl+S 存回文件） · ✎ 标注工具：点选/拖移/改色/删除 · Ctrl+滚轮缩放 · Ctrl+F 搜索 · ☰ 侧栏</span>
       </div>
       <div className="pdf-toolbar">
         {btn('◀', () => gotoPage(Math.max(1, curPage - 1)), curPage <= 1, '上一页')}
@@ -978,11 +1068,31 @@ function PdfViewer({ tab }: Props) {
         {btn('＋', () => setScale((s) => Math.min(SCALE_MAX, +(s * SCALE_STEP).toFixed(3))), scale >= SCALE_MAX, '放大')}
         {btn('100%', () => setScale(1))}
         <span className="tb-sep" />
+        <span className="pdf-tools">
+          <button
+            className={`pdf-tool${tool === 'text' ? ' on' : ''}`}
+            title="文字选择工具"
+            onClick={() => {
+              setTool('text')
+              setSelAnno(null)
+            }}
+          >
+            T
+          </button>
+          <button
+            className={`pdf-tool${tool === 'anno' ? ' on' : ''}`}
+            title="标注编辑工具（点选/拖移/改色/删除）"
+            onClick={() => setTool('anno')}
+          >
+            ✎
+          </button>
+        </span>
+        <span className="tb-sep" />
         {btn('🔍', () => {
           setSearchOpen((v) => !v)
           if (!searchOpen) searchInputRef.current?.focus()
         }, !doc, '搜索 (Ctrl+F)')}
-        {btn('☰', () => setSideOpen((v) => !v), !doc, '侧栏 (缩略图/大纲)')}
+        {btn('☰', () => setSideOpen((v) => !v), !doc, '侧栏 (缩略图/大纲/标注)')}
         {searchOpen && (
           <span className="pdf-search">
             <input
@@ -1056,12 +1166,16 @@ function PdfViewer({ tab }: Props) {
               annos.length ? (
                 <div className="pdf-annos">
                   {annos.map((a) => (
-                    <div key={a.id} className="pdf-anno-item">
+                    <div key={a.id} className={`pdf-anno-item${selAnno === a.id ? ' sel' : ''}`}>
                       <span className="pdf-anno-dot" style={{ background: a.color }} />
                       <button
                         className="pdf-anno-jump"
                         title={a.kind === 'note' ? a.content ?? '' : a.text ?? ''}
-                        onClick={() => gotoPage(a.page)}
+                        onClick={() => {
+                          setTool('anno')
+                          setSelAnno(a.id)
+                          gotoPage(a.page)
+                        }}
                       >
                         <span className="pdf-anno-page">P{a.page}</span>
                         <span className="pdf-anno-sum">{a.kind === 'note' ? a.content : a.text || '(高亮)'}</span>
@@ -1097,7 +1211,15 @@ function PdfViewer({ tab }: Props) {
             )}
           </div>
         )}
-        <div className="pdf-scroll" ref={scrollRef}>
+        <div
+          className="pdf-scroll"
+          ref={scrollRef}
+          onClick={(e) => {
+            if (tool !== 'anno') return
+            const t = e.target as HTMLElement
+            if (!t.closest('[data-anno]') && !t.closest('.pdf-anno-edit')) setSelAnno(null)
+          }}
+        >
           {doc &&
             Array.from({ length: numPages }, (_, i) => i + 1).map((n) => {
               const sz = sizes[n] ?? est
@@ -1106,7 +1228,7 @@ function PdfViewer({ tab }: Props) {
                 <div
                   key={n}
                   data-page={n}
-                  className="pdf-page"
+                  className={`pdf-page${tool === 'anno' ? ' anno-mode' : ''}`}
                   style={{ width: Math.floor(sz.w * scale), height: Math.floor(sz.h * scale) }}
                 >
                   <canvas className="pdf-canvas" />
@@ -1116,8 +1238,9 @@ function PdfViewer({ tab }: Props) {
                       a.rects.map((r, i) => (
                         <div
                           key={a.id + '-' + i}
-                          className="pdf-anno-hl"
+                          className={`pdf-anno-hl${selAnno === a.id ? ' sel' : ''}`}
                           data-anno={a.id}
+                          onPointerDown={(e) => startAnnoDrag(e, a.id)}
                           style={{ left: r.x * scale, top: r.y * scale, width: r.w * scale, height: r.h * scale, background: a.color }}
                         />
                       ))
@@ -1125,10 +1248,18 @@ function PdfViewer({ tab }: Props) {
                       <div
                         key={a.id}
                         data-anno={a.id}
-                        className="pdf-anno-note"
+                        className={`pdf-anno-note${selAnno === a.id ? ' sel' : ''}`}
                         style={{ left: a.rects[0].x * scale, top: a.rects[0].y * scale }}
                         title={a.content}
-                        onClick={() => setNoteOpen(noteOpen === a.id ? '' : a.id)}
+                        onPointerDown={(e) => startAnnoDrag(e, a.id)}
+                        onClick={() => {
+                          if (suppressClick.current === a.id) {
+                            suppressClick.current = ''
+                            return
+                          }
+                          if (tool === 'anno') setSelAnno(a.id)
+                          else setNoteOpen(noteOpen === a.id ? '' : a.id)
+                        }}
                       >
                         🗒
                         {noteOpen === a.id && (
@@ -1147,6 +1278,48 @@ function PdfViewer({ tab }: Props) {
                         )}
                       </div>
                     ),
+                  )}
+                  {tool === 'anno' && selA && selA.page === n && (
+                    <div
+                      className="pdf-anno-pop pdf-anno-edit"
+                      style={{
+                        left: (selA.rects[selA.rects.length - 1].x + selA.rects[selA.rects.length - 1].w / 2) * scale,
+                        top: Math.max(4, selA.rects[0].y * scale - 44),
+                      }}
+                      onMouseDown={(e) => e.stopPropagation()}
+                    >
+                      {ANNO_COLORS.map((c) => (
+                        <button
+                          key={c}
+                          className={`pdf-anno-swatch${c === selA.color ? ' on' : ''}`}
+                          style={{ background: c }}
+                          title="改为该颜色"
+                          onClick={() => recolorAnno(selA.id, c)}
+                        />
+                      ))}
+                      {selA.kind === 'note' && (
+                        <button
+                          className="tb-btn"
+                          title="查看/编辑便签内容"
+                          onClick={() => setNoteOpen(noteOpen === selA.id ? '' : selA.id)}
+                        >
+                          🗒
+                        </button>
+                      )}
+                      <button
+                        className="tb-btn"
+                        title="删除标注 (Del)"
+                        onClick={() => {
+                          removeAnno(selA.id)
+                          setSelAnno(null)
+                        }}
+                      >
+                        🗑
+                      </button>
+                      <button className="tb-btn" title="取消选中 (Esc)" onClick={() => setSelAnno(null)}>
+                        ✕
+                      </button>
+                    </div>
                   )}
                 </div>
               )

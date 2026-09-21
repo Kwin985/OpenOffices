@@ -2050,6 +2050,54 @@ button {
   pointer-events: none;
 }
 
+/* v0.29 标注编辑工具态：文字层让位，高亮可直接点选/拖移 */
+.pdf-page.anno-mode .pdf-textlayer {
+  pointer-events: none;
+}
+
+.pdf-page.anno-mode .pdf-anno-hl {
+  pointer-events: auto;
+  cursor: move;
+}
+
+.pdf-anno-hl.sel {
+  outline: 2px solid var(--accent);
+  outline-offset: -1px;
+  opacity: 0.55;
+}
+
+.pdf-anno-note.sel {
+  outline: 2px solid var(--accent);
+  border-radius: 3px;
+}
+
+.pdf-tools {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding: 2px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+}
+
+.pdf-tool {
+  border: none;
+  background: none;
+  cursor: pointer;
+  font-size: 13px;
+  line-height: 1;
+  padding: 4px 9px;
+  border-radius: 4px;
+  color: var(--text-2);
+}
+
+.pdf-tool.on {
+  background: var(--panel);
+  color: var(--text);
+  box-shadow: 0 1px 3px rgba(31, 41, 55, 0.18);
+}
+
 .pdf-textlayer {
   z-index: 2;
 }
@@ -2066,15 +2114,16 @@ button {
   filter: saturate(1.2);
 }
 
+/* v0.29 Acrobat 风便签弹卡：淡黄便签纸 */
 .pdf-note-pop {
   position: absolute;
   left: 22px;
   top: -6px;
   width: 190px;
-  background: var(--panel);
-  border: 1px solid var(--border);
+  background: #fef9c3;
+  border: 1px solid #fde047;
   border-radius: 6px;
-  box-shadow: 0 4px 16px rgba(31, 41, 55, 0.18);
+  box-shadow: 0 4px 16px rgba(113, 63, 18, 0.25);
   padding: 6px;
   cursor: default;
 }
@@ -2084,10 +2133,11 @@ button {
   height: 56px;
   resize: vertical;
   font-size: 12px;
-  border: 1px solid var(--border);
+  border: 1px solid #fde68a;
   border-radius: 4px;
   padding: 4px 6px;
-  color: var(--text);
+  background: transparent;
+  color: #713f12;
 }
 
 .pdf-note-acts {
@@ -2097,34 +2147,66 @@ button {
   margin-top: 4px;
 }
 
+/* v0.29 Acrobat 风深色胶囊弹层（选区菜单 / 选中编辑条共用） */
 .pdf-anno-pop {
   position: fixed;
   z-index: 40;
   display: flex;
   align-items: center;
-  gap: 5px;
-  padding: 5px 8px;
-  background: var(--panel);
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  box-shadow: 0 4px 16px rgba(31, 41, 55, 0.2);
+  gap: 7px;
+  padding: 7px 12px;
+  background: rgba(31, 41, 55, 0.94);
+  border: none;
+  border-radius: 999px;
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.35);
+}
+
+.pdf-anno-edit {
+  position: absolute;
+  z-index: 6;
+  transform: translateX(-50%);
+}
+
+.pdf-anno-pop .tb-btn {
+  background: none;
+  border: none;
+  color: #e5e7eb;
+  font-size: 14px;
+  padding: 2px 4px;
+}
+
+.pdf-anno-pop .tb-btn:hover {
+  color: #fff;
+  background: rgba(255, 255, 255, 0.12);
 }
 
 .pdf-anno-swatch {
-  width: 18px;
-  height: 18px;
-  border-radius: 4px;
-  border: 1px solid var(--border);
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  border: 2px solid rgba(255, 255, 255, 0.85);
   cursor: pointer;
   padding: 0;
 }
 
 .pdf-anno-swatch:hover {
-  transform: scale(1.12);
+  transform: scale(1.15);
+}
+
+.pdf-anno-swatch.on {
+  border-color: #fff;
+  box-shadow: 0 0 0 2px var(--accent);
 }
 
 .pdf-note-input {
   width: 170px;
+  background: rgba(255, 255, 255, 0.12);
+  border: none;
+  color: #fff;
+}
+
+.pdf-note-input::placeholder {
+  color: rgba(255, 255, 255, 0.55);
 }
 
 .pdf-annos {
@@ -2138,6 +2220,11 @@ button {
   align-items: center;
   gap: 5px;
   padding: 3px 6px;
+}
+
+.pdf-anno-item.sel {
+  background: rgba(59, 130, 246, 0.14);
+  box-shadow: inset 2px 0 0 var(--accent);
 }
 
 .pdf-anno-dot {
