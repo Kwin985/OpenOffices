@@ -32,6 +32,7 @@ import { deckToPptxBytes } from '../lib/pptx-export'
 import { pptxBytesToDeck } from '../lib/pptx-import'
 import { exportPdfWithOverlay } from '../lib/pdfprint'
 import { registerSaver } from '../lib/registry'
+import { pptTemplate } from '../lib/templates'
 import StaticSlide from './StaticSlide'
 
 interface Props {
@@ -49,7 +50,7 @@ async function fileToDataUri(file: File): Promise<string> {
 }
 
 function PptEditor({ tab }: Props) {
-  const [deck, setDeck] = useState<Deck>(() => emptyDeck())
+  const [deck, setDeck] = useState<Deck>(() => (tab.template ? pptTemplate(tab.template) : emptyDeck()))
   const [cur, setCur] = useState(0)
   const [present, setPresent] = useState(false)
   const [presentIdx, setPresentIdx] = useState(0)
@@ -276,7 +277,7 @@ function PptEditor({ tab }: Props) {
 
   if (import.meta.env.DEV) {
     const w = window as unknown as Record<string, unknown>
-    w.__oofPpt = { exportPdfTo: (p: string) => exportPdfToRef.current(p), setDeck }
+    w.__oofPpt = { exportPdfTo: (p: string) => exportPdfToRef.current(p), setDeck, getDeck: () => deck }
   }
 
   const addSlide = (layout: SlideLayout) => {

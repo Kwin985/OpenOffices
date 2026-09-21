@@ -482,6 +482,42 @@
   大小写语义、上下导航回绕、替换与全部替换、无匹配提示、字族/字号写进 JSON、历史快照列表、
   恢复内容还原）；30s/60s 定时器由开发钩子直推快照代验；tsc/build 绿，Rust 零改动
 
+## PDF 标注形状 · 首页模板（v0.32）
+
+- **标注形状四类**：`PdfAnno.kind` 扩到 `rect / ellipse / line / ink`，几何统一塞进
+  `polys: number[][][]`（line 一笔两点、ink 多笔），`rects[0]` 恒为包围盒——于是拖移、选中编辑条、
+  侧栏「标注」列表、保存清理全部沿用 v0.29 通路零改动；工具栏 ✎ 态下多四颗绘制按钮
+  （▭ ◯ ↗ ✏），页面按下起笔、拖出预览草稿、抬手成一条标注（ink 逐点采样），再点同颗或 Esc 退出
+- **第三方导入**：`Square/Circle/Line/Ink` 四类注解读进同一模型（Line 缺 `L` 时按包围盒对角线兜底，
+  Ink 多笔画逐条还原），颜色 0-255 数组 → `#rrggbb`
+- **写回**：pdf-lib 走低层 `context.obj({Type:Annot, Subtype:Square|Circle|Line|Ink, Rect, L|InkList, Border})`
+  + `register` + `Annots.push`；保存前清旧列表按 `Subtype` 全量重写，重复存开不累积；线尾箭头 `Head/Tail`
+  与 Ink 的 `InkList` 折线数组都用 `context.obj([])` + `PDFNumber` 逐个 push 构造
+- **渲染**：SVG 覆盖层按形状分支（`<rect>/<ellipse>/<line>+<polygon> 箭头/<polyline>`），每组外面套一层
+  `stroke="transparent" strokeWidth=14` 的同形命中孪生体——细线也好点；命中权由
+  `.pdf-page.anno-mode .pdf-anno-svg:not(.drawing) [data-anno] { pointer-events: auto }` 给
+- **首页模板体系**：`lib/templates.ts` 注册 11 个模板（公文/会议纪要/周报 ×3、记账表/库存清单 ×2、
+  六套演示配色 ×6），首页「从模板新建」画廊卡片一点即开标签；`Tab.template` 存 id，三个编辑器在
+  **无路径**分支各自 seed（文档 `setContent` + meta、表格 payload→Univer 快照（含冻结表头/列宽/合计公式/金额格式）、
+  演示 `useState` 惰性初值套主题），另存时文档用 `tab.title` 当默认文件名
+- **查找命中上限**：`FR_HIT_CAP = 2000`，收集到 2001 即停并置 `truncated`，面板计数显示 `N+`，
+  超长文档按文本块查找不再卡主线程
+- **坑**：① pdf.js 把 Line 解析成 **扁平数组** `lineCoordinates=[x1,y1,x2,y2]`（不是 `line` 对象），
+  Ink 是 `inkLists`（类数组，只能下标访问），读错字段整类注解静默全空；② 保存分支的 `else` 必须
+  在 `else if (kind === 'note')` **之前**收敛，否则形状全被写成 Text 便签；③ CSS 里父级
+  `pointer-events: none` 挡不住自己声明了取值的子元素，绘制态必须靠 `.drawing` 类把子组重新关掉；
+  ④ pdf-lib 不导出 `PDFHexColor`（颜色用 0-1 三分量 `PDFArray`），本构建也无 `PDFArray.withOutDeltas`；
+  ⑤ 页面 HTML 分支只特判 `highlight` 会让四种形状各多渲染一个 🗒 锚点（点选/拖移全打到错节点），
+  必须显式 `note` 分支 + 形状 `null`；⑥ 模板里用 `cells[11].f = …` 按下标补公式极易数错位
+  （合计文字与 `=SUM(D2:D3)` 挤进同一格），改为 `cell(r,c,v,style,f)` 构造期落值；
+  ⑦ Univer facade 的 worksheet 实名 `getSheetName()`（无 `getName()`），冒烟改读
+  `getActiveWorkbook().save()` 快照断言最稳；⑧ CDP 冒烟 `location.reload()` 后旧执行上下文仍可能
+  答出 `.home`，须等 `Page.loadEventFired` 再判定就绪
+- **验证**：vite-node 结构测试 28 断言（模板注册表、doc/sheet/ppt 三类 seed、公式落位、
+  命中上限截断语义）+ CDP 冒烟 19 断言全绿（模板卡片→三编辑器注入、四形状导入几何与 Ink 双笔、
+  页 1 拖拽画矩形落位、页 2 画线、点选+拖移 +50px、编辑条改色、Ctrl+S 写回清 dirty、
+  重开 6 形状不累积且颜色保真、Delete 删除、🗒 锚点仅 Text 注解渲染）；tsc/build 绿，Rust 零改动
+
 ## 性能（v0.3）
 
 - **按编辑器分包 + 懒加载**：主包 8MB → 首屏约 300KB；Univer（6.1MB）只在首次激活表格标签时加载，
@@ -535,7 +571,8 @@ src/                  React 前端
   lib/toc-extension.ts TipTap 目录原子节点：按标题实时汇总、点击跳转
   lib/comment-extension.ts comment mark（cid 锚定批注）+ 加/删/定位/汇总工具
   lib/odt.ts          ProseMirror JSON ↔ ODT（JSZip 打包导出 + DOMParser 导入，字符样式（字族/字号/字色，落在 content.xml 自动样式）/合并表/图片尺寸/页码域/page-layout 页面设置）
-  lib/find-replace.ts 查找/替换 ProseMirror 插件：按文本块匹配存 state、装饰高亮、findNext/findPrev/replaceOne/replaceAll 命令
+  lib/find-replace.ts 查找/替换 ProseMirror 插件：按文本块匹配存 state、装饰高亮、findNext/findPrev/replaceOne/replaceAll 命令（命中上限 FR_HIT_CAP=2000 截断并标 `N+`）
+  lib/templates.ts    首页模板注册表与纯函数 seed：11 个模板（公文/会议纪要/周报 → ProseMirror JSON+meta，记账表/库存清单 → WorkbookPayload 含公式冻结，六套演示配色 → Deck）
   lib/ppt.ts          .opd 幻灯片数据模型（版式/主题/序列化）
   lib/pdfprint.ts     打印覆盖层：挂 DOM → 注入打印样式 → export_pdf → 清理
   lib/sheet-print.ts  WorkbookPayload → 打印 HTML 网格（值/边框/对齐/换行/数字格式/字族/合并/列宽行高/跳过隐藏行列/分页/截断）
@@ -544,7 +581,7 @@ src/                  React 前端
   lib/registry.ts     跨组件保存器注册表（Ctrl+S 路由到当前标签）
   lib/open.ts         路径→标签 打开 / 带确认关闭
   lib/sync.ts         最近文件端到端加密同步（WebCrypto PBKDF2-SHA256 → AES-256-GCM，.oosync 信封）
-  components/         Home / Workspace / SheetEditor / DocEditor（页面设置/分页参考线/表格与图片上下文工具条/粘贴成图/查找替换面板/字体族·字号/版本历史·自动保存） / PptEditor / PdfViewer（pdfjs-dist 懒加载，连续多页视口虚拟渲染+Ctrl 缩放+TextLayer 文字选择+全文搜索+缩略图/大纲/标注侧栏+高亮便签 pdf-lib 写回+标注编辑（点选/拖移/改色/删除））
+  components/         Home（最近文件 + 从模板新建画廊） / Workspace / SheetEditor / DocEditor（页面设置/分页参考线/表格与图片上下文工具条/粘贴成图/查找替换面板/字体族·字号/版本历史·自动保存/模板 seed） / PptEditor / PdfViewer（pdfjs-dist 懒加载，连续多页视口虚拟渲染+Ctrl 缩放+TextLayer 文字选择+全文搜索+缩略图/大纲/标注侧栏+高亮便签与矩形·椭圆·直线·手绘形状（绘制/导入/写回 pdf-lib）+标注编辑（点选/拖移/改色/删除））
 scripts/              copy-pdfjs-assets.mjs（dev/build 前复制 cmaps/标准字体到 public/pdfjs）
 .github/workflows/    release.yml——tag v* 触发：门禁→win/linux 矩阵打包→GitHub Release
 ```
@@ -552,7 +589,7 @@ scripts/              copy-pdfjs-assets.mjs（dev/build 前复制 cmaps/标准�
 表格文件流：`xlsx/ods 磁盘 → Rust(calamine 值 + xlsx/ods 各自 zip/quick-xml 直解样式·合并·尺寸·字族·隐藏·冻结·公式·图表) → JSON 快照 → Univer 渲染（图表经 VChart 出 PNG 浮动图片）`；保存按扩展名分流——`.xlsx` 经 `rust_xlsxwriter`（含原生图表部件）、`.ods` 经 `ods.rs` 生成 ODF 包。
 文档文件流：`docx → mammoth 正文 + zip 直读页眉页脚/批注 → HTML/元数据 → TipTap`；`.odt` 走 `lib/odt.ts` 双向；保存为 `.odoc` JSON（含 meta）或导出 docx/odt。
 演示文件流：`pptx → JSZip 解包 OOXML → Deck 模型 → 编辑器`；保存为 `.opd` JSON 或经 pptxgenjs 导出 pptx。
-PDF 文件流：查看 `pdf 磁盘 → readBytes → pdfjs-dist（worker + canvas）`；标注 `选区/便签 → 内存模型 → Ctrl+S 时 pdf-lib 低层写 Annotation 字典回原文件`；文档导出 `@media print 排版 → Rust export_pdf → WebView2 PrintToPdf 落盘`；演示导出 `Deck → createRoot 离屏挂载 StaticSlide 分页 → 同上`；表格导出 `Univer 快照 → WorkbookPayload → lib/sheet-print.ts 自绘 HTML 网格 → 同上（canvas 抓不到故走数据侧重排）`。
+PDF 文件流：查看 `pdf 磁盘 → readBytes → pdfjs-dist（worker + canvas）`；标注 `选区高亮/便签/拖拽画的矩形·椭圆·直线·手绘 → 内存模型（rects[0] 包围盒 + polys 几何）→ Ctrl+S 时 pdf-lib 低层写 Annotation 字典回原文件`；文档导出 `@media print 排版 → Rust export_pdf → WebView2 PrintToPdf 落盘`；演示导出 `Deck → createRoot 离屏挂载 StaticSlide 分页 → 同上`；表格导出 `Univer 快照 → WorkbookPayload → lib/sheet-print.ts 自绘 HTML 网格 → 同上（canvas 抓不到故走数据侧重排）`。
 
 ## 开发
 
@@ -604,6 +641,8 @@ cargo check        # Rust 后端检查（在 src-tauri 下）
 - [x] 文档：表格上下文工具条（行列/合并/表头，gridSpan/vMerge 导出）+ 图片粘贴成图与宽度/居中条
 - [x] 文档：查找/替换面板（命中高亮+大小写+单个/全部替换）+ 字体族/字号（docx/odt 往返）
 - [x] 文档：自动保存（.odoc 定时静默落盘）+ 会话内版本历史（快照环形栈一键恢复）
+- [x] PDF 标注形状：矩形/椭圆/直线/手绘（绘制交互 + Square/Circle/Line/Ink 读侧导入 + pdf-lib 写回保真）
+- [x] 首页模板体系：文档/表格/演示 11 个模板一键新建（三编辑器无路径分支各自 seed）+ 查找命中上限截断
 - [ ] 自动更新通道（须先决策：公开仓库或独立托管 update metadata）
 - [ ] macOS 打包（需签名/公证凭据）
 

@@ -12,6 +12,7 @@ import { renderChartPng } from '../lib/chart'
 import { registerSaver } from '../lib/registry'
 import { exportPdfWithOverlay } from '../lib/pdfprint'
 import { sheetsToPrintHtml } from '../lib/sheet-print'
+import { sheetTemplate } from '../lib/templates'
 
 type FWorkbook = NonNullable<ReturnType<FUniver['getActiveWorkbook']>>
 type FWorksheet = NonNullable<ReturnType<FWorkbook['getSheetByName']>>
@@ -214,6 +215,9 @@ function SheetEditor({ tab }: Props) {
         if (tab.path) {
           dump = await readXlsx(tab.path)
           data = payloadToWorkbook(dump, baseName(tab.path))
+        } else if (tab.template) {
+          dump = sheetTemplate(tab.template)
+          data = payloadToWorkbook(dump, tab.title || '未命名表格')
         } else {
           dump = { sheets: [] }
           data = payloadToWorkbook({ sheets: [] }, '未命名表格')

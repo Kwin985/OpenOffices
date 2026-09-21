@@ -275,6 +275,77 @@ button {
   border-color: var(--ppt);
 }
 
+.home-templates {
+  margin-bottom: 32px;
+}
+
+.home-templates h3 {
+  font-size: 16px;
+  margin-bottom: 10px;
+}
+
+.tpl-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(230px, 1fr));
+  gap: 10px;
+}
+
+.tpl-card {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 14px;
+  text-align: left;
+  border-radius: 10px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  cursor: pointer;
+  transition: box-shadow 0.15s, border-color 0.15s;
+}
+
+.tpl-card:hover {
+  box-shadow: 0 4px 14px rgba(31, 41, 55, 0.1);
+  border-color: var(--accent);
+}
+
+.tpl-icon {
+  flex: none;
+  width: 30px;
+  height: 30px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 8px;
+  color: #fff;
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.tpl-icon.kind-doc { background: var(--doc); }
+.tpl-icon.kind-sheet { background: var(--sheet); }
+.tpl-icon.kind-ppt { background: var(--ppt); }
+
+.tpl-info {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.tpl-name {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.tpl-desc {
+  font-size: 11px;
+  color: var(--text-2);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 .home-recents h3 {
   font-size: 16px;
 }
@@ -2132,6 +2203,35 @@ button {
 .pdf-anno-note.sel {
   outline: 2px solid var(--accent);
   border-radius: 3px;
+}
+
+/* v0.32 形状标注：SVG 覆盖层（矩形/椭圆/直线/手绘）。
+   根 svg 恒 none（空白区落到页面），可命中性由 [data-anno] 分组按模式开关：
+   标注工具态开、绘制态关（让 pointerdown 落到页面起笔）、文字态关。 */
+.pdf-anno-svg {
+  position: absolute;
+  left: 0;
+  top: 0;
+  z-index: 2;
+  overflow: visible;
+  pointer-events: none;
+}
+
+.pdf-anno-svg [data-anno] {
+  pointer-events: none;
+}
+
+.pdf-page.anno-mode .pdf-anno-svg:not(.drawing) [data-anno] {
+  pointer-events: auto;
+  cursor: move;
+}
+
+.pdf-anno-selbox {
+  fill: none;
+  stroke: var(--accent);
+  stroke-width: 1.5;
+  stroke-dasharray: 4 3;
+  pointer-events: none;
 }
 
 .pdf-tools {

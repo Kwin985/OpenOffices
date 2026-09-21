@@ -53,12 +53,34 @@ interface AnnoRect {
 
 interface PdfAnno {
   id: string
-  kind: 'highlight' | 'note'
+  kind: 'highlight' | 'note' | 'rect' | 'ellipse' | 'line' | 'ink'
   page: number
   rects: AnnoRect[]
+  // 形状几何：line=[[p1,p2]]、ink=多笔折线；rect/ellipse 只存 rects[0] 包围盒
+  polys?: number[][][]
   color: string
   text?: string
   content?: string
+}
+
+const SHAPE_KINDS = new Set(['rect', 'ellipse', 'line', 'ink'])
+const isShape = (a: PdfAnno) => SHAPE_KINDS.has(a.kind)
+const SHAPE_LABEL: Record<string, string> = { rect: '▭ 矩形', ellipse: '◯ 椭圆', line: '↗ 直线', ink: '✏ 手绘' }
+
+// 点集 → 左上原点包围盒
+function bboxOf(pts: number[][][]): AnnoRect {
+  let x0 = Infinity
+  let y0 = Infinity
+  let x1 = -Infinity
+  let y1 = -Infinity
+  for (const s of pts)
+    for (const [x, y] of s) {
+      x0 = Math.min(x0, x)
+      y0 = Math.min(y0, y)
+      x1 = Math.max(x1, x)
+      y1 = Math.max(y1, y)
+    }
+  return { x: x0, y: y0, w: Math.max(x1 - x0, 1), h: Math.max(y1 - y0, 1) }
 }
 
 interface AnnoPop {
@@ -133,6 +155,12 @@ function PdfViewer({ tab }: Props) {
   const [pop, setPop] = useState<AnnoPop | null>(null)
   const [noteOpen, setNoteOpen] = useState('')
   const [tool, setTool] = useState<'text' | 'anno'>('text')
+  type DrawKind = 'rect' | 'ellipse' | 'line' | 'ink'
+  const [drawTool, setDrawTool] = useState<DrawKind | null>(null)
+  const [draft, setDraft] = useState<{ kind: DrawKind; page: number; polys: number[][][] } | null>(null)
+  const drawToolRef = useRef(drawTool)
+  drawToolRef.current = drawTool
+  const draftRef = useRef<{ kind: DrawKind; page: number; sx: number; sy: number; polys: number[][][] } | null>(null)
   const [selAnno, setSelAnno] = useState<string | null>(null)
   const annosRef = useRef(annos)
   annosRef.current = annos
@@ -140,8 +168,11 @@ function PdfViewer({ tab }: Props) {
   toolRef.current = tool
   const selRef = useRef(selAnno)
   selRef.current = selAnno
-  // 拖移中的注解：起点屏幕坐标 + 原始矩形（增量换算 px→PDF pt）
-  const dragRef = useRef<null | { id: string; sx: number; sy: number; orig: AnnoRect[]; moved: boolean }>(null)
+  // 拖移中的注解：起点屏幕坐标 + 原始矩形/折线（增量换算 px→PDF pt）
+  const dragRef = useRef<
+    | { id: string; sx: number; sy: number; orig: AnnoRect[]; origPolys?: number[][][]; moved: boolean }
+    | null
+  >(null)
   const suppressClick = useRef('')
   const markDirty = useApp((s) => s.markDirty)
   const scrollRef = useRef<HTMLDivElement>(null)
@@ -306,6 +337,8 @@ function PdfViewer({ tab }: Props) {
           rect?: number[]
           color?: number[]
           contentsObj?: { str?: string }
+          lineCoordinates?: number[]
+          inkLists?: ArrayLike<ArrayLike<number>>
         }[]
         for (const a of list) {
           if (!Array.isArray(a.rect) || a.rect.length < 4) continue
@@ -316,6 +349,33 @@ function PdfViewer({ tab }: Props) {
             out.push({ id: nid(), kind: 'highlight', page: n, rects: [r], color: rgbHex(a.color), text: txt })
           } else if (a.subtype === 'Text') {
             out.push({ id: nid(), kind: 'note', page: n, rects: [r], color: rgbHex(a.color), content: txt })
+          } else if (a.subtype === 'Square' || a.subtype === 'Circle') {
+            out.push({
+              id: nid(),
+              kind: a.subtype === 'Square' ? 'rect' : 'ellipse',
+              page: n,
+              rects: [r],
+              color: rgbHex(a.color),
+            })
+          } else if (a.subtype === 'Line') {
+            // pdf.js 把 L 解析成 lineCoordinates=[x1,y1,x2,y2]（左下原点，实测非对象）；缺字段时按包围盒对角线兜底
+            const lc = a.lineCoordinates
+            const l = Array.isArray(lc) && lc.length >= 4 ? lc : [x1, y1, x2, y2]
+            const pts = [
+              [
+                [l[0], ph - l[1]],
+                [l[2], ph - l[3]],
+              ],
+            ]
+            out.push({ id: nid(), kind: 'line', page: n, rects: [bboxOf(pts)], polys: pts, color: rgbHex(a.color) })
+          } else if (a.subtype === 'Ink') {
+            if (!Array.isArray(a.inkLists) || !a.inkLists.length) continue
+            const pts = a.inkLists.map((flat) => {
+              const s: number[][] = []
+              for (let i = 0; i + 1 < flat.length; i += 2) s.push([flat[i], ph - flat[i + 1]])
+              return s
+            })
+            out.push({ id: nid(), kind: 'ink', page: n, rects: [bboxOf(pts)], polys: pts, color: rgbHex(a.color) })
           }
         }
       }
@@ -737,6 +797,8 @@ function PdfViewer({ tab }: Props) {
       } else if (e.key === 'Escape' && searchOpenRef.current) {
         setSearchOpen(false)
         setQuery('')
+      } else if (e.key === 'Escape' && drawToolRef.current) {
+        setDrawTool(null)
       } else if (e.key === 'Escape' && selRef.current) {
         setSelAnno(null)
       }
@@ -844,13 +906,76 @@ function PdfViewer({ tab }: Props) {
 
   // 标注工具：pointerdown 即选中并预备拖移；位移超阈值才算拖（否则视作点击）
   const startAnnoDrag = (e: React.PointerEvent, id: string) => {
-    if (tool !== 'anno' || e.button !== 0) return
+    if (tool !== 'anno' || e.button !== 0 || drawTool) return
     const a = annos.find((x) => x.id === id)
     if (!a) return
     e.stopPropagation()
     setSelAnno(id)
     setPop(null)
-    dragRef.current = { id, sx: e.clientX, sy: e.clientY, orig: a.rects.map((r) => ({ ...r })), moved: false }
+    dragRef.current = {
+      id,
+      sx: e.clientX,
+      sy: e.clientY,
+      orig: a.rects.map((r) => ({ ...r })),
+      origPolys: a.polys?.map((s) => s.map((p) => [...p])),
+      moved: false,
+    }
+  }
+
+  // 形状绘制：在页面上按下起点，拖到终点抬手成一条标注（ink 逐点采样）
+  const drawPointerDown = (e: React.PointerEvent) => {
+    const kind = drawToolRef.current
+    if (!kind || tool !== 'anno' || e.button !== 0) return
+    const pe = (e.target as HTMLElement).closest('[data-page]') as HTMLElement | null
+    if (!pe) return
+    const n = Number(pe.dataset.page)
+    const pr = pe.getBoundingClientRect()
+    const sc = scaleRef.current
+    const pt = [(e.clientX - pr.left) / sc, (e.clientY - pr.top) / sc]
+    draftRef.current = { kind, page: n, sx: pt[0], sy: pt[1], polys: [[[...pt]]] }
+    setDraft({ kind, page: n, polys: [[[...pt]]] })
+    setPop(null)
+    setSelAnno(null)
+  }
+
+  const drawPointerMove = (e: React.PointerEvent) => {
+    const d = draftRef.current
+    if (!d) return
+    const pe = pageEl(d.page)
+    if (!pe) return
+    const pr = pe.getBoundingClientRect()
+    const sc = scaleRef.current
+    const x = +((e.clientX - pr.left) / sc).toFixed(1)
+    const y = +((e.clientY - pr.top) / sc).toFixed(1)
+    const stroke = d.polys[0]
+    if (d.kind === 'ink') {
+      const last = stroke[stroke.length - 1]
+      if (Math.hypot(x - last[0], y - last[1]) < 1.5) return
+      stroke.push([x, y])
+    } else {
+      stroke.length = 1
+      stroke.push([x, y])
+    }
+    setDraft({ kind: d.kind, page: d.page, polys: d.polys.map((s) => s.map((p) => [...p])) })
+  }
+
+  const drawPointerUp = () => {
+    const d = draftRef.current
+    draftRef.current = null
+    if (!d) return
+    const stroke = d.polys[0]
+    const min = d.kind === 'ink' ? 2 : 4
+    if (stroke.length < 2 || Math.max(
+      Math.abs(stroke[stroke.length - 1][0] - stroke[0][0]),
+      Math.abs(stroke[stroke.length - 1][1] - stroke[0][1]),
+    ) < min) {
+      setDraft(null)
+      return
+    }
+    const polys = d.polys.map((s) => s.map((p) => [...p]))
+    setAnnos((list) => [...list, { id: nid(), kind: d.kind, page: d.page, rects: [bboxOf(polys)], polys, color: ANNO_COLORS[0] }])
+    markDirty(tab.id, true)
+    setDraft(null)
   }
 
   useEffect(() => {
@@ -868,6 +993,9 @@ function PdfViewer({ tab }: Props) {
             ? {
                 ...a,
                 rects: d.orig.map((r) => ({ ...r, x: +(r.x + dx / sc).toFixed(2), y: +(r.y + dy / sc).toFixed(2) })),
+                polys: d.origPolys?.map((s) =>
+                  s.map((p) => [+(p[0] + dx / sc).toFixed(2), +(p[1] + dy / sc).toFixed(2)]),
+                ),
               }
             : a,
         ),
@@ -923,7 +1051,8 @@ function PdfViewer({ tab }: Props) {
           const obj = pdoc.context.lookup(arr.get(i))
           if (!(obj instanceof PDFDict)) continue
           const st = obj.get(PDFName.of('Subtype'))
-          if (st === PDFName.of('Highlight') || st === PDFName.of('Text')) arr.remove(i)
+          const owned = ['Highlight', 'Text', 'Square', 'Circle', 'Line', 'Ink']
+          if (owned.some((s) => st === PDFName.of(s))) arr.remove(i)
         }
       }
       const colorArr = (h: string) => [
@@ -963,7 +1092,7 @@ function PdfViewer({ tab }: Props) {
               }),
             ),
           )
-        } else {
+        } else if (a.kind === 'note') {
           const r0 = a.rects[0]
           const yb = height - r0.y - r0.h
           arr.push(
@@ -978,6 +1107,52 @@ function PdfViewer({ tab }: Props) {
               }),
             ),
           )
+        } else if (a.kind === 'rect' || a.kind === 'ellipse') {
+          const r = a.rects[0]
+          arr.push(
+            pdoc.context.register(
+              pdoc.context.obj({
+                Type: PDFName.of('Annot'),
+                Subtype: PDFName.of(a.kind === 'rect' ? 'Square' : 'Circle'),
+                Rect: [r.x, height - r.y - r.h, r.x + r.w, height - r.y],
+                C: colorArr(a.color),
+                Border: { S: PDFName.of('S'), W: 1.5 },
+              }),
+            ),
+          )
+        } else if (a.kind === 'line' || a.kind === 'ink') {
+          const r = a.rects[0]
+          const flip = (p: number[]) => [p[0], height - p[1]]
+          const s0 = a.polys?.[0]
+          if (a.kind === 'line' && s0 && s0.length >= 2) {
+            arr.push(
+              pdoc.context.register(
+                pdoc.context.obj({
+                  Type: PDFName.of('Annot'),
+                  Subtype: PDFName.of('Line'),
+                  Rect: [r.x, height - r.y - r.h, r.x + r.w, height - r.y],
+                  L: [...flip(s0[0]), ...flip(s0[s0.length - 1])],
+                  Head: PDFName.of('OpenA'),
+                  Tail: PDFName.of('None'),
+                  C: colorArr(a.color),
+                  Border: { S: PDFName.of('S'), W: 2 },
+                }),
+              ),
+            )
+          } else if (a.kind === 'ink' && a.polys?.length) {
+            arr.push(
+              pdoc.context.register(
+                pdoc.context.obj({
+                  Type: PDFName.of('Annot'),
+                  Subtype: PDFName.of('Ink'),
+                  Rect: [r.x, height - r.y - r.h, r.x + r.w, height - r.y],
+                  InkList: a.polys.map((s) => s.flatMap((p) => flip(p))),
+                  C: colorArr(a.color),
+                  Border: { S: PDFName.of('S'), W: 2 },
+                }),
+              ),
+            )
+          }
         }
       }
       const out = await pdoc.save({ addDefaultPage: false })
@@ -1007,8 +1182,13 @@ function PdfViewer({ tab }: Props) {
           page: a.page,
           color: a.color,
           rects: a.rects.length,
+          polys: a.polys?.map((s) => s.length),
+          box: a.polys ? a.rects[0] : undefined,
           content: (a.content ?? a.text ?? '').slice(0, 60),
         })),
+      shapes: () => annos.filter(isShape).map((a) => ({ kind: a.kind, page: a.page, color: a.color, box: a.rects[0] })),
+      drawTool: () => drawTool,
+      draftPolys: () => draft?.polys.map((s) => s.length),
       pop: () => (pop ? { mode: pop.mode, page: pop.page, rects: pop.rects.length } : null),
       tool: () => tool,
       sel: () =>
@@ -1023,6 +1203,66 @@ function PdfViewer({ tab }: Props) {
         thumbs: [...thumbSlots.current.keys()].sort((a, b) => a - b),
       }),
     }
+  }
+
+  // 形状标注 → SVG 元素（坐标 ×scale，与 rects 同一 PDF pt 左上原点约定）
+  const shapeNode = (a: PdfAnno) => {
+    const S = scale
+    const box = a.rects[0]
+    const linePts = a.polys?.[0]
+    const common = { stroke: a.color, fill: 'none', strokeWidth: 2, strokeLinecap: 'round' as const }
+    const el =
+      a.kind === 'rect' ? (
+        <rect x={box.x * S} y={box.y * S} width={box.w * S} height={box.h * S} {...common} />
+      ) : a.kind === 'ellipse' ? (
+        <ellipse
+          cx={(box.x + box.w / 2) * S}
+          cy={(box.y + box.h / 2) * S}
+          rx={(box.w / 2) * S}
+          ry={(box.h / 2) * S}
+          {...common}
+        />
+      ) : (
+        <>
+          {(a.polys ?? []).map((s, i) =>
+            a.kind === 'line' && s.length >= 2 ? (
+              <line key={i} x1={s[0][0] * S} y1={s[0][1] * S} x2={s[s.length - 1][0] * S} y2={s[s.length - 1][1] * S} {...common} />
+            ) : (
+              <polyline key={i} points={s.map((p) => `${p[0] * S},${p[1] * S}`).join(' ')} {...common} />
+            ),
+          )}
+          {a.kind === 'line' && linePts && linePts.length >= 2 && (() => {
+            const s = linePts
+            const [x, y] = s[s.length - 1].map((v) => v * S)
+            const [px, py] = s[s.length - 2].map((v) => v * S)
+            const ang = Math.atan2(y - py, x - px)
+            const L = 9
+            return (
+              <polygon
+                points={`${x},${y} ${x - L * Math.cos(ang - 0.45)},${y - L * Math.sin(ang - 0.45)} ${x - L * Math.cos(ang + 0.45)},${y - L * Math.sin(ang + 0.45)}`}
+                fill={a.color}
+              />
+            )
+          })()}
+        </>
+      )
+    return (
+      <g key={a.id} data-anno={a.id} onPointerDown={(e) => startAnnoDrag(e, a.id)} onClick={(e) => e.stopPropagation()}>
+        <g stroke="transparent" strokeWidth={14} fill="none">
+          {el}
+        </g>
+        {el}
+        {selAnno === a.id && (
+          <rect
+            className="pdf-anno-selbox"
+            x={(box.x - 3) * S}
+            y={(box.y - 3) * S}
+            width={(box.w + 6) * S}
+            height={(box.h + 6) * S}
+          />
+        )}
+      </g>
+    )
   }
 
   const btn = (label: string, onClick: () => void, disabled = false, title?: string) => (
@@ -1043,7 +1283,7 @@ function PdfViewer({ tab }: Props) {
     <div className="editor-pane">
       <div className="editor-toolbar">
         <span className="editor-status">{status}</span>
-        <span className="editor-hint">PDF · 选文字加高亮/便签（Ctrl+S 存回文件） · ✎ 标注工具：点选/拖移/改色/删除 · Ctrl+滚轮缩放 · Ctrl+F 搜索 · ☰ 侧栏</span>
+        <span className="editor-hint">PDF · 选文字加高亮/便签（Ctrl+S 存回文件） · ✎ 标注工具：点选/拖移/改色/删除，▭◯↗✏ 拖拽绘制形状 · Ctrl+滚轮缩放 · Ctrl+F 搜索 · ☰ 侧栏</span>
       </div>
       <div className="pdf-toolbar">
         {btn('◀', () => gotoPage(Math.max(1, curPage - 1)), curPage <= 1, '上一页')}
@@ -1074,6 +1314,7 @@ function PdfViewer({ tab }: Props) {
             title="文字选择工具"
             onClick={() => {
               setTool('text')
+              setDrawTool(null)
               setSelAnno(null)
             }}
           >
@@ -1082,10 +1323,24 @@ function PdfViewer({ tab }: Props) {
           <button
             className={`pdf-tool${tool === 'anno' ? ' on' : ''}`}
             title="标注编辑工具（点选/拖移/改色/删除）"
-            onClick={() => setTool('anno')}
+            onClick={() => {
+              setTool('anno')
+              setDrawTool(null)
+            }}
           >
             ✎
           </button>
+          {tool === 'anno' &&
+            (['rect', 'ellipse', 'line', 'ink'] as const).map((k) => (
+              <button
+                key={k}
+                className={`pdf-tool${drawTool === k ? ' on' : ''}`}
+                title={`${SHAPE_LABEL[k]}（在页面拖拽绘制，Esc 退出）`}
+                onClick={() => setDrawTool(drawTool === k ? null : k)}
+              >
+                {k === 'rect' ? '▭' : k === 'ellipse' ? '◯' : k === 'line' ? '↗' : '✏'}
+              </button>
+            ))}
         </span>
         <span className="tb-sep" />
         {btn('🔍', () => {
@@ -1170,15 +1425,16 @@ function PdfViewer({ tab }: Props) {
                       <span className="pdf-anno-dot" style={{ background: a.color }} />
                       <button
                         className="pdf-anno-jump"
-                        title={a.kind === 'note' ? a.content ?? '' : a.text ?? ''}
+                        title={isShape(a) ? SHAPE_LABEL[a.kind] : a.kind === 'note' ? (a.content ?? '') : (a.text ?? '')}
                         onClick={() => {
                           setTool('anno')
+                          setDrawTool(null)
                           setSelAnno(a.id)
                           gotoPage(a.page)
                         }}
                       >
                         <span className="pdf-anno-page">P{a.page}</span>
-                        <span className="pdf-anno-sum">{a.kind === 'note' ? a.content : a.text || '(高亮)'}</span>
+                        <span className="pdf-anno-sum">{isShape(a) ? SHAPE_LABEL[a.kind] : a.kind === 'note' ? a.content : a.text || '(高亮)'}</span>
                       </button>
                       <button className="pdf-anno-del" title="删除标注" onClick={() => removeAnno(a.id)}>
                         ✕
@@ -1214,6 +1470,10 @@ function PdfViewer({ tab }: Props) {
         <div
           className="pdf-scroll"
           ref={scrollRef}
+          onPointerDown={drawPointerDown}
+          onPointerMove={drawPointerMove}
+          onPointerUp={drawPointerUp}
+          onPointerCancel={drawPointerUp}
           onClick={(e) => {
             if (tool !== 'anno') return
             const t = e.target as HTMLElement
@@ -1244,7 +1504,7 @@ function PdfViewer({ tab }: Props) {
                           style={{ left: r.x * scale, top: r.y * scale, width: r.w * scale, height: r.h * scale, background: a.color }}
                         />
                       ))
-                    ) : (
+                    ) : a.kind === 'note' ? (
                       <div
                         key={a.id}
                         data-anno={a.id}
@@ -1277,7 +1537,56 @@ function PdfViewer({ tab }: Props) {
                           </div>
                         )}
                       </div>
-                    ),
+                    ) : null,
+                  )}
+                  {(pageAnnos.some(isShape) || (draft && draft.page === n)) && (
+                    <svg
+                      className={`pdf-anno-svg${drawTool ? ' drawing' : ''}`}
+                      width={Math.floor(sz.w * scale)}
+                      height={Math.floor(sz.h * scale)}
+                    >
+                      {pageAnnos.filter(isShape).map(shapeNode)}
+                      {draft && draft.page === n && (
+                        <g opacity={0.65}>
+                          {draft.kind === 'rect' && (() => {
+                            const b = bboxOf(draft.polys)
+                            return (
+                              <rect
+                                x={b.x * scale}
+                                y={b.y * scale}
+                                width={b.w * scale}
+                                height={b.h * scale}
+                                stroke={ANNO_COLORS[0]}
+                                fill="none"
+                                strokeWidth={2}
+                              />
+                            )
+                          })()}
+                          {draft.kind === 'ellipse' && (() => {
+                            const b = bboxOf(draft.polys)
+                            return (
+                              <ellipse
+                                cx={(b.x + b.w / 2) * scale}
+                                cy={(b.y + b.h / 2) * scale}
+                                rx={(b.w / 2) * scale}
+                                ry={(b.h / 2) * scale}
+                                stroke={ANNO_COLORS[0]}
+                                fill="none"
+                                strokeWidth={2}
+                              />
+                            )
+                          })()}
+                          {(draft.kind === 'line' || draft.kind === 'ink') && (
+                            <polyline
+                              points={draft.polys[0].map((p) => `${p[0] * scale},${p[1] * scale}`).join(' ')}
+                              stroke={ANNO_COLORS[0]}
+                              fill="none"
+                              strokeWidth={2}
+                            />
+                          )}
+                        </g>
+                      )}
+                    </svg>
                   )}
                   {tool === 'anno' && selA && selA.page === n && (
                     <div

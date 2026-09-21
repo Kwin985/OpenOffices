@@ -45,6 +45,13 @@ function MainApp() {
     document.documentElement.dataset.theme = theme
   }, [theme])
 
+  if (import.meta.env.DEV) {
+    const w = window as unknown as Record<string, unknown>
+    // 冒烟钩子：按路径开标签 + 读标签页状态（不改动任何生产行为）
+    w.__oofOpenPath = (p: string) => openPath(p)
+    w.__oofTabs = () => useApp.getState().tabs
+  }
+
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (!(e.ctrlKey || e.metaKey)) return

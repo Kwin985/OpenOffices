@@ -27,6 +27,7 @@ import {
 import { Comment, addCommentMark, findCommentAnchor, removeCommentMark } from '../lib/comment-extension'
 import { Toc } from '../lib/toc-extension'
 import { FindReplace, frPluginKey, activeIndexOf } from '../lib/find-replace'
+import { docTemplate } from '../lib/templates'
 import { odtToHtml, prosemirrorToOdtBytes } from '../lib/odt'
 import { registerSaver } from '../lib/registry'
 
@@ -211,6 +212,12 @@ function DocEditor({ tab }: Props) {
     let disposed = false
     ;(async () => {
       if (!tab.path) {
+        if (tab.template) {
+          const t = docTemplate(tab.template)
+          editor.commands.setContent(t.content)
+          setMeta(t.meta)
+          markDirty(tab.id, false)
+        }
         setStatus('')
         return
       }
@@ -262,7 +269,7 @@ function DocEditor({ tab }: Props) {
     }
     try {
       let path = asNew ? undefined : tab.path
-      const name = tab.path ? baseName(tab.path) : '未命名文档'
+      const name = tab.path ? baseName(tab.path) : tab.title || '未命名文档'
       if (!path || asNew) {
         path = (await pickSaveFile(name.replace(/\.docx$/i, '') + '.odoc', ['odoc'])) ?? undefined
         if (!path) return
@@ -829,7 +836,11 @@ function DocEditor({ tab }: Props) {
             }}
           />
           <span className="editor-status">
-            {frQ ? (fr && fr.matches.length ? `${frActive + 1}/${fr.matches.length}` : '无匹配') : ''}
+            {frQ
+              ? fr && fr.matches.length
+                ? `${frActive + 1}/${fr.matches.length}${fr.truncated ? '+' : ''}`
+                : '无匹配'
+              : ''}
           </span>
           {btn('Aa', frToggleCase, frCs, '区分大小写')}
           {btn('↑', () => editor.commands.findPrev())}

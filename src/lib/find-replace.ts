@@ -14,9 +14,13 @@ interface FrResult {
   query: string
   caseSensitive: boolean
   matches: FrMatch[]
+  truncated: boolean
 }
 
 export const frPluginKey = new PluginKey<FrResult>('findReplace')
+
+/** 整文档命中上限：超大文档每事务全量重算的开销与装饰集规模都失控，截断并在面板提示 */
+export const FR_HIT_CAP = 2000
 
 function matchBlock(block: PMNode, blockPos: number, needle: string, caseSensitive: boolean, out: FrMatch[]) {
   const runs: { start: number; end: number; docFrom: number }[] = []
@@ -31,7 +35,7 @@ function matchBlock(block: PMNode, blockPos: number, needle: string, caseSensiti
   if (!runs.length) return
   const hay = caseSensitive ? full : full.toLowerCase()
   let i = hay.indexOf(needle)
-  while (i >= 0) {
+  while (i >= 0 && out.length <= FR_HIT_CAP) {
     const j = i + needle.length
     let from = -1
     let to = -1
@@ -47,15 +51,20 @@ function matchBlock(block: PMNode, blockPos: number, needle: string, caseSensiti
   }
 }
 
-export function collectMatches(doc: PMNode, query: string, caseSensitive: boolean): FrMatch[] {
+export function collectMatches(
+  doc: PMNode,
+  query: string,
+  caseSensitive: boolean,
+): { matches: FrMatch[]; truncated: boolean } {
   const out: FrMatch[] = []
-  if (!query) return out
+  if (!query) return { matches: out, truncated: false }
   const needle = caseSensitive ? query : query.toLowerCase()
   doc.descendants((node, pos) => {
     if (node.isTextblock) matchBlock(node, pos, needle, caseSensitive, out)
-    return true
+    return out.length <= FR_HIT_CAP
   })
-  return out
+  const truncated = out.length > FR_HIT_CAP
+  return { matches: truncated ? out.slice(0, FR_HIT_CAP) : out, truncated }
 }
 
 // 与选区重叠的命中即"当前项"；没有重叠则取选区起点后的首个（替换后光标停在原地也能接上）
@@ -85,12 +94,12 @@ export const FindReplace = Extension.create({
       new Plugin<FrResult>({
         key: frPluginKey,
         state: {
-          init: () => ({ query: '', caseSensitive: false, matches: [] }),
+          init: () => ({ query: '', caseSensitive: false, matches: [], truncated: false }),
           apply: (tr, prev) => {
             const meta = tr.getMeta(frPluginKey) as { query: string; caseSensitive: boolean } | undefined
-            if (meta) return { ...meta, matches: collectMatches(tr.doc, meta.query, meta.caseSensitive) }
+            if (meta) return { ...meta, ...collectMatches(tr.doc, meta.query, meta.caseSensitive) }
             if (tr.docChanged && prev.query)
-              return { ...prev, matches: collectMatches(tr.doc, prev.query, prev.caseSensitive) }
+              return { ...prev, ...collectMatches(tr.doc, prev.query, prev.caseSensitive) }
             return prev
           },
         },
@@ -122,7 +131,7 @@ export const FindReplace = Extension.create({
           const prev = frPluginKey.getState(editor.state)
           const cs = caseSensitive ?? prev?.caseSensitive ?? false
           tr.setMeta(frPluginKey, { query, caseSensitive: cs })
-          const matches = collectMatches(tr.doc, query, cs)
+          const { matches } = collectMatches(tr.doc, query, cs)
           if (matches.length) {
             const sel = TextSelection.between(tr.doc.resolve(matches[0].from), tr.doc.resolve(matches[0].to))
             tr.setSelection(sel).scrollIntoView()

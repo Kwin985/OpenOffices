@@ -4,6 +4,7 @@ import { useApp, type DocKind } from '../store'
 import { pickOpenFile, pickSaveFile, readText, writeText } from '../lib/fs'
 import { encryptRecents, decryptRecents } from '../lib/sync'
 import { openPath } from '../lib/open'
+import { TEMPLATES } from '../lib/templates'
 
 const KIND_META: Record<DocKind, { label: string; icon: string; cls: string; desc: string; sample: string }> = {
   doc: { label: '文档', icon: '文', cls: 'kind-doc', desc: '富文本写作 · docx 导入导出', sample: '未命名文档' },
@@ -113,6 +114,24 @@ export default function Home() {
             </div>
           )
         })}
+      </div>
+
+      <div className="home-templates">
+        <h3>从模板新建</h3>
+        <div className="tpl-grid">
+          {TEMPLATES.map((t) => {
+            const meta = KIND_META[t.kind]
+            return (
+              <button key={t.id} className="tpl-card" onClick={() => openTab({ kind: t.kind, title: t.name, template: t.id })}>
+                <span className={`tpl-icon ${meta.cls}`}>{meta.icon}</span>
+                <span className="tpl-info">
+                  <span className="tpl-name">{t.name}</span>
+                  <span className="tpl-desc">{t.desc}</span>
+                </span>
+              </button>
+            )
+          })}
+        </div>
       </div>
 
       <div className="home-recents">

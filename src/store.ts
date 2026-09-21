@@ -7,6 +7,8 @@ export interface Tab {
   kind: DocKind
   title: string
   path?: string
+  /** 首页模板 id（lib/templates）：无 path 新建时由编辑器注入预置内容 */
+  template?: string
   dirty: boolean
 }
 
