@@ -22,6 +22,22 @@ const SEARCH_DEBOUNCE_MS = 200
 const PRERENDER_MARGIN_PX = 800
 // 已渲染页位图缓存（LRU）：回视口只 drawImage 免重栅格化；scale/dpr 不一致即视为未命中
 const BITMAP_CACHE_MAX = 8
+// 侧栏缩略图固定宽度（CSS px）：与主视图缩放无关
+const THUMB_W = 120
+// 大纲条目上限：恶意/异常深文档防御
+const OUTLINE_MAX = 1000
+
+interface OutlineEntry {
+  title: string
+  page: number | null
+  depth: number
+}
+
+interface ThumbSlot {
+  rendering: boolean
+  done: boolean
+  task: RenderTask | null
+}
 
 interface PageBitmap {
   canvas: HTMLCanvasElement
@@ -68,7 +84,11 @@ function PdfViewer({ tab }: Props) {
   const [query, setQuery] = useState('')
   const [matches, setMatches] = useState<Match[]>([])
   const [activeIdx, setActiveIdx] = useState(-1)
+  const [sideOpen, setSideOpen] = useState(false)
+  const [sideTab, setSideTab] = useState<'thumbs' | 'outline'>('thumbs')
+  const [outline, setOutline] = useState<OutlineEntry[]>([])
   const scrollRef = useRef<HTMLDivElement>(null)
+  const thumbsRef = useRef<HTMLDivElement>(null)
   const searchInputRef = useRef<HTMLInputElement>(null)
   const docRef = useRef<PDFDocumentProxy | null>(null)
   docRef.current = doc
@@ -85,6 +105,8 @@ function PdfViewer({ tab }: Props) {
     while (c.size > BITMAP_CACHE_MAX) c.delete(c.keys().next().value as number)
   }
   const renderStats = useRef({ full: 0, hit: 0 })
+  // 缩略图槽位：独立于主视图调度，侧栏收起/切走时整体清空重挂
+  const thumbSlots = useRef(new Map<number, ThumbSlot>())
   const curPageRef = useRef(1)
   curPageRef.current = curPage
 
@@ -161,10 +183,50 @@ function PdfViewer({ tab }: Props) {
     slots.current.clear()
     bmpCache.current.clear()
     renderStats.current = { full: 0, hit: 0 }
+    thumbSlots.current.clear()
     setQuery('')
     setMatches([])
     setActiveIdx(-1)
     setSearchOpen(false)
+    setOutline([])
+    setSideTab('thumbs')
+  }, [doc])
+
+  // 大纲：pdfjs getOutline 树递归拍平；目标页经 getDestination/getPageIndex 解析
+  useEffect(() => {
+    if (!doc) return
+    let cancelled = false
+    ;(async () => {
+      try {
+        const raw = await doc.getOutline()
+        const flat: OutlineEntry[] = []
+        const resolvePage = async (dest: unknown): Promise<number | null> => {
+          try {
+            const target = typeof dest === 'string' ? await doc.getDestination(dest) : dest
+            if (!Array.isArray(target) || !target[0]) return null
+            const idx = await doc.getPageIndex(target[0] as Parameters<PDFDocumentProxy['getPageIndex']>[0])
+            return idx + 1
+          } catch {
+            return null
+          }
+        }
+        const walk = async (items: { title?: string; dest?: unknown; items?: unknown[] }[], depth: number) => {
+          for (const it of items) {
+            if (cancelled || flat.length >= OUTLINE_MAX) return
+            const page = await resolvePage(it.dest)
+            flat.push({ title: it.title ?? '(未命名)', page, depth })
+            if (Array.isArray(it.items)) await walk(it.items as typeof items, depth + 1)
+          }
+        }
+        await walk(raw ?? [], 0)
+        if (!cancelled) setOutline(flat)
+      } catch (e) {
+        console.error(e)
+      }
+    })()
+    return () => {
+      cancelled = true
+    }
   }, [doc])
 
   const pageEl = (n: number) =>
@@ -281,6 +343,91 @@ function PdfViewer({ tab }: Props) {
     return () => io.disconnect()
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [doc])
+
+  // —— 缩略图：固定小宽独立渲染，进视口即画、离开即释放（量小不上位图缓存）——
+  const thumbEl = (n: number) =>
+    thumbsRef.current?.querySelector<HTMLElement>(`[data-thumb="${n}"]`) ?? null
+
+  const renderThumb = async (n: number) => {
+    const d = docRef.current
+    const el = thumbEl(n)
+    if (!d || !el) return
+    let slot = thumbSlots.current.get(n)
+    if (slot && (slot.rendering || slot.done)) return
+    slot = { rendering: true, done: false, task: null }
+    thumbSlots.current.set(n, slot)
+    const me = slot
+    try {
+      const p = await d.getPage(n)
+      if (thumbSlots.current.get(n) !== me) return
+      const viewport = p.getViewport({ scale: THUMB_W / p.getViewport({ scale: 1 }).width })
+      const canvas = el.querySelector('canvas')
+      const ctx = canvas?.getContext('2d')
+      if (!canvas || !ctx) return
+      const dpr = window.devicePixelRatio || 1
+      canvas.width = Math.floor(viewport.width * dpr)
+      canvas.height = Math.floor(viewport.height * dpr)
+      canvas.style.width = `${Math.floor(viewport.width)}px`
+      canvas.style.height = `${Math.floor(viewport.height)}px`
+      me.task = p.render({
+        canvasContext: ctx,
+        viewport,
+        transform: dpr === 1 ? undefined : [dpr, 0, 0, dpr, 0, 0],
+      })
+      await me.task.promise
+      if (thumbSlots.current.get(n) !== me) return
+      me.done = true
+      me.task = null
+    } catch (e) {
+      const name = e instanceof Error ? e.name : ''
+      if (name !== 'RenderingCancelledException' && !(e instanceof DOMException && e.name === 'AbortError')) {
+        console.error(e)
+      }
+      if (thumbSlots.current.get(n) === me) thumbSlots.current.delete(n)
+    } finally {
+      me.rendering = false
+    }
+  }
+
+  const freeThumb = (n: number) => {
+    const slot = thumbSlots.current.get(n)
+    if (!slot) return
+    slot.task?.cancel()
+    thumbSlots.current.delete(n)
+    const el = thumbEl(n)
+    const canvas = el?.querySelector('canvas')
+    if (canvas) {
+      canvas.width = 0
+      canvas.height = 0
+    }
+  }
+
+  // 侧栏可见性/页签切换：缩略图 DOM 随之挂载或移除，观察器整体重建
+  useEffect(() => {
+    if (!doc || !sideOpen || sideTab !== 'thumbs' || !thumbsRef.current) return
+    thumbSlots.current.clear()
+    const io = new IntersectionObserver(
+      (entries) => {
+        for (const e of entries) {
+          const n = Number((e.target as HTMLElement).dataset.thumb)
+          if (!n) continue
+          if (e.isIntersecting) void renderThumb(n)
+          else freeThumb(n)
+        }
+      },
+      { root: thumbsRef.current, rootMargin: '400px 0px' },
+    )
+    thumbsRef.current.querySelectorAll<HTMLElement>('[data-thumb]').forEach((el) => io.observe(el))
+    return () => io.disconnect()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [doc, sideOpen, sideTab, doc?.numPages])
+
+  // 当前页缩略图跟随视口（active 样式由渲染侧 className 给出）
+  useEffect(() => {
+    if (!sideOpen || sideTab !== 'thumbs') return
+    thumbEl(curPage)?.scrollIntoView({ block: 'nearest' })
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [curPage, sideOpen, sideTab, doc])
 
   // 缩放变化：占位尺寸由 style 重算；可见页释放后按新 scale 重画（done 槽位不重入，需先 free）
   useEffect(() => {
@@ -509,6 +656,13 @@ function PdfViewer({ tab }: Props) {
       matchPages: () => matches.map((m) => m.page),
       renderedPages: () => [...slots.current.keys()].sort((a, b) => a - b),
       perf: () => ({ ...renderStats.current, cached: [...bmpCache.current.keys()] }),
+      sideInfo: () => ({
+        open: sideOpen,
+        tab: sideTab,
+        outline: outline.length,
+        outlinePages: outline.map((o) => o.page),
+        thumbs: [...thumbSlots.current.keys()].sort((a, b) => a - b),
+      }),
     }
   }
 
@@ -530,7 +684,7 @@ function PdfViewer({ tab }: Props) {
     <div className="editor-pane">
       <div className="editor-toolbar">
         <span className="editor-status">{status}</span>
-        <span className="editor-hint">PDF 只读 · 连续滚动 · 文字可选可复制 · Ctrl+滚轮缩放 · Ctrl+F 搜索</span>
+        <span className="editor-hint">PDF 只读 · 连续滚动 · 文字可选可复制 · Ctrl+滚轮缩放 · Ctrl+F 搜索 · ☰ 侧栏</span>
       </div>
       <div className="pdf-toolbar">
         {btn('◀', () => gotoPage(Math.max(1, curPage - 1)), curPage <= 1, '上一页')}
@@ -559,6 +713,7 @@ function PdfViewer({ tab }: Props) {
           setSearchOpen((v) => !v)
           if (!searchOpen) searchInputRef.current?.focus()
         }, !doc, '搜索 (Ctrl+F)')}
+        {btn('☰', () => setSideOpen((v) => !v), !doc, '侧栏 (缩略图/大纲)')}
         {searchOpen && (
           <span className="pdf-search">
             <input
@@ -587,22 +742,80 @@ function PdfViewer({ tab }: Props) {
           </span>
         )}
       </div>
-      <div className="pdf-scroll" ref={scrollRef}>
-        {doc &&
-          Array.from({ length: numPages }, (_, i) => i + 1).map((n) => {
-            const sz = sizes[n] ?? est
-            return (
-              <div
-                key={n}
-                data-page={n}
-                className="pdf-page"
-                style={{ width: Math.floor(sz.w * scale), height: Math.floor(sz.h * scale) }}
+      <div className="pdf-body">
+        {sideOpen && (
+          <div className="pdf-sidebar">
+            <div className="pdf-side-tabs">
+              <button
+                className={`side-tab${sideTab === 'thumbs' ? ' on' : ''}`}
+                onClick={() => setSideTab('thumbs')}
               >
-                <canvas className="pdf-canvas" />
-                <div className="pdf-textlayer" />
+                缩略图
+              </button>
+              <button
+                className={`side-tab${sideTab === 'outline' ? ' on' : ''}`}
+                onClick={() => setSideTab('outline')}
+              >
+                大纲
+              </button>
+            </div>
+            {sideTab === 'thumbs' ? (
+              <div className="pdf-thumbs" ref={thumbsRef}>
+                {Array.from({ length: numPages }, (_, i) => i + 1).map((n) => {
+                  const sz = sizes[n] ?? est
+                  return (
+                    <div
+                      key={n}
+                      data-thumb={n}
+                      className={`pdf-thumb${n === curPage ? ' active' : ''}`}
+                      style={{ height: Math.floor((THUMB_W * sz.h) / sz.w) }}
+                      onClick={() => gotoPage(n)}
+                    >
+                      <canvas />
+                      <span className="pdf-thumb-no">{n}</span>
+                    </div>
+                  )
+                })}
               </div>
-            )
-          })}
+            ) : outline.length ? (
+              <div className="pdf-outline">
+                {outline.map((o, i) => (
+                  <button
+                    key={i}
+                    className={`pdf-outline-item${o.page === curPage ? ' active' : ''}`}
+                    style={{ paddingLeft: 8 + o.depth * 14 }}
+                    disabled={o.page === null}
+                    title={o.page === null ? '无跳转目标' : `第 ${o.page} 页`}
+                    onClick={() => {
+                      if (o.page !== null) gotoPage(o.page)
+                    }}
+                  >
+                    {o.title}
+                  </button>
+                ))}
+              </div>
+            ) : (
+              <div className="pdf-outline-empty">此 PDF 无大纲</div>
+            )}
+          </div>
+        )}
+        <div className="pdf-scroll" ref={scrollRef}>
+          {doc &&
+            Array.from({ length: numPages }, (_, i) => i + 1).map((n) => {
+              const sz = sizes[n] ?? est
+              return (
+                <div
+                  key={n}
+                  data-page={n}
+                  className="pdf-page"
+                  style={{ width: Math.floor(sz.w * scale), height: Math.floor(sz.h * scale) }}
+                >
+                  <canvas className="pdf-canvas" />
+                  <div className="pdf-textlayer" />
+                </div>
+              )
+            })}
+        </div>
       </div>
     </div>
   )
