@@ -27,6 +27,52 @@ export default function Workspace() {
     }
   }, [activeId, mounted])
 
+  // 空闲预热：主线程空闲时逐个把编辑器 chunk 的 fetch+evaluate 移出点击路径。
+  // 与 lazy() 共享同一模块 promise；预热过的 chunk 首次开标签只剩实例化成本
+  useEffect(() => {
+    let cancelled = false
+    const steps: [string, () => Promise<unknown>][] = [
+      ['pdf', () => import('./PdfViewer')],
+      ['doc', () => import('./DocEditor')],
+      ['ppt', () => import('./PptEditor')],
+      ['sheet', () => import('./SheetEditor')],
+      // 公式 worker 脚本在后台线程 fetch+编译，短暂存活后回收（HTTP 缓存留给真正实例化）
+      [
+        'univer-worker',
+        async () => {
+          const w = new Worker(new URL('../univer-worker.ts', import.meta.url), { type: 'module' })
+          await new Promise((r) => setTimeout(r, 2000))
+          w.terminate()
+        },
+      ],
+    ]
+    const idle = (cb: () => void) => {
+      if (typeof window.requestIdleCallback === 'function') window.requestIdleCallback(cb, { timeout: 4000 })
+      else window.setTimeout(cb, 1500)
+    }
+    const markDone = (label: string) => {
+      if (!import.meta.env.DEV) return
+      const w = window as unknown as Record<string, string[]>
+      ;(w.__oofPrewarm ??= []).push(label)
+    }
+    const run = (i: number) => {
+      if (cancelled || i >= steps.length) return
+      idle(() => {
+        if (cancelled) return
+        void steps[i][1]()
+          .catch(() => {})
+          .finally(() => {
+            markDone(steps[i][0])
+            run(i + 1)
+          })
+      })
+    }
+    run(0)
+    return () => {
+      cancelled = true
+    }
+  }, [])
+
   useEffect(() => {
     if (!ctx) return
     const close = () => setCtx(null)

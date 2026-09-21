@@ -20,6 +20,14 @@ const SEARCH_MAX_HITS = 500
 const SEARCH_DEBOUNCE_MS = 200
 // 视口外预渲染余量：约一屏，滚动方向上的下一页/层提前就绪
 const PRERENDER_MARGIN_PX = 800
+// 已渲染页位图缓存（LRU）：回视口只 drawImage 免重栅格化；scale/dpr 不一致即视为未命中
+const BITMAP_CACHE_MAX = 8
+
+interface PageBitmap {
+  canvas: HTMLCanvasElement
+  scale: number
+  dpr: number
+}
 
 interface PageText {
   items: string[]
@@ -68,6 +76,15 @@ function PdfViewer({ tab }: Props) {
   scaleRef.current = scale
   // 视口调度：每页一个槽位记录渲染任务/文字层/取消标记
   const slots = useRef(new Map<number, PageSlot>())
+  // 位图缓存按插入序做 LRU（get 命中后 delete+set 提到队尾）
+  const bmpCache = useRef(new Map<number, PageBitmap>())
+  const putBitmap = (n: number, bmp: PageBitmap) => {
+    const c = bmpCache.current
+    c.delete(n)
+    c.set(n, bmp)
+    while (c.size > BITMAP_CACHE_MAX) c.delete(c.keys().next().value as number)
+  }
+  const renderStats = useRef({ full: 0, hit: 0 })
   const curPageRef = useRef(1)
   curPageRef.current = curPage
 
@@ -107,17 +124,33 @@ function PdfViewer({ tab }: Props) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tab.id])
 
-  // 后台补齐每页尺寸（元数据级 getPage，快）：滚动条长度与占位高度尽早精确
+  // 后台补齐每页尺寸（元数据级 getPage，快）：滚动条长度与占位高度尽早精确。
+  // 攒批刷新：逐页 setSizes 会让全页占位随每页重渲染一次，批内合并为一次
   useEffect(() => {
     if (!doc) return
     let cancelled = false
     ;(async () => {
+      let batch: Record<number, { w: number; h: number }> = {}
+      let pending = 0
+      const flush = () => {
+        if (!pending) return
+        const b = batch
+        batch = {}
+        pending = 0
+        setSizes((s) => {
+          const next = { ...s }
+          for (const k in b) if (!next[k]) next[k] = b[k]
+          return next
+        })
+      }
       for (let n = 1; n <= doc.numPages && !cancelled; n++) {
         const p = await doc.getPage(n)
         if (cancelled) return
         const v = p.getViewport({ scale: 1 })
-        setSizes((s) => (s[n] ? s : { ...s, [n]: { w: v.width, h: v.height } }))
+        batch[n] = { w: v.width, h: v.height }
+        if (++pending >= 8) flush()
       }
+      flush()
     })()
     return () => {
       cancelled = true
@@ -126,6 +159,8 @@ function PdfViewer({ tab }: Props) {
 
   useEffect(() => {
     slots.current.clear()
+    bmpCache.current.clear()
+    renderStats.current = { full: 0, hit: 0 }
     setQuery('')
     setMatches([])
     setActiveIdx(-1)
@@ -157,13 +192,28 @@ function PdfViewer({ tab }: Props) {
       canvas.height = Math.floor(viewport.height * dpr)
       canvas.style.width = `${Math.floor(viewport.width)}px`
       canvas.style.height = `${Math.floor(viewport.height)}px`
-      me.task = p.render({
-        canvasContext: ctx,
-        viewport,
-        transform: dpr === 1 ? undefined : [dpr, 0, 0, dpr, 0, 0],
-      })
-      await me.task.promise
-      if (me.cancelled) return
+      const hit = bmpCache.current.get(n)
+      if (hit && hit.scale === viewport.scale && hit.dpr === dpr) {
+        // 位图命中：回栅格化，直接贴回画布（文字层绑定 DOM，仍需重建）
+        bmpCache.current.delete(n)
+        bmpCache.current.set(n, hit)
+        renderStats.current.hit++
+        ctx.drawImage(hit.canvas, 0, 0)
+      } else {
+        renderStats.current.full++
+        me.task = p.render({
+          canvasContext: ctx,
+          viewport,
+          transform: dpr === 1 ? undefined : [dpr, 0, 0, dpr, 0, 0],
+        })
+        await me.task.promise
+        if (me.cancelled) return
+        const snap = document.createElement('canvas')
+        snap.width = canvas.width
+        snap.height = canvas.height
+        snap.getContext('2d')?.drawImage(canvas, 0, 0)
+        putBitmap(n, { canvas: snap, scale: viewport.scale, dpr })
+      }
       const layerEl = el.querySelector<HTMLElement>('.pdf-textlayer')
       if (layerEl) {
         layerEl.replaceChildren()
@@ -458,6 +508,7 @@ function PdfViewer({ tab }: Props) {
       activeIdx: () => activeIdx,
       matchPages: () => matches.map((m) => m.page),
       renderedPages: () => [...slots.current.keys()].sort((a, b) => a - b),
+      perf: () => ({ ...renderStats.current, cached: [...bmpCache.current.keys()] }),
     }
   }
 
