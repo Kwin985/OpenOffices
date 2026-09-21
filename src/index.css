@@ -817,6 +817,30 @@ button {
   background: rgba(91, 140, 255, 0.08);
 }
 
+.doc-fr-panel {
+  background: rgba(255, 180, 0, 0.06);
+}
+
+.fr-hit {
+  background: rgba(255, 200, 40, 0.35);
+  border-radius: 2px;
+}
+
+.fr-active {
+  background: rgba(255, 150, 0, 0.6);
+  outline: 1px solid rgba(255, 150, 0, 0.9);
+}
+
+.doc-hist-panel {
+  background: rgba(44, 102, 212, 0.05);
+  max-height: 132px;
+  overflow-y: auto;
+}
+
+:root[data-theme='dark'] .doc-hist-panel {
+  background: rgba(91, 140, 255, 0.08);
+}
+
 /* 正文 + 批注侧栏并排 */
 .doc-body {
   display: flex;

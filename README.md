@@ -458,6 +458,30 @@
   约 N 页增长、表格条插行、图片条 50%+居中、粘贴成图、重置回 A4、@page 规则、
   odt 浏览器内往返含页面设置/合并/图宽）；tsc/build 绿，Rust 零改动
 
+## 文档查找替换 · 字体 · 自动保存（v0.31）
+
+- **查找/替换面板**：Ctrl+F 在文档标签打开面板（与 PDF 搜索互不劫持）——整文档按文本块匹配，
+  段内跨 mark 可命中、跨段不算；命中集存 ProseMirror 插件 state，装饰 `.fr-hit`/`.fr-active`
+  上色，"当前项"由选区派生（上下按钮即把选区挪到下一/上一命中，越界回绕）；支持大小写开关、
+  单个替换（`insertText` 保留 marks）与全部替换（自后向前替换避免位置漂移）
+- **字体族 / 字号**：工具栏两颗下拉——字号以 pt 呈现、内部按 `pt*96/72` 存 px，字体族含中英
+  常用族；走 TipTap `TextStyleKit`（Color/FontFamily/FontSize 共用 `textStyle` mark attrs），
+  导出 docx 时字族进 `w:ascii/hAnsi`、字号半磅 ×1.5，odt 进自动样式 `style:font-name` +
+  `fo:font-size`（pt = px×72/96），导入再反解回同一 mark，三属性（字族/字号/字色）同链路往返
+- **会话内版本历史**：每 60 秒探测一次内容变化并推快照（与栈顶 JSON+meta 相同则跳过），
+  手动保存与恢复前也各留一份；环形上限 20 份，「历史版本」面板按时间倒序列出，一键恢复
+  （恢复前自动把当前状态入栈，不丢操作）
+- **自动保存**：每 30 秒对已落盘的 `.odoc` 静默写回并清 dirty，工具栏显示「已自动保存 HH:MM:SS」；
+  未命名文档与会话内 docx/odt 标签不参与（不擅自造文件）
+- **坑**：TipTap v3 的 `useEditor` **不会因纯选区事务重渲染 React**，面板的命中计数与活动高亮
+  必须订阅 `editor.on('selectionUpdate')` 自增 tick；`commands.focus()` 返回 Thenable，
+  直接链式 `setTextSelection` 会 TypeError，要用 `editor.chain().focus().…`；关闭面板须同时清空
+  输入框状态，否则重开时 UI 与插件命中脱节
+- **验证**：vite-node 结构测试 8 断言（含「字符样式落在 content.xml 而非 styles.xml」定位、
+  odt 导入合并回单 span）+ CDP 冒烟 17 断言全绿（重载起干净标签 → 面板开合、命中计数、
+  大小写语义、上下导航回绕、替换与全部替换、无匹配提示、字族/字号写进 JSON、历史快照列表、
+  恢复内容还原）；30s/60s 定时器由开发钩子直推快照代验；tsc/build 绿，Rust 零改动
+
 ## 性能（v0.3）
 
 - **按编辑器分包 + 懒加载**：主包 8MB → 首屏约 300KB；Univer（6.1MB）只在首次激活表格标签时加载，
@@ -474,7 +498,7 @@
 | [Tauri 2](https://tauri.app) | 桌面壳（Rust 后端 + 系统 WebView） | MIT |
 | [Univer](https://univer.ai) | 电子表格内核（渲染/公式/撤销重做）+ 筛选/排序/条件格式/数据验证/查找替换/绘图社区预设 | Apache-2.0 |
 | [VChart](https://visactor.io/vchart) | 表格图表自绘（PNG 渲染 → 浮动图片），动态导入懒加载 | MIT |
-| [TipTap 3](https://tiptap.dev) | 富文本编辑器内核（ProseMirror），含 color / highlight / character-count 扩展 | MIT |
+| [TipTap 3](https://tiptap.dev) | 富文本编辑器内核（ProseMirror），含 color / highlight / character-count / text-style（字族·字号）扩展 | MIT |
 | [mammoth.js](https://github.com/mwilliamson/mammoth.js) | docx → HTML 导入 | BSD-2 |
 | [docx](https://github.com/dolanmiu/docx) | ProseMirror JSON → docx 导出 | MIT |
 | [pptxgenjs](https://gitbrent.github.io/PptxGenJS/) | 幻灯片 → pptx 导出 | MIT |
@@ -507,10 +531,11 @@ src/                  React 前端
   lib/univer.ts       Univer 实例工厂（公式 worker + 六个社区预设，含绘图 FOverGridImage）
   lib/univer-io.ts    xlsx 数据+样式（粗斜/颜色/字族/边框/对齐/换行/数字格式）/合并/图表/列宽行高/隐藏行列/冻结窗格 ↔ Univer 快照 转换（样式去重注册）
   lib/chart.ts        ChartPayload → VChart spec → 离屏 canvas PNG dataURL（动态导入分包）
-  lib/docx.ts         docx 导入导出（ProseMirror JSON ↔ docx，字色/高亮/页眉页脚/TOC 域/批注/页面设置 sectPr/表格合并映射；文本节点兼容顶层 text 与 attrs.text）
+  lib/docx.ts         docx 导入导出（ProseMirror JSON ↔ docx，字色/字族/字号/高亮/页眉页脚/TOC 域/批注/页面设置 sectPr/表格合并映射；文本节点兼容顶层 text 与 attrs.text）
   lib/toc-extension.ts TipTap 目录原子节点：按标题实时汇总、点击跳转
   lib/comment-extension.ts comment mark（cid 锚定批注）+ 加/删/定位/汇总工具
-  lib/odt.ts          ProseMirror JSON ↔ ODT（JSZip 打包导出 + DOMParser 导入，字符样式/合并表/图片尺寸/页码域/page-layout 页面设置）
+  lib/odt.ts          ProseMirror JSON ↔ ODT（JSZip 打包导出 + DOMParser 导入，字符样式（字族/字号/字色，落在 content.xml 自动样式）/合并表/图片尺寸/页码域/page-layout 页面设置）
+  lib/find-replace.ts 查找/替换 ProseMirror 插件：按文本块匹配存 state、装饰高亮、findNext/findPrev/replaceOne/replaceAll 命令
   lib/ppt.ts          .opd 幻灯片数据模型（版式/主题/序列化）
   lib/pdfprint.ts     打印覆盖层：挂 DOM → 注入打印样式 → export_pdf → 清理
   lib/sheet-print.ts  WorkbookPayload → 打印 HTML 网格（值/边框/对齐/换行/数字格式/字族/合并/列宽行高/跳过隐藏行列/分页/截断）
@@ -519,7 +544,7 @@ src/                  React 前端
   lib/registry.ts     跨组件保存器注册表（Ctrl+S 路由到当前标签）
   lib/open.ts         路径→标签 打开 / 带确认关闭
   lib/sync.ts         最近文件端到端加密同步（WebCrypto PBKDF2-SHA256 → AES-256-GCM，.oosync 信封）
-  components/         Home / Workspace / SheetEditor / DocEditor（页面设置/分页参考线/表格与图片上下文工具条/粘贴成图） / PptEditor / PdfViewer（pdfjs-dist 懒加载，连续多页视口虚拟渲染+Ctrl 缩放+TextLayer 文字选择+全文搜索+缩略图/大纲/标注侧栏+高亮便签 pdf-lib 写回+标注编辑（点选/拖移/改色/删除））
+  components/         Home / Workspace / SheetEditor / DocEditor（页面设置/分页参考线/表格与图片上下文工具条/粘贴成图/查找替换面板/字体族·字号/版本历史·自动保存） / PptEditor / PdfViewer（pdfjs-dist 懒加载，连续多页视口虚拟渲染+Ctrl 缩放+TextLayer 文字选择+全文搜索+缩略图/大纲/标注侧栏+高亮便签 pdf-lib 写回+标注编辑（点选/拖移/改色/删除））
 scripts/              copy-pdfjs-assets.mjs（dev/build 前复制 cmaps/标准字体到 public/pdfjs）
 .github/workflows/    release.yml——tag v* 触发：门禁→win/linux 矩阵打包→GitHub Release
 ```
@@ -577,6 +602,8 @@ cargo check        # Rust 后端检查（在 src-tauri 下）
 - [x] PDF 标注编辑增强：标注工具点选/拖移/改色/删除（含第三方注解）+ Acrobat 风胶囊弹层
 - [x] 文档：页面设置（纸张/边距，视图+打印+docx/odt 全链路）+ 分页参考线 + 页数指示
 - [x] 文档：表格上下文工具条（行列/合并/表头，gridSpan/vMerge 导出）+ 图片粘贴成图与宽度/居中条
+- [x] 文档：查找/替换面板（命中高亮+大小写+单个/全部替换）+ 字体族/字号（docx/odt 往返）
+- [x] 文档：自动保存（.odoc 定时静默落盘）+ 会话内版本历史（快照环形栈一键恢复）
 - [ ] 自动更新通道（须先决策：公开仓库或独立托管 update metadata）
 - [ ] macOS 打包（需签名/公证凭据）
 

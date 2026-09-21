@@ -1,7 +1,7 @@
 {
   "name": "openoffices",
   "private": true,
-  "version": "0.30.0",
+  "version": "0.31.0",
   "type": "module",
   "packageManager": "pnpm@10.33.0",
   "scripts": {
@@ -23,6 +23,7 @@
     "@tiptap/extension-placeholder": "^3.31.3",
     "@tiptap/extension-table": "^3.31.3",
     "@tiptap/extension-text-align": "^3.31.3",
+    "@tiptap/extension-text-style": "^3.31.3",
     "@tiptap/extensions": "^3.31.3",
     "@tiptap/pm": "^3.31.3",
     "@tiptap/react": "^3.31.3",

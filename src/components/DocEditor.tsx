@@ -5,7 +5,7 @@ import Image from '@tiptap/extension-image'
 import Placeholder from '@tiptap/extension-placeholder'
 import TextAlign from '@tiptap/extension-text-align'
 import { TableKit } from '@tiptap/extension-table'
-import Color from '@tiptap/extension-color'
+import { TextStyleKit } from '@tiptap/extension-text-style'
 import Highlight from '@tiptap/extension-highlight'
 import { CharacterCount } from '@tiptap/extensions'
 import { message, open } from '@tauri-apps/plugin-dialog'
@@ -26,6 +26,7 @@ import {
 } from '../lib/docx'
 import { Comment, addCommentMark, findCommentAnchor, removeCommentMark } from '../lib/comment-extension'
 import { Toc } from '../lib/toc-extension'
+import { FindReplace, frPluginKey, activeIndexOf } from '../lib/find-replace'
 import { odtToHtml, prosemirrorToOdtBytes } from '../lib/odt'
 import { registerSaver } from '../lib/registry'
 
@@ -36,6 +37,25 @@ interface Props {
 const ODOC_HEADER = { app: 'openoffices', kind: 'doc', version: 1 }
 
 const HL_COLORS = ['#fff59d', '#a5d6a7', '#90caf9', '#f48fb1']
+
+// 字体族候选（与 docx/odt 导出同一串名字，Word/LibreOffice 按本机字体回退）
+const FONT_FAMILIES = [
+  ['宋体', 'SimSun'],
+  ['黑体', 'SimHei'],
+  ['微软雅黑', 'Microsoft YaHei'],
+  ['等线', 'DengXian'],
+  ['楷体', 'KaiTi'],
+  ['Arial', 'Arial'],
+  ['Calibri', 'Calibri'],
+  ['Times New Roman', 'Times New Roman'],
+  ['Georgia', 'Georgia'],
+  ['Courier New', 'Courier New'],
+  ['Consolas', 'Consolas'],
+]
+// UI 以 pt 展示，内部存 px（CSS 习惯）；docx 导出换算回半点
+const FONT_SIZES_PT = [9, 10, 11, 12, 14, 16, 18, 22, 24, 28, 36, 48]
+const pt2px = (pt: number) => Math.round((pt * 96) / 72)
+const px2pt = (px: number) => Math.round((px * 72) / 96)
 
 // 图片扩展自带 width/height（像素数字），补 align=center：渲染成块级 + 双侧 auto 边距
 const ImgExt = Image.extend({
@@ -66,6 +86,14 @@ function DocEditor({ tab }: Props) {
   const [cmOpen, setCmOpen] = useState(false)
   const [draft, setDraft] = useState<{ cid: number; text: string } | null>(null)
   const [, setTick] = useState(0)
+  const [frOpen, setFrOpen] = useState(false)
+  const [frQ, setFrQ] = useState('')
+  const [frCs, setFrCs] = useState(false)
+  const [frRep, setFrRep] = useState('')
+  const frInputRef = useRef<HTMLInputElement>(null)
+  const [histOpen, setHistOpen] = useState(false)
+  const [hist, setHist] = useState<{ t: number; note: string; json: string; metaJson: string }[]>([])
+  const [autoSavedAt, setAutoSavedAt] = useState<Date | null>(null)
 
   const editor = useEditor({
     extensions: [
@@ -76,16 +104,27 @@ function DocEditor({ tab }: Props) {
       Placeholder.configure({ placeholder: '开始输入内容…' }),
       TextAlign.configure({ types: ['heading', 'paragraph'] }),
       TableKit.configure({ table: { resizable: true } }),
-      Color,
+      // textStyle mark + 字色/字体族/字号（底色与行高本编辑器暂不露出）
+      TextStyleKit.configure({ backgroundColor: false, lineHeight: false }),
       Highlight.configure({ multicolor: true }),
       CharacterCount,
       Toc,
       Comment,
+      FindReplace,
     ],
     content: '<p></p>',
     onUpdate: () => markDirty(tab.id, true),
     editorProps: {
       attributes: { class: 'doc-content' },
+      handleKeyDown: (_view, event) => {
+        if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'f' && !event.shiftKey) {
+          event.preventDefault()
+          setFrOpen(true)
+          setTimeout(() => frInputRef.current?.focus(), 0)
+          return true
+        }
+        return false
+      },
       // 剪贴板里有图片文件（截图/文件管理器复制）时拦截为 base64 插图，压过 HTML 粘贴
       handlePaste: (view, event) => {
         const items = event.clipboardData?.items
@@ -116,6 +155,11 @@ function DocEditor({ tab }: Props) {
     const map = (w.__oofDoc as Record<string, typeof editor> | undefined) ?? {}
     map[tab.id] = editor
     w.__oofDoc = map
+    // 冒烟用：历史快照的推送/查看（闭包读最新渲染的 pushHist/hist）
+    w.__oofDocCtl = {
+      push: (note: string) => pushHist(note),
+      list: () => hist.map((h) => h.note),
+    }
   }
 
   // 生效页面设置：未显式设定走 A4 + 默认边距（与 converter 导出同一 resolve）
@@ -150,13 +194,15 @@ function DocEditor({ tab }: Props) {
     return () => ro.disconnect()
   }, [editor])
 
-  // 批注侧栏随文档变更刷新（锚点位置/孤儿判定）
+  // 批注侧栏随文档变更刷新（锚点位置/孤儿判定）；查找面板计数/活动命中随选区刷新
   useEffect(() => {
     if (!editor) return
     const h = () => setTick((t) => t + 1)
     editor.on('update', h)
+    editor.on('selectionUpdate', h)
     return () => {
       editor.off('update', h)
+      editor.off('selectionUpdate', h)
     }
   }, [editor])
 
@@ -225,6 +271,7 @@ function DocEditor({ tab }: Props) {
       await writeText(path, content)
       renameTab(tab.id, baseName(path), path)
       markRecent(path, 'doc')
+      pushHist('保存')
       setStatus('已保存')
       setTimeout(() => setStatus(''), 1500)
     } catch (e) {
@@ -369,6 +416,74 @@ function DocEditor({ tab }: Props) {
     markDirty(tab.id, true)
   }
 
+  // 查找面板：查询词变更即重算命中（不碰文档，不触发 dirty）
+  const frSetQuery = (q: string, cs = frCs) => {
+    setFrQ(q)
+    editor?.commands.setFindQuery(q, cs)
+  }
+  const frToggleCase = () => {
+    const cs = !frCs
+    setFrCs(cs)
+    editor?.commands.setFindQuery(frQ, cs)
+  }
+  const frClose = () => {
+    setFrOpen(false)
+    // 关面板即清空查询：重开时输入框状态与插件命中状态不脱节
+    setFrQ('')
+    editor?.commands.setFindQuery('')
+  }
+
+  // —— 自动保存与版本历史（会话内）：内容有变化才入栈，最多 20 份 ——
+  const pushHist = (note: string) => {
+    if (!editor) return
+    const json = JSON.stringify(editor.getJSON())
+    const metaJson = JSON.stringify(meta)
+    setHist((h) => {
+      const top = h[h.length - 1]
+      if (top && top.json === json && top.metaJson === metaJson) return h
+      return [...h.slice(-19), { t: Date.now(), note, json, metaJson }]
+    })
+  }
+  const pushHistRef = useRef(pushHist)
+  pushHistRef.current = pushHist
+  const metaRef = useRef(meta)
+  metaRef.current = meta
+
+  useEffect(() => {
+    if (!editor) return
+    const iv = setInterval(() => {
+      if (useApp.getState().tabs.some((t) => t.id === tab.id && t.dirty)) pushHistRef.current('自动快照')
+    }, 60_000)
+    return () => clearInterval(iv)
+  }, [editor, tab.id])
+
+  // .odoc 已落盘路径的静默自动保存（新/ foreign 路径不抢对话，走手动保存）
+  useEffect(() => {
+    if (!editor) return
+    const p = tab.path
+    if (!p?.toLowerCase().endsWith('.odoc')) return
+    const iv = setInterval(async () => {
+      const s = useApp.getState()
+      if (!s.tabs.some((t) => t.id === tab.id && t.dirty)) return
+      try {
+        await writeText(p, JSON.stringify({ ...ODOC_HEADER, content: editor.getJSON(), meta: metaRef.current }))
+        s.markDirty(tab.id, false)
+        setAutoSavedAt(new Date())
+      } catch {
+        /* 写盘失败下一轮自然重试，不打断编辑 */
+      }
+    }, 30_000)
+    return () => clearInterval(iv)
+  }, [editor, tab.path, tab.id])
+
+  const restoreHist = (h: { json: string; metaJson: string; note: string }) => {
+    if (!editor) return
+    pushHist('恢复前')
+    editor.commands.setContent(JSON.parse(h.json), { emitUpdate: false })
+    setMeta(JSON.parse(h.metaJson) as DocMeta)
+    markDirty(tab.id, true)
+  }
+
   // 已有目录则滚动定位，否则在光标处插入（目录内容按标题实时汇总）
   const tocAction = () => {
     if (!editor) return
@@ -448,6 +563,8 @@ function DocEditor({ tab }: Props) {
 
   if (!editor) return null
   const cc = editor.storage.characterCount as { words: () => number; characters: () => number }
+  const fr = frPluginKey.getState(editor.state)
+  const frActive = fr && fr.matches.length ? activeIndexOf(fr, editor.state.selection.from, editor.state.selection.to) : -1
   const btn = (label: string, onClick: () => void, active = false, title?: string) => (
     <button
       key={label + title}
@@ -471,9 +588,14 @@ function DocEditor({ tab }: Props) {
         {btn('页面设置', () => setPgOpen((v) => !v), pgOpen || !!meta.page, '纸张与页边距：同步应用到视图、打印与 docx/odt 导出')}
         {btn('批注', () => setCmOpen((v) => !v), cmOpen || comments.length > 0, '批注侧栏：选中文字后可添加批注，导出为 docx 原生批注')}
         {btn('新建批注', startComment, !!draft, '选中正文文字后点击，为其添加一条批注')}
+        {btn('查找替换', () => setFrOpen((v) => !v), frOpen, 'Ctrl+F 打开：查找、定位、替换')}
+        {btn('历史版本', () => setHistOpen((v) => !v), histOpen, '会话内快照：每 60 秒自动留存，可一键恢复')}
         {btn('打印 / PDF', () => window.print(), false, '调用系统打印，可选择另存为 PDF')}
         {btn('导出 PDF', exportPdf, false, 'WebView2 原生 PrintToPdf：按打印样式矢量输出，含高亮底色')}
         {status && <span className="editor-status">{status}</span>}
+        {!status && autoSavedAt && (
+          <span className="editor-status">已自动保存 {autoSavedAt.toLocaleTimeString()}</span>
+        )}
         <span className="editor-hint">
           字数 {cc.words()} · 字符 {cc.characters()} · 约{' '}
           {Math.max(1, Math.ceil(docH / Math.max(1, effPx.h - effPx.top - effPx.bottom)))} 页
@@ -500,6 +622,46 @@ function DocEditor({ tab }: Props) {
           <option value="h2">标题 2</option>
           <option value="h3">标题 3</option>
           <option value="h4">标题 4</option>
+        </select>
+        <select
+          value={String(editor.getAttributes('textStyle').fontFamily ?? '')}
+          onChange={(e) => {
+            const v = e.target.value
+            if (v) editor.chain().focus().setFontFamily(v).run()
+            else editor.chain().focus().unsetFontFamily().run()
+          }}
+          className="tb-select"
+          title="字体族（作用于选中文字）"
+        >
+          <option value="">默认字体</option>
+          {FONT_FAMILIES.map(([label, css]) => (
+            <option key={css} value={css}>
+              {label}
+            </option>
+          ))}
+        </select>
+        <select
+          value={(() => {
+            const raw = String(editor.getAttributes('textStyle').fontSize ?? '')
+            const px = parseInt(raw, 10)
+            if (!Number.isFinite(px) || raw === '') return ''
+            const pt = px2pt(px)
+            return FONT_SIZES_PT.includes(pt) ? String(pt) : ''
+          })()}
+          onChange={(e) => {
+            const pt = Number(e.target.value)
+            if (pt) editor.chain().focus().setFontSize(`${pt2px(pt)}px`).run()
+            else editor.chain().focus().unsetFontSize().run()
+          }}
+          className="tb-select"
+          title="字号 pt（作用于选中文字；导出 docx 按半点换算）"
+        >
+          <option value="">字号</option>
+          {FONT_SIZES_PT.map((pt) => (
+            <option key={pt} value={pt}>
+              {pt}
+            </option>
+          ))}
         </select>
         {btn('B', () => editor.chain().focus().toggleBold().run(), editor.isActive('bold'), '加粗')}
         {btn('I', () => editor.chain().focus().toggleItalic().run(), editor.isActive('italic'), '斜体')}
@@ -651,6 +813,53 @@ function DocEditor({ tab }: Props) {
             </label>
           ))}
           {meta.page && btn('重置', () => patchMeta({ page: undefined }), false, '恢复 A4 + 默认边距')}
+        </div>
+      )}
+      {frOpen && (
+        <div className="doc-toolbar doc-fr-panel">
+          <input
+            ref={frInputRef}
+            className="tb-input"
+            placeholder="查找（回车下一个）"
+            value={frQ}
+            onChange={(e) => frSetQuery(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') (e.shiftKey ? editor.commands.findPrev() : editor.commands.findNext())
+              if (e.key === 'Escape') frClose()
+            }}
+          />
+          <span className="editor-status">
+            {frQ ? (fr && fr.matches.length ? `${frActive + 1}/${fr.matches.length}` : '无匹配') : ''}
+          </span>
+          {btn('Aa', frToggleCase, frCs, '区分大小写')}
+          {btn('↑', () => editor.commands.findPrev())}
+          {btn('↓', () => editor.commands.findNext())}
+          <span className="tb-sep" />
+          <input
+            className="tb-input"
+            placeholder="替换为"
+            value={frRep}
+            onChange={(e) => setFrRep(e.target.value)}
+          />
+          {btn('替换', () => editor.commands.replaceOne(frRep))}
+          {btn('全部替换', () => editor.commands.replaceAll(frRep))}
+          {btn('✕', frClose)}
+        </div>
+      )}
+      {histOpen && (
+        <div className="doc-toolbar doc-hist-panel">
+          <span className="editor-hint">会话内快照（最多 20 份，恢复前会自动留当前状态）：</span>
+          {hist.length === 0 && <span className="editor-status">暂无快照，编辑 60 秒后自动留存</span>}
+          {[...hist].reverse().map((h, i) => (
+            <button
+              key={`${h.t}-${hist.length - i}`}
+              className="tb-btn"
+              title="恢复到此快照"
+              onClick={() => restoreHist(h)}
+            >
+              {new Date(h.t).toLocaleTimeString()} · {h.note}
+            </button>
+          ))}
         </div>
       )}
       {hfOpen && (

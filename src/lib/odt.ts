@@ -59,6 +59,9 @@ class OdtBuilder {
         tp += ' style:text-underline-style="solid" style:text-underline-type="single" style:text-underline-width="auto"'
       if (m.st) tp += ' style:text-line-through-style="solid" style:text-line-through-type="single"'
       if (m.code) tp += ' style:font-name="Courier New"'
+      if (m.fam) tp += ` style:font-name="${esc(String(m.fam))}" style:font-name-asian="${esc(String(m.fam))}"`
+      // fontSize 存 px，ODF 习惯 pt
+      if (m.sz) tp += ` fo:font-size="${Math.round((Number(m.sz) * 72) / 96)}pt"`
       if (m.cl) tp += ` fo:color="${esc(String(m.cl))}"`
       if (m.bg) tp += ` fo:background-color="${esc(String(m.bg))}"`
       out += `<style:style style:name="${name}" style:family="text"><style:text-properties${tp}/></style:style>`
@@ -132,6 +135,8 @@ class OdtBuilder {
           code: marks.some((k) => k.type === 'code'),
           cl: (at('textStyle')?.color ?? at('color')?.color) as string | undefined,
           bg: at('highlight')?.color as string | undefined,
+          fam: (at('textStyle')?.fontFamily ?? at('fontFamily')?.fontFamily) as string | undefined,
+          sz: parseInt(String(at('textStyle')?.fontSize ?? at('fontSize')?.fontSize ?? ''), 10) || undefined,
         }
         const hasAny = Object.values(markKey).some(Boolean)
         if (hasAny) {
@@ -384,6 +389,8 @@ interface StyleInfo {
   color?: string
   bg?: string
   mono?: boolean
+  fam?: string
+  szPx?: number
 }
 
 function pick(el: Element, localName: string): Element | null {
@@ -444,6 +451,14 @@ export async function odtToHtml(bytes: Uint8Array): Promise<{ html: string; meta
     const font =
       tp.getAttribute('style:font-name') ?? tp.getAttribute('fo:font-name') ?? tp.getAttribute('style:font-name-asian')
     if (font && /courier|mono|consolas|menlo/i.test(font)) out.mono = true
+    if (font) out.fam = font
+    const sz = tp.getAttribute('fo:font-size')
+    if (sz) {
+      const v = parseFloat(sz)
+      // 导出统一写 pt；宽松兼容 cm/mm 与无前缀（px）写法
+      if (Number.isFinite(v) && v > 0)
+        out.szPx = /cm$/.test(sz) ? Math.round(v * 37.8) : /mm$/.test(sz) ? Math.round(v * 3.78) : /px$/.test(sz) ? Math.round(v) : Math.round((v * 96) / 72)
+    }
     return out
   }
 
@@ -451,7 +466,12 @@ export async function odtToHtml(bytes: Uint8Array): Promise<{ html: string; meta
     let html = inner
     if (si.mono) html = `<code>${html}</code>`
     if (si.bg) html = `<span style="background-color: ${si.bg}">${html}</span>`
-    if (si.color) html = `<span style="color: ${si.color}">${html}</span>`
+    // 字体族/字号/字色同挂 textStyle mark，必须合成一个 span，不能嵌套两层同类 mark
+    const css: string[] = []
+    if (si.fam) css.push(`font-family: ${si.fam}`)
+    if (si.szPx) css.push(`font-size: ${si.szPx}px`)
+    if (si.color) css.push(`color: ${si.color}`)
+    if (css.length) html = `<span style="${css.join('; ')}">${html}</span>`
     if (si.strike) html = `<s>${html}</s>`
     if (si.underline) html = `<u>${html}</u>`
     if (si.italic) html = `<em>${html}</em>`

@@ -354,14 +354,19 @@ function inlineToChildren(node: PMNode, inherited: Inherited = {}, cs?: CommentT
       const strike = inherited.strike || hasMark(child, 'strike')
       const mono = inherited.mono || hasMark(child, 'code')
       const href = linkHref(child)
-      const color = markAttr(child, 'color', 'color')?.replace('#', '')
+      // TextStyleKit 后字色/字体/字号统一挂 textStyle mark；历史文档可能残留独立 color mark
+      const ts = (attr: string) => markAttr(child, 'textStyle', attr) ?? markAttr(child, 'color', attr)
+      const color = ts('color')?.replace('#', '')
       const highlight = markAttr(child, 'highlight', 'color')?.replace('#', '')
+      // fontSize 内部存 px（CSS 习惯），docx 字号是半点：pt = px×0.75，half-points = pt×2
+      const fsPx = parseInt(ts('fontSize') ?? '', 10)
       const runOpts = {
         text,
         bold,
         italics: italic,
         strike,
-        font: mono ? 'Consolas' : undefined,
+        font: ts('fontFamily') || (mono ? 'Consolas' : undefined),
+        ...(Number.isFinite(fsPx) && fsPx > 0 ? { size: Math.round(fsPx * 1.5) } : {}),
         ...(color ? { color } : {}),
         ...(highlight ? { shading: { type: 'clear' as const, fill: highlight } } : {}),
         ...(underline ? { underline: {} } : {}),
