@@ -439,6 +439,25 @@
   面板联动/Delete 删除/文字态选字弹层回归/便签增改色/保存重开颜色内容保真且删掉的
   预置注解不再回来/胶囊与便签卡 computed style 断言/搜索回归）；tsc/build 绿，Rust 零改动
 
+## 文档编辑增强（v0.30）
+
+- **页面设置**：工具栏"页面设置"面板——纸张 A4/Letter/自定义宽高（mm）+ 四边距，
+  实时驱动 `.doc-page` 宽高与内边距、打印 `@page` 规则动态注入，并写进 docx
+  `sectPr`（pgSz/pgMar，twips；横版按"竖版宽高+orientation"语义传参避免库交换）与
+  odt `page-layout`；导入从 docx/odt 还原（A4/Letter 就近归 presets，否则 custom）
+- **分页参考线与页数**：页内绝对定位覆盖层 `repeating-linear-gradient` 按页高画灰线
+  （`pointer-events:none` 零侵入），ResizeObserver 量文档高度 → 状态栏"约 N 页"
+- **表格上下文工具条**：光标在表内浮出——前后插行/列、删行/列、合并拆分
+  （`mergeOrSplit`）、表头行切换、删除表格；导出补 `colspan/rowspan` →
+  docx `gridSpan/vMerge` 与 odt `covered-table-cell`
+- **图片增强**：剪贴板粘贴图片直接转 base64 插入（`handlePaste`）；选中图片浮出工具条——
+  宽度按版心 25/50/75/100%（按当前显示比例换算 height）、居中（display:block+auto margin
+  自定义 align 属性）、恢复原尺寸；宽度随 docx ImageRun/odt draw:frame 导出往返
+- **验证**：vite-node 结构测试 5 断言（custom/Letter/默认 A4/合并表/横版 docx 往返）+
+  CDP 冒烟 10 断言全绿（面板开合、Letter 页宽 816 与参考线、左边距 10mm→38px、
+  约 N 页增长、表格条插行、图片条 50%+居中、粘贴成图、重置回 A4、@page 规则、
+  odt 浏览器内往返含页面设置/合并/图宽）；tsc/build 绿，Rust 零改动
+
 ## 性能（v0.3）
 
 - **按编辑器分包 + 懒加载**：主包 8MB → 首屏约 300KB；Univer（6.1MB）只在首次激活表格标签时加载，
@@ -488,10 +507,10 @@ src/                  React 前端
   lib/univer.ts       Univer 实例工厂（公式 worker + 六个社区预设，含绘图 FOverGridImage）
   lib/univer-io.ts    xlsx 数据+样式（粗斜/颜色/字族/边框/对齐/换行/数字格式）/合并/图表/列宽行高/隐藏行列/冻结窗格 ↔ Univer 快照 转换（样式去重注册）
   lib/chart.ts        ChartPayload → VChart spec → 离屏 canvas PNG dataURL（动态导入分包）
-  lib/docx.ts         docx 导入导出（ProseMirror JSON ↔ docx，字色/高亮/页眉页脚/TOC 域/批注映射；文本节点兼容顶层 text 与 attrs.text）
+  lib/docx.ts         docx 导入导出（ProseMirror JSON ↔ docx，字色/高亮/页眉页脚/TOC 域/批注/页面设置 sectPr/表格合并映射；文本节点兼容顶层 text 与 attrs.text）
   lib/toc-extension.ts TipTap 目录原子节点：按标题实时汇总、点击跳转
   lib/comment-extension.ts comment mark（cid 锚定批注）+ 加/删/定位/汇总工具
-  lib/odt.ts          ProseMirror JSON ↔ ODT（JSZip 打包导出 + DOMParser 导入，字符样式/合并表/图片/页码域）
+  lib/odt.ts          ProseMirror JSON ↔ ODT（JSZip 打包导出 + DOMParser 导入，字符样式/合并表/图片尺寸/页码域/page-layout 页面设置）
   lib/ppt.ts          .opd 幻灯片数据模型（版式/主题/序列化）
   lib/pdfprint.ts     打印覆盖层：挂 DOM → 注入打印样式 → export_pdf → 清理
   lib/sheet-print.ts  WorkbookPayload → 打印 HTML 网格（值/边框/对齐/换行/数字格式/字族/合并/列宽行高/跳过隐藏行列/分页/截断）
@@ -500,7 +519,7 @@ src/                  React 前端
   lib/registry.ts     跨组件保存器注册表（Ctrl+S 路由到当前标签）
   lib/open.ts         路径→标签 打开 / 带确认关闭
   lib/sync.ts         最近文件端到端加密同步（WebCrypto PBKDF2-SHA256 → AES-256-GCM，.oosync 信封）
-  components/         Home / Workspace / SheetEditor / DocEditor / PptEditor / PdfViewer（pdfjs-dist 懒加载，连续多页视口虚拟渲染+Ctrl 缩放+TextLayer 文字选择+全文搜索+缩略图/大纲/标注侧栏+高亮便签 pdf-lib 写回+标注编辑（点选/拖移/改色/删除））
+  components/         Home / Workspace / SheetEditor / DocEditor（页面设置/分页参考线/表格与图片上下文工具条/粘贴成图） / PptEditor / PdfViewer（pdfjs-dist 懒加载，连续多页视口虚拟渲染+Ctrl 缩放+TextLayer 文字选择+全文搜索+缩略图/大纲/标注侧栏+高亮便签 pdf-lib 写回+标注编辑（点选/拖移/改色/删除））
 scripts/              copy-pdfjs-assets.mjs（dev/build 前复制 cmaps/标准字体到 public/pdfjs）
 .github/workflows/    release.yml——tag v* 触发：门禁→win/linux 矩阵打包→GitHub Release
 ```
@@ -556,6 +575,8 @@ cargo check        # Rust 后端检查（在 src-tauri 下）
 - [x] PDF 查看：缩略图 + 大纲（书签）侧栏（双页签虚拟渲染 + getOutline 解析跳页）
 - [x] PDF 标注与高亮：选文字加高亮/便签，Ctrl+S 经 pdf-lib 写回原 PDF（读侧导入+往返保真）
 - [x] PDF 标注编辑增强：标注工具点选/拖移/改色/删除（含第三方注解）+ Acrobat 风胶囊弹层
+- [x] 文档：页面设置（纸张/边距，视图+打印+docx/odt 全链路）+ 分页参考线 + 页数指示
+- [x] 文档：表格上下文工具条（行列/合并/表头，gridSpan/vMerge 导出）+ 图片粘贴成图与宽度/居中条
 - [ ] 自动更新通道（须先决策：公开仓库或独立托管 update metadata）
 - [ ] macOS 打包（需签名/公证凭据）
 

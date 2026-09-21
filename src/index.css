@@ -674,6 +674,7 @@ button {
   border-radius: 4px;
   box-shadow: 0 2px 12px rgba(31, 41, 55, 0.06);
   padding: 56px 72px;
+  position: relative;
   min-height: 1000px;
 }
 
@@ -776,6 +777,44 @@ button {
   display: flex;
   align-items: center;
   gap: 4px;
+}
+
+/* v0.30 页面设置：分页参考线 + 设置面板 + 表格/图片上下文条 */
+.doc-pg-lines {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background-image: repeating-linear-gradient(
+    to bottom,
+    transparent 0,
+    transparent calc(var(--pgh) - 1px),
+    rgba(120, 130, 145, 0.5) calc(var(--pgh) - 1px),
+    rgba(120, 130, 145, 0.5) var(--pgh)
+  );
+}
+
+.doc-pg-panel {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px 14px;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--border);
+  font-size: 13px;
+}
+
+.doc-num {
+  width: 64px;
+}
+
+.doc-table-bar,
+.doc-img-bar {
+  background: rgba(44, 102, 212, 0.05);
+}
+
+:root[data-theme='dark'] .doc-table-bar,
+:root[data-theme='dark'] .doc-img-bar {
+  background: rgba(91, 140, 255, 0.08);
 }
 
 /* 正文 + 批注侧栏并排 */

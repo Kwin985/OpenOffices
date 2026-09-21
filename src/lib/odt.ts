@@ -1,9 +1,21 @@
 // ODT（OpenDocument 文本）导出/导入：ProseMirror JSON ⇄ content.xml，零新依赖（JSZip + DOMParser）。
 // 范围：批注与目录节点不写 ODT；图片以 dataURL 内嵌进 Pictures/；页眉页脚/页码走 master-page。
 
-import type { PMNode, DocMeta } from './docx'
+import { resolvePage, type PMNode, type DocMeta, type PageMargin } from './docx'
 
 const OD_MIME = 'application/vnd.oasis.opendocument.text'
+
+// mm → ODF 长度字面量（cm 两位小数）
+const mm2cm = (mm: number) => `${(mm / 10).toFixed(2)}cm`
+// ODF 长度字面量 → mm；无法解析回 undefined
+function cm2mm(v: string | null | undefined): number | undefined {
+  if (!v) return undefined
+  const m = v.match(/^([\d.]+)\s*(cm|mm|in|")?$/)
+  if (!m) return undefined
+  const n = Number(m[1])
+  if (!Number.isFinite(n) || n <= 0) return undefined
+  return m[2] === 'in' ? n * 25.4 : m[2] === 'mm' ? n : n * 10
+}
 
 function esc(s: string): string {
   return s
@@ -139,11 +151,16 @@ class OdtBuilder {
       } else if (n.type === 'image') {
         const src = (n.attrs?.src as string) ?? ''
         if (!src) continue
+        // 宽度属性是像素（UI 设定），换算成 ODF 长度；缺省回退 4.5in
+        const pw = Number(n.attrs?.width)
+        const wAttr = `svg:width="${Number.isFinite(pw) && pw > 0 ? mm2cm(pw * 25.4 / 96) : '4.5in'}"`
+        const ph = Number(n.attrs?.height)
+        const hAttr = Number.isFinite(ph) && ph > 0 ? ` svg:height="${mm2cm(ph * 25.4 / 96)}"` : ''
         const entry = this.registerImage(src)
         if (entry) {
-          out += `<draw:frame draw:name="${entry.file}" text:anchor-type="as-char" svg:width="4.5in"><draw:image xlink:href="${entry.file}" xlink:type="simple" xlink:show="embed" xlink:actuate="onLoad"/></draw:frame>`
+          out += `<draw:frame draw:name="${entry.file}" text:anchor-type="as-char" ${wAttr}${hAttr}><draw:image xlink:href="${entry.file}" xlink:type="simple" xlink:show="embed" xlink:actuate="onLoad"/></draw:frame>`
         } else if (!src.startsWith('data:')) {
-          out += `<draw:frame text:anchor-type="as-char" svg:width="4.5in"><draw:image xlink:href="${esc(src)}" xlink:type="simple"/></draw:frame>`
+          out += `<draw:frame text:anchor-type="as-char" ${wAttr}${hAttr}><draw:image xlink:href="${esc(src)}" xlink:type="simple"/></draw:frame>`
         }
       } else if (n.content) {
         out += this.inline(n.content)
@@ -299,6 +316,13 @@ class OdtBuilder {
     const stylesNS = NS.split(' ')
       .filter((p) => /office|style|text|fo/.test(p))
       .join(' ')
+    const pg = resolvePage(this.meta?.page)
+    const pageProps =
+      `<style:page-layout-properties ` +
+      `fo:page-width="${mm2cm(pg.w)}" fo:page-height="${mm2cm(pg.h)}" ` +
+      `fo:margin-top="${mm2cm(pg.margin.top)}" fo:margin-bottom="${mm2cm(pg.margin.bottom)}" ` +
+      `fo:margin-left="${mm2cm(pg.margin.left)}" fo:margin-right="${mm2cm(pg.margin.right)}" ` +
+      `style:num-format="1"/>`
     return (
       `<?xml version="1.0" encoding="UTF-8"?><office:document-styles ${stylesNS} office:version="1.2">` +
       `<office:styles>` +
@@ -307,7 +331,7 @@ class OdtBuilder {
       `<style:style style:name="Header" style:family="paragraph" style:parent-style-name="Standard"><style:paragraph-properties fo:text-align="end"/><style:text-properties fo:font-size="9pt" fo:color="#6b7280"/></style:style>` +
       `<style:style style:name="Footer" style:family="paragraph" style:parent-style-name="Standard"><style:paragraph-properties fo:text-align="center"/><style:text-properties fo:font-size="9pt" fo:color="#6b7280"/></style:style>` +
       `</office:styles>` +
-      `<office:automatic-styles><style:page-layout style:name="pm1"><style:page-layout-properties fo:page-width="21cm" fo:page-height="29.7cm" fo:margin-top="2cm" fo:margin-bottom="2cm" fo:margin-left="2.2cm" fo:margin-right="2.2cm" style:num-format="1"/></style:page-layout></office:automatic-styles>` +
+      `<office:automatic-styles><style:page-layout style:name="pm1">${pageProps}</style:page-layout></office:automatic-styles>` +
       `<office:master-styles>${master}</office:master-styles>` +
       `</office:document-styles>`
     )
@@ -483,7 +507,12 @@ export async function odtToHtml(bytes: Uint8Array): Promise<{ html: string; meta
                 break
               }
             }
-            if (src) out += `<img src="${src}"/>`
+            if (src) {
+              const wmm = cm2mm(e.getAttribute('svg:width'))
+              out += wmm
+                ? `<img src="${src}" style="width:${Math.round((wmm / 25.4) * 96)}px"/>`
+                : `<img src="${src}"/>`
+            }
             break
           }
           case 'noscript':
@@ -589,6 +618,25 @@ export async function odtToHtml(bytes: Uint8Array): Promise<{ html: string; meta
           .trim()
       }
       if (foot) meta.footerText = foot
+    }
+    // 页面设置：page-layout-properties 的纸张与四边距
+    const plp = Array.from(sdoc.getElementsByTagName('*')).find((x) => x.localName === 'page-layout-properties')
+    const pw = cm2mm(plp?.getAttribute('fo:page-width') ?? null)
+    const ph = cm2mm(plp?.getAttribute('fo:page-height') ?? null)
+    if (pw && ph) {
+      const near = (a: number, b: number) => Math.abs(a - b) < 1.5
+      const size = near(pw, 210) && near(ph, 297) ? 'A4' : near(pw, 215.9) && near(ph, 279.4) ? 'Letter' : 'custom'
+      const r1 = (v: number) => Math.round(v * 10) / 10
+      const margin: Partial<PageMargin> = {}
+      const mt = cm2mm(plp?.getAttribute('fo:margin-top') ?? null)
+      const mb = cm2mm(plp?.getAttribute('fo:margin-bottom') ?? null)
+      const ml = cm2mm(plp?.getAttribute('fo:margin-left') ?? null)
+      const mr = cm2mm(plp?.getAttribute('fo:margin-right') ?? null)
+      if (mt) margin.top = r1(mt)
+      if (mb) margin.bottom = r1(mb)
+      if (ml) margin.left = r1(ml)
+      if (mr) margin.right = r1(mr)
+      meta.page = { size, ...(size === 'custom' ? { w: r1(pw), h: r1(ph) } : {}), ...(Object.keys(margin).length ? { margin } : {}) }
     }
   }
   return { html, meta }

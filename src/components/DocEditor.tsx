@@ -1,4 +1,4 @@
-import { memo, useEffect, useRef, useState } from 'react'
+import { memo, useEffect, useRef, useState, type CSSProperties } from 'react'
 import { useEditor, EditorContent } from '@tiptap/react'
 import StarterKit from '@tiptap/starter-kit'
 import Image from '@tiptap/extension-image'
@@ -18,6 +18,8 @@ import {
   docxToDocMeta,
   docxToHtml,
   prosemirrorToDocxBytes,
+  resolvePage,
+  MM_PX,
   type DocComment,
   type DocMeta,
   type PMNode,
@@ -35,6 +37,22 @@ const ODOC_HEADER = { app: 'openoffices', kind: 'doc', version: 1 }
 
 const HL_COLORS = ['#fff59d', '#a5d6a7', '#90caf9', '#f48fb1']
 
+// 图片扩展自带 width/height（像素数字），补 align=center：渲染成块级 + 双侧 auto 边距
+const ImgExt = Image.extend({
+  addAttributes() {
+    return {
+      ...this.parent?.(),
+      align: {
+        default: null,
+        parseHTML: (el: HTMLElement) =>
+          el.style.display === 'block' && el.style.marginLeft === 'auto' ? 'center' : null,
+        renderHTML: (attrs: { align?: string | null }) =>
+          attrs.align === 'center' ? { style: 'display:block;margin-left:auto;margin-right:auto' } : {},
+      },
+    }
+  },
+})
+
 function DocEditor({ tab }: Props) {
   const renameTab = useApp((s) => s.renameTab)
   const markDirty = useApp((s) => s.markDirty)
@@ -43,6 +61,8 @@ function DocEditor({ tab }: Props) {
   const [linkDraft, setLinkDraft] = useState<string | null>(null)
   const [meta, setMeta] = useState<DocMeta>({})
   const [hfOpen, setHfOpen] = useState(false)
+  const [pgOpen, setPgOpen] = useState(false)
+  const [docH, setDocH] = useState(0)
   const [cmOpen, setCmOpen] = useState(false)
   const [draft, setDraft] = useState<{ cid: number; text: string } | null>(null)
   const [, setTick] = useState(0)
@@ -52,7 +72,7 @@ function DocEditor({ tab }: Props) {
       StarterKit.configure({
         heading: { levels: [1, 2, 3, 4] },
       }),
-      Image.configure({ allowBase64: true }),
+      ImgExt.configure({ allowBase64: true }),
       Placeholder.configure({ placeholder: '开始输入内容…' }),
       TextAlign.configure({ types: ['heading', 'paragraph'] }),
       TableKit.configure({ table: { resizable: true } }),
@@ -64,7 +84,32 @@ function DocEditor({ tab }: Props) {
     ],
     content: '<p></p>',
     onUpdate: () => markDirty(tab.id, true),
-    editorProps: { attributes: { class: 'doc-content' } },
+    editorProps: {
+      attributes: { class: 'doc-content' },
+      // 剪贴板里有图片文件（截图/文件管理器复制）时拦截为 base64 插图，压过 HTML 粘贴
+      handlePaste: (view, event) => {
+        const items = event.clipboardData?.items
+        if (!items) return false
+        for (const it of items) {
+          if (it.kind !== 'file' || !it.type.startsWith('image/')) continue
+          const file = it.getAsFile()
+          if (!file) continue
+          event.preventDefault()
+          const reader = new FileReader()
+          reader.onload = () => {
+            const type = view.state.schema.nodes.image
+            if (!type) return
+            view.dispatch(
+              view.state.tr.replaceSelectionWith(type.create({ src: String(reader.result) })).scrollIntoView(),
+            )
+            markDirty(tab.id, true)
+          }
+          reader.readAsDataURL(file)
+          return true
+        }
+        return false
+      },
+    },
   })
   if (import.meta.env.DEV && editor) {
     const w = window as unknown as Record<string, unknown>
@@ -72,6 +117,38 @@ function DocEditor({ tab }: Props) {
     map[tab.id] = editor
     w.__oofDoc = map
   }
+
+  // 生效页面设置：未显式设定走 A4 + 默认边距（与 converter 导出同一 resolve）
+  const eff = resolvePage(meta.page)
+  const effPx = {
+    w: eff.w * MM_PX,
+    h: eff.h * MM_PX,
+    top: eff.margin.top * MM_PX,
+    bottom: eff.margin.bottom * MM_PX,
+    left: eff.margin.left * MM_PX,
+    right: eff.margin.right * MM_PX,
+  }
+
+  // 打印 @page 跟随页面设置（PrintToPdf/系统打印均读它）
+  useEffect(() => {
+    let el = document.getElementById('oo-page-rule') as HTMLStyleElement | null
+    if (!el) {
+      el = document.createElement('style')
+      el.id = 'oo-page-rule'
+      document.head.appendChild(el)
+    }
+    el.textContent = `@media print { @page { size: ${eff.w}mm ${eff.h}mm; margin: ${eff.margin.top}mm ${eff.margin.right}mm ${eff.margin.bottom}mm ${eff.margin.left}mm; } }`
+  }, [eff.w, eff.h, eff.margin.top, eff.margin.right, eff.margin.bottom, eff.margin.left])
+
+  // 正文高度随事务/输入变化：分页参考线之"约 N 页"由它折算（观察包装 div，避开 view 未挂载期）
+  const wrapRef = useRef<HTMLDivElement>(null)
+  useEffect(() => {
+    const el = wrapRef.current
+    if (!el) return
+    const ro = new ResizeObserver(() => setDocH(el.offsetHeight))
+    ro.observe(el)
+    return () => ro.disconnect()
+  }, [editor])
 
   // 批注侧栏随文档变更刷新（锚点位置/孤儿判定）
   useEffect(() => {
@@ -261,6 +338,37 @@ function DocEditor({ tab }: Props) {
     markDirty(tab.id, true)
   }
 
+  const pg = meta.page ?? {}
+  const setPg = (p: Partial<typeof pg>) => patchMeta({ page: { ...pg, ...p } })
+
+  // 图片宽度按版心百分比设定；height 用当前显示比例换算，docx/odt 导出才能保形
+  const setImageWidth = (pct: number) => {
+    if (!editor) return
+    const contentW = effPx.w - effPx.left - effPx.right
+    const width = Math.round((contentW * pct) / 100)
+    const dom = editor.view.dom.querySelector('img.ProseMirror-selectednode')
+    const ratio =
+      dom instanceof HTMLImageElement && dom.naturalWidth ? dom.naturalHeight / dom.naturalWidth : null
+    editor
+      .chain()
+      .focus()
+      .updateAttributes('image', { width, ...(ratio ? { height: Math.round(width * ratio) } : {}) })
+      .run()
+    markDirty(tab.id, true)
+  }
+
+  const setImageAlign = (align: string | null) => {
+    if (!editor) return
+    editor.chain().focus().updateAttributes('image', { align }).run()
+    markDirty(tab.id, true)
+  }
+
+  const resetImage = () => {
+    if (!editor) return
+    editor.chain().focus().updateAttributes('image', { width: null, height: null, align: null }).run()
+    markDirty(tab.id, true)
+  }
+
   // 已有目录则滚动定位，否则在光标处插入（目录内容按标题实时汇总）
   const tocAction = () => {
     if (!editor) return
@@ -360,13 +468,15 @@ function DocEditor({ tab }: Props) {
         {btn('导出 odt', exportOdt, false, '导出 OpenDocument 文本（LibreOffice 系通用）')}
         {btn('目录', tocAction, false, '插入/定位目录：按标题实时汇总；导出为 Word 原生 TOC 域')}
         {btn('页眉页脚', () => setHfOpen((v) => !v), hfOpen || !!(meta.headerText || meta.footerText || meta.footerPageNumber), '设置页眉、页脚与页码')}
+        {btn('页面设置', () => setPgOpen((v) => !v), pgOpen || !!meta.page, '纸张与页边距：同步应用到视图、打印与 docx/odt 导出')}
         {btn('批注', () => setCmOpen((v) => !v), cmOpen || comments.length > 0, '批注侧栏：选中文字后可添加批注，导出为 docx 原生批注')}
         {btn('新建批注', startComment, !!draft, '选中正文文字后点击，为其添加一条批注')}
         {btn('打印 / PDF', () => window.print(), false, '调用系统打印，可选择另存为 PDF')}
         {btn('导出 PDF', exportPdf, false, 'WebView2 原生 PrintToPdf：按打印样式矢量输出，含高亮底色')}
         {status && <span className="editor-status">{status}</span>}
         <span className="editor-hint">
-          字数 {cc.words()} · 字符 {cc.characters()}
+          字数 {cc.words()} · 字符 {cc.characters()} · 约{' '}
+          {Math.max(1, Math.ceil(docH / Math.max(1, effPx.h - effPx.top - effPx.bottom)))} 页
         </span>
       </div>
       <div className="doc-toolbar">
@@ -454,6 +564,95 @@ function DocEditor({ tab }: Props) {
         {btn('撤销', () => editor.chain().focus().undo().run())}
         {btn('重做', () => editor.chain().focus().redo().run())}
       </div>
+      {editor.isActive('table') && (
+        <div className="doc-toolbar doc-table-bar">
+          {btn('↑行', () => editor.chain().focus().addRowBefore().run(), false, '在上方插入行')}
+          {btn('↓行', () => editor.chain().focus().addRowAfter().run(), false, '在下方插入行')}
+          {btn('←列', () => editor.chain().focus().addColumnBefore().run(), false, '在左侧插入列')}
+          {btn('→列', () => editor.chain().focus().addColumnAfter().run(), false, '在右侧插入列')}
+          {btn('删行', () => editor.chain().focus().deleteRow().run())}
+          {btn('删列', () => editor.chain().focus().deleteColumn().run())}
+          <span className="tb-sep" />
+          {btn('合并', () => editor.chain().focus().mergeOrSplit().run(), false, '框选多格合并；点在已合并格上则拆分')}
+          {btn('表头行', () => editor.chain().focus().toggleHeaderRow().run(), editor.isActive('tableHeader'))}
+          <span className="tb-sep" />
+          {btn('删除表格', () => editor.chain().focus().deleteTable().run())}
+        </div>
+      )}
+      {editor.isActive('image') && (
+        <div className="doc-toolbar doc-img-bar">
+          <span className="editor-status">图片：</span>
+          {[25, 50, 75, 100].map((p) =>
+            btn(`${p}%`, () => setImageWidth(p), false, `宽度设为版心的 ${p}%（按选中型图片当前比例缩放）`),
+          )}
+          {btn('居中', () => setImageAlign('center'), editor.getAttributes('image').align === 'center')}
+          {btn('恢复', resetImage, false, '清除宽高与对齐')}
+        </div>
+      )}
+      {pgOpen && (
+        <div className="doc-pg-panel">
+          <label className="doc-hf-field">
+            纸张
+            <select
+              className="tb-select"
+              value={pg.size ?? 'A4'}
+              onChange={(e) => {
+                const v = e.target.value as 'A4' | 'Letter' | 'custom'
+                if (v === 'custom') setPg({ size: 'custom', w: Math.round(eff.w * 10) / 10, h: Math.round(eff.h * 10) / 10 })
+                else setPg({ size: v, w: undefined, h: undefined })
+              }}
+            >
+              <option value="A4">A4（210×297mm）</option>
+              <option value="Letter">Letter（216×279mm）</option>
+              <option value="custom">自定义</option>
+            </select>
+          </label>
+          {(pg.size ?? 'A4') === 'custom' && (
+            <>
+              <label className="doc-hf-field">
+                宽
+                <input
+                  className="tb-input doc-num"
+                  type="number"
+                  step="0.5"
+                  value={Math.round(eff.w * 10) / 10}
+                  onChange={(e) => Number.isFinite(e.target.valueAsNumber) && e.target.valueAsNumber > 0 && setPg({ w: e.target.valueAsNumber })}
+                />
+                mm
+              </label>
+              <label className="doc-hf-field">
+                高
+                <input
+                  className="tb-input doc-num"
+                  type="number"
+                  step="0.5"
+                  value={Math.round(eff.h * 10) / 10}
+                  onChange={(e) => Number.isFinite(e.target.valueAsNumber) && e.target.valueAsNumber > 0 && setPg({ h: e.target.valueAsNumber })}
+                />
+                mm
+              </label>
+            </>
+          )}
+          <span className="tb-sep" />
+          {(['top', 'right', 'bottom', 'left'] as const).map((side) => (
+            <label key={side} className="doc-hf-field">
+              {{ top: '上', right: '右', bottom: '下', left: '左' }[side]}
+              <input
+                className="tb-input doc-num"
+                type="number"
+                step="0.5"
+                value={Math.round(eff.margin[side] * 10) / 10}
+                onChange={(e) =>
+                  Number.isFinite(e.target.valueAsNumber) &&
+                  e.target.valueAsNumber >= 0 &&
+                  setPg({ margin: { ...eff.margin, [side]: e.target.valueAsNumber } })
+                }
+              />
+            </label>
+          ))}
+          {meta.page && btn('重置', () => patchMeta({ page: undefined }), false, '恢复 A4 + 默认边距')}
+        </div>
+      )}
       {hfOpen && (
         <div className="doc-hf-panel">
           <label className="doc-hf-field">
@@ -491,9 +690,20 @@ function DocEditor({ tab }: Props) {
       )}
       <div className="doc-body">
         <div className="doc-scroll">
-          <div className="doc-page">
+          <div
+            className="doc-page"
+            style={{
+              width: effPx.w,
+              maxWidth: 'none',
+              minHeight: effPx.h,
+              padding: `${effPx.top}px ${effPx.right}px ${effPx.bottom}px ${effPx.left}px`,
+            }}
+          >
+            <div className="doc-pg-lines" style={{ '--pgh': `${effPx.h}px` } as CSSProperties} />
             {meta.headerText && <div className="doc-hf doc-hf-head">{meta.headerText}</div>}
-            <EditorContent editor={editor} />
+            <div ref={wrapRef}>
+              <EditorContent editor={editor} />
+            </div>
             {(meta.footerText || meta.footerPageNumber) && (
               <div className="doc-hf doc-hf-foot">
                 {meta.footerText}

@@ -43,12 +43,40 @@ export interface DocComment {
   resolved?: boolean
 }
 
-// 页眉页脚设置 + 批注列表：随 .odoc meta 存储，导出写入 OOXML
+// 页面设置：mm 存储；size=custom 时用 w/h，margin 缺项回退默认
+export interface PageMargin {
+  top: number
+  right: number
+  bottom: number
+  left: number
+}
+
+export interface PageSetup {
+  size?: 'A4' | 'Letter' | 'custom'
+  w?: number
+  h?: number
+  margin?: Partial<PageMargin>
+}
+
+export const PAGE_SIZES_MM = { A4: [210, 297], Letter: [215.9, 279.4] } as const
+export const DEFAULT_PAGE_MARGIN: PageMargin = { top: 20, right: 22, bottom: 20, left: 22 }
+export const MM_PX = 96 / 25.4
+const MM_TWIPS = 1440 / 25.4
+
+export function resolvePage(p?: PageSetup): { w: number; h: number; margin: PageMargin } {
+  const preset = p?.size === 'Letter' ? PAGE_SIZES_MM.Letter : PAGE_SIZES_MM.A4
+  const w = p?.size === 'custom' && p.w ? p.w : preset[0]
+  const h = p?.size === 'custom' && p.h ? p.h : preset[1]
+  return { w, h, margin: { ...DEFAULT_PAGE_MARGIN, ...p?.margin } }
+}
+
+// 页眉页脚设置 + 批注列表 + 页面设置：随 .odoc meta 存储，导出写入 OOXML
 export interface DocMeta {
   headerText?: string
   footerText?: string
   footerPageNumber?: boolean
   comments?: DocComment[]
+  page?: PageSetup
 }
 
 export async function docxToHtml(bytes: Uint8Array): Promise<string> {
@@ -104,6 +132,38 @@ export async function docxToDocMeta(bytes: Uint8Array): Promise<DocMeta> {
     if (rest) out.footerText = rest
   }
   if (foot.hasPage) out.footerPageNumber = true
+  // 页面设置：body 末尾 sectPr 的 pgSz/pgMar（twips → mm）
+  const pgSz = docXml.match(/<w:pgSz[^>]*>/)?.[0]
+  const pgMar = docXml.match(/<w:pgMar[^>]*>/)?.[0]
+  const tw = (xml: string | undefined, attr: string) => {
+    const v = Number(xml?.match(new RegExp(`w:${attr}="(\\d+)"`))?.[1])
+    return Number.isFinite(v) && v > 0 ? v / MM_TWIPS : undefined
+  }
+  const pw = tw(pgSz, 'w')
+  const ph = tw(pgSz, 'h')
+  const mt = tw(pgMar, 'top')
+  const mr = tw(pgMar, 'right')
+  const mb = tw(pgMar, 'bottom')
+  const ml = tw(pgMar, 'left')
+  if (pw && ph) {
+    const near = (a: number, b: number) => Math.abs(a - b) < 1
+    const size = near(pw, 210) && near(ph, 297) ? 'A4' : near(pw, 215.9) && near(ph, 279.4) ? 'Letter' : 'custom'
+    const r1 = (v?: number) => (v === undefined ? undefined : Math.round(v * 10) / 10)
+    const margin: Partial<PageMargin> = {}
+    const tm = r1(mt)
+    const rm = r1(mr)
+    const bm = r1(mb)
+    const lm = r1(ml)
+    if (tm !== undefined) margin.top = tm
+    if (rm !== undefined) margin.right = rm
+    if (bm !== undefined) margin.bottom = bm
+    if (lm !== undefined) margin.left = lm
+    out.page = {
+      size,
+      ...(size === 'custom' ? { w: r1(pw), h: r1(ph) } : {}),
+      ...(Object.keys(margin).length ? { margin } : {}),
+    }
+  }
   return out
 }
 
@@ -464,12 +524,16 @@ function blocksOf(nodes: PMNode[], depth = 0, dt: DocTrack = { used: new Set(), 
           rows: rows.map(
             (r) =>
               new TableRow({
-                children: (r.content ?? []).map(
-                  (cell) =>
-                    new TableCell({
-                      children: [new Paragraph({ children: inlineBlockChildren(cell, dt) })],
-                    }),
-                ),
+                children: (r.content ?? []).map((cell) => {
+                  // TipTap 合并语义 colspan/rowspan → gridSpan + vMerge（docx 库内部展开 restart/continue）
+                  const cs = Number(cell.attrs?.colspan ?? 1) || 1
+                  const rs = Number(cell.attrs?.rowspan ?? 1) || 1
+                  return new TableCell({
+                    ...(cs > 1 ? { columnSpan: cs } : {}),
+                    ...(rs > 1 ? { rowSpan: rs } : {}),
+                    children: [new Paragraph({ children: inlineBlockChildren(cell, dt) })],
+                  })
+                }),
               }),
           ),
         }),
@@ -491,9 +555,32 @@ export async function prosemirrorToDocxBytes(json: PMNode, meta?: DocMeta): Prom
   const dt: DocTrack = { used: new Set(), ranges: new Set(), skipped: new Set() }
   const section: {
     children: (Paragraph | Table | TableOfContents)[]
+    properties?: { page: { size: { width: number; height: number; orientation?: 'landscape' | 'portrait' }; margin: Record<string, number> } }
     headers?: { default: Header }
     footers?: { default: Footer }
   } = { children: blocksOf(json.content ?? [], 0, dt) }
+  {
+    const pg = resolvePage(meta?.page)
+    const twips = (mm: number) => Math.round(mm * MM_TWIPS)
+    // docx 库按"竖版宽高 + orientation"理解 size（landscape 时自行交换写盘），故传排序后的尺寸
+    section.properties = {
+      page: {
+        size: {
+          width: twips(Math.min(pg.w, pg.h)),
+          height: twips(Math.max(pg.w, pg.h)),
+          ...(pg.w > pg.h ? { orientation: 'landscape' as const } : {}),
+        },
+        margin: {
+          top: twips(pg.margin.top),
+          bottom: twips(pg.margin.bottom),
+          left: twips(pg.margin.left),
+          right: twips(pg.margin.right),
+          header: twips(Math.min(pg.margin.top, 12.7)),
+          footer: twips(Math.min(pg.margin.bottom, 12.7)),
+        },
+      },
+    }
+  }
   if (meta?.headerText?.trim()) {
     section.headers = {
       default: new Header({
