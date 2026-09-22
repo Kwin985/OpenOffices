@@ -243,9 +243,32 @@ fn data_to_value(d: &Data) -> Option<Value> {
 }
 
 #[tauri::command]
-pub fn read_xlsx(path: String) -> Result<WorkbookPayload, Error> {
+pub async fn read_xlsx(path: String) -> Result<WorkbookPayload, Error> {
+    // 解压 + 全表解析是 CPU 密集活，放主线程会让窗口整段冻结
+    to_blocking(move || read_xlsx_sync(path)).await
+}
+
+#[tauri::command]
+pub async fn write_xlsx(path: String, workbook: WorkbookPayload) -> Result<(), Error> {
+    to_blocking(move || write_xlsx_sync(path, workbook)).await
+}
+
+/// 命令的 async 外壳：把同步实现挪到 blocking 线程池，IPC 名仍按原命令对外
+pub(crate) async fn to_blocking<T: Send + 'static>(
+    f: impl FnOnce() -> Result<T, Error> + Send + 'static,
+) -> Result<T, Error> {
+    tauri::async_runtime::spawn_blocking(f)
+        .await
+        .map_err(|e| Error(format!("后台任务失败: {e}")))?
+}
+
+pub fn read_xlsx_sync(path: String) -> Result<WorkbookPayload, Error> {
     if !Path::new(&path).exists() {
         return Err(Error(format!("文件不存在: {path}")));
+    }
+    // calamine 不认 csv（它按扩展名嗅探文件魔数，csv 只会报 Cannot detect file format），读侧自己分流
+    if path.to_ascii_lowercase().ends_with(".csv") {
+        return crate::csv::read_payload(&path);
     }
     let mut workbook =
         open_workbook_auto(&path).map_err(|e| Error(format!("无法打开文件: {e}")))?;
@@ -256,6 +279,8 @@ pub fn read_xlsx(path: String) -> Result<WorkbookPayload, Error> {
         xlsx_style::read_xlsx_styles(&path)
     };
     let mut sheets = Vec::new();
+    // 一格值同时进 cells 和"图表取数"用的网格；后者只在簿子真含图表时才需要（多数没有）
+    let keep_grid = xlsx_chart::has_charts(&path);
     let mut grids: std::collections::HashMap<String, xlsx_chart::Grid> =
         std::collections::HashMap::new();
     for name in workbook.sheet_names().to_vec() {
@@ -272,7 +297,9 @@ pub fn read_xlsx(path: String) -> Result<WorkbookPayload, Error> {
                 if let Some(v) = data_to_value(cell) {
                     let (r, c) = (r0 + ri as u32, c0 + ci as u32);
                     seen.insert((r, c));
-                    grids.entry(name.clone()).or_default().insert((r, c), v.clone());
+                    if keep_grid {
+                        grids.entry(name.clone()).or_default().insert((r, c), v.clone());
+                    }
                     cells.push(CellPayload {
                         r,
                         c,
@@ -328,7 +355,11 @@ pub fn read_xlsx(path: String) -> Result<WorkbookPayload, Error> {
         });
     }
     // 图表部件单独解析：值按引用从上面已建好的网格取
-    let charts = xlsx_chart::read_xlsx_charts(&path, &grids);
+    let charts = if keep_grid {
+        xlsx_chart::read_xlsx_charts(&path, &grids)
+    } else {
+        Default::default()
+    };
     for sheet in sheets.iter_mut() {
         if let Some(cs) = charts.get(&sheet.name) {
             sheet.charts = cs.clone();
@@ -457,8 +488,7 @@ fn px_to_cm(px: u32) -> u32 {
     ((px as f64) * 2.54 / 96.0).round().max(2.0) as u32
 }
 
-#[tauri::command]
-pub fn write_xlsx(path: String, workbook: WorkbookPayload) -> Result<(), Error> {
+pub fn write_xlsx_sync(path: String, workbook: WorkbookPayload) -> Result<(), Error> {
     let mut wb = Workbook::new();
     for sheet in &workbook.sheets {
         let ws = wb.add_worksheet();
@@ -629,8 +659,8 @@ mod tests {
                 },
             ],
         };
-        write_xlsx(path.clone(), wb).expect("write failed");
-        let back = read_xlsx(path.clone()).expect("read failed");
+        write_xlsx_sync(path.clone(), wb).expect("write failed");
+        let back = read_xlsx_sync(path.clone()).expect("read failed");
         std::fs::remove_file(&path).ok();
 
         assert_eq!(back.sheets.len(), 2);
@@ -715,8 +745,8 @@ mod tests {
                 ..Default::default()
             }],
         };
-        write_xlsx(path.clone(), wb).expect("write failed");
-        let back = read_xlsx(path.clone()).expect("read failed");
+        write_xlsx_sync(path.clone(), wb).expect("write failed");
+        let back = read_xlsx_sync(path.clone()).expect("read failed");
         std::fs::remove_file(&path).ok();
 
         let sheet = &back.sheets[0];
@@ -800,8 +830,8 @@ mod tests {
                 ..Default::default()
             }],
         };
-        write_xlsx(path.clone(), wb).expect("write failed");
-        let back = read_xlsx(path.clone()).expect("read failed");
+        write_xlsx_sync(path.clone(), wb).expect("write failed");
+        let back = read_xlsx_sync(path.clone()).expect("read failed");
         std::fs::remove_file(&path).ok();
 
         let sheet = &back.sheets[0];
@@ -905,8 +935,8 @@ mod tests {
                 ..Default::default()
             }],
         };
-        write_xlsx(path.clone(), wb).expect("write failed");
-        let back = read_xlsx(path.clone()).expect("read failed");
+        write_xlsx_sync(path.clone(), wb).expect("write failed");
+        let back = read_xlsx_sync(path.clone()).expect("read failed");
         std::fs::remove_file(&path).ok();
 
         let charts = &back.sheets[0].charts;
@@ -951,8 +981,8 @@ mod tests {
                 ..Default::default()
             }],
         };
-        write_xlsx(path.clone(), wb).expect("write_xlsx");
-        let back = read_xlsx(path.clone()).expect("读回失败");
+        write_xlsx_sync(path.clone(), wb).expect("write_xlsx");
+        let back = read_xlsx_sync(path.clone()).expect("读回失败");
         std::fs::remove_file(&path).ok();
         let sheet = &back.sheets[0];
         assert_eq!(sheet.col_widths.get(&0), Some(&140.0), "列 0 宽 140px");
@@ -987,8 +1017,8 @@ mod tests {
                 freeze: Some(Freeze { rows: 1, cols: 0 }),
             }],
         };
-        write_xlsx(path.clone(), wb).expect("write_xlsx");
-        let back = read_xlsx(path.clone()).expect("读回失败");
+        write_xlsx_sync(path.clone(), wb).expect("write_xlsx");
+        let back = read_xlsx_sync(path.clone()).expect("读回失败");
         std::fs::remove_file(&path).ok();
         let sheet = &back.sheets[0];
         assert_eq!(sheet.hidden_cols, vec![1], "隐藏列往返");
@@ -1036,8 +1066,8 @@ mod tests {
                 ..Default::default()
             }],
         };
-        write_xlsx(path.clone(), wb).expect("write_xlsx");
-        let back = read_xlsx(path.clone()).expect("读回失败");
+        write_xlsx_sync(path.clone(), wb).expect("write_xlsx");
+        let back = read_xlsx_sync(path.clone()).expect("读回失败");
         std::fs::remove_file(&path).ok();
         let sheet = &back.sheets[0];
         let at = |r: u32, c: u32| sheet.cells.iter().find(|x| x.r == r && x.c == c);
@@ -1172,7 +1202,7 @@ mod tests {
                 ..Default::default()
             }],
         };
-        write_xlsx(path.clone(), wb).expect("写夹具失败");
+        write_xlsx_sync(path.clone(), wb).expect("写夹具失败");
         println!("fixture written: {path}");
     }
 }

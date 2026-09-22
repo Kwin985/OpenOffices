@@ -1,3 +1,4 @@
+mod csv;
 mod pdf;
 mod ods;
 mod xlsx;
@@ -55,6 +56,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             xlsx::read_xlsx,
             xlsx::write_xlsx,
+            csv::write_csv,
             ods::write_ods,
             pdf::export_pdf,
             take_startup_files

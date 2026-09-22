@@ -1,6 +1,6 @@
 [package]
 name = "openoffices"
-version = "0.33.0"
+version = "0.34.0"
 description = "A Tauri App"
 authors = ["you"]
 edition = "2021"
@@ -31,6 +31,8 @@ rust_xlsxwriter = "0.99.1"
 # 直接依赖以读取 xlsx 单元格样式/合并（calamine 不公开样式 API）；两者均已在依赖树中，零体积增量
 zip = { version = "8.6", default-features = false, features = ["deflate"] }
 quick-xml = "0.42"
+# CSV 读侧中文兼容（Excel 另存的 GBK 文件）；已在依赖树（url/tauri 传递），提为直接依赖零体积增量
+encoding_rs = "0.8"
 
 # WebView2 PrintToPdf（导出 PDF）；两者已在依赖树（wry 传递），提为直接依赖零体积增量
 [target.'cfg(windows)'.dependencies]

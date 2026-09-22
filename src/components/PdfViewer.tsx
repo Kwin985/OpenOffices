@@ -5,8 +5,23 @@ import type { PDFDocumentProxy, RenderTask } from 'pdfjs-dist'
 import workerUrl from 'pdfjs-dist/build/pdf.worker.min.mjs?url'
 import type { Tab } from '../store'
 import { useApp } from '../store'
-import { readBytes, writeBytes } from '../lib/fs'
+import { readBytes, writeBytes, pickDirectory, pickPdfFiles, pickSaveFile, baseName } from '../lib/fs'
 import { registerSaver } from '../lib/registry'
+import {
+  fromDisplayPoints,
+  fromDisplayRect,
+  normRot,
+  parsePageSpec,
+  toDisplayPoints,
+  toDisplayRect,
+} from '../lib/pdf-geo'
+import {
+  extractPages,
+  mergePdfs,
+  removePagesInPlace,
+  rotatePagesInPlace,
+  splitPdf,
+} from '../lib/pdf-pages'
 
 pdfjsLib.GlobalWorkerOptions.workerSrc = workerUrl
 
@@ -24,6 +39,8 @@ const SEARCH_DEBOUNCE_MS = 200
 const PRERENDER_MARGIN_PX = 800
 // 已渲染页位图缓存（LRU）：回视口只 drawImage 免重栅格化；scale/dpr 不一致即视为未命中
 const BITMAP_CACHE_MAX = 8
+// 像素总量上限（约 8 张 A4@2x）：高倍缩放下单页就有几十 MB，只限页数会撑爆
+const BITMAP_CACHE_PX = 32_000_000
 // 侧栏缩略图固定宽度（CSS px）：与主视图缩放无关
 const THUMB_W = 120
 // 大纲条目上限：恶意/异常深文档防御
@@ -149,7 +166,14 @@ function PdfViewer({ tab }: Props) {
   const [matches, setMatches] = useState<Match[]>([])
   const [activeIdx, setActiveIdx] = useState(-1)
   const [sideOpen, setSideOpen] = useState(false)
-  const [sideTab, setSideTab] = useState<'thumbs' | 'outline' | 'annos'>('thumbs')
+  const [sideTab, setSideTab] = useState<'thumbs' | 'outline' | 'annos' | 'pages'>('thumbs')
+  // 页面管理：勾选的页号（1-based）+ 忙标志 + 重载计数（页面写盘后重新读文件）
+  const [pageSel, setPageSel] = useState<Set<number>>(new Set())
+  const [pageSpec, setPageSpec] = useState('')
+  const [pageBusy, setPageBusy] = useState(false)
+  const [reloadKey, setReloadKey] = useState(0)
+  // 重载后仍停在操作前那一页（否则每次页面操作都跳回第 1 页）
+  const keepPageRef = useRef(0)
   const [outline, setOutline] = useState<OutlineEntry[]>([])
   const [annos, setAnnos] = useState<PdfAnno[]>([])
   const [pop, setPop] = useState<AnnoPop | null>(null)
@@ -186,11 +210,21 @@ function PdfViewer({ tab }: Props) {
   const slots = useRef(new Map<number, PageSlot>())
   // 位图缓存按插入序做 LRU（get 命中后 delete+set 提到队尾）
   const bmpCache = useRef(new Map<number, PageBitmap>())
+  const bmpPx = (bmp: PageBitmap) => bmp.canvas.width * bmp.canvas.height
   const putBitmap = (n: number, bmp: PageBitmap) => {
     const c = bmpCache.current
+    // 缩放档位或像素比一变，旧位图就永远命中不了，先清干净再存新的
+    for (const [k, v] of c) if (v.scale !== bmp.scale || v.dpr !== bmp.dpr) c.delete(k)
     c.delete(n)
     c.set(n, bmp)
-    while (c.size > BITMAP_CACHE_MAX) c.delete(c.keys().next().value as number)
+    let px = 0
+    for (const v of c.values()) px += bmpPx(v)
+    // A4 在 3× 缩放 + dpr 2 下单页位图就几十 MB，所以既限页数也限像素总量
+    while (c.size > 1 && (c.size > BITMAP_CACHE_MAX || px > BITMAP_CACHE_PX)) {
+      const k = c.keys().next().value as number
+      px -= bmpPx(c.get(k) as PageBitmap)
+      c.delete(k)
+    }
   }
   const renderStats = useRef({ full: 0, hit: 0 })
   // 缩略图槽位：独立于主视图调度，侧栏收起/切走时整体清空重挂
@@ -219,7 +253,7 @@ function PdfViewer({ tab }: Props) {
         openDoc = d
         slots.current.clear()
         setSizes({})
-        setCurPage(1)
+        setCurPage(keepPageRef.current || 1)
         setDoc(d)
         setStatus('')
       } catch (e) {
@@ -232,7 +266,7 @@ function PdfViewer({ tab }: Props) {
       void openDoc?.destroy().catch(() => {})
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [tab.id])
+  }, [tab.id, reloadKey])
 
   // 后台补齐每页尺寸（元数据级 getPage，快）：滚动条长度与占位高度尽早精确。
   // 攒批刷新：逐页 setSizes 会让全页占位随每页重渲染一次，批内合并为一次
@@ -270,6 +304,8 @@ function PdfViewer({ tab }: Props) {
   useEffect(() => {
     slots.current.clear()
     bmpCache.current.clear()
+    // 全文索引只按页号缓存，换文档不清会把上一本的文本当这一本命中
+    pageTexts.current.clear()
     renderStats.current = { full: 0, hit: 0 }
     thumbSlots.current.clear()
     setQuery('')
@@ -277,12 +313,24 @@ function PdfViewer({ tab }: Props) {
     setActiveIdx(-1)
     setSearchOpen(false)
     setOutline([])
-    setSideTab('thumbs')
+    // "页面"是工作区而不是内容视图：页面操作后重载要留在原页签
+    setSideTab((t) => (t === 'pages' ? t : 'thumbs'))
     setAnnos([])
     setPop(null)
     setNoteOpen('')
     setTool('text')
     setSelAnno(null)
+  }, [doc])
+
+  // 页面操作写盘后回到操作前的那一页（占位 DOM 由上一行 setDoc 触发渲染，等一帧再滚）
+  useEffect(() => {
+    if (!doc) return
+    const n = keepPageRef.current
+    if (!n) return
+    keepPageRef.current = 0
+    requestAnimationFrame(() => {
+      scrollRef.current?.querySelector<HTMLElement>(`[data-page="${Math.min(n, doc.numPages)}"]`)?.scrollIntoView({ block: 'start' })
+    })
   }, [doc])
 
   // 大纲：pdfjs getOutline 树递归拍平；目标页经 getDestination/getPageIndex 解析
@@ -331,7 +379,13 @@ function PdfViewer({ tab }: Props) {
       for (let n = 1; n <= doc.numPages && !cancelled; n++) {
         const p = await doc.getPage(n)
         if (cancelled) return
-        const ph = p.getViewport({ scale: 1 }).height
+        // /Rect 是"未旋转 + 左下原点"，内存统一存"显示空间（已旋转 + 左上原点）"，先按 rotation:0 拿基准尺寸
+        const rot = normRot(p.rotate ?? 0)
+        const vp0 = p.getViewport({ scale: 1, rotation: 0 })
+        const base = { w: vp0.width, h: vp0.height }
+        // 注解点集：PDF 左下原点 → 未旋转左上 → 显示空间
+        const dispPts = (pts: number[][]) =>
+          toDisplayPoints([pts.map(([x, y]) => [x, base.h - y])], rot, base)[0]
         const list = (await p.getAnnotations({ intent: 'display' })) as {
           subtype?: string
           rect?: number[]
@@ -343,7 +397,8 @@ function PdfViewer({ tab }: Props) {
         for (const a of list) {
           if (!Array.isArray(a.rect) || a.rect.length < 4) continue
           const [x1, y1, x2, y2] = a.rect
-          const r = { x: x1, y: ph - y2, w: x2 - x1, h: y2 - y1 }
+          const tl = { x: x1, y: base.h - y2, w: x2 - x1, h: y2 - y1 }
+          const r = toDisplayRect(tl, rot, base)
           const txt = a.contentsObj?.str ?? ''
           if (a.subtype === 'Highlight') {
             out.push({ id: nid(), kind: 'highlight', page: n, rects: [r], color: rgbHex(a.color), text: txt })
@@ -361,19 +416,17 @@ function PdfViewer({ tab }: Props) {
             // pdf.js 把 L 解析成 lineCoordinates=[x1,y1,x2,y2]（左下原点，实测非对象）；缺字段时按包围盒对角线兜底
             const lc = a.lineCoordinates
             const l = Array.isArray(lc) && lc.length >= 4 ? lc : [x1, y1, x2, y2]
-            const pts = [
-              [
-                [l[0], ph - l[1]],
-                [l[2], ph - l[3]],
-              ],
-            ]
+            const pts = [dispPts([
+              [l[0], l[1]],
+              [l[2], l[3]],
+            ])]
             out.push({ id: nid(), kind: 'line', page: n, rects: [bboxOf(pts)], polys: pts, color: rgbHex(a.color) })
           } else if (a.subtype === 'Ink') {
             if (!Array.isArray(a.inkLists) || !a.inkLists.length) continue
             const pts = a.inkLists.map((flat) => {
               const s: number[][] = []
-              for (let i = 0; i + 1 < flat.length; i += 2) s.push([flat[i], ph - flat[i + 1]])
-              return s
+              for (let i = 0; i + 1 < flat.length; i += 2) s.push([flat[i], flat[i + 1]])
+              return dispPts(s)
             })
             out.push({ id: nid(), kind: 'ink', page: n, rects: [bboxOf(pts)], polys: pts, color: rgbHex(a.color) })
           }
@@ -1033,11 +1086,9 @@ function PdfViewer({ tab }: Props) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
-  // —— 标注写回：pdf-lib 删旧 Highlight/Text（留链接等）→ 按模型重加 → 覆盖原文件 ——
-  useEffect(() => {
-    if (!tab.path) return
-    const path = tab.path
-    return registerSaver(tab.id, async () => {
+  // —— 标注写回：pdf-lib 删旧自有注解（Highlight/Text/Square/…，留链接等）→ 按模型重加 → 覆盖原文件 ——
+  // 页面操作（旋转/删除/合并）写盘前也要先把内存标注落进去，所以抽成函数给两处共用
+  const writeAnnosTo = async (path: string) => {
       const list = annosRef.current
       // pdf-lib 1.17 无高层标注 API：用 context 手建 /Annot 字典（Highlight/Text 标准注解，其他阅读器可见）
       const { PDFDocument, PDFName, PDFDict, PDFHexString } = await import('pdf-lib')
@@ -1063,19 +1114,25 @@ function PdfViewer({ tab }: Props) {
       for (const a of list) {
         const pg = pages[a.page - 1]
         if (!pg) continue
-        const { height } = pg.getSize()
+        // 内存存显示空间坐标，/Annot 要写回"未旋转 + 左下原点"：先按该页 /Rotate 反变换
+        const sz = pg.getSize()
+        const base = { w: sz.width, h: sz.height }
+        const rot = normRot(pg.getRotation().angle)
+        const height = base.h
+        const rects = a.rects.map((r) => fromDisplayRect(r, rot, base))
+        const polys = a.polys ? fromDisplayPoints(a.polys, rot, base) : undefined
         let arr = pg.node.Annots()
         if (!arr) {
           arr = pdoc.context.obj([])
           pg.node.set(PDFName.of('Annots'), arr)
         }
         if (a.kind === 'highlight') {
-          const x0 = Math.min(...a.rects.map((r) => r.x))
-          const y0 = Math.min(...a.rects.map((r) => r.y))
-          const x1 = Math.max(...a.rects.map((r) => r.x + r.w))
-          const y1 = Math.max(...a.rects.map((r) => r.y + r.h))
+          const x0 = Math.min(...rects.map((r) => r.x))
+          const y0 = Math.min(...rects.map((r) => r.y))
+          const x1 = Math.max(...rects.map((r) => r.x + r.w))
+          const y1 = Math.max(...rects.map((r) => r.y + r.h))
           const quads: number[] = []
-          for (const r of a.rects) {
+          for (const r of rects) {
             const yt = height - r.y
             const yb = height - r.y - r.h
             quads.push(r.x, yt, r.x + r.w, yt, r.x, yb, r.x + r.w, yb)
@@ -1085,7 +1142,7 @@ function PdfViewer({ tab }: Props) {
               pdoc.context.obj({
                 Type: PDFName.of('Annot'),
                 Subtype: PDFName.of('Highlight'),
-                Rect: [x0, height - y1, x1 - x0, y1 - y0],
+                Rect: [x0, height - y1, x1, height - y0],
                 QuadPoints: quads,
                 C: colorArr(a.color),
                 Contents: PDFHexString.fromText(a.text || ' '),
@@ -1093,7 +1150,7 @@ function PdfViewer({ tab }: Props) {
             ),
           )
         } else if (a.kind === 'note') {
-          const r0 = a.rects[0]
+          const r0 = rects[0]
           const yb = height - r0.y - r0.h
           arr.push(
             pdoc.context.register(
@@ -1108,7 +1165,7 @@ function PdfViewer({ tab }: Props) {
             ),
           )
         } else if (a.kind === 'rect' || a.kind === 'ellipse') {
-          const r = a.rects[0]
+          const r = rects[0]
           arr.push(
             pdoc.context.register(
               pdoc.context.obj({
@@ -1121,9 +1178,9 @@ function PdfViewer({ tab }: Props) {
             ),
           )
         } else if (a.kind === 'line' || a.kind === 'ink') {
-          const r = a.rects[0]
+          const r = rects[0]
           const flip = (p: number[]) => [p[0], height - p[1]]
-          const s0 = a.polys?.[0]
+          const s0 = polys?.[0]
           if (a.kind === 'line' && s0 && s0.length >= 2) {
             arr.push(
               pdoc.context.register(
@@ -1139,14 +1196,14 @@ function PdfViewer({ tab }: Props) {
                 }),
               ),
             )
-          } else if (a.kind === 'ink' && a.polys?.length) {
+          } else if (a.kind === 'ink' && polys?.length) {
             arr.push(
               pdoc.context.register(
                 pdoc.context.obj({
                   Type: PDFName.of('Annot'),
                   Subtype: PDFName.of('Ink'),
                   Rect: [r.x, height - r.y - r.h, r.x + r.w, height - r.y],
-                  InkList: a.polys.map((s) => s.flatMap((p) => flip(p))),
+                  InkList: polys.map((s) => s.flatMap((p) => flip(p))),
                   C: colorArr(a.color),
                   Border: { S: PDFName.of('S'), W: 2 },
                 }),
@@ -1158,9 +1215,111 @@ function PdfViewer({ tab }: Props) {
       const out = await pdoc.save({ addDefaultPage: false })
       await writeBytes(path, out)
       markDirty(tab.id, false)
-    })
+  }
+  const writeAnnosRef = useRef(writeAnnosTo)
+  writeAnnosRef.current = writeAnnosTo
+
+  useEffect(() => {
+    if (!tab.path) return
+    const path = tab.path
+    return registerSaver(tab.id, () => writeAnnosRef.current(path))
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tab.id, tab.path])
+
+  // —— 页面级操作：先把内存标注写进文件（页序一变旧坐标就失去意义），改完重载，标注由 /Annots 重新导入 ——
+  const pageOp = async (
+    label: string,
+    run: (path: string, pages: number[]) => Promise<string>,
+  ) => {
+    const path = tab.path
+    if (!path || !doc || pageBusy) return
+    const pages = [...pageSel]
+      .filter((n) => n >= 1 && n <= doc.numPages)
+      .sort((a, b) => a - b)
+    const targets = pages.length ? pages : [Math.min(curPage, doc.numPages)]
+    setPageBusy(true)
+    setStatus(`${label}…`)
+    try {
+      await writeAnnosRef.current(path)
+      keepPageRef.current = curPage
+      const msg = await run(path, targets)
+      setPageSel(new Set())
+      reloadDoc()
+      setStatus(msg)
+    } catch (e) {
+      setStatus(`${label}失败: ${e instanceof Error ? e.message : String(e)}`)
+    } finally {
+      setPageBusy(false)
+      setTimeout(() => setStatus(''), 3000)
+    }
+  }
+
+  const reloadDoc = () => {
+    setPop(null)
+    setSelAnno(null)
+    setNoteOpen('')
+    setDrawTool(null)
+    setReloadKey((k) => k + 1)
+  }
+
+  const opRotate = (delta: number) =>
+    pageOp('旋转', async (path, pages) => {
+      await rotatePagesInPlace(path, pages, delta)
+      return `已旋转 ${pages.length} 页 ${delta > 0 ? '顺时针' : '逆时针'} 90°`
+    })
+
+  const opRemove = () =>
+    pageOp('删除页面', async (path, pages) => {
+      const left = await removePagesInPlace(path, pages)
+      return `已删除 ${pages.length} 页，剩 ${left} 页`
+    })
+
+  const opExtract = async () => {
+    if (!tab.path) return
+    const stem = baseName(tab.path).replace(/\.pdf$/i, '')
+    const out = await pickSaveFile(`${stem}-提取.pdf`, ['pdf'])
+    if (!out) return
+    await pageOp('提取页面', async (path, pages) => {
+      const n = await extractPages(path, out, pages)
+      return `已提取 ${n} 页到 ${baseName(out)}`
+    })
+  }
+
+  const opMerge = async () => {
+    if (!tab.path) return
+    const files = await pickPdfFiles(true)
+    if (!files.length) return
+    await pageOp('合并 PDF', async (path) => {
+      const total = await mergePdfs(path, files)
+      return `已合并 ${files.length} 个文件，共 ${total} 页`
+    })
+  }
+
+  const opSplit = async () => {
+    if (!tab.path) return
+    const dir = await pickDirectory()
+    if (!dir) return
+    await pageOp('拆分页面', async (path) => {
+      const names = await splitPdf(path, dir)
+      return `已拆成 ${names.length} 个单页文件（${baseName(path).replace(/\.pdf$/i, '')}-001.pdf 起）`
+    })
+  }
+
+  const togglePage = (n: number) => {
+    setPageSel((s) => {
+      const next = new Set(s)
+      if (next.has(n)) next.delete(n)
+      else next.add(n)
+      return next
+    })
+  }
+
+  // "1-3,5" 这类表达式一次性换成勾选集合；全空即清空选择
+  const applySpec = () => {
+    const pages = parsePageSpec(pageSpec, doc?.numPages ?? 0)
+    setPageSel(new Set(pages ?? []))
+    if (!pages && pageSpec.trim()) setStatus('页码写法无效，例：1-3,5')
+  }
 
   const selA = selAnno ? (annos.find((a) => a.id === selAnno) ?? null) : null
 
@@ -1187,6 +1346,8 @@ function PdfViewer({ tab }: Props) {
           content: (a.content ?? a.text ?? '').slice(0, 60),
         })),
       shapes: () => annos.filter(isShape).map((a) => ({ kind: a.kind, page: a.page, color: a.color, box: a.rects[0] })),
+      // 冒烟用：标注的显示空间几何原值（验证旋转/删页后几何是否跟着走对）
+      geo: () => annos.map((a) => ({ kind: a.kind, page: a.page, r: a.rects[0], polys: a.polys })),
       drawTool: () => drawTool,
       draftPolys: () => draft?.polys.map((s) => s.length),
       pop: () => (pop ? { mode: pop.mode, page: pop.page, rects: pop.rects.length } : null),
@@ -1202,6 +1363,22 @@ function PdfViewer({ tab }: Props) {
         outlinePages: outline.map((o) => o.page),
         thumbs: [...thumbSlots.current.keys()].sort((a, b) => a - b),
       }),
+    }
+    // 冒烟钩子：页面操作绕过对话框直接给路径/页号
+    w.__oofPdfPages = {
+      sel: () => [...pageSel].sort((a, b) => a - b),
+      setSel: (xs: number[]) => setPageSel(new Set(xs)),
+      rotate: (pages: number[], delta: number) => rotatePagesInPlace(tab.path!, pages, delta),
+      remove: (pages: number[]) => removePagesInPlace(tab.path!, pages),
+      extract: (out: string, pages: number[]) => extractPages(tab.path!, out, pages),
+      merge: (files: string[]) => mergePdfs(tab.path!, files),
+      split: (dir: string) => splitPdf(tab.path!, dir),
+      reload: () => reloadDoc(),
+      saveAnnos: () => writeAnnosRef.current(tab.path!),
+      runOp: (pages: number[], kind: 'rotate' | 'remove') => {
+        setPageSel(new Set(pages))
+        return kind === 'rotate' ? opRotate(90) : opRemove()
+      },
     }
   }
 
@@ -1398,6 +1575,12 @@ function PdfViewer({ tab }: Props) {
               >
                 标注{annos.length ? ` ${annos.length}` : ''}
               </button>
+              <button
+                className={`side-tab${sideTab === 'pages' ? ' on' : ''}`}
+                onClick={() => setSideTab('pages')}
+              >
+                页面
+              </button>
             </div>
             {sideTab === 'thumbs' ? (
               <div className="pdf-thumbs" ref={thumbsRef}>
@@ -1416,6 +1599,62 @@ function PdfViewer({ tab }: Props) {
                     </div>
                   )
                 })}
+              </div>
+            ) : sideTab === 'pages' ? (
+              <div className="pdf-pages">
+                <div className="pdf-pages-spec">
+                  <input
+                    className="tb-input pdf-spec-input"
+                    type="text"
+                    placeholder="按页码选中，如 1-3,5"
+                    value={pageSpec}
+                    onChange={(e) => setPageSpec(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') applySpec()
+                    }}
+                  />
+                  {btn('选中', applySpec)}
+                  {btn('清空', () => setPageSel(new Set()))}
+                </div>
+                <div className="pdf-pages-list">
+                  {Array.from({ length: numPages }, (_, i) => i + 1).map((n) => {
+                    const sz = sizes[n] ?? est
+                    return (
+                      <div
+                        key={n}
+                        className={`pdf-page-row${n === curPage ? ' active' : ''}${pageSel.has(n) ? ' sel' : ''}`}
+                        onClick={() => togglePage(n)}
+                      >
+                        <input type="checkbox" checked={pageSel.has(n)} readOnly />
+                        <button
+                          className="pdf-page-jump"
+                          title="滚到此页"
+                          onClick={(e) => {
+                            e.stopPropagation()
+                            gotoPage(n)
+                          }}
+                        >
+                          第 {n} 页
+                        </button>
+                        <span className="pdf-page-dim">
+                          {Math.round(sz.w)}×{Math.round(sz.h)}
+                        </span>
+                      </div>
+                    )
+                  })}
+                </div>
+                <div className="pdf-pages-acts">
+                  {btn('⟲ 左转', () => opRotate(-90), pageBusy, '逆时针 90°（未选中时对当前页）')}
+                  {btn('⟳ 右转', () => opRotate(90), pageBusy, '顺时针 90°（未选中时对当前页）')}
+                  {btn('删除页', opRemove, pageBusy)}
+                  {btn('提取为新 PDF', opExtract, pageBusy)}
+                  {btn('合并其他 PDF', opMerge, pageBusy)}
+                  {btn('拆分为单页', opSplit, pageBusy)}
+                </div>
+                <div className="pdf-pages-hint">
+                  {pageSel.size ? `已选 ${pageSel.size} 页` : '未选中页时对当前页生效'} ·
+                  操作直接覆盖原文件，页面上的标注跟随所在页
+                </div>
               </div>
             ) : sideTab === 'annos' ? (
               annos.length ? (

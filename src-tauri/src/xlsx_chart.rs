@@ -389,6 +389,19 @@ fn map_grouping(g: &str) -> String {
     }
 }
 
+/// 只做文件名嗅探（不解 XML）：让 `read_xlsx` 在没有图表的簿子上省掉整张网格的克隆
+pub fn has_charts(path: &str) -> bool {
+    let Ok(file) = File::open(path) else {
+        return false;
+    };
+    match zip::ZipArchive::new(file) {
+        Ok(zip) => zip
+            .file_names()
+            .any(|n| n.starts_with("xl/charts/chart") && n.ends_with(".xml")),
+        Err(_) => false,
+    }
+}
+
 /// 主入口：返回 sheetName → 图表列表；缺部件（多数工作簿没有图表）静默跳过
 pub fn read_xlsx_charts(
     path: &str,

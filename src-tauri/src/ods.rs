@@ -1121,7 +1121,11 @@ pub fn ods_bytes(workbook: &WorkbookPayload) -> Result<Vec<u8>, Error> {
 }
 
 #[tauri::command]
-pub fn write_ods(path: String, workbook: WorkbookPayload) -> Result<(), Error> {
+pub async fn write_ods(path: String, workbook: WorkbookPayload) -> Result<(), Error> {
+    crate::xlsx::to_blocking(move || write_ods_sync(path, workbook)).await
+}
+
+pub fn write_ods_sync(path: String, workbook: WorkbookPayload) -> Result<(), Error> {
     if let Some(parent) = Path::new(&path).parent() {
         if !parent.exists() {
             return Err(Error(format!("目录不存在: {}", parent.display())));
@@ -1223,7 +1227,7 @@ mod tests {
             .to_string_lossy()
             .to_string();
         std::fs::write(&path, ods_bytes(&wb).expect("ods bytes")).expect("write");
-        let back = crate::xlsx::read_xlsx(path.clone()).expect("读回失败");
+        let back = crate::xlsx::read_xlsx_sync(path.clone()).expect("读回失败");
         std::fs::remove_file(&path).ok();
         let sheet = &back.sheets[0];
         let find = |r: u32, c: u32| sheet.cells.iter().find(|x| x.r == r && x.c == c);
@@ -1271,7 +1275,7 @@ mod tests {
             .to_string();
         let bytes = ods_bytes(&wb).expect("ods bytes");
         std::fs::write(&path, bytes).expect("write");
-        let back = crate::xlsx::read_xlsx(path.clone()).expect("calamine 读回失败");
+        let back = crate::xlsx::read_xlsx_sync(path.clone()).expect("calamine 读回失败");
         std::fs::remove_file(&path).ok();
 
         let sheet = &back.sheets[0];
@@ -1311,7 +1315,7 @@ mod tests {
             .to_string_lossy()
             .to_string();
         std::fs::write(&path, ods_bytes(&wb).expect("ods bytes")).expect("write");
-        let back = crate::xlsx::read_xlsx(path.clone()).expect("读回失败");
+        let back = crate::xlsx::read_xlsx_sync(path.clone()).expect("读回失败");
         std::fs::remove_file(&path).ok();
 
         let s = &back.sheets[0];
@@ -1460,7 +1464,7 @@ mod tests {
             .to_string_lossy()
             .to_string();
         std::fs::write(&path, ods_bytes(&wb).expect("ods bytes")).expect("write");
-        let back = crate::xlsx::read_xlsx(path.clone()).expect("read_xlsx 读回失败");
+        let back = crate::xlsx::read_xlsx_sync(path.clone()).expect("read_xlsx 读回失败");
         std::fs::remove_file(&path).ok();
 
         let sheet = &back.sheets[0];
@@ -1522,7 +1526,7 @@ mod tests {
             .to_string_lossy()
             .to_string();
         std::fs::write(&path, ods_bytes(&wb).expect("ods bytes")).expect("write");
-        let back = crate::xlsx::read_xlsx(path.clone()).expect("读回失败");
+        let back = crate::xlsx::read_xlsx_sync(path.clone()).expect("读回失败");
         std::fs::remove_file(&path).ok();
         let sheet = &back.sheets[0];
         assert_eq!(sheet.col_widths.get(&0), Some(&140.0), "cm 往返列宽");
@@ -1628,7 +1632,7 @@ mod tests {
                 ..Default::default()
             }],
         };
-        write_ods(path.clone(), wb).expect("生成夹具 ods 失败");
+        write_ods_sync(path.clone(), wb).expect("生成夹具 ods 失败");
         println!("fixture: {path}");
     }
 }

@@ -550,6 +550,38 @@
   A4 595×842pt 与 Letter 612×792pt、左缘精确到 62pt、上边距差分 56.7pt、双栏 x 两簇、清空后无 margin box）；
   `cargo test --lib` 30 通过、tsc/build 绿
 
+## CSV 往返 · PDF 页面管理 · 性能包（v0.34）
+
+- **CSV 全链路补齐**：calamine 不读 CSV，故读侧按扩展名分流到 `src-tauri/src/csv.rs` 的逐字符状态机
+  （RFC4180：双引号包裹、`""` 转义、字段内可含逗号与换行；分隔符在 `,` `;` 制表符 三者按首行出现次数嗅探，
+  欧洲导出的分号 CSV 直接能开）；解码先试 UTF-8、失败退 **GBK**（中文 Excel 另存的 CSV 常是 GBK），
+  写回带 **UTF-8 BOM** + CRLF 行尾；值一律按文本落，`007` 不会被吞成 `7`；工作表名取文件主名。
+  `write_csv` 成为第三个表格保存命令，`.xlsx`/`.ods`/`.csv` 三分流，存 CSV 时提示「只含首个工作表，样式与图表不保留」
+- **PDF 页面管理**：侧栏新增「页面」工作区——每页一行缩略信息 + 勾选多选，页码写法 `1-3,5` 可直接输入套用；
+  六个操作 ⟲ 左转 / ⟳ 右转（90° 步进）/ 删除页 / 提取为新 PDF / 合并其他 PDF / 拆分为单页，
+  全部走 pdf-lib 覆盖写回（未选中页时对当前页生效）；删空被拒（PDF 至少要有一页），
+  不允许把文件合并进自己；做完自动重载并**停在操作前那一页**
+- **标注跟随页面操作**：页操作写盘前先把内存标注落进文件，操作后重载、标注从 `/Annots` 重新导入——
+  不用自己维护页序映射表，删页/换序天然正确。旋转另有一处真问题：内存存的是**显示空间**（已套旋转、左上原点），
+  而 `/Rect` 是**未旋转 + 左下原点**，故 `lib/pdf-geo.ts` 按该页 `/Rotate` 做精确可逆换算
+  （`mapPoint`/`unmapPoint` 四个角度各一分支，`toDisplayRect`/`fromDisplayRect`/`toDisplayPoints`/`fromDisplayPoints`），
+  旋转过的页上高亮与形状不再整体偏移
+- **性能包**：`read_xlsx`/`write_xlsx`/`write_ods`/`write_csv` 升为 async 命令 + `spawn_blocking`
+  （原来同步命令跑在主线程，解析大表时整个窗口冻结），IPC 名保持不变；xlsx 读侧先用
+  `has_charts()` 只嗅探 zip 文件名，**图表专用的那份全表网格克隆**与 `read_xlsx_charts` 都只在簿子真含图表时才做；
+  PDF 位图缓存除条数上限外补**像素预算**（`BITMAP_CACHE_PX`）并在 scale/设备像素比变化时清陈旧条目
+  （A4 × 3 倍 × dpr 2 单页就几十 MB）；文档状态栏字数/字符改 400ms 后缘节流，逐键不再全文遍历
+- **坑**：① TipTap v3 的 `useEditor` 是异步建实例的，挂载 effect 里直接取 `editor.storage.characterCount`
+  拿到 `undefined` 就抛，React 会把**整棵树**卸掉（首页/工作区全白）——冒烟抓到并修：先订阅、`create` 事件补算、
+  取不到就跳过；② pdf-lib 删页必须**倒序**删，正序会让后续索引整体前移而错位；③ 高亮写回的 `/Rect`
+  要的是**角点对** `[x0,y0,x1,y1]`，写成 `[x,y,w,h]` 时 pdf.js 不报错、只是读回位置全歪（本轮实测撞出）；
+  ④ pdf.js 会**静默丢弃**没有 `/QuadPoints`（或与 `/Rect` 不匹配）的 Highlight 注解，测试夹具少写这一项时表现为「注解导入永远 0 条」
+- **验证**：`cargo test --lib` 36 通过（CSV 状态机/引号转义/分隔符嗅探/GBK 回退/BOM 往返）+ vite-node 结构测试 28 断言
+  （四角度显示↔PDF 坐标往返回合、`displaySize`、`parsePageSpec` 各种写法）+ CDP 真机冒烟 31 断言全绿
+  （CSV 读取五断言 + 落盘字节断言 + 二次打开保真、xlsx 异步读、删页/旋转后标注几何随之换算、
+  旋转 90° 写回后 `/Rotate` 与 `/Rect` 双校、重载后显示几何不变、删空守卫、提取/合并/拆分数数、
+  位图缓存受限、字数节流仍跟手）；tsc/build 绿
+
 ## 性能（v0.3）
 
 - **按编辑器分包 + 懒加载**：主包 8MB → 首屏约 300KB；Univer（6.1MB）只在首次激活表格标签时加载，
@@ -571,10 +603,11 @@
 | [docx](https://github.com/dolanmiu/docx) | ProseMirror JSON → docx 导出 | MIT |
 | [pptxgenjs](https://gitbrent.github.io/PptxGenJS/) | 幻灯片 → pptx 导出 | MIT |
 | [JSZip](https://github.com/Stuk/jszip) | pptx/odt（zip）解包与 ODT 打包 | MIT |
-| [pdf-lib](https://github.com/Hopding/pdf-lib) | PDF 标注写回（低层 Annotation 字典构造，保存时动态导入） | MIT |
+| [pdf-lib](https://github.com/Hopding/pdf-lib) | PDF 标注写回（低层 Annotation 字典构造）与页面操作（旋转/删除/提取/合并/拆分），保存时动态导入 | MIT |
 | [pdfjs-dist](https://github.com/mozilla/pdf.js) | PDF 查看渲染（worker + cmaps/标准字体） | Apache-2.0 |
 | [webview2-com](https://docs.rs/webview2-com) + [windows](https://github.com/microsoft/windows-rs) | PrintToPdf 原生调用（wry 依赖树内，零体积增量） | MIT / Apache-2.0 |
-| [calamine](https://github.com/tafia/calamine) | Rust xlsx/xls/ods 读取 | MIT |
+| [calamine](https://github.com/tafia/calamine) | Rust xlsx/xls/ods 读取（CSV 不支持，故 `csv.rs` 自解） | MIT |
+| [encoding_rs](https://docs.rs/encoding_rs) | CSV 读侧 GBK 回退解码（中文 Excel 另存的 CSV 非 UTF-8） | MIT / Apache-2.0 |
 | [rust_xlsxwriter](https://github.com/jmcnamara/rust_xlsxwriter) | Rust xlsx 写出（含 Format 样式/合并） | BSD-2 / Artistic-2.0 |
 | [zip](https://github.com/zip-rs/zip) | Rust xlsx 解包（读取样式/合并 XML）+ ODS 打包写出 | MIT |
 | [quick-xml](https://github.com/tafia/quick-xml) | Rust OOXML 流式解析 | MIT |
@@ -586,10 +619,11 @@
 
 ```
 src-tauri/            Rust 后端
-  src/xlsx.rs         read_xlsx (calamine) / write_xlsx (rust_xlsxwriter) 命令，含样式、合并区、尺寸/字族、隐藏/冻结、公式（含缓存值）与图表往返
+  src/xlsx.rs         read_xlsx (calamine) / write_xlsx (rust_xlsxwriter) 命令，含样式、合并区、尺寸/字族、隐藏/冻结、公式（含缓存值）与图表往返；命令为 async + spawn_blocking（同步跑主线程会让窗口冻结），`.csv` 读侧分流到 csv.rs，图表网格按 has_charts 惰性构建
+  src/csv.rs          CSV 往返：RFC4180 逐字符状态机（引号/转义/字段内换行）+ 分隔符嗅探（, ; 制表符）+ UTF-8 失败退 GBK 解码 + 写侧 BOM/CRLF，read_payload 供 read_xlsx 分流、write_csv 为独立命令
   src/xlsx_style.rs   zip + quick-xml 直读 xlsx 的 styles.xml（StyleBook：fonts/fills/borders/cellXfs/numFmts）/ mergeCells / col·row 尺寸（字符宽·pt→px）/ 隐藏行列 / 冻结 pane / 公式 `<f>`（GeneralRef 实体重建 + unescape，calamine 无样式/公式 API）
-  src/xlsx_chart.rs   zip + quick-xml 直读 chartN.xml + drawing 锚点，系列值按实时网格解析
-  src/ods.rs          ODS 双向：write_ods（共用 xlsx 载荷 → ODF zip，样式/尺寸去重与合并、冻结 settings.xml、公式 of:= 换算）+ read_ods_styles（直解边框/对齐/换行/列宽行高/字族/隐藏 collapse/重复单元格/合并跨度/公式 + settings.xml 冻结）
+  src/xlsx_chart.rs   zip + quick-xml 直读 chartN.xml + drawing 锚点，系列值按实时网格解析；has_charts 只做 zip 文件名嗅探
+  src/ods.rs          ODS 双向：write_ods（async 外壳 + write_ods_sync，共用 xlsx 载荷 → ODF zip，样式/尺寸去重与合并、冻结 settings.xml、公式 of:= 换算）+ read_ods_styles（直解边框/对齐/换行/列宽行高/字族/隐藏 collapse/重复单元格/合并跨度/公式 + settings.xml 冻结）
   src/pdf.rs          export_pdf 命令：with_webview → WebView2 PrintToPdf（四边距英寸四元组 + 纸张宽高/朝向，cfg windows）
   src/lib.rs          OPEN_EXTS 与 argv 文件过滤纯函数、take_startup_files 命令、single-instance 文件转发
   capabilities/       dialog + fs 权限与路径作用域
@@ -611,18 +645,20 @@ src/                  React 前端
   lib/sheet-print.ts  WorkbookPayload → 打印 HTML 网格（值/边框/对齐/换行/数字格式/字族/合并/列宽行高/跳过隐藏行列/分页/截断）
   lib/pptx-export.ts  Deck → pptx（pptxgenjs）
   lib/pptx-import.ts  pptx → Deck（JSZip 解包 + OOXML 解析 + 媒体还原）
+  lib/pdf-pages.ts    PDF 页面级操作（pdf-lib 覆盖写回）：rotatePagesInPlace / removePagesInPlace（倒序删 + 删空守卫）/ extractPages / mergePdfs / splitPdf，做完由调用方重载
+  lib/pdf-geo.ts      显示空间（已套旋转·左上原点）↔ PDF 原始坐标（未旋转·左下原点）双向精确换算：normRot / displaySize / toDisplayRect / fromDisplayRect / toDisplayPoints / fromDisplayPoints + parsePageSpec（`1-3,5` 页码写法）
   lib/registry.ts     跨组件保存器注册表（Ctrl+S 路由到当前标签）
   lib/open.ts         路径→标签 打开 / 带确认关闭
   lib/sync.ts         最近文件端到端加密同步（WebCrypto PBKDF2-SHA256 → AES-256-GCM，.oosync 信封）
-  components/         Home（最近文件 + 从模板新建画廊） / Workspace / SheetEditor / DocEditor（页面设置含分栏/页码格式、分页参考线、分页符、表格与图片上下文工具条、粘贴成图、查找替换面板、字体族·字号、版本历史·自动保存、模板 seed） / PptEditor / PdfViewer（pdfjs-dist 懒加载，连续多页视口虚拟渲染+Ctrl 缩放+TextLayer 文字选择+全文搜索+缩略图/大纲/标注侧栏+高亮便签与矩形·椭圆·直线·手绘形状（绘制/导入/写回 pdf-lib）+标注编辑（点选/拖移/改色/删除））
+  components/         Home（最近文件 + 从模板新建画廊） / Workspace / SheetEditor（保存按 .xlsx/.ods/.csv 三分流） / DocEditor（页面设置含分栏/页码格式、分页参考线、分页符、表格与图片上下文工具条、粘贴成图、查找替换面板、字体族·字号、版本历史·自动保存、模板 seed、状态栏字数节流） / PptEditor / PdfViewer（pdfjs-dist 懒加载，连续多页视口虚拟渲染+Ctrl 缩放+TextLayer 文字选择+全文搜索+缩略图/大纲/标注侧栏+高亮便签与矩形·椭圆·直线·手绘形状（绘制/导入/写回 pdf-lib）+标注编辑（点选/拖移/改色/删除）+「页面」工作区旋转/删除/提取/合并/拆分））
 scripts/              copy-pdfjs-assets.mjs（dev/build 前复制 cmaps/标准字体到 public/pdfjs）
 .github/workflows/    release.yml——tag v* 触发：门禁→win/linux 矩阵打包→GitHub Release
 ```
 
-表格文件流：`xlsx/ods 磁盘 → Rust(calamine 值 + xlsx/ods 各自 zip/quick-xml 直解样式·合并·尺寸·字族·隐藏·冻结·公式·图表) → JSON 快照 → Univer 渲染（图表经 VChart 出 PNG 浮动图片）`；保存按扩展名分流——`.xlsx` 经 `rust_xlsxwriter`（含原生图表部件）、`.ods` 经 `ods.rs` 生成 ODF 包。
+表格文件流：`xlsx/ods 磁盘 → Rust(calamine 值 + xlsx/ods 各自 zip/quick-xml 直解样式·合并·尺寸·字族·隐藏·冻结·公式·图表) → JSON 快照 → Univer 渲染（图表经 VChart 出 PNG 浮动图片）`；CSV 走 `csv.rs` 状态机（UTF-8/GBK 自动）→ 单表载荷；保存按扩展名分流——`.xlsx` 经 `rust_xlsxwriter`（含原生图表部件）、`.ods` 经 `ods.rs` 生成 ODF 包、`.csv` 经 `csv.rs` 写 BOM + CRLF 文本（只存首表）。
 文档文件流：`docx → mammoth 正文 + zip 直读页眉页脚/批注/sectPr（纸张·边距·栏数·页码格式）→ HTML/元数据 → TipTap`；`.odt` 走 `lib/odt.ts` 双向；保存为 `.odoc` JSON（含 meta）或导出 docx/odt。
 演示文件流：`pptx → JSZip 解包 OOXML → Deck 模型 → 编辑器`；保存为 `.opd` JSON 或经 pptxgenjs 导出 pptx。
-PDF 文件流：查看 `pdf 磁盘 → readBytes → pdfjs-dist（worker + canvas）`；标注 `选区高亮/便签/拖拽画的矩形·椭圆·直线·手绘 → 内存模型（rects[0] 包围盒 + polys 几何）→ Ctrl+S 时 pdf-lib 低层写 Annotation 字典回原文件`；文档导出 `@media print 排版（分栏/分页符/避免跨页折断）+ @page margin box 逐页页眉页脚页码 → Rust export_pdf（PrintSettings 纸张与四边距）→ WebView2 PrintToPdf 落盘`；演示导出 `Deck → createRoot 离屏挂载 StaticSlide 分页 → 同上`；表格导出 `Univer 快照 → WorkbookPayload → lib/sheet-print.ts 自绘 HTML 网格 → 同上（canvas 抓不到故走数据侧重排）`。
+PDF 文件流：查看 `pdf 磁盘 → readBytes → pdfjs-dist（worker + canvas）`；标注 `选区高亮/便签/拖拽画的矩形·椭圆·直线·手绘 → 内存模型（rects[0] 包围盒 + polys 几何）→ Ctrl+S 时 pdf-lib 低层写 Annotation 字典回原文件`；文档导出 `@media print 排版（分栏/分页符/避免跨页折断）+ @page margin box 逐页页眉页脚页码 → Rust export_pdf（PrintSettings 纸张与四边距）→ WebView2 PrintToPdf 落盘`；演示导出 `Deck → createRoot 离屏挂载 StaticSlide 分页 → 同上`；表格导出 `Univer 快照 → WorkbookPayload → lib/sheet-print.ts 自绘 HTML 网格 → 同上（canvas 抓不到故走数据侧重排）`；页面管理 `内存标注先写回 → pdf-lib 旋转/删除/提取/合并/拆分覆盖写回 → 重载并从 /Annots 重新导入标注（旋转页坐标按 /Rotate 经 pdf-geo.ts 换算）`。
 
 ## 开发
 
@@ -677,6 +713,9 @@ cargo check        # Rust 后端检查（在 src-tauri 下）
 - [x] PDF 标注形状：矩形/椭圆/直线/手绘（绘制交互 + Square/Circle/Line/Ink 读侧导入 + pdf-lib 写回保真）
 - [x] 首页模板体系：文档/表格/演示 11 个模板一键新建（三编辑器无路径分支各自 seed）+ 查找命中上限截断
 - [x] 文档分页保真：`@page` margin box 逐页页眉页脚页码（四格式）+ 多栏排版 + 分页符 + 纸张/四边距贯穿 PrintToPdf（docx/odt 同步往返）
+- [x] 表格：CSV 往返（RFC4180 状态机 + UTF-8/GBK 自动 + BOM/CRLF 写回 + 保存三分流）
+- [x] PDF 页面管理：旋转/删除/提取/合并/拆分覆盖写回（标注跟随所在页，旋转页坐标按 `/Rotate` 换算）
+- [x] 性能：表格命令 async（spawn_blocking）+ 图表网格惰性构建、PDF 位图缓存像素预算、文档字数节流
 - [ ] 自动更新通道（须先决策：公开仓库或独立托管 update metadata）
 - [ ] macOS 打包（需签名/公证凭据）
 

@@ -78,6 +78,9 @@ const ImgExt = Image.extend({
   },
 })
 
+// 状态栏字数/字符的最小刷新间隔：characterCount 每次都要遍历全文
+const WORDS_THROTTLE_MS = 400
+
 function DocEditor({ tab }: Props) {
   const renameTab = useApp((s) => s.renameTab)
   const markDirty = useApp((s) => s.markDirty)
@@ -168,6 +171,7 @@ function DocEditor({ tab }: Props) {
       setMeta: (p: Partial<DocMeta>) => patchMeta(p),
       meta: () => meta,
       exportPdfTo: (path: string) => exportPdfTo(path),
+      counts: () => counts,
     }
     const byTab = (w.__oofDocCtlByTab as Record<string, typeof ctl> | undefined) ?? {}
     byTab[tab.id] = ctl
@@ -239,6 +243,38 @@ function DocEditor({ tab }: Props) {
     const ro = new ResizeObserver(() => setDocH(el.offsetHeight))
     ro.observe(el)
     return () => ro.disconnect()
+  }, [editor])
+
+  // 字数统计要遍历整篇文档：逐键重算在长文里会拖慢输入，改成节流刷新（首次立即、之后最小间隔）
+  const [counts, setCounts] = useState({ words: 0, chars: 0 })
+  useEffect(() => {
+    if (!editor) return
+    // v3 的 useEditor 是异步建实例的：effect 跑起来时 storage 里还没有 characterCount，
+    // 直接取就抛（整棵 React 树被掀掉）。所以先订阅，再在 create 事件里补算一次。
+    const run = () => {
+      const cc = editor.storage.characterCount as
+        | { words: () => number; characters: () => number }
+        | undefined
+      if (!cc) return
+      setCounts({ words: cc.words(), chars: cc.characters() })
+    }
+    let timer = 0
+    // 纯后缘节流：窗口内不重复遍历，窗口末尾一定补算一次，终值仍跟手
+    const schedule = () => {
+      if (timer) return
+      timer = window.setTimeout(() => {
+        timer = 0
+        run()
+      }, WORDS_THROTTLE_MS)
+    }
+    editor.on('update', schedule)
+    editor.on('create', run)
+    run()
+    return () => {
+      editor.off('update', schedule)
+      editor.off('create', run)
+      if (timer) clearTimeout(timer)
+    }
   }, [editor])
 
   // 批注侧栏随文档变更刷新（锚点位置/孤儿判定）；查找面板计数/活动命中随选区刷新
@@ -625,7 +661,6 @@ function DocEditor({ tab }: Props) {
   }
 
   if (!editor) return null
-  const cc = editor.storage.characterCount as { words: () => number; characters: () => number }
   const fr = frPluginKey.getState(editor.state)
   const frActive = fr && fr.matches.length ? activeIndexOf(fr, editor.state.selection.from, editor.state.selection.to) : -1
   const btn = (label: string, onClick: () => void, active = false, title?: string) => (
@@ -661,7 +696,7 @@ function DocEditor({ tab }: Props) {
           <span className="editor-status">已自动保存 {autoSavedAt.toLocaleTimeString()}</span>
         )}
         <span className="editor-hint">
-          字数 {cc.words()} · 字符 {cc.characters()} · 约{' '}
+          字数 {counts.words} · 字符 {counts.chars} · 约{' '}
           {Math.max(1, Math.ceil(docH / Math.max(1, effPx.h - effPx.top - effPx.bottom)))} 页
         </span>
       </div>

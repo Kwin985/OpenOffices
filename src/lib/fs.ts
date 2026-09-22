@@ -129,6 +129,22 @@ export async function pickOpenFile(): Promise<string | null> {
   return typeof selected === 'string' ? selected : null
 }
 
+/** 选 PDF 文件（合并入口），multiple 时返回多选 */
+export async function pickPdfFiles(multiple: boolean): Promise<string[]> {
+  const selected = await open({
+    multiple,
+    filters: [{ name: 'PDF', extensions: PDF_EXTS }],
+  })
+  if (Array.isArray(selected)) return selected
+  return selected ? [selected] : []
+}
+
+/** 选目录（页面拆分输出） */
+export async function pickDirectory(): Promise<string | null> {
+  const selected = await open({ directory: true })
+  return typeof selected === 'string' ? selected : null
+}
+
 export async function pickSaveFile(defaultName: string, extensions: string[]): Promise<string | null> {
   let path = await save({ defaultPath: defaultName, filters: [{ name: '文件', extensions }] })
   if (!path) return null
@@ -164,4 +180,9 @@ export async function writeXlsx(path: string, workbook: WorkbookPayload): Promis
 
 export async function writeOds(path: string, workbook: WorkbookPayload): Promise<void> {
   await invoke('write_ods', { path, workbook })
+}
+
+/** 只导出第一个工作表：CSV 没有多表概念，数值/日期按显示文本落盘 */
+export async function writeCsv(path: string, workbook: WorkbookPayload): Promise<void> {
+  await invoke('write_csv', { path, workbook })
 }

@@ -6,7 +6,7 @@ import type { Tab } from '../store'
 import { useApp } from '../store'
 import { createSheetApp } from '../lib/univer'
 import { payloadToWorkbook, workbookToPayload } from '../lib/univer-io'
-import { baseName, pickSaveFile, readXlsx, writeOds, writeXlsx } from '../lib/fs'
+import { baseName, pickSaveFile, readXlsx, writeCsv, writeOds, writeXlsx } from '../lib/fs'
 import type { ChartPayload, ChartRangeRef, ChartSeriesPayload, WorkbookPayload } from '../lib/fs'
 import { renderChartPng } from '../lib/chart'
 import { registerSaver } from '../lib/registry'
@@ -349,20 +349,32 @@ function SheetEditor({ tab }: Props) {
       setChartCount(chartsRef.current.size)
       let path = asNew ? undefined : tab.path
       if (!path) {
-        path = (await pickSaveFile(`${snapshot.name || '工作簿'}.xlsx`, ['xlsx', 'ods'])) ?? undefined
+        path =
+          (await pickSaveFile(`${snapshot.name || '工作簿'}.xlsx`, ['xlsx', 'ods', 'csv'])) ??
+          undefined
         if (!path) return
       }
-      // 按目标扩展名分流：.ods 走 ODF 写出，避免把 xlsx 字节写进 ods 路径
-      const isOds = path.toLowerCase().endsWith('.ods')
+      // 按目标扩展名分流：格式不匹配会把 xlsx 字节写进 .ods/.csv 路径，打开方直接认不出文件
+      const lower = path.toLowerCase()
+      const isOds = lower.endsWith('.ods')
+      const isCsv = lower.endsWith('.csv')
       if (isOds) {
         await writeOds(path, payload)
+      } else if (isCsv) {
+        await writeCsv(path, payload)
       } else {
         await writeXlsx(path, payload)
       }
       renameTab(tab.id, baseName(path), path)
       markRecent(path, 'sheet')
       const hasCharts = payload.sheets.some((s) => s.charts?.length)
-      setStatus(isOds && hasCharts ? '已保存（ODS 暂不含图表）' : '已保存')
+      setStatus(
+        isCsv
+          ? '已保存（CSV 只含首个工作表，样式与图表不保留）'
+          : isOds && hasCharts
+            ? '已保存（ODS 暂不含图表）'
+            : '已保存',
+      )
       setTimeout(() => setStatus(''), 1500)
     } catch (e) {
       await message(String(e), { title: '保存失败', kind: 'error' })

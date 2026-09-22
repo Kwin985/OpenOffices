@@ -2443,6 +2443,86 @@ button {
   color: rgba(255, 255, 255, 0.55);
 }
 
+/* 页面管理面板：页码表达式 + 勾选列表 + 操作条 */
+.pdf-pages {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.pdf-pages-spec {
+  display: flex;
+  gap: 4px;
+  align-items: center;
+  padding: 8px;
+  border-bottom: 1px solid var(--border);
+}
+
+.pdf-spec-input {
+  flex: 1;
+  min-width: 0;
+}
+
+.pdf-pages-list {
+  flex: 1;
+  overflow-y: auto;
+  padding: 4px 0;
+}
+
+.pdf-page-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 10px;
+  cursor: pointer;
+  font-size: 12px;
+}
+
+.pdf-page-row:hover {
+  background: var(--bg);
+}
+
+.pdf-page-row.sel {
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+}
+
+.pdf-page-row.active .pdf-page-jump {
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.pdf-page-jump {
+  border: none;
+  background: none;
+  color: var(--text);
+  cursor: pointer;
+  font-size: 12px;
+  padding: 0;
+  text-align: left;
+}
+
+.pdf-page-dim {
+  margin-left: auto;
+  color: var(--text-2);
+  font-size: 11px;
+}
+
+.pdf-pages-acts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  padding: 8px;
+  border-top: 1px solid var(--border);
+}
+
+.pdf-pages-hint {
+  padding: 6px 8px 10px;
+  font-size: 11px;
+  color: var(--text-2);
+  line-height: 1.5;
+}
+
 .pdf-annos {
   flex: 1;
   overflow-y: auto;
