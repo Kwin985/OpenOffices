@@ -16,6 +16,45 @@ const OD_MIME = 'application/vnd.oasis.opendocument.text'
 
 // mm → ODF 长度字面量（cm 两位小数）
 const mm2cm = (mm: number) => `${(mm / 10).toFixed(2)}cm`
+// CSS px → ODF 长度：缩进写 cm，三位小数以免往返掉精度（32px ≈ 0.847cm）
+const px2cm = (px: number) => `${(px / 37.795).toFixed(3)}cm`
+/** ODF 长度 → CSS px；负值照收（悬挂缩进就是负的 fo:text-indent） */
+function len2px(v: string | null | undefined): number | undefined {
+  if (!v) return undefined
+  const m = v.trim().match(/^(-?[\d.]+)(cm|mm|in|"|pt|px)?$/)
+  if (!m) return undefined
+  const n = Number(m[1])
+  if (!Number.isFinite(n) || n === 0) return undefined
+  const px =
+    m[2] === 'mm' ? n * 37.795
+    : m[2] === 'in' || m[2] === '"' ? n * 96
+    : m[2] === 'pt' ? (n * 96) / 72
+    : m[2] === 'px' ? n
+    : n * 37.795
+  return Math.round(px)
+}
+/** CSS 属性值 → ODF 的 fo:text-align（start/center/end/justify） */
+const FO_ALIGN: Record<string, string> = { left: 'start', center: 'center', right: 'end', justify: 'justify' }
+/** ODF 的 fo:text-align → CSS 值（本编辑器的 textAlign 属性吃 CSS 词） */
+const CSS_ALIGN: Record<string, string> = { start: 'left', center: 'center', end: 'right', justify: 'justify' }
+
+function num(v: unknown): number {
+  const n = typeof v === 'number' ? v : Number.parseInt(String(v ?? ''), 10)
+  return Number.isFinite(n) ? n : 0
+}
+
+/**
+ * CSS 字体列表 → ODF 的拉丁/中日韩两个槽。
+ * 'Times New Roman', '宋体' 里前一个是拉丁名、后一个是中文名（保真导入就是这个排法）。
+ */
+function splitFont(family: string): { latin: string; cjk?: string } {
+  const names = family
+    .split(',')
+    .map((s) => s.trim().replace(/^['"]|['"]$/g, ''))
+    .filter(Boolean)
+  const cjk = names.find((n) => /[㐀-䶿一-鿿぀-ヿ가-힯]/.test(n))
+  return { latin: names.find((n) => n !== cjk) ?? names[0] ?? '', cjk }
+}
 // ODF 长度字面量 → mm；无法解析回 undefined
 function cm2mm(v: string | null | undefined): number | undefined {
   if (!v) return undefined
@@ -52,10 +91,55 @@ const NS =
 
 class OdtBuilder {
   charStyles = new Map<string, string>() // 样式键 JSON → 样式名
+  paraStyles = new Map<string, string>() // 段落直接格式键 JSON → 段落自动样式名
   images = new Map<string, ImageEntry>() // src → entry
   private imageSeq = 0
+  private paraSeq = 0
 
   constructor(private meta?: DocMeta) {}
+
+  /**
+   * 段落直接格式（对齐 + 缩进）→ 派生自动样式名。
+   * ODF 一个段落只认一个 text:style-name，「居中 + 首行缩进两字符」这类组合只能另起一条样式，
+   * 父样式指回基础样式（Standard/H1/PQ），同样的组合复用同一个名字。
+   * leftAdd：基础样式自带的左边距（PQ 的 0.8cm），节点上的缩进是在它之外的增量。
+   * dropLeft：左缩进交给 text:list-style 管（列表项节点上那份多半是从 docx 层级继承来的，再写就是双份）。
+   */
+  private pStyle(
+    node: PMNode,
+    base: string,
+    opts: { leftAdd?: number; dropLeft?: boolean } = {},
+  ): string {
+    const align = String(node.attrs?.textAlign ?? '')
+    const raw = opts.dropLeft ? 0 : Math.max(0, num(node.attrs?.indentLeft)) + (opts.leftAdd ?? 0)
+    const first = num(node.attrs?.indentFirst)
+    const bl = opts.leftAdd ?? 0
+    if (!align && raw <= bl && !first) return base
+    const key = JSON.stringify({ base, align, left: raw, first, bl })
+    let name = this.paraStyles.get(key)
+    if (!name) {
+      name = `PS${++this.paraSeq}`
+      this.paraStyles.set(key, name)
+    }
+    return name
+  }
+
+  private paraStyleXml(): string {
+    let out = ''
+    for (const [key, name] of this.paraStyles) {
+      const s = JSON.parse(key) as { base?: string; align?: string; left?: number; first?: number; bl?: number }
+      let pp = ''
+      const align = FO_ALIGN[s.align ?? '']
+      if (align) pp += ` fo:text-align="${align}"`
+      // 父样式链已经给到的左边距不必重写
+      if ((s.left ?? 0) > (s.bl ?? 0)) pp += ` fo:margin-left="${px2cm(s.left ?? 0)}"`
+      if (s.first) pp += ` fo:text-indent="${px2cm(s.first)}"`
+      out +=
+        `<style:style style:name="${name}" style:family="paragraph" style:parent-style-name="${s.base || 'Standard'}">` +
+        `<style:paragraph-properties${pp}/></style:style>`
+    }
+    return out
+  }
 
   private charStyleXml(): string {
     let out = ''
@@ -67,8 +151,10 @@ class OdtBuilder {
       if (m.ul)
         tp += ' style:text-underline-style="solid" style:text-underline-type="single" style:text-underline-width="auto"'
       if (m.st) tp += ' style:text-line-through-style="solid" style:text-line-through-type="single"'
-      if (m.code) tp += ' style:font-name="Courier New"'
-      if (m.fam) tp += ` style:font-name="${esc(String(m.fam))}" style:font-name-asian="${esc(String(m.fam))}"`
+      // 字体族拆拉丁/中日韩两槽；code 与 fam 都写 style:font-name，同元素重复属性会让 XML 解析失败
+      const font = m.fam ? splitFont(String(m.fam)) : m.code ? { latin: 'Courier New' } : null
+      if (font?.latin) tp += ` style:font-name="${esc(font.latin)}"`
+      if (font?.cjk) tp += ` style:font-name-asian="${esc(font.cjk)}"`
       // fontSize 存 px，ODF 习惯 pt
       if (m.sz) tp += ` fo:font-size="${Math.round((Number(m.sz) * 72) / 96)}pt"`
       if (m.cl) tp += ` fo:color="${esc(String(m.cl))}"`
@@ -87,14 +173,7 @@ class OdtBuilder {
       .join('')
     const pc = `<style:style style:name="PC" style:family="paragraph" style:parent-style-name="Standard"><style:paragraph-properties fo:background-color="#f3f4f6" fo:margin-left="0.4cm"/><style:text-properties style:font-name="Courier New" fo:font-size="9.5pt"/></style:style>`
     const pq = `<style:style style:name="PQ" style:family="paragraph" style:parent-style-name="Standard"><style:paragraph-properties fo:margin-left="0.8cm" fo:border-left="0.06cm solid #d1d5db" fo:padding-left="0.3cm"/></style:style>`
-    const aligns = (
-      [['AC', 'center'], ['AR', 'right'], ['AJ', 'justify']] as const
-    )
-      .map(
-        ([name, v]) =>
-          `<style:style style:name="${name}" style:family="paragraph" style:parent-style-name="Standard"><style:paragraph-properties fo:text-align="${v}"/></style:style>`,
-      )
-      .join('')
+    const aligns = this.paraStyleXml()
     const lb = `<text:list-style style:name="LB">${[1, 2, 3]
       .map(
         (l) =>
@@ -189,16 +268,13 @@ class OdtBuilder {
       switch (n.type) {
         case 'heading': {
           const level = Math.min(4, Math.max(1, Number(n.attrs?.level ?? 1)))
-          out += `<text:h text:style-name="H${level}" text:outline-level="${level}">${this.inline(n.content ?? [])}</text:h>`
+          const sn = this.pStyle(n, `H${level}`)
+          out += `<text:h text:style-name="${sn}" text:outline-level="${level}">${this.inline(n.content ?? [])}</text:h>`
           break
         }
         case 'paragraph': {
-          const align = n.attrs?.alignment as string | undefined
-          const an =
-            align === 'center' || align === 'right' || align === 'justify'
-              ? ` text:style-name="A${align[0].toUpperCase()}"`
-              : ''
-          out += `<text:p${an}>${this.inline(n.content ?? [])}</text:p>`
+          const sn = this.pStyle(n, '')
+          out += `<text:p${sn ? ` text:style-name="${sn}"` : ''}>${this.inline(n.content ?? [])}</text:p>`
           break
         }
         case 'codeBlock': {
@@ -209,7 +285,8 @@ class OdtBuilder {
         case 'blockquote':
           for (const c of n.content ?? []) {
             if (c.type === 'paragraph') {
-              out += `<text:p text:style-name="PQ">${this.inline(c.content ?? [])}</text:p>`
+              // PQ 自带 0.8cm 左边距：用户再缩进要在这个基础上加，否则派生样式会盖掉引用缩进
+              out += `<text:p text:style-name="${this.pStyle(c, 'PQ', { leftAdd: 30 })}">${this.inline(c.content ?? [])}</text:p>`
             } else {
               out += this.blocks([c])
             }
@@ -246,9 +323,11 @@ class OdtBuilder {
     for (const li of nodes) {
       if (li.type !== 'listItem') continue
       const inner = (li.content ?? [])
-        .map((c) =>
-          c.type === 'paragraph' ? `<text:p>${this.inline(c.content ?? [])}</text:p>` : this.blocks([c]),
-        )
+        .map((c) => {
+          if (c.type !== 'paragraph') return this.blocks([c])
+          const sn = this.pStyle(c, '', { dropLeft: true })
+          return `<text:p${sn ? ` text:style-name="${sn}"` : ''}>${this.inline(c.content ?? [])}</text:p>`
+        })
         .join('')
       out += `<text:list-item>${inner}</text:list-item>`
     }
@@ -301,11 +380,11 @@ class OdtBuilder {
           ? ` table:number-columns-spanned="${sp.cs}" table:number-rows-spanned="${sp.rs}"`
           : ''
         const body = (item.cell.content ?? [])
-          .map((x) =>
-            x.type === 'paragraph'
-              ? `<text:p>${this.inline(x.content ?? [])}</text:p>`
-              : this.blocks([x]),
-          )
+          .map((x) => {
+            if (x.type !== 'paragraph') return this.blocks([x])
+            const sn = this.pStyle(x, '')
+            return `<text:p${sn ? ` text:style-name="${sn}"` : ''}>${this.inline(x.content ?? [])}</text:p>`
+          })
           .join('')
         rowXml += `<table:table-cell${attrs}>${body}</table:table-cell>`
         c += sp?.cs ?? 1
@@ -487,6 +566,53 @@ export async function odtToHtml(bytes: Uint8Array): Promise<{ html: string; meta
     return out
   }
 
+  /** 样式名 → 从祖先到自己的样式元素链（派生样式要连父样式一起看） */
+  const styleChain = (name: string | null | undefined): Element[] => {
+    const out: Element[] = []
+    let el = name ? styles.get(name) : undefined
+    for (let guard = 0; el && guard < 6; guard++) {
+      out.unshift(el)
+      el = styles.get(el.getAttribute('style:parent-style-name') ?? '')
+    }
+    return out
+  }
+
+  /** 段落直接格式：对齐 + 缩进（本应用把它写成派生自动样式，第三方文件同理） */
+  interface ParaFormat {
+    align?: string
+    leftPx?: number
+    firstPx?: number
+  }
+
+  const resolvePara = (name: string | null | undefined): ParaFormat => {
+    const out: ParaFormat = {}
+    for (const el of styleChain(name)) {
+      const pp = pick(el, 'paragraph-properties')
+      if (!pp) continue
+      const al = pp.getAttribute('fo:text-align')
+      if (al) out.align = CSS_ALIGN[al] ?? out.align
+      const ml = len2px(pp.getAttribute('fo:margin-left'))
+      if (ml !== undefined) out.leftPx = ml
+      const ti = len2px(pp.getAttribute('fo:text-indent'))
+      if (ti !== undefined) out.firstPx = ti
+    }
+    return out
+  }
+
+  /**
+   * 段落 → 行内 style（textAlign 与 Indent 两个扩展都按行内样式解析）。
+   * minusLeft 是容器本身已经给出的左边距（blockquote 即 PQ 的 0.8cm），只把超出的那一档落成缩进属性。
+   */
+  const paraStyle = (name: string | null | undefined, minusLeft = 0): string => {
+    const p = resolvePara(name)
+    const bits: string[] = []
+    if (p.align && p.align !== 'left') bits.push(`text-align: ${p.align}`)
+    const left = (p.leftPx ?? 0) - minusLeft
+    if (left > 0) bits.push(`margin-left: ${left}px`)
+    if (p.firstPx) bits.push(`text-indent: ${p.firstPx}px`)
+    return bits.length ? ` style="${bits.join('; ')}"` : ''
+  }
+
   const htmlOfStyle = (si: StyleInfo, inner: string): string => {
     let html = inner
     if (si.mono) html = `<code>${html}</code>`
@@ -589,19 +715,24 @@ export async function odtToHtml(bytes: Uint8Array): Promise<{ html: string; meta
     switch (el.localName) {
       case 'h': {
         const level = Math.min(4, Math.max(1, Number(el.getAttribute('text:outline-level') ?? 1)))
-        return `<h${level}>${await renderInline(el)}</h${level}>`
+        const sn = el.getAttribute('text:style-name')
+        // 派生样式（PSn）挂在 H1..H4 之下，对齐与缩进照旧从样式链上取
+        return `<h${level}${paraStyle(sn)}>${await renderInline(el)}</h${level}>`
       }
       case 'p': {
         const sn = el.getAttribute('text:style-name')
-        if (sn === 'PC') return `<pre><code>${await renderInline(el)}</code></pre>`
-        if (sn === 'PQ') return `<blockquote><p>${await renderInline(el)}</p></blockquote>`
+        const chain = styleChain(sn)
+        const names = chain.map((x) => x.getAttribute('style:name'))
         // 分页符：本编辑器写 PBK，第三方按段落样式里的 break-before 识别
-        const st = sn ? styles.get(sn) : undefined
-        const pp = st ? pick(st, 'paragraph-properties') : null
-        if (sn === 'PBK' || pp?.getAttribute('fo:break-before') === 'page')
+        if (
+          names.includes('PBK') ||
+          chain.some((x) => pick(x, 'paragraph-properties')?.getAttribute('fo:break-before') === 'page')
+        )
           return `<div data-oo-pagebreak="1"></div>`
-        const align = sn === 'AC' ? 'center' : sn === 'AR' ? 'right' : sn === 'AJ' ? 'justify' : ''
-        return `<p${align ? ` style="text-align: ${align}"` : ''}>${await renderInline(el)}</p>`
+        if (names.includes('PC')) return `<pre><code>${await renderInline(el)}</code></pre>`
+        if (names.includes('PQ'))
+          return `<blockquote><p${paraStyle(sn, 30)}>${await renderInline(el)}</p></blockquote>`
+        return `<p${paraStyle(sn)}>${await renderInline(el)}</p>`
       }
       case 'list': {
         const ordered = listStyles.get(el.getAttribute('text:style-name') ?? '') ?? false

@@ -9,7 +9,9 @@ import {
   Footer,
   Header,
   HeadingLevel,
+  type IFontAttributesProperties,
   ImageRun,
+  LevelFormat,
   PageBreak,
   PageNumber,
   Packer,
@@ -21,6 +23,7 @@ import {
   TextRun,
   WidthType,
 } from 'docx'
+import { decodeEnt } from './ooxml'
 
 export interface PMNode {
   type: string
@@ -228,8 +231,46 @@ export async function docxToDocMeta(bytes: Uint8Array): Promise<DocMeta> {
   return out
 }
 
-// mammoth 会丢弃批注：直读 word/comments.xml 取内容/作者，document.xml 里 commentRangeStart/End 取锚文本，
-// 在 HTML 中把锚文本包成 <span data-oo-comment>，由 Comment mark 还原
+/** 批注条目列表（只到"有哪些批注"，不含正文锚点位置） */
+export function commentRowsOf(commentsXml: string, extXml: string): DocComment[] {
+  // 段落里文本按 w:t 顺序拼接（Word 会保留节点内空格，不要额外插空格）
+  const joinT = (xml: string) => (xml.match(/<w:t[^>]*>([\s\S]*?)<\/w:t>/g) ?? []).map((m) => m.replace(/<[^>]+>/g, '')).join('')
+  // commentsExtended 里 done="1" 的 paraId 集合（docx 库写属性式，Word 写 w15:val 元素式，都兼容）
+  const doneParaIds = new Set<string>()
+  for (const m of extXml.matchAll(/<w15:commentEx[^>]*w15:paraId="([0-9A-Fa-f]+)"[^>]*w15:done="1"/g)) {
+    doneParaIds.add(m[1].toUpperCase())
+  }
+  for (const m of extXml.matchAll(/<w15:commentEx[^>]*w15:done="1"[^>]*w15:paraId="([0-9A-Fa-f]+)"/g)) {
+    doneParaIds.add(m[1].toUpperCase())
+  }
+  const rows = [...commentsXml.matchAll(/<w:comment\b([^>]*)>([\s\S]*?)<\/w:comment>/g)]
+    .map((m) => ({ attrs: m[1], body: m[2] }))
+    .sort((a, b) => Number(a.attrs.match(/w:id="(\d+)"/)?.[1] ?? 0) - Number(b.attrs.match(/w:id="(\d+)"/)?.[1] ?? 0))
+  const out: DocComment[] = []
+  for (const { attrs, body } of rows) {
+    const id = Number(attrs.match(/w:id="(\d+)"/)?.[1])
+    if (!Number.isFinite(id)) continue
+    const author = attrs.match(/w:author="([^"]*)"/)?.[1]
+    const date = attrs.match(/w:date="([^"]*)"/)?.[1]
+    // docx 库与 Word 都把 paraId 写成 w:p 上的 w14:paraId 属性；兼容 w15 写法
+    const paraIdM =
+      body.match(/w14:paraId="([0-9A-Fa-f]+)"/) ??
+      body.match(/w15:paraId="([0-9A-Fa-f]+)"/) ??
+      body.match(/<w15:paraId w15:val="([0-9A-Fa-f]+)"/)
+    out.push({
+      id,
+      text: decodeEnt(joinT(body)),
+      ...(author ? { author: decodeEnt(author) } : {}),
+      ...(date ? { date } : {}),
+      ...(paraIdM && doneParaIds.has(paraIdM[1].toUpperCase()) ? { resolved: true } : {}),
+    })
+  }
+  return out
+}
+
+// mammoth 会丢弃批注：兜底路径直读 word/comments.xml 取内容/作者，document.xml 里 commentRangeStart/End
+// 取锚文本，在 HTML 中把锚文本包成 <span data-oo-comment>，由 Comment mark 还原。
+// （保真导入路径按区间原位包 span，不走这里，只用 commentRowsOf）
 export async function docxToCommentHtml(
   bytes: Uint8Array,
   html: string,
@@ -247,22 +288,7 @@ export async function docxToCommentHtml(
     (xml.match(/<w:t[^>]*>([^<]*)<\/w:t>/g) ?? [])
       .map((m) => m.replace(/<[^>]+>/g, ''))
       .join('')
-  const decode = (s: string) =>
-    s
-      .replace(/&lt;/g, '<')
-      .replace(/&gt;/g, '>')
-      .replace(/&quot;/g, '"')
-      .replace(/&apos;/g, "'")
-      .replace(/&amp;/g, '&')
   const esc = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
-  // commentsExtended 里 done="1" 的 paraId 集合（docx 写属性式，Word 写 w15:val 元素式，都兼容）
-  const doneParaIds = new Set<string>()
-  for (const m of extXml.matchAll(/<w15:commentEx[^>]*w15:paraId="([0-9A-Fa-f]+)"[^>]*w15:done="1"/g)) {
-    doneParaIds.add(m[1].toUpperCase())
-  }
-  for (const m of extXml.matchAll(/<w15:commentEx[^>]*w15:done="1"[^>]*w15:paraId="([0-9A-Fa-f]+)"/g)) {
-    doneParaIds.add(m[1].toUpperCase())
-  }
   // 锚文本限定在单段落内；跨段批注不重锚（侧栏仍显示，标记为未定位）
   const anchorOf = (id: number): string | undefined => {
     const startRe = new RegExp(`<w:commentRangeStart[^>]*w:id="${id}"[^>]*>`)
@@ -274,40 +300,20 @@ export async function docxToCommentHtml(
     if (!em) return undefined
     const endIdx = bodyStart + em.index
     if (docXml.indexOf('</w:p>', bodyStart) < endIdx) return undefined
-    const text = decode(joinT(docXml.slice(bodyStart, endIdx)))
+    const text = decodeEnt(joinT(docXml.slice(bodyStart, endIdx)))
     return text || undefined
   }
+  const comments = commentRowsOf(commentsXml, extXml)
   let outHtml = html
-  const comments: DocComment[] = []
-  const rows = [...commentsXml.matchAll(/<w:comment\b([^>]*)>([\s\S]*?)<\/w:comment>/g)]
-    .map((m) => ({ attrs: m[1], body: m[2] }))
-    .sort((a, b) => Number(a.attrs.match(/w:id="(\d+)"/)?.[1] ?? 0) - Number(b.attrs.match(/w:id="(\d+)"/)?.[1] ?? 0))
-  for (const { attrs, body } of rows) {
-    const id = Number(attrs.match(/w:id="(\d+)"/)?.[1])
-    if (!Number.isFinite(id)) continue
-    const author = attrs.match(/w:author="([^"]*)"/)?.[1]
-    const date = attrs.match(/w:date="([^"]*)"/)?.[1]
-    // docx 库与 Word 都把 paraId 写成 w:p 上的 w14:paraId 属性；兼容 w15 写法
-    const paraIdM =
-      body.match(/w14:paraId="([0-9A-Fa-f]+)"/) ??
-      body.match(/w15:paraId="([0-9A-Fa-f]+)"/) ??
-      body.match(/<w15:paraId w15:val="([0-9A-Fa-f]+)"/)
-    const comment: DocComment = {
-      id,
-      text: decode(joinT(body)),
-      ...(author ? { author: decode(author) } : {}),
-      ...(date ? { date } : {}),
-      ...(paraIdM && doneParaIds.has(paraIdM[1].toUpperCase()) ? { resolved: true } : {}),
-    }
-    comments.push(comment)
-    const anchor = anchorOf(id)
+  for (const comment of comments) {
+    const anchor = anchorOf(comment.id)
     if (!anchor) continue
     const needle = esc(anchor)
     const idx = outHtml.indexOf(needle)
     if (idx < 0) continue
     outHtml =
       outHtml.slice(0, idx) +
-      `<span data-oo-comment="${id}">${needle}</span>` +
+      `<span data-oo-comment="${comment.id}">${needle}</span>` +
       outHtml.slice(idx + needle.length)
   }
   return { html: outHtml, comments }
@@ -426,7 +432,7 @@ function inlineToChildren(node: PMNode, inherited: Inherited = {}, cs?: CommentT
         bold,
         italics: italic,
         strike,
-        font: ts('fontFamily') || (mono ? 'Consolas' : undefined),
+        font: docFont(ts('fontFamily')) ?? (mono ? 'Consolas' : undefined),
         ...(Number.isFinite(fsPx) && fsPx > 0 ? { size: Math.round(fsPx * 1.5) } : {}),
         ...(color ? { color } : {}),
         ...(highlight ? { shading: { type: 'clear' as const, fill: highlight } } : {}),
@@ -493,31 +499,77 @@ function alignOf(node: PMNode): (typeof AlignmentType)[keyof typeof AlignmentTyp
   }
 }
 
+const PX_TWIP = 15
+
+function num(v: unknown): number {
+  const n = typeof v === 'number' ? v : Number.parseInt(String(v ?? ''), 10)
+  return Number.isFinite(n) ? n : 0
+}
+
+/** 缩进属性 → w:ind：左缩进 w:left，正的首行进 firstLine、负的进 hanging */
+function indentOf(node: PMNode, baseLeftTwip = 0) {
+  const left = baseLeftTwip + Math.max(0, num(node.attrs?.indentLeft)) * PX_TWIP
+  const first = num(node.attrs?.indentFirst) * PX_TWIP
+  const o: { left?: number; firstLine?: number; hanging?: number } = {}
+  if (left) o.left = Math.round(left)
+  if (first > 0) o.firstLine = Math.round(first)
+  else if (first < 0) o.hanging = Math.round(-first)
+  return Object.keys(o).length ? o : undefined
+}
+
+/**
+ * CSS 字体列表 → docx 分区字体。一个名字直接给整体；两个名字（保真导入的排法是
+ * 拉丁名在前、中文字体名在后）必须拆到 ascii/hAnsi 与 eastAsia，否则 Word 里
+ * 中文只能落在 eastAsia 上，整串塞进 w:ascii 会让中文用回主题字体。
+ */
+export function docFont(family: string | undefined): string | IFontAttributesProperties | undefined {
+  if (!family) return undefined
+  const names = family
+    .split(',')
+    .map((s) => s.trim().replace(/^['"]|['"]$/g, ''))
+    .filter(Boolean)
+  if (names.length === 0) return undefined
+  if (names.length === 1) return names[0]
+  const cjk = names.find((n) => /[㐀-鿿぀-ヿ가-힯]/.test(n))
+  const latin = names.find((n) => n !== cjk) ?? names[0]
+  if (!cjk) return names[0]
+  return { ascii: latin, hAnsi: latin, eastAsia: cjk, cs: cjk }
+}
+
 interface DocTrack {
   used: Set<number>
   ranges: Set<number>
   skipped: Set<number>
 }
 
+/** 导出用的编号定义名：Document.numbering.config 与段落 numbering.reference 必须同名 */
+const ORDERED_REF = 'oof-ordered'
+
+/** 三级十进制/字母/罗马数字，缩进交编号层管（用户另有直接格式缩进时段落级覆盖它） */
+const ORDERED_LEVELS = [0, 1, 2].map((level) => ({
+  level,
+  format: level === 0 ? LevelFormat.DECIMAL : level === 1 ? LevelFormat.LOWER_LETTER : LevelFormat.LOWER_ROMAN,
+  text: `%${level + 1}.`,
+  alignment: AlignmentType.START,
+  style: { paragraph: { indent: { left: 720 * (level + 1), hanging: 360 } } },
+}))
+
 function blocksOf(nodes: PMNode[], depth = 0, dt: DocTrack = { used: new Set(), ranges: new Set(), skipped: new Set() }): (Paragraph | Table | TableOfContents)[] {
   const out: (Paragraph | Table | TableOfContents)[] = []
   for (const node of nodes) {
     if (node.type === 'bulletList' || node.type === 'orderedList') {
       const ordered = node.type === 'orderedList'
-      let counter = 0
       for (const item of node.content ?? []) {
-        counter += 1
         const blocks = (item.content ?? []).filter((b) => b.type !== 'bulletList' && b.type !== 'orderedList')
         const nested = (item.content ?? []).filter((b) => b.type === 'bulletList' || b.type === 'orderedList')
-        const main = blocks[0] ?? { type: 'paragraph', content: [] }
+        const main: PMNode = blocks[0] ?? { type: 'paragraph', content: [] }
         out.push(
           new Paragraph({
-            children: [
-              ...(ordered ? [new TextRun({ text: `${counter}. ` })] : []),
-              ...inlineBlockChildren(main, dt),
-            ],
-            bullet: ordered ? undefined : { level: depth },
-            indent: ordered ? { left: 480 + depth * 360 } : undefined,
+            children: inlineBlockChildren(main, dt),
+            // 有序项必须走真编号：写成「1. 」字面文本时 Word 里既不续号也不重排，
+            // 读回来更会把它当成普通段落（编号从此消失）。
+            ...(ordered ? { numbering: { reference: ORDERED_REF, level: Math.min(2, depth) } } : { bullet: { level: depth } }),
+            indent: indentOf(main),
             spacing: { after: 60 },
           }),
         )
@@ -532,6 +584,8 @@ function blocksOf(nodes: PMNode[], depth = 0, dt: DocTrack = { used: new Set(), 
         new Paragraph({
           children: inlineBlockChildren(node, dt),
           outlineLevel: Math.max(0, Math.min(8, level - 1)),
+          indent: indentOf(node),
+          alignment: alignOf(node),
           heading:
             level === 1 ? HeadingLevel.HEADING_1
             : level === 2 ? HeadingLevel.HEADING_2
@@ -567,7 +621,7 @@ function blocksOf(nodes: PMNode[], depth = 0, dt: DocTrack = { used: new Set(), 
       out.push(
         new Paragraph({
           children: inlineBlockChildren(node, dt),
-          indent: { left: 480 },
+          indent: indentOf(node, 480),
           border: { left: { style: BorderStyle.SINGLE, size: 12, color: '9CA3AF', space: 8 } },
           spacing: { after: 120 },
         }),
@@ -594,6 +648,10 @@ function blocksOf(nodes: PMNode[], depth = 0, dt: DocTrack = { used: new Set(), 
           rows: rows.map(
             (r) =>
               new TableRow({
+                // 表头行由行级 w:trPr/w:tblHeader 记账（TipTap 用 th 单元格类型表示）。
+                // 只在命中时给属性：写成 tableHeader:false 会落 <w:tblHeader w:val="false"/>，
+                // 而读侧按"有没有这个元素"判断，伪标记会把正文行错认成表头。
+                ...(r.content ?? []).some((c) => c.type === 'tableHeader') ? { tableHeader: true } : {},
                 children: (r.content ?? []).map((cell) => {
                   // TipTap 合并语义 colspan/rowspan → gridSpan + vMerge（docx 库内部展开 restart/continue）
                   const cs = Number(cell.attrs?.colspan ?? 1) || 1
@@ -614,6 +672,7 @@ function blocksOf(nodes: PMNode[], depth = 0, dt: DocTrack = { used: new Set(), 
       new Paragraph({
         children: inlineBlockChildren(node, dt),
         alignment: alignOf(node),
+        indent: indentOf(node),
         spacing: { after: 120 },
       }),
     )
@@ -727,8 +786,15 @@ export async function prosemirrorToDocxBytes(json: PMNode, meta?: DocMeta): Prom
           },
         }
       : {}),
+    numbering: { config: [{ reference: ORDERED_REF, levels: ORDERED_LEVELS }] },
     sections: [section],
   })
-  const buf = await Packer.toBuffer(doc)
-  return new Uint8Array(buf)
+  // Packer.toBuffer 走 jszip 的 nodebuffer 通道，浏览器里没有 Buffer 会直接抛
+  // 「nodebuffer is not supported by this platform」——应用内「导出 docx」一直就是坏的，
+  // 只有 Node 侧结构测试能过。base64 两端都支持，解码后照样是同一份 zip 字节。
+  const b64 = await Packer.toBase64String(doc)
+  const bin = atob(b64)
+  const out = new Uint8Array(bin.length)
+  for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i)
+  return out
 }

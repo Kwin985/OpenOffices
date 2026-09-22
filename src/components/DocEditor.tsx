@@ -28,8 +28,10 @@ import {
   type PMNode,
 } from '../lib/docx'
 import { Comment, addCommentMark, findCommentAnchor, removeCommentMark } from '../lib/comment-extension'
+import type { DocxImport } from '../lib/docx-fidelity'
 import { Toc } from '../lib/toc-extension'
 import { PageBreak } from '../lib/page-break-extension'
+import { Indent } from '../lib/indent-extension'
 import { FindReplace, frPluginKey, activeIndexOf } from '../lib/find-replace'
 import { docTemplate } from '../lib/templates'
 import { odtToHtml, prosemirrorToOdtBytes } from '../lib/odt'
@@ -111,6 +113,7 @@ function DocEditor({ tab }: Props) {
       ImgExt.configure({ allowBase64: true }),
       Placeholder.configure({ placeholder: '开始输入内容…' }),
       TextAlign.configure({ types: ['heading', 'paragraph'] }),
+      Indent.configure({ types: ['heading', 'paragraph'] }),
       TableKit.configure({ table: { resizable: true } }),
       // textStyle mark + 字色/字体族/字号（底色与行高本编辑器暂不露出）
       TextStyleKit.configure({ backgroundColor: false, lineHeight: false }),
@@ -171,6 +174,8 @@ function DocEditor({ tab }: Props) {
       setMeta: (p: Partial<DocMeta>) => patchMeta(p),
       meta: () => meta,
       exportPdfTo: (path: string) => exportPdfTo(path),
+      exportDocxTo: (path: string) => exportDocxTo(path),
+      exportOdtTo: (path: string) => exportOdtTo(path),
       counts: () => counts,
     }
     const byTab = (w.__oofDocCtlByTab as Record<string, typeof ctl> | undefined) ?? {}
@@ -304,15 +309,35 @@ function DocEditor({ tab }: Props) {
         return
       }
       try {
+        let note = ''
         if (tab.path.toLowerCase().endsWith('.docx')) {
           const bytes = await readBytes(tab.path)
-          const baseHtml = await docxToHtml(bytes)
           const m = await docxToDocMeta(bytes)
-          const { html, comments } = await docxToCommentHtml(bytes, baseHtml)
+          // 保真导入器直接读 OOXML 的 pPr/rPr，样式还原度远高于 mammoth；
+          // 但它覆盖面有限（认不出的构造会漏），所以抛错或一块都没拆出来时退回 mammoth。
+          let fid: DocxImport | null = null
+          try {
+            // 只在真的打开 .docx 时才拉这个模块，别把它塞进编辑器 chunk 的常驻体积里
+            const { docxToHtmlFidelity } = await import('../lib/docx-fidelity')
+            const r = await docxToHtmlFidelity(bytes)
+            if (r.blocks > 0) fid = r
+          } catch (e) {
+            console.warn('docx 保真导入失败，回退 mammoth', e)
+          }
           if (!disposed) {
-            editor.commands.setContent(html)
-            setMeta(comments.length ? { ...m, comments } : m)
-            if (comments.length) setCmOpen(true)
+            if (fid) {
+              editor.commands.setContent(fid.html)
+              setMeta(fid.comments.length ? { ...m, comments: fid.comments } : m)
+              if (fid.comments.length) setCmOpen(true)
+              if (fid.warnings.length)
+                note = `保真导入：${fid.warnings.length} 项未保留（${fid.warnings[0]}${fid.warnings.length > 1 ? '…' : ''}）`
+            } else {
+              const baseHtml = await docxToHtml(bytes)
+              const { html, comments } = await docxToCommentHtml(bytes, baseHtml)
+              editor.commands.setContent(html)
+              setMeta(comments.length ? { ...m, comments } : m)
+              if (comments.length) setCmOpen(true)
+            }
           }
         } else if (tab.path.toLowerCase().endsWith('.odt')) {
           const bytes = await readBytes(tab.path)
@@ -328,7 +353,7 @@ function DocEditor({ tab }: Props) {
             if (parsed.meta?.comments?.length) setCmOpen(true)
           }
         }
-        if (!disposed) setStatus('')
+        if (!disposed) setStatus(note)
         markDirty(tab.id, false)
       } catch (e) {
         console.error(e)
@@ -343,10 +368,14 @@ function DocEditor({ tab }: Props) {
 
   const saveOdoc = async (asNew: boolean) => {
     if (!editor) return
-    // .odt 标签的 Ctrl+S 直接原地导出 ODT，不能把 JSON 写进 odt 路径
     const cur = tab.path
+    // .odt / .docx 标签的 Ctrl+S 原地按各自格式导出，不能把 JSON 存档写进 Office 扩展名
     if (!asNew && cur?.toLowerCase().endsWith('.odt')) {
       await exportOdtTo(cur)
+      return
+    }
+    if (!asNew && cur?.toLowerCase().endsWith('.docx')) {
+      await exportDocxTo(cur)
       return
     }
     try {
@@ -365,6 +394,20 @@ function DocEditor({ tab }: Props) {
       setTimeout(() => setStatus(''), 1500)
     } catch (e) {
       await message(String(e), { title: '保存失败', kind: 'error' })
+    }
+  }
+
+  // 直接格式 → OOXML 字节；.docx 标签的原地保存与「导出 docx」共用一条链路
+  const exportDocxTo = async (path: string) => {
+    if (!editor) return
+    try {
+      const bytes = await prosemirrorToDocxBytes(editor.getJSON() as PMNode, meta)
+      await writeBytes(path, bytes)
+      markRecent(path, 'doc')
+      setStatus('已保存（docx）')
+      setTimeout(() => setStatus(''), 1500)
+    } catch (e) {
+      await message(String(e), { title: '导出 docx 失败', kind: 'error' })
     }
   }
 
@@ -387,20 +430,12 @@ function DocEditor({ tab }: Props) {
 
   const exportDocx = async () => {
     if (!editor) return
-    try {
-      const path = await pickSaveFile(
-        (tab.path ? baseName(tab.path).replace(/\.[^.]+$/, '') : '未命名文档') + '.docx',
-        ['docx'],
-      )
-      if (!path) return
-      const bytes = await prosemirrorToDocxBytes(editor.getJSON() as PMNode, meta)
-      await writeBytes(path, bytes)
-      markRecent(path, 'doc')
-      setStatus('已导出 docx')
-      setTimeout(() => setStatus(''), 1500)
-    } catch (e) {
-      await message(String(e), { title: '导出失败', kind: 'error' })
-    }
+    const path = await pickSaveFile(
+      (tab.path ? baseName(tab.path).replace(/\.[^.]+$/, '') : '未命名文档') + '.docx',
+      ['docx'],
+    )
+    if (!path) return
+    await exportDocxTo(path)
   }
 
   const exportOdt = async () => {
@@ -793,6 +828,17 @@ function DocEditor({ tab }: Props) {
         {btn('中', () => editor.chain().focus().setTextAlign('center').run(), editor.isActive({ textAlign: 'center' }))}
         {btn('右', () => editor.chain().focus().setTextAlign('right').run(), editor.isActive({ textAlign: 'right' }))}
         {btn('两', () => editor.chain().focus().setTextAlign('justify').run(), editor.isActive({ textAlign: 'justify' }))}
+        {btn(
+          '首行',
+          () => {
+            const cur = editor.getAttributes('paragraph').indentFirst ?? editor.getAttributes('heading').indentFirst
+            editor.chain().focus().setIndent({ indentFirst: cur ? null : 32 }).run()
+          },
+          (editor.getAttributes('paragraph').indentFirst ?? editor.getAttributes('heading').indentFirst ?? 0) > 0,
+          '首行缩进两个字符',
+        )}
+        {btn('缩进', () => editor.chain().focus().indent().run(), false, '整段增加缩进（Ctrl+]）')}
+        {btn('退缩', () => editor.chain().focus().outdent().run(), false, '整段减少缩进（Ctrl+[）')}
         <span className="tb-sep" />
         {btn('• 列表', () => editor.chain().focus().toggleBulletList().run(), editor.isActive('bulletList'))}
         {btn('1. 列表', () => editor.chain().focus().toggleOrderedList().run(), editor.isActive('orderedList'))}
