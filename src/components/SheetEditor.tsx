@@ -1,4 +1,4 @@
-import { memo, useEffect, useRef, useState } from 'react'
+import { memo, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { message } from '@tauri-apps/plugin-dialog'
 import type { IWorkbookData } from '@univerjs/presets'
 import type { FUniver } from '@univerjs/presets'
@@ -197,7 +197,12 @@ function SheetEditor({ tab }: Props) {
     return image.drawingId
   }
 
-  useEffect(() => {
+  // 挂载用 layout effect 而不是普通 effect：被动效果排在「这一帧画完」之后，Univer 的建立
+  // 因此要等一次真实绘制；layout effect 在提交阶段就跑，容器此刻已在 DOM 里，Univer 量得到
+  // 的还是真实尺寸。
+  // 账要记清：本轮在表格侧改 layout 时那 295ms 一跳没动（它其实是外壳 Suspense 的兜底节流，
+  // 已单独删掉），同构建分离实测到 layout 收益的是 PDF 侧（heavy.pdf 首页 746 → 473ms）。
+  useLayoutEffect(() => {
     const container = containerRef.current
     if (!container) return
     let disposed = false
@@ -222,7 +227,8 @@ function SheetEditor({ tab }: Props) {
         const dump = await loading
         if (disposed) return
         const name = tab.path ? baseName(tab.path) : tab.title || '未命名表格'
-        const wb = api.createWorkbook(payloadToWorkbook(dump, name))
+        const snap = payloadToWorkbook(dump, name)
+        const wb = api.createWorkbook(snap)
         // 还原已存图表：PNG 渲染并行（VChart 是纯计算），落格串行（同一 sheet 的命令队列）
         const items = dump.sheets.flatMap((s) =>
           (s.charts ?? []).map((chart) => ({ sheetName: s.name, chart })),
@@ -263,6 +269,8 @@ function SheetEditor({ tab }: Props) {
       disposed = true
       apiRef.current = null
       api?.dispose()
+      // 传给 Univer 的 worker 不会被 Univer 销毁（它只在 _internalWorker 是自己建的时候才管），
+      // 所以这里显式杀掉，不留悬着的线程
       worker.terminate()
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps

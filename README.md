@@ -378,7 +378,9 @@
   Univer 公式 worker（`new Worker` 后台线程 fetch+编译，2s 后回收，脚本留在 HTTP/代码
   缓存）；表格 6.2MB 主 chunk 与 7.4MB worker 脚本的加载成本从点击路径移到空闲期
   （**v0.35 修订**：预热上移到 `App` 并补上此前漏在点击路径上的外壳 chunk；worker 预热经发布包
-  实测对首开耗时零收益，已删——见「大 PDF 分段读取 · 首开提速（v0.35）」）
+  实测对首开耗时零收益，已删——见「大 PDF 分段读取 · 首开提速（v0.35）」。
+  **v0.36 修订**：worker 预热与线程池再度 A/B 复核仍无收益，池子一并删除；挂载侧不再用 `lazy()`，
+  改为自持已解析组件——见「首开那 300ms 的元凶：挂载不再走 Suspense（v0.36）」）
 - **盘点结论**（不改代码）：标签切换本就是 `display:none` 保持挂载零重挂成本；首屏入口
   仅 247KB；vchart（2MB）与 Univer 各 locale 数据表（hu/nb/nn 300+KB）都已是按需动态
   chunk；`univer-worker` 7.46MB 为公式计算引擎必要成本，保留
@@ -607,6 +609,8 @@
   **确实执行了**（`__oofPrewarm` 全绿、无告警）而发布包首开耗时**一位数都没降**。
   留下的原因是：首次开标签比同会话第二次慢的那 ~600ms 不是库代码编译，而是新 context 里 6MB chunk 的
   编译与堆增长，空闲期提前跑同样要付一遍
+  **（v0.36 修正：那 ~600ms 里还压着一条外壳 Suspense 的 ~300ms 兜底节流，当时把它算进了"编译"这一项；
+  节流删掉后表格冷开 1281→584ms。本节其余结论——worker 与实例级预热不省——依然成立）**
 - **坑**：① pdf.js 的 `PDFDataTransportStream` 按 `_begin` 找 reader 且 `assert(found)` **在发布包里照样抛**，
   而 `getRangeReader` 是先 `requestDataRange` 后 push reader、同一 `begin` 可被两个 reader 分别请求——
   用「按 begin 去重」当投递策略会把第二个 reader 永久挂死（表现为卡住且无异常面），
@@ -618,17 +622,63 @@
   零长与越界守卫、小文件整本读未回归、大文件 `rangeMode=true`、远处页按区间补读并画出像素、
   旋转后覆盖写回仍走分段、重载后页数与旋转页渲染保真、CSV 表格装载、空闲预热清单 shell/sheet/pdf/doc/ppt）；tsc/build 绿
 
+## 首开那 300ms 的元凶：挂载不再走 Suspense（v0.36）
+
+- **元凶是一条节流，不是"懒加载慢"**：发布包分段打点 + 间隙探针（rAF 采样 / longtask / MutationObserver）显示
+  `Workspace` 在 79ms 就渲染完了、内容却到 **349ms** 才提交进 DOM，中间主线程每 8ms 跑一帧、没有任何长任务。
+  原因是 React 对 Suspense 边界有一条「兜底一旦可见就至少撑住 ~300ms」的节流，而 **App 用 `lazy()`+`<Suspense>`
+  包住了整个工作区外壳**——于是每个新 context 里第一次开编辑器都要付这一笔（首页 → 工作区同样付）
+- **修法：自己持有已解析组件**（`src/lib/editors.ts`）——动态 import 由这一个模块独占，预热与挂载点共用同一份
+  promise；外壳 `WorkspaceSlot` 与每标签的 `LazyEditor` 先 `peekEditor/peekWorkspace` **同步命中**，
+  于是「挂上编辑器」与「改状态」落在同一次提交里，没有兜底可见期可被节流。浏览器**不缓存重编译**：
+  组件源码求值一次，但每次新 context 的编译要重付——所以省掉的是等待，不是编译
+- **编辑器与 PDF 的建实例 effect 改 `useLayoutEffect`**：被动效果排在「这一帧画完」之后，取文档/建 Univer
+  白等一次真实绘制。PDF 侧同构建实测 heavy.pdf 首屏 **746 → 473ms**（画布判据）；表格侧这一改没动那一跳
+  （那一跳的账在外壳），两处账分开记、不再混算
+- **v0.35 的归因被本轮纠正**：上轮写「冷开多出的 ~600ms 是 6MB chunk 在新 context 的编译与堆增长」，
+  编译确实每 context 重付，但当时压着的还有一条 300ms 节流，故那条结论把两件事算成了一件事
+- **公式 worker 线程池：裁决为删**（同构建开关 `__oofNoPool` A/B）——常驻线程让卸载只摘监听器不 `terminate()`、
+  再配合空闲预热拉起线程，实测**热开 569(池) / 565(无池) 持平、冷开 911(池) / 877(无池) 反而更慢**
+  （预热线程与启动抢 CPU）。省掉一次 fetch+构造只值 40ms 左右，不足以推翻 v0.35 的边界判断，
+  故池子（`lib/worker-pool.ts`）与预热步一并删除，回到每标签自建自杀
+- **保住的部分要背书**：编辑器级自解析表不是"lazy 一律不好"——同构建 A/B 里表格冷开 **588ms（自解析）vs
+  875ms（每标签一个 Suspense 边界）**、热开持平，这条差异就是节流量级，所以留着
+- **性能结论（发布包 `--no-bundle` + CDP 真实双开路径，单位 ms）**：
+  | 用例（判据一致才可跨轮比） | v0.35 | v0.36 本轮 |
+  | --- | --- | --- |
+  | 表格 big.csv 20001 行 · 冷开（Univer 两画布有宽） | 1281 | **584** |
+  | 表格 big.csv · 热开 | 529 | 574（持平，噪声内） |
+  | heavy.pdf 17.9MB · 冷开（首页画布节点出现） | 710 | **225** |
+  | heavy.pdf · 热开 | 91 | 97（持平） |
+  | big.pdf 375KB · 冷开（首页画布节点出现） | 715 | **198** |
+  | heavy.pdf · 冷开（**真出像素**，本轮起的严格判据） | 未测 | 309 |
+  | big.pdf · 冷开（真出像素） | 未测 | 195 |
+- **预热没命中也要能开**：把静置时间压到 0（空闲预热来不及跑完）再双击开表格，仍 710ms 出画布、无异常，
+  只比预热过的 584ms 慢 126ms——`peekEditor` 未命中时走 `loadEditor` 等一次的兜底路径是通的
+- **坑**：① 判据一换数字就不可比——pdf.js 先建画布后绘制，「画布节点出现」比「第一个非零像素」早约 120ms，
+  本轮把 PDF 判据改成扫描 `getImageData` alpha，故 PDF 与 v0.35 的不同判据两列都列出；
+  ② 发布包与 dev 共用单实例互斥锁，测发布包前须先杀 dev（反之亦然）；
+  ③ 首页与工作区是互斥渲染，回首页会整棵卸载编辑器树（Univer 实例重建）——本轮只断言"回来还能用"，
+  保留状态是后话
+- **验证**：`cargo test --lib` 39 通过（Rust 零改动）+ CDP 发布包冒烟 19 断言全绿、页面异常 0 条
+  （模板→文档/表格/演示、外链开 heavy.pdf 走分段并按区间补画像素、切标签 Univer 容器不被重挂、
+  首页往返后重挂可用、收尾关标签）；未预热兜底路径单跑 1 次通过；tsc/build 绿
+
 ## 性能（v0.3）
 
 - **按编辑器分包 + 懒加载**：主包 8MB → 首屏约 300KB；Univer（6.1MB）只在首次激活表格标签时加载，
   TipTap/docx（836KB）与 pptxgenjs/jszip 同理按编辑器按需加载，mammoth/pptxgenjs/jszip 进一步延迟到导入/导出动作
-- **编辑器懒挂载**：标签首次激活才创建 Univer/TipTap 重型实例，之后切换保留状态不重复初始化
+- **编辑器懒挂载**：标签首次激活才创建 Univer/TipTap 重型实例，之后切换保留状态不重复初始化；
+  激活判定落在**渲染期**（幂等 `Set.add`）而不是 effect 里再 `setState`，少一次空转重渲染（v0.36）
 - **渲染裁剪**：三个编辑器与幻灯片缩略图 `React.memo` 化；store 的 `markDirty` 幂等去重，
   避免 Univer 每条命令都触发无关标签重渲染
-- **空闲预热编辑器 chunk**（v0.26 起，v0.35 收到实证边界）：`lib/prewarm.ts` 挂在 App（首页才是免费的空闲窗口），
-  与 `lazy()` 共享同一模块 promise，点击路径上只剩数据请求；预热顺序为外壳 + 按最近文件排部的四个编辑器。
-  **实测到此为止**——再往下（真建 Univer 实例、预取/预启 worker、拿空白 PDF 走一遍渲染）发布包首开耗时一位数都不降，
-  因为冷开多出的那部分是 6MB chunk 在新 context 的编译与堆增长，提前跑同样要付
+- **挂载不走 Suspense**（v0.36）：外壳与四类编辑器都由 `src/lib/editors.ts` 自持已解析组件，
+  绕开 React「兜底至少可见 ~300ms」的节流——表格冷开 1281→584ms、heavy.pdf 冷开 710→225ms
+- **空闲预热编辑器 chunk**（v0.26 起，v0.35/v0.36 两次收到实证边界）：`lib/prewarm.ts` 挂在 App
+  （首页才是免费的空闲窗口），与挂载点共用同一模块 promise，点击路径上只剩数据请求；
+  预热顺序为**外壳** + 按最近文件排部的四个编辑器。
+  **实测到此为止**——再往下（真建 Univer 实例、预取/预启 worker、拿空白 PDF 走一遍渲染、把公式 worker
+  线程做成常驻池）发布包首开耗时一位数都不降甚至更慢，见上一节的 A/B
 - **大 PDF 分段读取**（v0.35）：≥4MB 走 `PDFDataRangeTransport` + Rust `read_range`（raw IPC），
   首屏只读 64KB 头 + 按需区间，17.9MB 文档冷开 901→710ms、热开 260→91ms，且整本字节不再进 JS 堆
 - **Univer 首开并行化**（v0.35）：读文件与建实例不再串行等待，20001 行表格冷开 1456→1281ms
@@ -691,7 +741,8 @@ src/                  React 前端
   lib/pdf-pages.ts    PDF 页面级操作（pdf-lib 覆盖写回）：rotatePagesInPlace / removePagesInPlace（倒序删 + 删空守卫）/ extractPages / mergePdfs / splitPdf，做完由调用方重载
   lib/pdf-geo.ts      显示空间（已套旋转·左上原点）↔ PDF 原始坐标（未旋转·左下原点）双向精确换算：normRot / displaySize / toDisplayRect / fromDisplayRect / toDisplayPoints / fromDisplayPoints + parsePageSpec（`1-3,5` 页码写法）
   lib/pdf-range.ts    大 PDF 分段读取：PDFDataRangeTransport 子类（≥4MB 才启用、64KB 文件头起手、按 begin 计数投递、abort 置 dead）+ fileSize/readRange，配 Rust 侧 file_len + read_range
-  lib/prewarm.ts      首页空闲期预取编辑器 chunk（App 级，与 lazy() 共享模块 promise）：顺序为 Workspace 外壳 → 按最近文件类型的四个编辑器；实测无收益的实例级/worker 级预热已删除
+  lib/editors.ts      动态 import 的唯一持有者：四类编辑器 + Workspace 外壳各自的「已解析组件表」（peekEditor/loadEditor、peekWorkspace/loadWorkspace），挂载点同步命中即不走 Suspense（v0.36）
+  lib/prewarm.ts      首页空闲期预取外壳与编辑器 chunk（App 级，与 lib/editors.ts 共用同一模块 promise）：顺序为 Workspace 外壳 → 按最近文件类型的四个编辑器；实测无收益的实例级/worker 级预热与公式 worker 线程池已删除
   lib/registry.ts     跨组件保存器注册表（Ctrl+S 路由到当前标签）
   lib/open.ts         路径→标签 打开 / 带确认关闭
   lib/sync.ts         最近文件端到端加密同步（WebCrypto PBKDF2-SHA256 → AES-256-GCM，.oosync 信封）
@@ -762,6 +813,7 @@ cargo check        # Rust 后端检查（在 src-tauri 下）
 - [x] PDF 页面管理：旋转/删除/提取/合并/拆分覆盖写回（标注跟随所在页，旋转页坐标按 `/Rotate` 换算）
 - [x] 性能：表格命令 async（spawn_blocking）+ 图表网格惰性构建、PDF 位图缓存像素预算、文档字数节流
 - [x] 性能二期：大 PDF 分段读取（`file_len`/`read_range` raw IPC + `PDFDataRangeTransport`）+ Univer 首开并行化 + 预热实证边界（更激进的实例级预热实测零收益，已删）
+- [x] 性能三期：首开挂载不再走 Suspense（外壳+编辑器自持已解析组件，绕开 ~300ms 兜底节流）+ effect 改 layout + 公式 worker 线程池 A/B 裁决为删
 - [ ] 自动更新通道（须先决策：公开仓库或独立托管 update metadata）
 - [ ] macOS 打包（需签名/公证凭据）
 

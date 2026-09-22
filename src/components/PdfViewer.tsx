@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import * as pdfjsLib from 'pdfjs-dist'
 import { TextLayer } from 'pdfjs-dist'
 import type { PDFDocumentLoadingTask, PDFDocumentProxy, RenderTask } from 'pdfjs-dist'
@@ -236,7 +236,11 @@ function PdfViewer({ tab }: Props) {
   // 本次打开是否走分段读取（冒烟断言用，不参与渲染）
   const rangeModeRef = useRef(false)
 
-  useEffect(() => {
+  // layout effect：被动效果排在「这一帧画完」之后，取文档要等一次真实绘制。这条 effect
+  // 不量 DOM，提前跑只是把异步任务早发出去——同构建实测 heavy.pdf 首页 746 → 473ms。
+  // （更早这里记的「~317ms」后来查明主要是外壳 Suspense 的兜底节流，不是被动效果排队；
+  // 表格侧改 layout 时那一跳没动，因为卡的是外壳不是这条排队。两处账分开记。）
+  useLayoutEffect(() => {
     if (!tab.path) return
     let disposed = false
     let openTask: PDFDocumentLoadingTask | null = null

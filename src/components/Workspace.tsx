@@ -1,12 +1,31 @@
-import { lazy, Suspense, useEffect, useState } from 'react'
-import { useApp, type DocKind } from '../store'
+import { useEffect, useRef, useState } from 'react'
+import { useApp, type DocKind, type Tab } from '../store'
 import { requestCloseTab } from '../lib/open'
 import { saveTab } from '../lib/registry'
+import { loadEditor, peekEditor, type EditorComp } from '../lib/editors'
 
-const SheetEditor = lazy(() => import('./SheetEditor'))
-const DocEditor = lazy(() => import('./DocEditor'))
-const PptEditor = lazy(() => import('./PptEditor'))
-const PdfViewer = lazy(() => import('./PdfViewer'))
+// 编辑器不经 React.lazy + Suspense：自己持有已解析的组件（见 lib/editors）。
+// React 对 Suspense 边界有一条「兜底至少可见 ~300ms」的节流，同一次构建的 A/B 实测：
+// 每标签一个 Suspense 边界时表格冷开 875ms，换成自解析组件 588ms（差的那 287ms 就是节流）。
+// 空闲预热（lib/prewarm.ts）通常已把组件备好，`peekEditor` 同步命中，标签出现的那一次渲染
+// 就把编辑器挂上；没命中才走 `loadEditor` 等一次。另外每标签各自一条加载线，也不再共用一个
+// 边界（新增文档标签不会把已在显示的表格闪成兜底）。
+function EditorMount({ tab }: { tab: Tab }) {
+  const [Comp, setComp] = useState<EditorComp | undefined>(() => peekEditor(tab.kind))
+  useEffect(() => {
+    if (Comp) return
+    let alive = true
+    loadEditor(tab.kind).then((c) => {
+      // 组件本身是函数，必须包一层才不被当成 updater
+      if (alive) setComp(() => c)
+    })
+    return () => {
+      alive = false
+    }
+  }, [tab.kind, Comp])
+  if (Comp) return <Comp tab={tab} />
+  return <div className="editor-loading">正在加载编辑器…</div>
+}
 
 const KIND_ICON: Record<DocKind, string> = { doc: '文', sheet: '表', ppt: '演', pdf: 'P' }
 const KIND_CLS: Record<DocKind, string> = { doc: 'kind-doc', sheet: 'kind-sheet', ppt: 'kind-ppt', pdf: 'kind-pdf' }
@@ -18,14 +37,12 @@ export default function Workspace() {
   const openTab = useApp((s) => s.openTab)
   const [menuOpen, setMenuOpen] = useState(false)
   const [ctx, setCtx] = useState<{ id: string; x: number; y: number } | null>(null)
-  // 标签首次激活才挂载编辑器（Univer/TipTap 等重型实例按需创建）
-  const [mounted, setMounted] = useState<Set<string>>(() => new Set())
-
-  useEffect(() => {
-    if (activeId && !mounted.has(activeId)) {
-      setMounted((prev) => new Set(prev).add(activeId))
-    }
-  }, [activeId, mounted])
+  // 标签首次激活才挂载编辑器（Univer/TipTap 等重型实例按需创建）。
+  // 判定落在渲染期：effect 里记 mounted 再 setState 会多要一整轮渲染，冷开时白等一跳。
+  // 登记放进渲染里做（幂等的 Set.add），标签出现的那一次渲染就把编辑器挂上。
+  // 注：早先这里写过「那一跳固定花 ~300ms」，归因错了——300ms 是外壳 App 的 Suspense 兜底
+  // 节流（App 的 WorkspaceSlot 已改成自解析组件），不是这轮 effect；节流已删，此处只省下一次空转渲染。
+  const liveRef = useRef<Set<string>>(new Set())
 
   // 空闲预热已提到 App（首页也要预热），见 lib/prewarm.ts
 
@@ -104,19 +121,16 @@ export default function Workspace() {
       <div className="editor-area">
         {tabs.map((t) => {
           const visible = t.id === active?.id
+          const live = visible || liveRef.current.has(t.id)
+          if (live) liveRef.current.add(t.id)
           return (
             <div
               key={t.id}
               className="editor-slot"
               style={{ display: visible ? 'flex' : 'none' }}
             >
-              {mounted.has(t.id) ? (
-                <Suspense fallback={<div className="editor-loading">正在加载编辑器…</div>}>
-                  {t.kind === 'sheet' && <SheetEditor tab={t} />}
-                  {t.kind === 'doc' && <DocEditor tab={t} />}
-                  {t.kind === 'ppt' && <PptEditor tab={t} />}
-                  {t.kind === 'pdf' && <PdfViewer tab={t} />}
-                </Suspense>
+              {live ? (
+                <EditorMount tab={t} />
               ) : (
                 <div className="editor-loading">编辑器待命 · 切换到该标签后初始化</div>
               )}

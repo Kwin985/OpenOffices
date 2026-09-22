@@ -1,4 +1,4 @@
-import { Suspense, lazy, useEffect } from 'react'
+import { Suspense, lazy, useEffect, useState, type ComponentType } from 'react'
 import { invoke } from '@tauri-apps/api/core'
 import { listen } from '@tauri-apps/api/event'
 import { getCurrentWebview } from '@tauri-apps/api/webview'
@@ -10,8 +10,8 @@ import { pickOpenFile } from './lib/fs'
 import { openPath, requestCloseTab } from './lib/open'
 import { startEditorPrewarm } from './lib/prewarm'
 import { saveTab } from './lib/registry'
+import { loadWorkspace, peekWorkspace } from './lib/editors'
 
-const Workspace = lazy(() => import('./components/Workspace'))
 const Presenter = lazy(() => import('./components/Presenter'))
 
 const IS_PRESENTER =
@@ -24,6 +24,25 @@ function cycleTab(dir: 1 | -1) {
   const i = tabs.findIndex((t) => t.id === activeId)
   const next = (i + dir + tabs.length) % tabs.length
   setActive(tabs[next].id)
+}
+
+// 工作区自己解析组件，不走 React.lazy + Suspense（原因见 lib/editors 的注释：那条边界的
+// 兜底可见性节流在冷开首屏固定吃掉约 270ms）。空闲预热通常已经把组件备好在表里，
+// 于是「切到工作区」那一次渲染就直接挂上真组件；没备好的罕见路径才多等一次。
+function WorkspaceSlot() {
+  const [W, setW] = useState<ComponentType | null>(() => peekWorkspace())
+  useEffect(() => {
+    if (W) return
+    let alive = true
+    loadWorkspace().then((c) => {
+      if (alive) setW(() => c) // 组件本身是函数，包一层才不被当成 updater
+    })
+    return () => {
+      alive = false
+    }
+  }, [W])
+  if (!W) return <div className="editor-loading">正在加载工作区…</div>
+  return <W />
 }
 
 export default function App() {
@@ -190,13 +209,7 @@ function MainApp() {
         </button>
       </header>
       <main className="main">
-        {view === 'home' ? (
-          <Home />
-        ) : (
-          <Suspense fallback={<div className="editor-loading">正在加载编辑器…</div>}>
-            <Workspace />
-          </Suspense>
-        )}
+        {view === 'home' ? <Home /> : <WorkspaceSlot />}
       </main>
     </div>
   )
