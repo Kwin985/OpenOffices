@@ -9,9 +9,11 @@
 // 抛错或拆不出块时调用方回退 mammoth。
 //
 // schema 边界（TipTap 侧没有对应属性，导入时刻意不硬塞，全部记进 warnings）：段落底纹与边框、
-// 表格边框与单元格底纹/竖排、行距与段前段后、上下标、脚注尾注、图表与 OLE 对象。
+// 行距与段前段后、脚注尾注、图表与 OLE 对象。
+// 表格边框/单元格底纹与竖排/上下标/表格缩进在 v0.38 起已经能读进 cell-style 与上下标 schema。
 
 import { all, allDesc, attr, attrL, attrNum, els, find, findDesc, local, parseXml, textOf, type XEl } from './ooxml'
+import { CELL_EDGES, CSS_BORDER_STYLE, eighthsToPx, rgb2hex } from './cell-style'
 import { commentRowsOf, type DocComment } from './docx'
 
 export interface DocxImport {
@@ -272,6 +274,8 @@ interface RunProps {
   /** 半点 */
   sz?: number
   fonts?: string[]
+  /** w:vertAlign：superscript / subscript（其余值视为 normal） */
+  va?: 'sup' | 'sub'
 }
 
 const NONE: RunProps = {}
@@ -294,6 +298,10 @@ function readRPr(el: XEl | undefined, p: RunProps): RunProps {
   if (hlv) o.hl = HL[hlv.toLowerCase()] ?? '#ffff00'
   const sz = valNum(el, 'w:sz')
   if (sz) o.sz = sz
+  const va = (val(el, 'w:vertAlign') ?? '').toLowerCase()
+  if (va === 'superscript') o.va = 'sup'
+  else if (va === 'subscript') o.va = 'sub'
+  else if (va === 'normal' || va === 'baseline') o.va = undefined
   const rf = find(el, 'w:rFonts')
   if (rf) {
     const fams: string[] = []
@@ -335,6 +343,9 @@ function marked(inner: string, p: RunProps): string {
   if (p.u) s = `<u>${s}</u>`
   if (p.i) s = `<em>${s}</em>`
   if (p.b) s = `<strong>${s}</strong>`
+  // 上下标是最外层：Word 把 vertAlign 记在 rPr 里，与粗斜体同级，套在外面读回来不改变含义
+  if (p.va === 'sup') s = `<sup>${s}</sup>`
+  else if (p.va === 'sub') s = `<sub>${s}</sub>`
   return s
 }
 
@@ -570,8 +581,8 @@ class Fidelity {
       const left = attrNum(ind, 'w:left') ?? attrNum(ind, 'w:start')
       const hang = attrNum(ind, 'w:hanging')
       const right = attrNum(ind, 'w:right') ?? attrNum(ind, 'w:end')
-      if (right) this.warn('右缩进未导入')
       if (left) bits.push(`margin-left: ${Math.round(left * TWIP_PX)}px`)
+      if (right) bits.push(`margin-right: ${Math.round(right * TWIP_PX)}px`)
       // firstLineChars 是"字符数×100"（Word 同时会写 firstLine 的 twips 值）；只给前者时按 16px 字宽估
       const first = attrNum(ind, 'w:firstLine')
       const firstChars = attrNum(ind, 'w:firstLineChars')
@@ -737,8 +748,6 @@ class Fidelity {
           const cs = val(rPr, 'w:rStyle')
           for (const s of styleChain(this.book, cs)) if (s.rPr) rp = readRPr(s.rPr, rp)
           rp = readRPr(rPr, rp)
-          const va = val(rPr, 'w:vertAlign')
-          if (va === 'superscript' || va === 'subscript') this.warn('上标/下标未导入（文字保留）')
         }
         // 一个 run 里文字与图片/域标记可以穿插，所以先攒文字、遇到非文字构件就落盘
         let text = ''
@@ -833,9 +842,8 @@ class Fidelity {
     const tblPr = find(el, 'w:tblPr')
     const grid = all(find(el, 'w:tblGrid'), 'w:gridCol').map((g) => Math.round((attrNum(g, 'w') ?? 0) * TWIP_PX))
     const rows = all(el, 'w:tr')
-    const borders = tblPr ? find(tblPr, 'w:tblBorders') : undefined
-    if (borders && els(borders).length) this.warn('表格边框未导入（应用自带网格线）')
-    if (tblPr && find(tblPr, 'w:tblInd')) this.warn('表格缩进未导入')
+    const tb = borderEdges(tblPr ? find(tblPr, 'w:tblBorders') : undefined)
+    const tblInd = tblPr ? attrNum(find(tblPr, 'w:tblInd'), 'w') : undefined
     // 横向 gridSpan / 纵向 vMerge 都按网格列记账：Word 保证同一次纵向合并里各行的 gridSpan 一致，
     // 所以 continue 单元格就落在 restart 单元格同一批网格列上，无需跳过被占用列。
     type Span = { row: number; span: number }
@@ -861,15 +869,19 @@ class Fidelity {
       plan.push(cells)
     })
     // 记账完成后才出 HTML：rowspan 要等所有行的 continue 都数完
-    let s = '<table>'
+    const tblStyle = tblInd ? tableIndentCss(Math.round(tblInd * TWIP_PX)) : ''
+    let s = `<table${tblStyle ? ` style="${tblStyle}"` : ''}>`
     for (let ri = 0; ri < plan.length; ri++) {
       const trPr = find(rows[ri], 'w:trPr')
       // 表头由 w:trPr/w:tblHeader 决定，不限首行（Word 里可以声明第 2 行起重复表头）
       const tag = trPr && find(trPr, 'w:tblHeader') ? 'th' : 'td'
+      const last = plan.length - 1
+      const rowEnd = plan[ri].reduce((m, c) => Math.max(m, c.gc + c.colspan), 0)
       s += '<tr>'
       for (const c of plan[ri]) {
         if (c.cont) continue
         const tcPr = find(c.el, 'w:tcPr')
+        const cb = borderEdges(tcPr ? find(tcPr, 'w:tcBorders') : undefined)
         const attrs: string[] = []
         if (c.colspan > 1) attrs.push(`colspan="${c.colspan}"`)
         const sp = spanAt[c.gc]
@@ -878,10 +890,13 @@ class Fidelity {
           const widths = grid.slice(c.gc, c.gc + c.colspan).filter((v) => v > 0)
           if (widths.length) attrs.push(`colwidth="${widths.join(',')}"`)
         }
-        const shd = tcPr ? find(tcPr, 'w:shd') : undefined
-        const fill = shd ? attr(shd, 'w:fill') : undefined
-        if (fill && fill !== 'auto' && fill.toLowerCase() !== 'ffffff') this.warn('单元格底纹未导入')
-        if (tcPr && find(tcPr, 'w:vAlign')) this.warn('单元格竖排对齐未导入')
+        const style = cellStyleCss(tcPr, {
+          top: cb.top ?? (ri === 0 ? tb.top : tb.insideH),
+          bottom: cb.bottom ?? (ri === last ? tb.bottom : tb.insideH),
+          left: cb.left ?? (c.gc === 0 ? tb.left : tb.insideV),
+          right: cb.right ?? (c.gc + c.colspan >= rowEnd ? tb.right : tb.insideV),
+        })
+        if (style) attrs.push(`style="${style}"`)
         s += `<${tag}${attrs.length ? ' ' + attrs.join(' ') : ''}>${await this.cellBlocks(c.el)}</${tag}>`
       }
       s += '</tr>'
@@ -910,6 +925,52 @@ class Fidelity {
 }
 
 const PAGE_BREAK = '<div data-oo-pagebreak class="doc-page-break"></div>'
+
+/** 单边元素（w:top/w:bottom/…）→ 规范串；`w:val="none"/"nil"/"hidden"` 是「这条边明确不要」 */
+function edgeCss(b: XEl): string {
+  const style = CSS_BORDER_STYLE[(attr(b, 'w:val') ?? 'single').toLowerCase()] ?? 'solid'
+  if (style === 'none') return 'none'
+  const px = eighthsToPx(attrNum(b, 'w:sz') ?? 8)
+  const hex = rgb2hex(`#${(attr(b, 'w:color') ?? '').replace(/^#/, '').toLowerCase()}`) ?? '#000000'
+  return `${px}px ${style} ${hex}`
+}
+
+/**
+ * `w:tblBorders` / `w:tcBorders` → 各边规范串。
+ * 没写的边留 undefined（区别于显式的 'none'）：undefined 才允许落回表级或应用网格线。
+ */
+function borderEdges(el: XEl | undefined): Record<string, string | undefined> {
+  const out: Record<string, string | undefined> = {}
+  if (!el) return out
+  for (const child of els(el)) out[local(child.name)] = edgeCss(child)
+  return out
+}
+
+/** 单元格边框四边 + 底纹 + 竖排对齐 → 一段内联 style（顺序固定，供结构测试直接比对） */
+function cellStyleCss(
+  tcPr: XEl | undefined,
+  edges: { top?: string; bottom?: string; left?: string; right?: string },
+): string {
+  const bits: string[] = []
+  for (const edge of CELL_EDGES) {
+    const v = edges[edge]
+    if (v) bits.push(`border-${edge}: ${v}`)
+  }
+  const fill = attr(find(tcPr, 'w:shd'), 'w:fill') ?? ''
+  if (fill && fill.toLowerCase() !== 'auto') {
+    const hex = rgb2hex(`#${fill.replace(/^#/, '').toLowerCase()}`)
+    if (hex && hex !== '#ffffff') bits.push(`background-color: ${hex}`)
+  }
+  const va = (val(tcPr, 'w:vAlign') ?? '').toLowerCase()
+  const align = va === 'center' ? 'middle' : va === 'top' || va === 'bottom' ? va : ''
+  if (align) bits.push(`vertical-align: ${align}`)
+  return bits.join('; ')
+}
+
+/** `w:tblInd`（twips）→ 表格离版心的缩进；表宽 100%，右边要一起收，否则顶出页面 */
+function tableIndentCss(px: number): string {
+  return `margin-left: ${px}px; width: calc(100% - ${px}px)`
+}
 
 function plainText(el: XEl): string {
   return allDesc(el, 't')

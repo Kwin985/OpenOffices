@@ -11,6 +11,7 @@ import {
   type PageSetup,
   type PMNode,
 } from './docx'
+import { bdAttr, borderParts, CELL_EDGES, cssBorder, rgb2hex } from './cell-style'
 
 const OD_MIME = 'application/vnd.oasis.opendocument.text'
 
@@ -18,6 +19,37 @@ const OD_MIME = 'application/vnd.oasis.opendocument.text'
 const mm2cm = (mm: number) => `${(mm / 10).toFixed(2)}cm`
 // CSS px → ODF 长度：缩进写 cm，三位小数以免往返掉精度（32px ≈ 0.847cm）
 const px2cm = (px: number) => `${(px / 37.795).toFixed(3)}cm`
+/** ODF 承认的四边框线型；inset/outset 之类翻成 solid，至少宽度与颜色还在 */
+const ODF_BORDER_STYLE: Record<string, string> = { solid: 'solid', dashed: 'dashed', dotted: 'dotted', double: 'double' }
+/** 规范边框串（`1px solid #8899aa`）→ fo:border-* 的值（宽度用 pt：px↔pt 换算是精确的） */
+function odtBorder(v: string): string {
+  const p = borderParts(v)
+  if (!p) return 'none'
+  const style = ODF_BORDER_STYLE[p.style] ?? 'solid'
+  return `${Math.round(p.px * 75) / 100}pt ${style} ${p.hex}`
+}
+/**
+ * fo:border-* 的值 → 规范边框串。
+ * 第三方 ODF 的宽度多写 cm（本应用写 pt），cssBorder 只认 px/pt，故先把长度档位换成 px。
+ * 这里不走 len2px：它按整数 px 取整，会把 0.5pt 的细线（0.67px）抬成 1px，
+ * 而边框宽度正是往返要保真的量，故保留两位小数。
+ */
+function odfBorderCss(v: string | null | undefined): string | null {
+  if (!v) return null
+  const s = v.trim()
+  if (!s || s === 'none' || s === 'hidden') return 'none'
+  const m = s.match(/^(-?[\d.]+)(cm|mm|in|"|pt|px)?(.*)$/)
+  if (!m) return cssBorder(s)
+  const n = Number(m[1])
+  const unit = m[2] ?? ''
+  const px =
+    unit === 'mm' ? n * 37.795
+    : unit === 'in' || unit === '"' ? n * 96
+    : unit === 'pt' ? (n * 96) / 72
+    : unit === 'px' ? n
+    : n * 37.795
+  return cssBorder(`${Math.round(px * 100) / 100}px${m[3]}`)
+}
 /** ODF 长度 → CSS px；负值照收（悬挂缩进就是负的 fo:text-indent） */
 function len2px(v: string | null | undefined): number | undefined {
   if (!v) return undefined
@@ -92,9 +124,82 @@ const NS =
 class OdtBuilder {
   charStyles = new Map<string, string>() // 样式键 JSON → 样式名
   paraStyles = new Map<string, string>() // 段落直接格式键 JSON → 段落自动样式名
+  cellStyles = new Map<string, string>() // 单元格样式键 JSON → 自动样式名（ce1…）
+  tableStyles = new Map<string, string>() // 表格样式键 JSON → 自动样式名（TS1…）
   images = new Map<string, ImageEntry>() // src → entry
   private imageSeq = 0
   private paraSeq = 0
+  private cellSeq = 0
+  private tableSeq = 0
+
+  /**
+   * 单元格直接格式（四边边框 + 底纹 + 竖排对齐）→ table-cell 家族自动样式。
+   * ODF 的表格单元格样式必须走 `style:family="table-cell"`，不能像 HTML 那样写内联。
+   * 边框宽度用 pt 而不是 cm：px↔pt 是 ×4/3 的精确换算，cm 保留两位小数会把 1px 变成 1.13px。
+   */
+  private cStyle(cell: PMNode): string {
+    const o: Record<string, string> = {}
+    for (const edge of CELL_EDGES) {
+      const v = cell.attrs?.[bdAttr(edge)]
+      if (typeof v !== 'string' || !v) continue
+      o[`b${edge}`] = v === 'none' ? 'none' : odtBorder(v)
+    }
+    const bg = cell.attrs?.background
+    if (typeof bg === 'string' && bg) o.bg = bg
+    const va = cell.attrs?.vAlign
+    if (va === 'top' || va === 'middle' || va === 'bottom') o.va = va
+    if (!Object.keys(o).length) return ''
+    const key = JSON.stringify(o)
+    let name = this.cellStyles.get(key)
+    if (!name) {
+      name = `ce${++this.cellSeq}`
+      this.cellStyles.set(key, name)
+    }
+    return name
+  }
+
+  private cellStyleXml(): string {
+    let out = ''
+    for (const [key, name] of this.cellStyles) {
+      const s = JSON.parse(key) as Record<string, string>
+      let tp = ''
+      for (const edge of CELL_EDGES) {
+        if (s[`b${edge}`]) tp += ` fo:border-${edge}="${esc(s[`b${edge}`])}"`
+      }
+      if (s.bg) tp += ` fo:background-color="${esc(s.bg)}"`
+      if (s.va) tp += ` style:vertical-align="${s.va}"`
+      out += `<style:style style:name="${name}" style:family="table-cell"><style:table-cell-properties${tp}/></style:style>`
+    }
+    return out
+  }
+
+  /**
+   * 表格缩进（Word 的 w:tblInd 那一档）→ table 家族自动样式。
+   * ODF 里整张表的左边距就是 `fo:margin-left`，表宽本应用不锁（版式表恒为满宽减缩进），
+   * 所以只写 margin-left，导入侧按同一属性读回。
+   */
+  private tStyle(node: PMNode): string {
+    const ml = Number(node.attrs?.marginLeft)
+    if (!Number.isFinite(ml) || ml <= 0) return ''
+    const key = JSON.stringify({ ml: Math.round(ml * 100) / 100 })
+    let name = this.tableStyles.get(key)
+    if (!name) {
+      name = `TS${++this.tableSeq}`
+      this.tableStyles.set(key, name)
+    }
+    return name
+  }
+
+  private tableStyleXml(): string {
+    let out = ''
+    for (const [key, name] of this.tableStyles) {
+      const s = JSON.parse(key) as { ml: number }
+      out +=
+        `<style:style style:name="${name}" style:family="table">` +
+        `<style:table-properties table:align="margins" fo:margin-left="${px2cm(s.ml)}"/></style:style>`
+    }
+    return out
+  }
 
   constructor(private meta?: DocMeta) {}
 
@@ -112,10 +217,11 @@ class OdtBuilder {
   ): string {
     const align = String(node.attrs?.textAlign ?? '')
     const raw = opts.dropLeft ? 0 : Math.max(0, num(node.attrs?.indentLeft)) + (opts.leftAdd ?? 0)
+    const right = Math.max(0, num(node.attrs?.indentRight))
     const first = num(node.attrs?.indentFirst)
     const bl = opts.leftAdd ?? 0
-    if (!align && raw <= bl && !first) return base
-    const key = JSON.stringify({ base, align, left: raw, first, bl })
+    if (!align && raw <= bl && !right && !first) return base
+    const key = JSON.stringify({ base, align, left: raw, right, first, bl })
     let name = this.paraStyles.get(key)
     if (!name) {
       name = `PS${++this.paraSeq}`
@@ -127,12 +233,13 @@ class OdtBuilder {
   private paraStyleXml(): string {
     let out = ''
     for (const [key, name] of this.paraStyles) {
-      const s = JSON.parse(key) as { base?: string; align?: string; left?: number; first?: number; bl?: number }
+      const s = JSON.parse(key) as { base?: string; align?: string; left?: number; right?: number; first?: number; bl?: number }
       let pp = ''
       const align = FO_ALIGN[s.align ?? '']
       if (align) pp += ` fo:text-align="${align}"`
       // 父样式链已经给到的左边距不必重写
       if ((s.left ?? 0) > (s.bl ?? 0)) pp += ` fo:margin-left="${px2cm(s.left ?? 0)}"`
+      if (s.right) pp += ` fo:margin-right="${px2cm(s.right)}"`
       if (s.first) pp += ` fo:text-indent="${px2cm(s.first)}"`
       out +=
         `<style:style style:name="${name}" style:family="paragraph" style:parent-style-name="${s.base || 'Standard'}">` +
@@ -159,6 +266,9 @@ class OdtBuilder {
       if (m.sz) tp += ` fo:font-size="${Math.round((Number(m.sz) * 72) / 96)}pt"`
       if (m.cl) tp += ` fo:color="${esc(String(m.cl))}"`
       if (m.bg) tp += ` fo:background-color="${esc(String(m.bg))}"`
+      // 58%/-25% 是 LibreOffice 自己写上下标时用的偏移档位，跟着它才不会被判成自定义位置
+      if (m.sp) tp += ' style:text-position="super 58%"'
+      else if (m.sb) tp += ' style:text-position="sub -25%"'
       out += `<style:style style:name="${name}" style:family="text"><style:text-properties${tp}/></style:style>`
     }
     return out
@@ -186,7 +296,7 @@ class OdtBuilder {
           `<text:list-level-style-number text:level="${l}" style:num-suffix="." style:num-format="1"><style:list-level-properties text:list-level-position-and-space-mode="label-alignment"><style:list-level-label-alignment text:label-followed-by="listtab" fo:text-indent="-0.7cm" fo:margin-left="${(0.7 * l).toFixed(2)}cm"/></style:list-level-properties></text:list-level-style-number>`,
       )
       .join('')}</text:list-style>`
-    return this.charStyleXml() + headings + pc + pq + aligns + lb + lo
+    return this.charStyleXml() + this.cellStyleXml() + this.tableStyleXml() + headings + pc + pq + aligns + lb + lo
   }
 
   private registerImage(src: string): ImageEntry | null {
@@ -225,6 +335,9 @@ class OdtBuilder {
           bg: at('highlight')?.color as string | undefined,
           fam: (at('textStyle')?.fontFamily ?? at('fontFamily')?.fontFamily) as string | undefined,
           sz: parseInt(String(at('textStyle')?.fontSize ?? at('fontSize')?.fontSize ?? ''), 10) || undefined,
+          // ODF 的上下标是一个属性两值（style:text-position="super 58%"），故两个布尔键分开记
+          sp: marks.some((k) => k.type === 'superscript'),
+          sb: marks.some((k) => k.type === 'subscript'),
         }
         const hasAny = Object.values(markKey).some(Boolean)
         if (hasAny) {
@@ -358,7 +471,8 @@ class OdtBuilder {
       grid.push(line)
     })
     // 后续行可能只写到部分列：补齐 covered 占位由 while+set 逻辑自然处理
-    let out = '<table:table>'
+    const ts = this.tStyle(node)
+    let out = `<table:table${ts ? ` table:style-name="${ts}"` : ''}>`
     grid.forEach((line, ri) => {
       let rowXml = ''
       const lastCol = Math.max(...line.map((x) => x.col), 0)
@@ -376,9 +490,10 @@ class OdtBuilder {
           continue
         }
         const sp = spans.get(`${ri},${c}`)
-        const attrs = sp
-          ? ` table:number-columns-spanned="${sp.cs}" table:number-rows-spanned="${sp.rs}"`
-          : ''
+        const cellStyle = this.cStyle(item.cell)
+        const attrs = `${sp ? ` table:number-columns-spanned="${sp.cs}" table:number-rows-spanned="${sp.rs}"` : ''}${
+          cellStyle ? ` table:style-name="${cellStyle}"` : ''
+        }`
         const body = (item.cell.content ?? [])
           .map((x) => {
             if (x.type !== 'paragraph') return this.blocks([x])
@@ -495,6 +610,8 @@ interface StyleInfo {
   mono?: boolean
   fam?: string
   szPx?: number
+  sup?: boolean
+  sub?: boolean
 }
 
 function pick(el: Element, localName: string): Element | null {
@@ -563,6 +680,13 @@ export async function odtToHtml(bytes: Uint8Array): Promise<{ html: string; meta
       if (Number.isFinite(v) && v > 0)
         out.szPx = /cm$/.test(sz) ? Math.round(v * 37.8) : /mm$/.test(sz) ? Math.round(v * 3.78) : /px$/.test(sz) ? Math.round(v) : Math.round((v * 96) / 72)
     }
+    const pos = tp.getAttribute('style:text-position')
+    if (pos) {
+      // ODF 一条属性同时表方向与偏移（super 58% / sub -25%），normal 表示回到基线
+      const w = pos.trim().toLowerCase()
+      out.sup = w.startsWith('super')
+      out.sub = w.startsWith('sub')
+    }
     return out
   }
 
@@ -581,6 +705,7 @@ export async function odtToHtml(bytes: Uint8Array): Promise<{ html: string; meta
   interface ParaFormat {
     align?: string
     leftPx?: number
+    rightPx?: number
     firstPx?: number
   }
 
@@ -593,6 +718,8 @@ export async function odtToHtml(bytes: Uint8Array): Promise<{ html: string; meta
       if (al) out.align = CSS_ALIGN[al] ?? out.align
       const ml = len2px(pp.getAttribute('fo:margin-left'))
       if (ml !== undefined) out.leftPx = ml
+      const mr = len2px(pp.getAttribute('fo:margin-right'))
+      if (mr !== undefined) out.rightPx = mr
       const ti = len2px(pp.getAttribute('fo:text-indent'))
       if (ti !== undefined) out.firstPx = ti
     }
@@ -609,8 +736,46 @@ export async function odtToHtml(bytes: Uint8Array): Promise<{ html: string; meta
     if (p.align && p.align !== 'left') bits.push(`text-align: ${p.align}`)
     const left = (p.leftPx ?? 0) - minusLeft
     if (left > 0) bits.push(`margin-left: ${left}px`)
+    if (p.rightPx) bits.push(`margin-right: ${p.rightPx}px`)
     if (p.firstPx) bits.push(`text-indent: ${p.firstPx}px`)
     return bits.length ? ` style="${bits.join('; ')}"` : ''
+  }
+
+  /**
+   * 单元格样式（table-cell 家族）→ td 的行内 style。
+   * CellStyle 扩展就是按 border 四边、background-color、vertical-align 这几条行内属性取值的，
+   * 而 ODF 侧它们只能住在样式里（表格单元格不给内联），这里就是两者之间的桥。
+   */
+  const cellStyleCss = (name: string | null | undefined): string => {
+    const o: Record<string, string> = {}
+    for (const el of styleChain(name)) {
+      const tp = pick(el, 'table-cell-properties')
+      if (!tp) continue
+      // 四边各有一条 fo:border-<edge>，简写 fo:border 是「四边同值」的兜底
+      const shorthand = tp.getAttribute('fo:border')
+      for (const edge of CELL_EDGES) {
+        const v = odfBorderCss(tp.getAttribute(`fo:border-${edge}`) ?? shorthand)
+        if (v) o[`border-${edge}`] = v
+      }
+      const bg = tp.getAttribute('fo:background-color')
+      if (bg && !/^(auto|transparent|inherit)$/.test(bg.trim().toLowerCase()))
+        o['background-color'] = rgb2hex(bg) ?? bg.trim()
+      const va = tp.getAttribute('style:vertical-align')?.trim().toLowerCase()
+      if (va === 'top' || va === 'bottom') o['vertical-align'] = va
+      else if (va === 'middle' || va === 'center') o['vertical-align'] = 'middle'
+    }
+    return Object.keys(o).length ? ` style="${Object.entries(o).map(([k, v]) => `${k}: ${v}`).join('; ')}"` : ''
+  }
+
+  /** 表格样式（table 家族）的 fo:margin-left → 缩进；表宽由 CellStyle 的 renderHTML 自己收 */
+  const tableStyleCss = (name: string | null | undefined): string => {
+    let ml: number | undefined
+    for (const el of styleChain(name)) {
+      const tp = pick(el, 'table-properties')
+      const v = len2px(tp?.getAttribute('fo:margin-left'))
+      if (v !== undefined) ml = v
+    }
+    return ml && ml > 0 ? ` style="margin-left: ${ml}px"` : ''
   }
 
   const htmlOfStyle = (si: StyleInfo, inner: string): string => {
@@ -627,6 +792,9 @@ export async function odtToHtml(bytes: Uint8Array): Promise<{ html: string; meta
     if (si.underline) html = `<u>${html}</u>`
     if (si.italic) html = `<em>${html}</em>`
     if (si.bold) html = `<strong>${html}</strong>`
+    // 上下标套在最外层：superscript/subscript 是独立 mark，与加粗同层不会互相吞掉
+    if (si.sup) html = `<sup>${html}</sup>`
+    else if (si.sub) html = `<sub>${html}</sub>`
     return html
   }
 
@@ -758,12 +926,12 @@ export async function odtToHtml(bytes: Uint8Array): Promise<{ html: string; meta
             if (c.localName !== 'table-cell') continue
             const cs = Number(c.getAttribute('table:number-columns-spanned') ?? 1)
             const rs = Number(c.getAttribute('table:number-rows-spanned') ?? 1)
-            const attrs = `${cs > 1 ? ` colspan="${cs}"` : ''}${rs > 1 ? ` rowspan="${rs}"` : ''}`
+            const attrs = `${cs > 1 ? ` colspan="${cs}"` : ''}${rs > 1 ? ` rowspan="${rs}"` : ''}${cellStyleCss(c.getAttribute('table:style-name'))}`
             cells.push(`<td${attrs}>${await renderChildrenBlocks(c)}</td>`)
           }
           rows.push(`<tr>${cells.join('')}</tr>`)
         }
-        return `<table><tbody>${rows.join('')}</tbody></table>`
+        return `<table${tableStyleCss(el.getAttribute('table:style-name'))}><tbody>${rows.join('')}</tbody></table>`
       }
       case 'body':
       case 'text':

@@ -676,7 +676,7 @@
   `w:numPr` + `word/numbering.xml` 的 numFmt → 有序/无序与 ilvl 层级、表格 `gridSpan`/`vMerge`（continue 记账在
   restart 的同一批网格列上，rowspan 数完所有行才出 HTML）+ `tblGrid` 列宽、`w:drawing`/`v:imagedata` 图片（rels → data URL）、
   超链接（外部 `r:id` 与内部 `w:anchor`）、`w:br type="page"` → pageBreak 节点、批注 `commentRangeStart/End` 三态锚点、
-  上标下标只留文字（明确记告警）、`fldSimple`/`fldChar` 的**域代码文字不外泄**（结果段才渲染）、TOC 内容控件跳过
+  上标下标（v0.38 起真还原成 `<sup>/<sub>`）、`fldSimple`/`fldChar` 的**域代码文字不外泄**（结果段才渲染）、TOC 内容控件跳过
 - **缩进进 schema**（`lib/indent-extension.ts`）：`indentLeft`/`indentFirst` 作为段落级全局属性（32px 一档、上限 320px），
   `Ctrl+]`/`Ctrl+[` 与工具条按钮调 `setIndent`，首行缩进与悬挂缩进共存时出 `hanging`；
   导出侧 docx 写 `w:ind`、ODF 因"一段只能挂一个 `text:style-name`"而**派生自动样式**（`style:parent-style-name` →
@@ -705,6 +705,46 @@
   重开比对 → 导 odt 重开 → 空 body 走 mammoth 且坏 zip 会抛错）；
   **Word 16.0 实机 13 断言**（`ListType=3`、`ListString` 1./3./a.、层级 2、项目符号未受影响、正文无写死序号、
   首行 `HeadingFormat=-1` 次行 0、左缩进 36pt 首行 24pt）；`cargo test --lib` 39 通过（Rust 零改动）；tsc/build 绿
+
+## 单元格样式与上下标：保真续项（v0.38）
+
+- **闭合 v0.37 剩下的六条边界**：`w:vertAlign`（上标/下标）、`w:tcBorders`（单元格四边）、`w:shd w:fill`（底纹）、
+  `w:vAlign`（单元格竖排对齐）、`w:tblInd`（整张表的左缩进）、`w:ind w:right`（段落右缩进）——
+  读侧进 `lib/docx-fidelity.ts`，schema 落在 `lib/cell-style.ts`，写侧三条链路（.odoc JSON / docx / odt）各自回得去
+- **边框只存一种形状**：规范串 `"<px>px <线型> <#rrggbb>"`，并区分**三态**——`null` 是原文件没声明（不写内联样式，
+  落回应用自己的网格线）、`'none'` 是原文件显式去掉了这条边、有值才是真边框。省掉"CSS 一套、OOXML 一套"的双表示，
+  往返只经一次换算
+- **单位换算钉死在一处**：OOXML 的 `w:sz` 是 **1/8 磅**（`eighthsToPx = sz/8×4/3`、`pxToEighths = px×6`），
+  ODF 侧宽度写 **pt**（px×0.75 是精确换算，故 1px 边框回来还是 1px）；
+  ODT 读边**不走整数取整的 `len2px`**——0.5pt 细线是 0.67px，整数量化会把它抬成 1px，而边框宽度正是往返要保的那个量，
+  故另写 `odfBorderCss` 保留两位小数（缩进/边距仍用 `len2px`）
+- **UI 入口**：工具栏 X² / X₂；表格上下文条加"底纹色"一格与竖排对齐（上/中/下），命令走
+  `setCellBackground`/`setCellVAlign`（`updateAttributes` 对选区内的 cell 与 header 一并生效）
+- **三处真 bug，全是"只测 JSON 测不出来"的那类**：
+  ① `border-right: none` **整条静默丢失**——Chrome CSSOM 把 `none` 拆成 longhand 存
+  （width=medium / style=none / color=currentcolor），而 shorthand 的 getter 返回**空串**，
+  于是 parseHTML 读到空、属性根本不进 schema；新增 `inlineBorder()` 直接读四条 longhand；
+  ② **表格缩进在屏幕和 PDF 上完全不生效**——`TableKit` 开 `resizable: true` 后表格 DOM 由 prosemirror-tables 的
+  `columnResizing` 节点视图生成，它 `new View(node, min, view)` **不传 HTMLAttributes**，`renderHTML` 里的
+  `margin-left` 永远落不了地；`IndentTableView` 子类在构造与 `update()` 里自己套 `marginLeft`（并同步
+  `width: calc(100% - Npx)`，否则满宽版心会被顶出页面）；
+  ③ Word 里"显式去掉的边框"照样画出来——`w:val="none"` 在 Word 语义里**压不住表级默认边框**（它当"没指定"，
+  继续吃 `w:tblBorders` 的 insideV，导出再开变成 0.5pt 实线），只有 **`w:val="nil"`** 才是真去掉；
+  导出侧改 `BorderStyle.NIL`，导入侧 `CSS_BORDER_STYLE` 加 `nil → none`
+- **坑**：① Word 的内部边框经不起 COM 读——边框合并会把相邻格的那条报回来（实测右边框读成 single、下边框宽度读成
+  乙格左边框的 sz18），所以**单元格边框的保真一律直接比 OOXML 字面**（`tmp/t-wresave.mjs`），COM 只留外框（上/左）；
+  ② 这台 WebView2 带浏览器级缩放，`getComputedStyle` 把长度按缩放折算（1px 报成 0.667px），DOM 断言里
+  **长度只比 specified 内联样式**，宽度 0 与颜色这类缩放无关的量才比 computed；
+  ③ Word 的另存会把颜色改大写（`FFF2CC`）、属性换序（`w:type` 与 `w:w` 谁在前都可能），读侧必须两者通吃；
+  ④ `Table.Indent`/`PreferredLeft` 在这台 Word 上返回 null、`Paragraph.Runs` 与 `Range.Runs` 恒为 0，
+  上下标只能靠 `Find.Font.Subscript/Superscript = -1` 按格式搜
+- **验证**：结构测试 42 断言（docx/odt 写侧字面 + 保真导入读回，含 `nil`、0.67px 细线、`text-position="super 58%"`）；
+  CDP 真机冒烟 **58 断言全绿、页面异常 0 条**（schema → 真实 DOM 渲染 → 存 docx 重开 → 存 odt 重开 →
+  **Word 另存的那份再被本应用读回**，逐条比四边/底纹/竖排/两处缩进/上下标）；
+  **Word 16.0 实机 13 断言**（外框线型与 1/8 磅宽度、底纹色 `13431551`、竖排 1/3/0 三态可区分、右缩进 36pt、
+  Find 搜到上标与下标）+ Word 原样另存后 **26 断言** OOXML 差分（`w:tblInd 360`、`w:ind w:right="720"`、
+  `w:vertAlign` 上下标、`w:shd fill=FFF2CC`、`w:vAlign` center/bottom 恰两处、未声明的格子仍不写 vAlign、
+  `w:right w:val="nil"` 被 Word 原样写回）；`cargo test --lib` 39 通过（Rust 零改动）；tsc/build 绿
 
 ## 性能（v0.3）
 
@@ -768,14 +808,15 @@ src/                  React 前端
   lib/univer.ts       Univer 实例工厂（公式 worker + 六个社区预设，含绘图 FOverGridImage）
   lib/univer-io.ts    xlsx 数据+样式（粗斜/颜色/字族/边框/对齐/换行/数字格式）/合并/图表/列宽行高/隐藏行列/冻结窗格 ↔ Univer 快照 转换（样式去重注册）
   lib/chart.ts        ChartPayload → VChart spec → 离屏 canvas PNG dataURL（动态导入分包）
-  lib/docx.ts         docx 导入导出（ProseMirror JSON ↔ docx，字色/字族/字号/高亮/页眉页脚/TOC 域/批注/页面设置 sectPr（纸张·四边距·w:cols 栏数栏距）/页码格式（PAGE·NUMPAGES）/分页符/表格合并映射（首行行级 tableHeader、列表 numbering.config 真编号）；文本节点兼容顶层 text 与 attrs.text；字节经 Packer.toBase64String + atob 取（toBuffer 走 jszip 的 nodebuffer 通道，浏览器里没有 Buffer））
+  lib/docx.ts         docx 导入导出（ProseMirror JSON ↔ docx，字色/字族/字号/高亮/页眉页脚/TOC 域/批注/页面设置 sectPr（纸张·四边距·w:cols 栏数栏距）/页码格式（PAGE·NUMPAGES）/分页符/表格合并映射（首行行级 tableHeader、列表 numbering.config 真编号）、单元格四边 `w:tcBorders`（**显式去边写 `w:val="nil"`**——none 压不住表级默认边框）、`w:shd` 底纹、`w:vAlign` 竖排、`w:tblInd` 表缩进、`w:vertAlign` 上下标）；文本节点兼容顶层 text 与 attrs.text；字节经 Packer.toBase64String + atob 取（toBuffer 走 jszip 的 nodebuffer 通道，浏览器里没有 Buffer））
   lib/ooxml.ts        迷你 OOXML XML 解析器（零依赖、不碰 DOM）：parseXml/find/findDesc/all/allL/attr/attrL/val/valNum/textOf + decodeEnt 实体表——让 docx 读侧能在 Node 里直测
-  lib/docx-fidelity.ts OOXML → HTML 保真导入器（v0.37）：run 级 rPr（粗斜/删除线/下划线/字色/高亮/字族/字号）、段落 pPr（jc/`w:ind` 四种缩进写法/pStyle 样式链）、numPr+numbering.xml → 有序无序与 ilvl 层级、表格 gridSpan/vMerge + tblGrid 列宽、图片 rels→dataURL、内外超链接、分页符、批注三态锚点、域代码文字不外泄；认不出就抛错或 blocks=0，调用方回退 mammoth
+  lib/docx-fidelity.ts OOXML → HTML 保真导入器（v0.37）：run 级 rPr（粗斜/删除线/下划线/字色/高亮/字族/字号/上下标 `w:vertAlign`）、段落 pPr（jc/`w:ind` 左右与首行悬挂四种缩进写法/pStyle 样式链）、numPr+numbering.xml → 有序无序与 ilvl 层级、表格 gridSpan/vMerge + tblGrid 列宽 + 单元格四边 `w:tcBorders`（含 val=nil 的显式去边）/底纹 `w:shd fill`/竖排 `w:vAlign`/表级 `w:tblInd`、图片 rels→dataURL、内外超链接、分页符、批注三态锚点、域代码文字不外泄；认不出就抛错或 blocks=0，调用方回退 mammoth
+  lib/cell-style.ts  单元格样式扩展（v0.38）：tableCell/tableHeader 的 bdTop/bdRight/bdBottom/bdLeft + background + vAlign、table 的 marginLeft 全局属性（只声明属性不改内容模型）；边框统一规范串 `"0.67px solid #8899aa"`，三态 null 未声明/'none' 显式去边/有值；`inlineBorder()` 读 CSSOM longhand（shorthand 对 none 返回空串）、`IndentTableView` 子类补 marginLeft（resizable 的节点视图不传 HTMLAttributes）、`eighthsToPx`/`pxToEighths` 管 1/8 磅换算、命令 setCellBackground/setCellVAlign
   lib/indent-extension.ts 段落全局属性 indentLeft/indentFirst（32px 一档、上限 320px）+ setIndent/indent/outdent 命令 + Ctrl+] / Ctrl+[ + 悬挂缩进感知的出退格
   lib/toc-extension.ts TipTap 目录原子节点：按标题实时汇总、点击跳转
   lib/page-break-extension.ts TipTap pageBreak 原子块（`div[data-oo-pagebreak]`）+ insertPageBreak 命令 + Ctrl+Enter 快捷键
   lib/comment-extension.ts comment mark（cid 锚定批注）+ 加/删/定位/汇总工具
-  lib/odt.ts          ProseMirror JSON ↔ ODT（JSZip 打包导出 + DOMParser 导入，字符样式（字族/字号/字色，落在 content.xml 自动样式）/合并表/图片尺寸/页码域与总页数/page-layout 页面设置（纸张·四边距·style:columns 多栏）/分页符 fo:break-before）
+  lib/odt.ts          ProseMirror JSON ↔ ODT（JSZip 打包导出 + DOMParser 导入，字符样式（字族/字号/字色/上下标 `style:text-position`，落在 content.xml 自动样式）/合并表/图片尺寸/页码域与总页数/page-layout 页面设置（纸张·四边距·style:columns 多栏）/分页符 fo:break-before/单元格自动样式 `fo:border-*`（宽度写 pt，读回走 `odfBorderCss` 保留 0.67px 这类细线不整数取整）+`fo:background-color`+`style:vertical-align`、表级 `fo:margin-left`）
   lib/find-replace.ts 查找/替换 ProseMirror 插件：按文本块匹配存 state、装饰高亮、findNext/findPrev/replaceOne/replaceAll 命令（命中上限 FR_HIT_CAP=2000 截断并标 `N+`）
   lib/templates.ts    首页模板注册表与纯函数 seed：11 个模板（公文/会议纪要/周报 → ProseMirror JSON+meta，记账表/库存清单 → WorkbookPayload 含公式冻结，六套演示配色 → Deck）
   lib/ppt.ts          .opd 幻灯片数据模型（版式/主题/序列化）
@@ -791,7 +832,7 @@ src/                  React 前端
   lib/registry.ts     跨组件保存器注册表（Ctrl+S 路由到当前标签）
   lib/open.ts         路径→标签 打开 / 带确认关闭
   lib/sync.ts         最近文件端到端加密同步（WebCrypto PBKDF2-SHA256 → AES-256-GCM，.oosync 信封）
-  components/         Home（最近文件 + 从模板新建画廊） / Workspace / SheetEditor（保存按 .xlsx/.ods/.csv 三分流） / DocEditor（页面设置含分栏/页码格式、分页参考线、分页符、表格与图片上下文工具条、粘贴成图、查找替换面板、字体族·字号、缩进工具条与 Ctrl+]/[、版本历史·自动保存、模板 seed、状态栏字数节流；打开 .docx 保真导入优先、mammoth 兜底，保存按 .odoc/.odt/.docx 各自格式原地落盘） / PptEditor / PdfViewer（pdfjs-dist 懒加载，连续多页视口虚拟渲染+Ctrl 缩放+TextLayer 文字选择+全文搜索+缩略图/大纲/标注侧栏+高亮便签与矩形·椭圆·直线·手绘形状（绘制/导入/写回 pdf-lib）+标注编辑（点选/拖移/改色/删除）+「页面」工作区旋转/删除/提取/合并/拆分；≥4MB 走分段读（lib/pdf-range.ts），卸载时 destroy openTask 并 abort transport））
+  components/         Home（最近文件 + 从模板新建画廊） / Workspace / SheetEditor（保存按 .xlsx/.ods/.csv 三分流） / DocEditor（页面设置含分栏/页码格式、分页参考线、分页符、表格与图片上下文工具条、粘贴成图、查找替换面板、字体族·字号、缩进工具条与 Ctrl+]/[、上下标 X²/X₂、表格上下文条的底纹色与竖排对齐（上/中/下）、版本历史·自动保存、模板 seed、状态栏字数节流；打开 .docx 保真导入优先、mammoth 兜底，保存按 .odoc/.odt/.docx 各自格式原地落盘） / PptEditor / PdfViewer（pdfjs-dist 懒加载，连续多页视口虚拟渲染+Ctrl 缩放+TextLayer 文字选择+全文搜索+缩略图/大纲/标注侧栏+高亮便签与矩形·椭圆·直线·手绘形状（绘制/导入/写回 pdf-lib）+标注编辑（点选/拖移/改色/删除）+「页面」工作区旋转/删除/提取/合并/拆分；≥4MB 走分段读（lib/pdf-range.ts），卸载时 destroy openTask 并 abort transport））
 scripts/              copy-pdfjs-assets.mjs（dev/build 前复制 cmaps/标准字体到 public/pdfjs）
 .github/workflows/    release.yml——tag v* 触发：门禁→win/linux 矩阵打包→GitHub Release
 ```
@@ -862,7 +903,8 @@ cargo check        # Rust 后端检查（在 src-tauri 下）
 - [x] 性能二期：大 PDF 分段读取（`file_len`/`read_range` raw IPC + `PDFDataRangeTransport`）+ Univer 首开并行化 + 预热实证边界（更激进的实例级预热实测零收益，已删）
 - [x] 性能三期：首开挂载不再走 Suspense（外壳+编辑器自持已解析组件，绕开 ~300ms 兜底节流）+ effect 改 layout + 公式 worker 线程池 A/B 裁决为删
 - [x] 文档：docx 保真导入（直接格式/缩进/列表层级/表格合并/图片/批注，mammoth 退为兜底）+ 缩进 schema 与 docx/odt 往返 + Word 实机回归
-- [ ] 文档保真续项：上标/下标读入（当前只保留文字并记告警）、表格边框与单元格底纹/竖排对齐读入
+- [x] 文档保真续项：上下标 `w:vertAlign` + 单元格四边/底纹/竖排对齐 + 表格缩进/段落右缩进 读入，.odoc/docx/odt 三链路回写（Word 16.0 实机 + Word 另存件差分与再读回双向核对）
+- [ ] 文档保真续项二：脚注/尾注、题注与交叉域（图表号/题注 SEQ）、文本框与 SmartArt、嵌入对象——当前各记一条"未保留"告警
 - [ ] 自动更新通道（须先决策：公开仓库或独立托管 update metadata）
 - [ ] macOS 打包（需签名/公证凭据）
 

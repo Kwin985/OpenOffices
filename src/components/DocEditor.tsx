@@ -6,6 +6,8 @@ import Placeholder from '@tiptap/extension-placeholder'
 import TextAlign from '@tiptap/extension-text-align'
 import { TableKit } from '@tiptap/extension-table'
 import { TextStyleKit } from '@tiptap/extension-text-style'
+import { Superscript } from '@tiptap/extension-superscript'
+import { Subscript } from '@tiptap/extension-subscript'
 import Highlight from '@tiptap/extension-highlight'
 import { CharacterCount } from '@tiptap/extensions'
 import { message, open } from '@tauri-apps/plugin-dialog'
@@ -32,6 +34,7 @@ import type { DocxImport } from '../lib/docx-fidelity'
 import { Toc } from '../lib/toc-extension'
 import { PageBreak } from '../lib/page-break-extension'
 import { Indent } from '../lib/indent-extension'
+import { CellStyle, IndentTableView } from '../lib/cell-style'
 import { FindReplace, frPluginKey, activeIndexOf } from '../lib/find-replace'
 import { docTemplate } from '../lib/templates'
 import { odtToHtml, prosemirrorToOdtBytes } from '../lib/odt'
@@ -114,9 +117,14 @@ function DocEditor({ tab }: Props) {
       Placeholder.configure({ placeholder: '开始输入内容…' }),
       TextAlign.configure({ types: ['heading', 'paragraph'] }),
       Indent.configure({ types: ['heading', 'paragraph'] }),
-      TableKit.configure({ table: { resizable: true } }),
+      TableKit.configure({ table: { resizable: true, View: IndentTableView } }),
       // textStyle mark + 字色/字体族/字号（底色与行高本编辑器暂不露出）
       TextStyleKit.configure({ backgroundColor: false, lineHeight: false }),
+      // 上下标不在 TextStyleKit 里（它们是独立 mark，渲染成 <sup>/<sub>）
+      Superscript,
+      Subscript,
+      // 表格/单元格的边框、底纹、竖排对齐与表格缩进：保真导入落在这些属性上
+      CellStyle,
       Highlight.configure({ multicolor: true }),
       CharacterCount,
       Toc,
@@ -801,6 +809,8 @@ function DocEditor({ tab }: Props) {
         {btn('I', () => editor.chain().focus().toggleItalic().run(), editor.isActive('italic'), '斜体')}
         {btn('U', () => editor.chain().focus().toggleUnderline().run(), editor.isActive('underline'), '下划线')}
         {btn('S', () => editor.chain().focus().toggleStrike().run(), editor.isActive('strike'), '删除线')}
+        {btn('X²', () => editor.chain().focus().toggleSuperscript().run(), editor.isActive('superscript'), '上标（Ctrl+.）')}
+        {btn('X₂', () => editor.chain().focus().toggleSubscript().run(), editor.isActive('subscript'), '下标（Ctrl+,）')}
         <span className="tb-sep" />
         <label className="tb-color" title="字体颜色">
           字色
@@ -882,6 +892,29 @@ function DocEditor({ tab }: Props) {
           <span className="tb-sep" />
           {btn('合并', () => editor.chain().focus().mergeOrSplit().run(), false, '框选多格合并；点在已合并格上则拆分')}
           {btn('表头行', () => editor.chain().focus().toggleHeaderRow().run(), editor.isActive('tableHeader'))}
+          <span className="tb-sep" />
+          {(() => {
+            // 光标所在格可能是 tableHeader（表头行），两种类型的属性都要读一遍
+            const ca = { ...editor.getAttributes('tableCell'), ...editor.getAttributes('tableHeader') }
+            const bg = /^#[0-9a-f]{6}$/i.test(String(ca.background ?? '')) ? String(ca.background) : '#f3f4f6'
+            const va = String(ca.vAlign ?? '')
+            return (
+              <>
+                <label className="tb-color" title="单元格底纹（Word 的「底纹」，导出 docx/odt 带走）">
+                  底纹
+                  <input
+                    type="color"
+                    value={bg}
+                    onChange={(e) => editor.chain().focus().setCellBackground(e.target.value).run()}
+                  />
+                </label>
+                {btn('无底纹', () => editor.chain().focus().setCellBackground(null).run())}
+                {btn('顶端', () => editor.chain().focus().setCellVAlign(va === 'top' ? null : 'top').run(), va === 'top', '内容靠单元格上沿')}
+                {btn('垂直居中', () => editor.chain().focus().setCellVAlign(va === 'middle' ? null : 'middle').run(), va === 'middle', '内容在单元格内垂直居中')}
+                {btn('底部', () => editor.chain().focus().setCellVAlign(va === 'bottom' ? null : 'bottom').run(), va === 'bottom', '内容靠单元格下沿')}
+              </>
+            )
+          })()}
           <span className="tb-sep" />
           {btn('删除表格', () => editor.chain().focus().deleteTable().run())}
         </div>

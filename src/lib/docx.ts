@@ -9,6 +9,7 @@ import {
   Footer,
   Header,
   HeadingLevel,
+  type IBorderOptions,
   type IFontAttributesProperties,
   ImageRun,
   LevelFormat,
@@ -16,13 +17,16 @@ import {
   PageNumber,
   Packer,
   Paragraph,
+  ShadingType,
   Table,
   TableCell,
   TableOfContents,
   TableRow,
   TextRun,
+  VerticalAlignTable,
   WidthType,
 } from 'docx'
+import { borderParts, pxToEighths } from './cell-style'
 import { decodeEnt } from './ooxml'
 
 export interface PMNode {
@@ -437,6 +441,7 @@ function inlineToChildren(node: PMNode, inherited: Inherited = {}, cs?: CommentT
         ...(color ? { color } : {}),
         ...(highlight ? { shading: { type: 'clear' as const, fill: highlight } } : {}),
         ...(underline ? { underline: {} } : {}),
+        ...vertAlignOf(child),
       }
       if (href) {
         out.push(
@@ -509,12 +514,58 @@ function num(v: unknown): number {
 /** 缩进属性 → w:ind：左缩进 w:left，正的首行进 firstLine、负的进 hanging */
 function indentOf(node: PMNode, baseLeftTwip = 0) {
   const left = baseLeftTwip + Math.max(0, num(node.attrs?.indentLeft)) * PX_TWIP
+  const right = Math.max(0, num(node.attrs?.indentRight)) * PX_TWIP
   const first = num(node.attrs?.indentFirst) * PX_TWIP
-  const o: { left?: number; firstLine?: number; hanging?: number } = {}
+  const o: { left?: number; right?: number; firstLine?: number; hanging?: number } = {}
   if (left) o.left = Math.round(left)
+  if (right) o.right = Math.round(right)
   if (first > 0) o.firstLine = Math.round(first)
   else if (first < 0) o.hanging = Math.round(-first)
   return Object.keys(o).length ? o : undefined
+}
+
+/** CSS 线型词 → OOXML 线型（导入时已归一到这几个词） */
+const OOXML_BORDER: Record<string, (typeof BorderStyle)[keyof typeof BorderStyle]> = {
+  solid: BorderStyle.SINGLE,
+  dashed: BorderStyle.DASHED,
+  dotted: BorderStyle.DOTTED,
+  double: BorderStyle.DOUBLE,
+  inset: BorderStyle.INSET,
+  outset: BorderStyle.OUTSET,
+}
+
+/**
+ * 规范边框串 → `w:tcBorders` 的一边。
+ * 空值返回 undefined（不写这一边），`'none'` 写 `w:val="nil"`——两者在 Word 里不是一回事：
+ * 前者由表级/样式决定，后者是"这一格这条边明确不要"。
+ * 实测 Word 会拿 `val="none"` 当"没指定"继续吃表级默认边框（导出再开变成 0.5pt 实线），
+ * 只有 `nil` 真把边框压掉，故写 nil。
+ */
+function cellBorder(v: unknown): IBorderOptions | undefined {
+  const s = typeof v === 'string' ? v : ''
+  if (!s) return undefined
+  if (s === 'none') return { style: BorderStyle.NIL, size: 0 }
+  const p = borderParts(s)
+  if (!p) return undefined
+  return { style: OOXML_BORDER[p.style] ?? BorderStyle.SINGLE, size: pxToEighths(p.px), color: p.hex.slice(1) }
+}
+
+/** 单元格四边 → w:tcBorders；一条都没有就不写这个元素 */
+function cellBorders(attrs: Record<string, unknown> | undefined) {
+  const b = {
+    top: cellBorder(attrs?.bdTop),
+    bottom: cellBorder(attrs?.bdBottom),
+    left: cellBorder(attrs?.bdLeft),
+    right: cellBorder(attrs?.bdRight),
+  }
+  return Object.values(b).some(Boolean) ? b : undefined
+}
+
+/** 上下标：Word 把 vertAlign 记在 rPr，与粗斜体同级，所以是两个互斥的 run 属性 */
+function vertAlignOf(node: PMNode): { superScript?: boolean; subScript?: boolean } {
+  if (hasMark(node, 'superscript')) return { superScript: true }
+  if (hasMark(node, 'subscript')) return { subScript: true }
+  return {}
 }
 
 /**
@@ -645,6 +696,10 @@ function blocksOf(nodes: PMNode[], depth = 0, dt: DocTrack = { used: new Set(), 
       out.push(
         new Table({
           width: { size: 100, type: WidthType.PERCENTAGE },
+          // w:tblInd 是表离版心左边距的距离（twips），由导入侧的 marginLeft 属性记着
+          ...(num(node.attrs?.marginLeft) > 0
+            ? { indent: { size: Math.round(num(node.attrs?.marginLeft) * PX_TWIP), type: WidthType.DXA } }
+            : {}),
           rows: rows.map(
             (r) =>
               new TableRow({
@@ -656,9 +711,17 @@ function blocksOf(nodes: PMNode[], depth = 0, dt: DocTrack = { used: new Set(), 
                   // TipTap 合并语义 colspan/rowspan → gridSpan + vMerge（docx 库内部展开 restart/continue）
                   const cs = Number(cell.attrs?.colspan ?? 1) || 1
                   const rs = Number(cell.attrs?.rowspan ?? 1) || 1
+                  const borders = cellBorders(cell.attrs)
+                  const bg = typeof cell.attrs?.background === 'string' ? cell.attrs.background : ''
+                  const va = cell.attrs?.vAlign
                   return new TableCell({
                     ...(cs > 1 ? { columnSpan: cs } : {}),
                     ...(rs > 1 ? { rowSpan: rs } : {}),
+                    ...(borders ? { borders } : {}),
+                    ...(bg ? { shading: { type: ShadingType.CLEAR, fill: bg.replace('#', '').toLowerCase() } } : {}),
+                    ...(va === 'top' || va === 'middle' || va === 'bottom'
+                      ? { verticalAlign: va === 'middle' ? VerticalAlignTable.CENTER : va === 'top' ? VerticalAlignTable.TOP : VerticalAlignTable.BOTTOM }
+                      : {}),
                     children: [new Paragraph({ children: inlineBlockChildren(cell, dt) })],
                   })
                 }),

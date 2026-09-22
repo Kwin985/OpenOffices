@@ -4,7 +4,11 @@ declare module '@tiptap/core' {
   interface Commands<ReturnType> {
     indent: {
       /** 绝对设定：导入与批量套用样式走这里 */
-      setIndent: (attrs: { indentLeft?: number | null; indentFirst?: number | null }) => ReturnType
+      setIndent: (attrs: {
+        indentLeft?: number | null
+        indentRight?: number | null
+        indentFirst?: number | null
+      }) => ReturnType
       /** Ctrl+]：整段向右一格；悬挂缩进时首行位置保持不动 */
       indent: () => ReturnType
       /** Ctrl+[: 整段向左一格，退到 0 时连负的首行缩进一并收掉 */
@@ -31,12 +35,14 @@ function int(v: unknown): number {
   return Number.isFinite(n) ? n : 0
 }
 
-/** 两个属性共用一条 style：分开各写一份 style 时，后写的那份会整条盖掉前一份 */
-function styleOf(a: { indentLeft?: unknown; indentFirst?: unknown }): { style?: string } {
+/** 多个属性共用一条 style：分开各写一份 style 时，后写的那份会整条盖掉前一份 */
+function styleOf(a: { indentLeft?: unknown; indentRight?: unknown; indentFirst?: unknown }): { style?: string } {
   const bits: string[] = []
   const left = int(a.indentLeft)
+  const right = int(a.indentRight)
   const first = int(a.indentFirst)
   if (left) bits.push(`margin-left: ${left}px`)
+  if (right) bits.push(`margin-right: ${right}px`)
   if (first) bits.push(`text-indent: ${first}px`)
   return bits.length ? { style: bits.join('; ') } : {}
 }
@@ -61,6 +67,14 @@ export const Indent = Extension.create({
             default: null,
             parseHTML: (el) => {
               const n = px(el.style.marginLeft)
+              return n === undefined ? undefined : Math.max(0, Math.min(max, n))
+            },
+            renderHTML: (a) => styleOf(a),
+          },
+          indentRight: {
+            default: null,
+            parseHTML: (el) => {
+              const n = px(el.style.marginRight)
               return n === undefined ? undefined : Math.max(0, Math.min(max, n))
             },
             renderHTML: (a) => styleOf(a),
