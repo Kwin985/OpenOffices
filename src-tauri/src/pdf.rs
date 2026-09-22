@@ -1,6 +1,47 @@
-//! PDF 导出：调 WebView2 原生 PrintToPdf，按页面 @media print 样式矢量落盘。
+//! PDF 相关命令：导出走 WebView2 原生 PrintToPdf；大文档读取按字节区间切片。
 
+use std::io::{Read, Seek, SeekFrom};
 use tauri::WebviewWindow;
+
+/// 文件字节数：前端据此决定整本读还是分段读
+#[tauri::command]
+pub async fn file_len(path: String) -> Result<u64, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        std::fs::metadata(&path)
+            .map(|m| m.len())
+            .map_err(|e| format!("无法读取文件信息 {path}: {e}"))
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+/// 读 [start, start+len) 字节区间（越界自动裁到文件末尾）。返回原始字节，走 Tauri 的 raw IPC，
+/// 免得大 PDF 整本进 JS 堆——首屏只需要其中几十 KB。
+#[tauri::command]
+pub async fn read_range(path: String, start: u64, len: u64) -> Result<tauri::ipc::Response, String> {
+    let data = tauri::async_runtime::spawn_blocking(move || read_range_sync(&path, start, len))
+        .await
+        .map_err(|e| e.to_string())??;
+    Ok(tauri::ipc::Response::new(data))
+}
+
+fn read_range_sync(path: &str, start: u64, len: u64) -> Result<Vec<u8>, String> {
+    let mut f = std::fs::File::open(path).map_err(|e| format!("无法打开文件 {path}: {e}"))?;
+    let size = f
+        .metadata()
+        .map_err(|e| format!("无法读取文件大小: {e}"))?
+        .len();
+    if start >= size || len == 0 {
+        return Ok(Vec::new());
+    }
+    let want = (size - start).min(len) as usize;
+    f.seek(SeekFrom::Start(start))
+        .map_err(|e| format!("定位失败: {e}"))?;
+    let mut buf = vec![0u8; want];
+    f.read_exact(&mut buf)
+        .map_err(|e| format!("读取失败: {e}"))?;
+    Ok(buf)
+}
 
 #[tauri::command]
 pub async fn export_pdf(
@@ -107,4 +148,44 @@ unsafe fn kick_print(
     wv7.PrintToPdf(PCWSTR::from_raw(wide.as_ptr()), &settings, &handler)
         .map_err(|e| e.to_string())?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::read_range_sync;
+
+    fn tmp_path(tag: &str) -> String {
+        std::env::temp_dir()
+            .join(format!("openoffices-test-pdf-{}-{}.bin", tag, std::process::id()))
+            .to_string_lossy()
+            .to_string()
+    }
+
+    #[test]
+    fn reads_exact_window() {
+        let p = tmp_path("range");
+        std::fs::write(&p, b"0123456789ABCDEF").unwrap();
+        assert_eq!(read_range_sync(&p, 4, 6).unwrap(), b"456789");
+        let _ = std::fs::remove_file(&p);
+    }
+
+    #[test]
+    fn clamps_past_eof() {
+        let p = tmp_path("clamp");
+        std::fs::write(&p, b"hello").unwrap();
+        assert_eq!(read_range_sync(&p, 2, 100).unwrap(), b"llo");
+        assert_eq!(read_range_sync(&p, 5, 10).unwrap(), Vec::<u8>::new());
+        assert_eq!(read_range_sync(&p, 0, 0).unwrap(), Vec::<u8>::new());
+        let _ = std::fs::remove_file(&p);
+    }
+
+    #[test]
+    fn reports_len_and_missing_file() {
+        let p = tmp_path("len");
+        std::fs::write(&p, "一二三".as_bytes()).unwrap();
+        assert_eq!(std::fs::metadata(&p).unwrap().len(), 9);
+        let missing = tmp_path("nope");
+        assert!(read_range_sync(&missing, 0, 10).is_err());
+        let _ = std::fs::remove_file(&p);
+    }
 }

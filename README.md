@@ -582,6 +582,40 @@
   旋转 90° 写回后 `/Rotate` 与 `/Rect` 双校、重载后显示几何不变、删空守卫、提取/合并/拆分数数、
   位图缓存受限、字数节流仍跟手）；tsc/build 绿
 
+## 大 PDF 分段读取 · 首开提速（v0.35）
+
+- **PDF 不再整本进 JS 堆**：`src/lib/pdf-range.ts` 实现 pdf.js 的 `PDFDataRangeTransport`——先问 `file_len` 拿字节数，
+  **≥4MB** 才只喂 64KB 文件头起手，其余正文由 pdf.js 按实际需要的区间回调 `read_range` 从磁盘切片取
+  （`disableAutoFetch` 使 worker 只请求真正用到的字节）；**小于阈值仍走原来的整本 `data` 读**，
+  因为几十次区间往返对中小文档反而更慢（big.pdf 375KB 实测 715→731ms 持平，正是这条阈值的守卫）
+- **Rust 侧两个新命令**：`file_len` 与 `read_range(path, start, len)`——后者返回 `tauri::ipc::Response::new(Vec<u8>)`
+  走 **raw IPC**（JS 侧直接拿 `ArrayBuffer`，不经 JSON 逐字节序列化），同为 async 外壳 + `spawn_blocking`；
+  越界自动裁到文件末尾、起点越界与零长返回空，缺文件给中文错误而非 panic
+- **表格冷开提速**：`SheetEditor` 把「读文件」与「建 Univer 实例」由串行改为**并行**（数据 promise 先起，
+  再 `createSheetApp`，两者互不等待），并把空闲预热上移到 `App`（停在首页时 `Workspace` 尚未挂载，
+  那是唯一免费的空闲窗口）
+- **预热只留实测有效的部分**：资源计时（`performance.getEntriesByType('resource')`，发布包无需 DEV 钩子）
+  查出**外壳 Workspace chunk 原本还挂在点击路径上**，遂补 `shell` 预热步；现在点击之后只剩
+  `read_xlsx` 与 worker 创建，四个编辑器 chunk + 外壳 + CSS 全部在空闲期取完
+- **性能结论（发布包 `--no-bundle` + CDP 真实双开路径，单位 ms）**：
+  表格 big.csv 冷开 **1456 → 1281**、热开 579 → 529；heavy.pdf 17.9MB 冷开 **901 → 710**、
+  热开 **260 → 91**（分段读少掉的是整本字节进出 JS 堆那一趟）；big.pdf 保持不动
+- **被数据否掉的三种更激进预热（已删除，别再试）**：空闲期预取 pdf.js worker 脚本、预先 new 一个 `Worker`
+  再 terminate、空闲期真建一个 Univer 实例 + 空表、拿空白 PDF 走一遍渲染管线——DEV 探针确认这些步骤
+  **确实执行了**（`__oofPrewarm` 全绿、无告警）而发布包首开耗时**一位数都没降**。
+  留下的原因是：首次开标签比同会话第二次慢的那 ~600ms 不是库代码编译，而是新 context 里 6MB chunk 的
+  编译与堆增长，空闲期提前跑同样要付一遍
+- **坑**：① pdf.js 的 `PDFDataTransportStream` 按 `_begin` 找 reader 且 `assert(found)` **在发布包里照样抛**，
+  而 `getRangeReader` 是先 `requestDataRange` 后 push reader、同一 `begin` 可被两个 reader 分别请求——
+  用「按 begin 去重」当投递策略会把第二个 reader 永久挂死（表现为卡住且无异常面），
+  正确做法是**按 begin 计数**、每个待决请求投递一次；② 分段模式下 `onDataRange` 的 chunk 所有权交给
+  pdf.js（会 transfer 给 worker），主线程不得复用；③ 标签卸载必须 `openTask.destroy()`，
+  否则 transport 的在途区间读回写到已销毁实例（`abort()` 里置 `dead` 标志兜住）
+- **验证**：`cargo test --lib` 39 通过（read_range 3 个新测试：精确窗口取值、越界裁到文件末尾 + 起点越界与零长返回空、
+  文件字节数与缺文件报错）+ CDP 冒烟 25 断言全绿（真实字节切片的首块 `%PDF` 魔数与尾块 `%%EOF`、
+  零长与越界守卫、小文件整本读未回归、大文件 `rangeMode=true`、远处页按区间补读并画出像素、
+  旋转后覆盖写回仍走分段、重载后页数与旋转页渲染保真、CSV 表格装载、空闲预热清单 shell/sheet/pdf/doc/ppt）；tsc/build 绿
+
 ## 性能（v0.3）
 
 - **按编辑器分包 + 懒加载**：主包 8MB → 首屏约 300KB；Univer（6.1MB）只在首次激活表格标签时加载，
@@ -589,6 +623,13 @@
 - **编辑器懒挂载**：标签首次激活才创建 Univer/TipTap 重型实例，之后切换保留状态不重复初始化
 - **渲染裁剪**：三个编辑器与幻灯片缩略图 `React.memo` 化；store 的 `markDirty` 幂等去重，
   避免 Univer 每条命令都触发无关标签重渲染
+- **空闲预热编辑器 chunk**（v0.26 起，v0.35 收到实证边界）：`lib/prewarm.ts` 挂在 App（首页才是免费的空闲窗口），
+  与 `lazy()` 共享同一模块 promise，点击路径上只剩数据请求；预热顺序为外壳 + 按最近文件排部的四个编辑器。
+  **实测到此为止**——再往下（真建 Univer 实例、预取/预启 worker、拿空白 PDF 走一遍渲染）发布包首开耗时一位数都不降，
+  因为冷开多出的那部分是 6MB chunk 在新 context 的编译与堆增长，提前跑同样要付
+- **大 PDF 分段读取**（v0.35）：≥4MB 走 `PDFDataRangeTransport` + Rust `read_range`（raw IPC），
+  首屏只读 64KB 头 + 按需区间，17.9MB 文档冷开 901→710ms、热开 260→91ms，且整本字节不再进 JS 堆
+- **Univer 首开并行化**（v0.35）：读文件与建实例不再串行等待，20001 行表格冷开 1456→1281ms
 - **Rust release profile**：`lto = true`、`codegen-units = 1`、`strip = true`、`panic = "abort"`
 
 ## 技术栈与开源组件
@@ -624,7 +665,7 @@ src-tauri/            Rust 后端
   src/xlsx_style.rs   zip + quick-xml 直读 xlsx 的 styles.xml（StyleBook：fonts/fills/borders/cellXfs/numFmts）/ mergeCells / col·row 尺寸（字符宽·pt→px）/ 隐藏行列 / 冻结 pane / 公式 `<f>`（GeneralRef 实体重建 + unescape，calamine 无样式/公式 API）
   src/xlsx_chart.rs   zip + quick-xml 直读 chartN.xml + drawing 锚点，系列值按实时网格解析；has_charts 只做 zip 文件名嗅探
   src/ods.rs          ODS 双向：write_ods（async 外壳 + write_ods_sync，共用 xlsx 载荷 → ODF zip，样式/尺寸去重与合并、冻结 settings.xml、公式 of:= 换算）+ read_ods_styles（直解边框/对齐/换行/列宽行高/字族/隐藏 collapse/重复单元格/合并跨度/公式 + settings.xml 冻结）
-  src/pdf.rs          export_pdf 命令：with_webview → WebView2 PrintToPdf（四边距英寸四元组 + 纸张宽高/朝向，cfg windows）
+  src/pdf.rs          export_pdf 命令：with_webview → WebView2 PrintToPdf（四边距英寸四元组 + 纸张宽高/朝向，cfg windows）；file_len + read_range（raw IPC 返回 Vec<u8>，async + spawn_blocking，供大 PDF 分段读）
   src/lib.rs          OPEN_EXTS 与 argv 文件过滤纯函数、take_startup_files 命令、single-instance 文件转发
   capabilities/       dialog + fs 权限与路径作用域
 src/                  React 前端
@@ -647,10 +688,12 @@ src/                  React 前端
   lib/pptx-import.ts  pptx → Deck（JSZip 解包 + OOXML 解析 + 媒体还原）
   lib/pdf-pages.ts    PDF 页面级操作（pdf-lib 覆盖写回）：rotatePagesInPlace / removePagesInPlace（倒序删 + 删空守卫）/ extractPages / mergePdfs / splitPdf，做完由调用方重载
   lib/pdf-geo.ts      显示空间（已套旋转·左上原点）↔ PDF 原始坐标（未旋转·左下原点）双向精确换算：normRot / displaySize / toDisplayRect / fromDisplayRect / toDisplayPoints / fromDisplayPoints + parsePageSpec（`1-3,5` 页码写法）
+  lib/pdf-range.ts    大 PDF 分段读取：PDFDataRangeTransport 子类（≥4MB 才启用、64KB 文件头起手、按 begin 计数投递、abort 置 dead）+ fileSize/readRange，配 Rust 侧 file_len + read_range
+  lib/prewarm.ts      首页空闲期预取编辑器 chunk（App 级，与 lazy() 共享模块 promise）：顺序为 Workspace 外壳 → 按最近文件类型的四个编辑器；实测无收益的实例级/worker 级预热已删除
   lib/registry.ts     跨组件保存器注册表（Ctrl+S 路由到当前标签）
   lib/open.ts         路径→标签 打开 / 带确认关闭
   lib/sync.ts         最近文件端到端加密同步（WebCrypto PBKDF2-SHA256 → AES-256-GCM，.oosync 信封）
-  components/         Home（最近文件 + 从模板新建画廊） / Workspace / SheetEditor（保存按 .xlsx/.ods/.csv 三分流） / DocEditor（页面设置含分栏/页码格式、分页参考线、分页符、表格与图片上下文工具条、粘贴成图、查找替换面板、字体族·字号、版本历史·自动保存、模板 seed、状态栏字数节流） / PptEditor / PdfViewer（pdfjs-dist 懒加载，连续多页视口虚拟渲染+Ctrl 缩放+TextLayer 文字选择+全文搜索+缩略图/大纲/标注侧栏+高亮便签与矩形·椭圆·直线·手绘形状（绘制/导入/写回 pdf-lib）+标注编辑（点选/拖移/改色/删除）+「页面」工作区旋转/删除/提取/合并/拆分））
+  components/         Home（最近文件 + 从模板新建画廊） / Workspace / SheetEditor（保存按 .xlsx/.ods/.csv 三分流） / DocEditor（页面设置含分栏/页码格式、分页参考线、分页符、表格与图片上下文工具条、粘贴成图、查找替换面板、字体族·字号、版本历史·自动保存、模板 seed、状态栏字数节流） / PptEditor / PdfViewer（pdfjs-dist 懒加载，连续多页视口虚拟渲染+Ctrl 缩放+TextLayer 文字选择+全文搜索+缩略图/大纲/标注侧栏+高亮便签与矩形·椭圆·直线·手绘形状（绘制/导入/写回 pdf-lib）+标注编辑（点选/拖移/改色/删除）+「页面」工作区旋转/删除/提取/合并/拆分；≥4MB 走分段读（lib/pdf-range.ts），卸载时 destroy openTask 并 abort transport））
 scripts/              copy-pdfjs-assets.mjs（dev/build 前复制 cmaps/标准字体到 public/pdfjs）
 .github/workflows/    release.yml——tag v* 触发：门禁→win/linux 矩阵打包→GitHub Release
 ```
@@ -658,7 +701,7 @@ scripts/              copy-pdfjs-assets.mjs（dev/build 前复制 cmaps/标准�
 表格文件流：`xlsx/ods 磁盘 → Rust(calamine 值 + xlsx/ods 各自 zip/quick-xml 直解样式·合并·尺寸·字族·隐藏·冻结·公式·图表) → JSON 快照 → Univer 渲染（图表经 VChart 出 PNG 浮动图片）`；CSV 走 `csv.rs` 状态机（UTF-8/GBK 自动）→ 单表载荷；保存按扩展名分流——`.xlsx` 经 `rust_xlsxwriter`（含原生图表部件）、`.ods` 经 `ods.rs` 生成 ODF 包、`.csv` 经 `csv.rs` 写 BOM + CRLF 文本（只存首表）。
 文档文件流：`docx → mammoth 正文 + zip 直读页眉页脚/批注/sectPr（纸张·边距·栏数·页码格式）→ HTML/元数据 → TipTap`；`.odt` 走 `lib/odt.ts` 双向；保存为 `.odoc` JSON（含 meta）或导出 docx/odt。
 演示文件流：`pptx → JSZip 解包 OOXML → Deck 模型 → 编辑器`；保存为 `.opd` JSON 或经 pptxgenjs 导出 pptx。
-PDF 文件流：查看 `pdf 磁盘 → readBytes → pdfjs-dist（worker + canvas）`；标注 `选区高亮/便签/拖拽画的矩形·椭圆·直线·手绘 → 内存模型（rects[0] 包围盒 + polys 几何）→ Ctrl+S 时 pdf-lib 低层写 Annotation 字典回原文件`；文档导出 `@media print 排版（分栏/分页符/避免跨页折断）+ @page margin box 逐页页眉页脚页码 → Rust export_pdf（PrintSettings 纸张与四边距）→ WebView2 PrintToPdf 落盘`；演示导出 `Deck → createRoot 离屏挂载 StaticSlide 分页 → 同上`；表格导出 `Univer 快照 → WorkbookPayload → lib/sheet-print.ts 自绘 HTML 网格 → 同上（canvas 抓不到故走数据侧重排）`；页面管理 `内存标注先写回 → pdf-lib 旋转/删除/提取/合并/拆分覆盖写回 → 重载并从 /Annots 重新导入标注（旋转页坐标按 /Rotate 经 pdf-geo.ts 换算）`。
+PDF 文件流：查看 `pdf 磁盘 → 小于 4MB 整本 readBytes / 大于 4MB 经 file_len + read_range 分段喂给 pdf.js（首屏只取 64KB 文件头）→ pdfjs-dist（worker + canvas）`；标注 `选区高亮/便签/拖拽画的矩形·椭圆·直线·手绘 → 内存模型（rects[0] 包围盒 + polys 几何）→ Ctrl+S 时 pdf-lib 低层写 Annotation 字典回原文件`；文档导出 `@media print 排版（分栏/分页符/避免跨页折断）+ @page margin box 逐页页眉页脚页码 → Rust export_pdf（PrintSettings 纸张与四边距）→ WebView2 PrintToPdf 落盘`；演示导出 `Deck → createRoot 离屏挂载 StaticSlide 分页 → 同上`；表格导出 `Univer 快照 → WorkbookPayload → lib/sheet-print.ts 自绘 HTML 网格 → 同上（canvas 抓不到故走数据侧重排）`；页面管理 `内存标注先写回 → pdf-lib 旋转/删除/提取/合并/拆分覆盖写回 → 重载并从 /Annots 重新导入标注（旋转页坐标按 /Rotate 经 pdf-geo.ts 换算）`。
 
 ## 开发
 
@@ -716,6 +759,7 @@ cargo check        # Rust 后端检查（在 src-tauri 下）
 - [x] 表格：CSV 往返（RFC4180 状态机 + UTF-8/GBK 自动 + BOM/CRLF 写回 + 保存三分流）
 - [x] PDF 页面管理：旋转/删除/提取/合并/拆分覆盖写回（标注跟随所在页，旋转页坐标按 `/Rotate` 换算）
 - [x] 性能：表格命令 async（spawn_blocking）+ 图表网格惰性构建、PDF 位图缓存像素预算、文档字数节流
+- [x] 性能二期：大 PDF 分段读取（`file_len`/`read_range` raw IPC + `PDFDataRangeTransport`）+ Univer 首开并行化 + 预热实证边界（更激进的实例级预热实测零收益，已删）
 - [ ] 自动更新通道（须先决策：公开仓库或独立托管 update metadata）
 - [ ] macOS 打包（需签名/公证凭据）
 

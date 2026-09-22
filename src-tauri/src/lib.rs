@@ -59,6 +59,8 @@ pub fn run() {
             csv::write_csv,
             ods::write_ods,
             pdf::export_pdf,
+            pdf::file_len,
+            pdf::read_range,
             take_startup_files
         ])
         .run(tauri::generate_context!())

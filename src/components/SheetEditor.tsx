@@ -182,8 +182,8 @@ function SheetEditor({ tab }: Props) {
     setTimeout(() => setStatus(''), 1800)
   }
 
-  const insertChartImage = async (api: FUniver, ws: FWorksheet, p: ChartPayload) => {
-    const url = await renderChartPng(p)
+  const insertChartImage = async (api: FUniver, ws: FWorksheet, p: ChartPayload, png?: string) => {
+    const url = png ?? (await renderChartPng(p))
     const image = await ws
       .newOverGridImage()
       .setSource(url, api.Enum.ImageSourceType.URL)
@@ -210,35 +210,40 @@ function SheetEditor({ tab }: Props) {
     })
     ;(async () => {
       try {
-        let data: IWorkbookData
-        let dump: WorkbookPayload
-        if (tab.path) {
-          dump = await readXlsx(tab.path)
-          data = payloadToWorkbook(dump, baseName(tab.path))
-        } else if (tab.template) {
-          dump = sheetTemplate(tab.template)
-          data = payloadToWorkbook(dump, tab.title || '未命名表格')
-        } else {
-          dump = { sheets: [] }
-          data = payloadToWorkbook({ sheets: [] }, '未命名表格')
-        }
-        if (disposed) return
+        // 读文件与建 Univer 实例互不依赖：先把 IPC 发出去，实例同时在造，两条时间线叠成一条
+        const loading: Promise<WorkbookPayload> = tab.path
+          ? readXlsx(tab.path)
+          : tab.template
+            ? Promise.resolve(sheetTemplate(tab.template))
+            : Promise.resolve({ sheets: [] })
         const created = createSheetApp(container, worker)
         api = created.univerAPI
         apiRef.current = api
-        const wb = api.createWorkbook(data)
-        // 还原已存图表：渲染 PNG → 浮动图片
-        for (const sheet of dump.sheets) {
-          if (!sheet.charts?.length) continue
-          const ws = wb.getSheetByName(sheet.name)
-          if (!ws) continue
-          for (const chart of sheet.charts) {
-            try {
-              const id = await insertChartImage(api, ws, chart)
-              chartsRef.current.set(id, { sheetName: sheet.name, payload: chart })
-            } catch (e) {
-              console.error('图表还原失败', e)
-            }
+        const dump = await loading
+        if (disposed) return
+        const name = tab.path ? baseName(tab.path) : tab.title || '未命名表格'
+        const wb = api.createWorkbook(payloadToWorkbook(dump, name))
+        // 还原已存图表：PNG 渲染并行（VChart 是纯计算），落格串行（同一 sheet 的命令队列）
+        const items = dump.sheets.flatMap((s) =>
+          (s.charts ?? []).map((chart) => ({ sheetName: s.name, chart })),
+        )
+        const pngs = await Promise.all(
+          items.map((it) =>
+            renderChartPng(it.chart).catch((e) => {
+              console.error('图表渲染失败', e)
+              return null
+            }),
+          ),
+        )
+        for (const [i, it] of items.entries()) {
+          const png = pngs[i]
+          const ws = wb.getSheetByName(it.sheetName)
+          if (!png || !ws) continue
+          try {
+            const id = await insertChartImage(api, ws, it.chart, png)
+            chartsRef.current.set(id, { sheetName: it.sheetName, payload: it.chart })
+          } catch (e) {
+            console.error('图表还原失败', e)
           }
         }
         setChartCount(chartsRef.current.size)

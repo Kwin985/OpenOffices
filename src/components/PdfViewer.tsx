@@ -1,11 +1,12 @@
 import { useEffect, useRef, useState } from 'react'
 import * as pdfjsLib from 'pdfjs-dist'
 import { TextLayer } from 'pdfjs-dist'
-import type { PDFDocumentProxy, RenderTask } from 'pdfjs-dist'
+import type { PDFDocumentLoadingTask, PDFDocumentProxy, RenderTask } from 'pdfjs-dist'
 import workerUrl from 'pdfjs-dist/build/pdf.worker.min.mjs?url'
 import type { Tab } from '../store'
 import { useApp } from '../store'
 import { readBytes, writeBytes, pickDirectory, pickPdfFiles, pickSaveFile, baseName } from '../lib/fs'
+import { createRangeTransport } from '../lib/pdf-range'
 import { registerSaver } from '../lib/registry'
 import {
   fromDisplayPoints,
@@ -232,25 +233,32 @@ function PdfViewer({ tab }: Props) {
   const curPageRef = useRef(1)
   curPageRef.current = curPage
 
+  // 本次打开是否走分段读取（冒烟断言用，不参与渲染）
+  const rangeModeRef = useRef(false)
+
   useEffect(() => {
     if (!tab.path) return
     let disposed = false
-    let openDoc: PDFDocumentProxy | null = null
+    let openTask: PDFDocumentLoadingTask | null = null
     ;(async () => {
       try {
-        const bytes = await readBytes(tab.path!)
-        const task = pdfjsLib.getDocument({
-          data: bytes,
+        const path = tab.path!
+        const opts = {
           cMapUrl: '/pdfjs/cmaps/',
           cMapPacked: true,
           standardFontDataUrl: '/pdfjs/standard_fonts/',
-        })
-        const d = await task.promise
+        }
+        // 大文件只喂文件头，正文按需区间取；小的整本读，省掉一串 IPC 往返
+        const range = await createRangeTransport(path)
+        rangeModeRef.current = !!range
+        openTask = range
+          ? pdfjsLib.getDocument({ ...opts, range })
+          : pdfjsLib.getDocument({ ...opts, data: await readBytes(path) })
+        const d = await openTask.promise
         if (disposed) {
           void d.destroy()
           return
         }
-        openDoc = d
         slots.current.clear()
         setSizes({})
         setCurPage(keepPageRef.current || 1)
@@ -263,7 +271,8 @@ function PdfViewer({ tab }: Props) {
     })()
     return () => {
       disposed = true
-      void openDoc?.destroy().catch(() => {})
+      // destroy 任务连带销毁文档与 transport（未完成的区间请求据此作废）
+      void openTask?.destroy().catch(() => {})
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tab.id, reloadKey])
@@ -295,7 +304,11 @@ function PdfViewer({ tab }: Props) {
         if (++pending >= 8) flush()
       }
       flush()
-    })()
+    })().catch((e) => {
+      // 关标签时文档被销毁，在途的 getPage 会抛 Transport destroyed——扫尺寸是尽力而为
+      if (!cancelled) console.error(e)
+      cancelled = true
+    })
     return () => {
       cancelled = true
     }
@@ -433,7 +446,11 @@ function PdfViewer({ tab }: Props) {
         }
       }
       if (!cancelled) setAnnos(out)
-    })()
+    })().catch((e) => {
+      // 同上：关标签销毁文档时在途的 getPage 会抛，标注导入是后台补做
+      if (!cancelled) console.error(e)
+      cancelled = true
+    })
     return () => {
       cancelled = true
     }
@@ -1335,6 +1352,7 @@ function PdfViewer({ tab }: Props) {
       matchPages: () => matches.map((m) => m.page),
       renderedPages: () => [...slots.current.keys()].sort((a, b) => a - b),
       perf: () => ({ ...renderStats.current, cached: [...bmpCache.current.keys()] }),
+      rangeMode: () => rangeModeRef.current,
       annos: () =>
         annos.map((a) => ({
           kind: a.kind,

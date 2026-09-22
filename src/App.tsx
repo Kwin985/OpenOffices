@@ -8,6 +8,7 @@ import { useApp } from './store'
 import Home from './components/Home'
 import { pickOpenFile } from './lib/fs'
 import { openPath, requestCloseTab } from './lib/open'
+import { startEditorPrewarm } from './lib/prewarm'
 import { saveTab } from './lib/registry'
 
 const Workspace = lazy(() => import('./components/Workspace'))
@@ -44,6 +45,11 @@ function MainApp() {
   useEffect(() => {
     document.documentElement.dataset.theme = theme
   }, [theme])
+
+  // 首页就是免费的空闲窗口：在这里预热各编辑器 chunk（挂在 Workspace 里等不到首屏用户）
+  useEffect(() => {
+    startEditorPrewarm()
+  }, [])
 
   if (import.meta.env.DEV) {
     const w = window as unknown as Record<string, unknown>
