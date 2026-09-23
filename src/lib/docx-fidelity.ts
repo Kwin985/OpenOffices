@@ -19,10 +19,13 @@
 // 域（field）在 v0.43 起分两种待遇：SEQ 题注号是纯顺序计数，一律按当前文档顺序现算（文件里的缓存
 // 在别的工具编辑过之后会与实际序号不符）；PAGE/PAGEREF/DOCPROPERTY 这类我们算不出正确值的仍读缓存。
 // 只有代码没有结果的域（交叉引用、别的工具写出的件）以前会静默变空，现在 REF 退回收尾书签所在段落
-// 的文本，其余记一条"没有缓存结果，未重算"。
+// 的文本，其余记一条"没有缓存结果，未重算"。OLE 嵌入对象的**内容**在 v0.44 起能取的都取：
+// 复合文档里的原生文件（\x01Ole10Native）与直接放 zip 的部件都会展开，工作表出表格、嵌入文档递归展开，
+// 取不出来的（Excel 97 的 BIFF、Visio 绘图、超过 24MB 的大件）才留"内容未提取"那行可见占位。
 
 import { all, allDesc, attr, attrL, attrNum, els, find, findDesc, findL, local, parseXml, textOf, type XEl } from './ooxml'
 import { FieldEngine, fieldLabel, parseInstr, recomputable } from './docx-fields'
+import { embedHtml, inlineFlatten, unwrapEmbed, type EmbedHtml } from './ole'
 import { chartToHtml, smartArtToHtml } from './ooxml-graphics'
 import { CELL_EDGES, CSS_BORDER_STYLE, eighthsToPx, rgb2hex } from './cell-style'
 import { ooxmlLine } from './paragraph-style'
@@ -41,6 +44,7 @@ export interface DocxImport {
 interface ZipPart {
   async(t: 'string'): Promise<string>
   async(t: 'base64'): Promise<string>
+  async(t: 'uint8array'): Promise<Uint8Array>
 }
 interface ZipLike {
   file(path: string): ZipPart | null
@@ -490,6 +494,8 @@ class Fidelity {
   /** 图形类部件（diagrams/dataN.xml、charts/chartN.xml）的 XML 文本缓存 */
   private parts = new Map<string, Promise<string>>()
   private zip: ZipLike | null = null
+  /** 嵌入部件（word/embeddings/*）的二进制缓存：同一个对象被两处引用时只解一次 */
+  private bins = new Map<string, Promise<Uint8Array | null>>()
   /** 书签表与 SEQ 计数（交叉引用可以指向后面的段落，所以正文渲染前先扫一遍整篇） */
   private fields = new FieldEngine()
   /** w:id → 正文（脚注与尾注各自的编号空间，故分两张表）；引用处按此查正文 */
@@ -501,6 +507,8 @@ class Fidelity {
   constructor(
     private book: StyleBook,
     private numbering: Numbering,
+    /** 嵌套深度：文档里嵌文档再嵌文档会没完，展平到这一层就停手记边界 */
+    private depth = 0,
   ) {}
 
   private warn(msg: string) {
@@ -860,13 +868,26 @@ class Fidelity {
         const ole = findDesc(node, 'OLEObject')
         const prog = attr(ole, 'ProgID') ?? attr(ole, 'Type')
         const rel = this.rels.get(attrL(ole, 'id') ?? '')
-        const file = rel?.target.split('/').pop()
+        const file = rel?.target.split('/').pop() ?? ''
         const what = [prog, file].filter(Boolean).join('，')
+        // 先试内容提取（v0.44）：嵌入的工作表/文档/CSV 里有真字，取到了就不该再写"内容未提取"
+        const body = rel && !rel.external ? await this.embedContent(rel.target, file) : null
+        if (body?.html) {
+          // 单元格放不下一张嵌套表（本读侧对嵌套表格一律"展平为段落"），硬塞等于让
+          // ProseMirror 的内容表达式把整块字丢掉；压成行文本至少字还在，并如实记一条
+          if (st.inCell) {
+            st.pieces.push({ kind: 'inline', html: inlineFlatten(body.html) })
+            this.warn('单元格里的嵌入内容已展平为文字')
+          } else st.pieces.push({ kind: 'block', html: body.html })
+          for (const n of body.notes) this.warn(n)
+          return
+        }
         if (!img)
           st.pieces.push({
             kind: 'block',
             html: `<p>〔嵌入对象${what ? `：${esc(what)}` : ''}，内容未提取〕</p>`,
           })
+        for (const n of body?.notes ?? []) this.warn(n)
         this.warn(`嵌入对象${prog ? `（${prog}）` : ''}未导入`)
         return
       }
@@ -1130,6 +1151,35 @@ class Fidelity {
       this.parts.set(path, p)
     }
     return p
+  }
+
+  /** 嵌入部件的二进制（同一份 oleObject 被两处引用时只解一次） */
+  private partBytes(path: string): Promise<Uint8Array | null> {
+    let p = this.bins.get(path)
+    if (!p) {
+      const f = this.zip?.file(path)
+      p = f ? f.async('uint8array').catch(() => null) : Promise.resolve(null)
+      this.bins.set(path, p)
+    }
+    return p
+  }
+
+  /**
+   * 嵌入对象的内容：先按容器取回内层文件（CFB 里是 `\x01Ole10Native`，现代写法是部件自己），
+   * 再按类型分派成 HTML。取不到内容时返回 null，调用方保留"内容未提取"那条可见占位。
+   */
+  private async embedContent(target: string, name: string): Promise<EmbedHtml | null> {
+    const bytes = await this.partBytes(target)
+    if (!bytes) {
+      this.warn(`嵌入部件未找到：${target}`)
+      return null
+    }
+    const content = unwrapEmbed(bytes, name)
+    if (!content) {
+      this.warn(`嵌入部件 ${name} 的容器没认出来`)
+      return null
+    }
+    return embedHtml(content, this.depth)
   }
 
   /** 位图部分：找不到可解码的图像就返回 null（交给调用方决定是否另有文本框可出） */
@@ -1430,14 +1480,18 @@ function plainText(el: XEl): string {
 
 // ---- 入口 ------------------------------------------------------------------
 
-/** 保真导入一份 docx。抛错或 blocks=0 时调用方应回退 mammoth。 */
-export async function docxToHtmlFidelity(bytes: Uint8Array): Promise<DocxImport> {
+/** 保真导入一份 docx。抛错或 blocks=0 时调用方应回退 mammoth。`depth` 是嵌套层数（嵌入文档递归用）。 */
+export async function docxToHtmlFidelity(bytes: Uint8Array, depth = 0): Promise<DocxImport> {
   const { default: JSZip } = await import('jszip')
   const zip = (await JSZip.loadAsync(bytes)) as unknown as ZipLike
   const read = async (p: string): Promise<string> => (await zip.file(p)?.async('string')) ?? ''
   const documentXml = await read('word/document.xml')
   if (!documentXml) throw new Error('缺 word/document.xml')
-  const f = new Fidelity(readStyles(await read('word/styles.xml')), readNumbering(await read('word/numbering.xml')))
+  const f = new Fidelity(
+    readStyles(await read('word/styles.xml')),
+    readNumbering(await read('word/numbering.xml')),
+    depth,
+  )
   f.load(zip)
   f.setRels(await read('word/_rels/document.xml.rels'))
   f.setNotes(await read('word/footnotes.xml'), await read('word/endnotes.xml'))

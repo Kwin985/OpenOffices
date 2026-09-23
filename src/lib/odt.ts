@@ -14,6 +14,7 @@ import {
 } from './docx'
 import { bdAttr, borderParts, CELL_EDGES, cssBorder, rgb2hex, type CellEdge } from './cell-style'
 import { encodeNoteText } from './note-extension'
+import { embedHtml, inlineFlatten, unwrapEmbed, type EmbedHtml } from './ole'
 import { ruleOf, type LineRule } from './paragraph-style'
 
 const OD_MIME = 'application/vnd.oasis.opendocument.text'
@@ -789,6 +790,10 @@ export async function odtToHtml(bytes: Uint8Array): Promise<{ html: string; meta
   const stylesText = (await zip.file('styles.xml')?.async('string')) ?? ''
   const parser = new DOMParser()
   const cdoc = parser.parseFromString(contentText, 'text/xml')
+  // 解析失败时 DOMParser 不抛错，只给一棵 parsererror 树：不挡的话整篇是"打开了一份空白文档"，
+  // 用户看不出是文件坏了；抛出去让界面能说"加载失败：……"
+  const perr = cdoc.getElementsByTagName('parsererror')[0]
+  if (perr) throw new Error(`content.xml 不是合法的 XML：${(perr.textContent ?? '').replace(/\s+/g, ' ').trim().slice(0, 160)}`)
   const sdoc = stylesText ? parser.parseFromString(stylesText, 'text/xml') : null
 
   /** 与 docx 保真导入同一套边界账：同类只记一条，出口写成「文案×N」，显示在状态栏而不是静默丢 */
@@ -1068,6 +1073,15 @@ export async function odtToHtml(bytes: Uint8Array): Promise<{ html: string; meta
     return `<span class="doc-note" data-oo-note-kind="${kind}" data-oo-note-text="${a}"></span>`
   }
 
+  /**
+   * 嵌入对象摊出来的**块级**正文。draw:frame 住在段落里，而表格一类必须是块（段内嵌表会被
+   * ProseMirror 的内容表达式整块丢掉，等于字又没了），所以先攒在这里，由产出段落的那几处接在
+   * 自己后面成为兄弟块。单元格里的对象不攒：改走 inlineFlatten 压成行文本。
+   */
+  const embedBlocks: string[] = []
+  let inCell = 0
+  const tail = (): string => embedBlocks.splice(0).join('')
+
   const imgCache = new Map<string, Promise<string>>()
   const imageDataUrl = (href: string): Promise<string> => {
     if (href.startsWith('data:')) return Promise.resolve(href)
@@ -1099,6 +1113,55 @@ export async function odtToHtml(bytes: Uint8Array): Promise<{ html: string; meta
       return ''
     }
     return ''
+  }
+
+  /** office:mime-type → 一个带扩展名的名字：unwrapEmbed 的主判据是魔数，扩展名只用来补文本与 CSV 那两类 */
+  const MIME_NAME: Record<string, string> = {
+    'application/vnd.openxmlformats-officedocument.wordprocessingml.document': 'doc.docx',
+    'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet': 'sheet.xlsx',
+    'application/vnd.ms-excel': 'sheet.xls',
+    'application/msword': 'doc.doc',
+    'text/csv': 'data.csv',
+    'text/plain': 'text.txt',
+  }
+  /** 目录型对象里属于 ODF 自己的部件：剩下的那一个才是原生文件 */
+  const ODF_OWN = new Set(['mimetype', 'content.xml', 'styles.xml', 'meta.xml', 'settings.xml', 'preview.wmf'])
+
+  /**
+   * 嵌入对象的**内容**。ODF 把外来件放成两种形状：老的是 `<office:binary-data>` 内联 base64，
+   * 新的是 `Objects/objN/` 一个目录（里面是原生文件，或者整套迷你 ODF）。两种都先解出字节，
+   * 再交给 lib/ole 那一套容器分派（CFB → `\x01Ole10Native` → 内层文件）。
+   * 迷你 ODF 包不在这一版展开：它的样式表与本页的不是同一份，硬接等于假装能读。
+   */
+  const embedOfObject = async (obj: Element): Promise<EmbedHtml | null> => {
+    let bytes: Uint8Array | null = null
+    let name = MIME_NAME[(obj.getAttribute('office:mime-type') ?? '').toLowerCase()] ?? ''
+    const inline = (findLocal(obj, 'binary-data')?.textContent ?? '').replace(/\s+/g, '')
+    if (inline.length > 8) {
+      try {
+        const s = atob(inline)
+        bytes = new Uint8Array(s.length)
+        for (let i = 0; i < s.length; i++) bytes[i] = s.charCodeAt(i)
+      } catch {
+        return null
+      }
+    }
+    if (!bytes) {
+      const base = (obj.getAttribute('xlink:href') ?? '').replace(/^\.\//, '').replace(/\/$/, '')
+      if (!base) return null
+      for (const n of Object.keys(zip.files)) {
+        if (!n.startsWith(base + '/') || n.endsWith('/') || zip.file(n) === null) continue
+        const rel = n.slice(base.length + 1)
+        if (ODF_OWN.has(rel) || rel.includes('/')) continue
+        bytes = await zip.file(n)!.async('uint8array')
+        if (!name) name = rel
+        break
+      }
+    }
+    if (!bytes) return null
+    const content = unwrapEmbed(bytes, name || '嵌入对象')
+    if (!content) return null
+    return embedHtml(content, 0)
   }
 
   async function renderInline(el: Element): Promise<string> {
@@ -1159,15 +1222,26 @@ export async function odtToHtml(bytes: Uint8Array): Promise<{ html: string; meta
               } else warn('空文本框未导入')
               break
             }
-            const obj = findLocal(e, 'object') ?? findLocal(e, 'animate')
-            const href = obj?.getAttribute('xlink:href') ?? null
-            if (href) {
-              const s = await objectText(href)
+            const obj = findLocal(e, 'object') ?? findLocal(e, 'embed') ?? findLocal(e, 'animate')
+            if (obj) {
+              // objectText 取的是 href 那个迷你 ODF 包里的正文，只有 href 才可能是公式
+              const href = obj.getAttribute('xlink:href') ?? ''
+              const s = href ? await objectText(href) : ''
               if (s) {
                 out += escapeHtml(s)
                 warn('公式已线性化为文本，结构不保真')
                 break
               }
+              // 内联 base64（<office:binary-data>）那种老写法根本没有 href，
+              // 所以取内容这一趟不能压在 href 后面，否则它永远走不到
+              const body = await embedOfObject(obj)
+              if (body?.html) {
+                if (inCell) out += inlineFlatten(body.html)
+                else embedBlocks.push(body.html)
+                for (const n of body.notes) warn(n)
+                break
+              }
+              for (const n of body?.notes ?? []) warn(n)
               warn('嵌入对象（draw:object）未导入')
               break
             }
@@ -1207,7 +1281,7 @@ export async function odtToHtml(bytes: Uint8Array): Promise<{ html: string; meta
     for (const child of Array.from(el.children)) {
       if (['s', 'tab', 'line-break', 'span', 'a', 'frame'].includes(child.localName)) {
         // 容器里直接散落的行内容（list-item/table-cell 均可能）
-        out += `<p>${await renderInline(el)}</p>`
+        out += `<p>${await renderInline(el)}</p>${tail()}`
         return out
       }
       out += await renderBlock(child)
@@ -1221,7 +1295,7 @@ export async function odtToHtml(bytes: Uint8Array): Promise<{ html: string; meta
         const level = Math.min(4, Math.max(1, Number(el.getAttribute('text:outline-level') ?? 1)))
         const sn = el.getAttribute('text:style-name')
         // 派生样式（PSn）挂在 H1..H4 之下，对齐与缩进照旧从样式链上取
-        return `<h${level}${paraStyle(sn)}>${await renderInline(el)}</h${level}>`
+        return `<h${level}${paraStyle(sn)}>${await renderInline(el)}</h${level}>${tail()}`
       }
       case 'p': {
         const sn = el.getAttribute('text:style-name')
@@ -1233,10 +1307,10 @@ export async function odtToHtml(bytes: Uint8Array): Promise<{ html: string; meta
           chain.some((x) => pick(x, 'paragraph-properties')?.getAttribute('fo:break-before') === 'page')
         )
           return `<div data-oo-pagebreak="1"></div>`
-        if (names.includes('PC')) return `<pre><code>${await renderInline(el)}</code></pre>`
+        if (names.includes('PC')) return `<pre><code>${await renderInline(el)}</code></pre>${tail()}`
         if (names.includes('PQ'))
-          return `<blockquote><p${paraStyle(sn, 30)}>${await renderInline(el)}</p></blockquote>`
-        return `<p${paraStyle(sn)}>${await renderInline(el)}</p>`
+          return `<blockquote><p${paraStyle(sn, 30)}>${await renderInline(el)}</p></blockquote>${tail()}`
+        return `<p${paraStyle(sn)}>${await renderInline(el)}</p>${tail()}`
       }
       case 'list': {
         const ordered = listStyles.get(el.getAttribute('text:style-name') ?? '') ?? false
@@ -1254,6 +1328,7 @@ export async function odtToHtml(bytes: Uint8Array): Promise<{ html: string; meta
       }
       case 'table': {
         const rows: string[] = []
+        inCell++ // 单元格里放不下第二层表：嵌入正文改压成行内文本，别让它整块被内容表达式丢掉
         for (const r of Array.from(el.children)) {
           if (r.localName !== 'table-row') continue
           const cells: string[] = []
@@ -1267,6 +1342,7 @@ export async function odtToHtml(bytes: Uint8Array): Promise<{ html: string; meta
           }
           rows.push(`<tr>${cells.join('')}</tr>`)
         }
+        inCell--
         return `<table${tableStyleCss(el.getAttribute('table:style-name'))}><tbody>${rows.join('')}</tbody></table>`
       }
       case 'body':
@@ -1279,7 +1355,7 @@ export async function odtToHtml(bytes: Uint8Array): Promise<{ html: string; meta
 
   const body = cdoc.getElementsByTagNameNS('*', 'body')[0]
   const otext = body ? pick(body, 'text') : null
-  const html = otext ? await renderChildrenBlocks(otext) : ''
+  const html = otext ? `${await renderChildrenBlocks(otext)}${tail()}` : ''
 
   // —— meta：styles.xml 的 master-page 头脚
   const meta: DocMeta = {}

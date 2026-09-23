@@ -951,8 +951,8 @@ v0.37 起我们只把缓存抄进正文——于是别的工具编辑过的文�
 - **OLE 嵌入对象：预览解不开也要看得见**：EMF/WMF 预览浏览器解不了，以前只剩一条告警、文档里
   什么都不留；现在在原位置放一行正文占位 `〔嵌入对象：Excel.Sheet.12，Microsoft_Excel_Worksheet.xlsx，内容未提取〕`
   （ProgID 取自 `o:OLEObject`，文件名经 rels 反查），能出预览图（PNG/JPEG）就出图、**不叠占位**。
-  占位是真正文节点，所以 .odoc 存盘重开、docx/odt 导出再开都在。**内容（CFB / 嵌入包）提取仍未做**，
-  如实留在路线图未勾项里
+  占位是真正文节点，所以 .odoc 存盘重开、docx/odt 导出再开都在。**内容（CFB / 嵌入包）提取当时仍未做**，
+  下一轮（v0.44）补上
 
 - **坑**：① **PowerShell 位置传参 `Ok($cond,'文案')` 会把整个括号当成一个数组参数** → `$msg` 恒 null、
   `$cond` 恒非空数组恒真，上一轮那条腿的"6 通过 3 失败"全部无意义。改成空格分参 `Ok (条件) '文案'` 并在
@@ -973,6 +973,60 @@ v0.37 起我们只把缓存抄进正文——于是别的工具编辑过的文�
   **Word 16.0 只读腿 11 断言**——同一份夹具让 Word 自己 `Fields.Update`，`1|2|3|1|I|II|A|i|图 1|1`
   与我们算的逐枚相同（含大小写两形态），并核回更新前缓存确实是 `1|2|2|9|I|II|z|XVIII|图 1|7`；
   `cargo test --lib` 39 通过（Rust 零改动）+ tsc/build 绿
+
+## 嵌入对象里的字：CFB 容器与内层文件（v0.44）
+
+续项六的最后一刀，也是路线图里最后一条未勾的功能项。v0.43 只做到"看得见有个对象"，
+而对象里面通常装着**真正的文字**：Word 的 `word/embeddings/oleObjectN.bin` 是一套复合文档
+（OLE 2 / MS-C），流 `\x01Ole10Native` 里又装着一个完整原生文件（Excel 工作簿、另一份 docx、
+CSV、txt…）。这一轮把这层套娃拆到能读到底为止——读不到底的地方一律说清楚，不塞乱码。
+
+- **容器形状两种，都由本机真件实测得来**（扫描到的分布：CFB 的 `.bin` 70 个、直接放的
+  `Microsoft_Excel_Worksheet.xlsx` 21 个、`.docx` 2 个、Visio `.vsd` 1 个）：现代 Office 常把
+  原生文件**直接**放在 `embeddings/` 下（本身就是 zip，没有 OLE 包装）；老的 Package 对象才套一层
+  复合文档。两条都在同一条分派里走，先魔数后文件名
+- **`src/lib/cfb.ts`：零依赖复合文档读侧**（不碰 DOM，所以 Node 侧与页面内跑同一份代码）。
+  DIFAT（头里 109 直槽 + 链）→ FAT（扇区编号即数组下标）→ 目录链；小于 4096 的流住进根存储那条链
+  装的迷你流，由 miniFAT 按 64 字节迷你扇区串；同一存储下的条目是红黑树（left/right 树兄弟、
+  child 指孩子的树根），遍历带 `assigned` 闸门防环。**结构不合一律返回 `null` 不抛**：调用方要的是
+  "取不到就记一条边界"，而不是把整次导入掀掉
+- **`Ole10Native` 的字段布局是逐字节量出来的**（真件 1.5MB 的 oleObject1.bin）：
+  `DWORD cbSize | WORD 0x0002 | label asciiz | 源路径 asciiz | 4 字节占位 | DWORD 临时路径长度（含结尾 \0）|
+  临时路径 | DWORD 数据长度 | 数据 | 尾部一百多字节`。两个要点：**数据不贴着流末尾**（按流长反推必错），
+  而严格走字段只覆盖了量到的这一种写法，所以走不通时再按"哪枚 DWORD 能把数据吃到接近结尾"扫一遍兜底
+- **内层类型分派**（`src/lib/ole.ts`）：docx → 递归 `docxToHtmlFidelity(bytes, depth+1)`（套到第二层停）；
+  xlsx → 只要值（共享字符串、`inlineStr`、按 `r="C5"` 定位、跳过的空列不挤位）→ `<table>`；
+  CSV → 分隔符按首行嗅探 + RFC4180 引号规则 → `<table>`；txt → 按空行分段（UTF-8 出替换符就换 GBK 重试）。
+  老式内层（Excel 97 的 BIFF、Word 97 的 FIB）与裸位图**不硬解**，如实给一条带真名与大小的边界说明；
+  内层最大 24MB、表格 200 行 × 40 列 × 4 张表、文本 64KB / 200 段，**截断都写进告警**而不是静默少给
+- **两条接缝都吃这套结果**：docx 保真导入器的 `w:object`（取到内容就不再叠 v0.43 那条占位），
+  以及 ODT 的 `draw:frame`——`<office:binary-data>` 内联 base64 与 `Objects/objN/` 目录两种形状都解。
+  摊出来的是**块级**正文（表格、多个段落），而 `draw:frame` 与 `w:object` 都住在段落里：所以块级正文作
+  段落的**兄弟块**接在后面（`embedBlocks` + 各出口 `tail()`），单元格里的则压成行内文本（`inlineFlatten`）——
+  嵌套表放不进 `<td>`，硬塞等于让 ProseMirror 的内容表达式把整块字丢掉
+- **三处真 bug，全是"读得到字节才算数"的那类**：① `Ole10Native` 偏移 4 的标志是 **WORD** 0x0002，
+  按 DWORD 读会把紧随的 label 头两字节一起吃进长度里 → 本机那份真件一直返回"没认出来"；
+  ② 截断的复合文档（zip 里只存了一半）最后一枚扇区是残缺的，照整枚去 `DataView` 读直接
+  `RangeError: Offset is outside the bounds of the DataView`，改成 `lastSec = floor(len/sec) - 1`；
+  ③ ODT 的 `case 'frame'` 把取内容整段压在 `if (href)` 后面——而内联 base64 那种写法**根本没有 href**，
+  于是它永远走不到（这一条是冒烟造夹具时才暴露的）。顺手补了 `content.xml` 的 `parsererror` 守卫：
+  XML 坏了以前是"安静地打开一篇空白文档"，现在说得出是哪份 XML 坏了
+
+- **坑**：① 单元格里的嵌入内容展平后**不再是表格**，那条"已取值为表格"的告警要有前置的一条
+  "单元格里的嵌入内容已展平为文字"，否则状态栏第一句就是矛盾的；② 截断上限要**多取一行当探针**——
+  `csvRows` 恰好截在 200 行时，"后面还有"这件事本来就说不出口了；③ 手搭 ODF 夹具的命名空间前缀必须
+  声明到位（URI 是 `...:drawing:1.0` 而前缀惯例是 `draw:`），漏了就是整份 XML 解析失败，
+  表现为"导入没报错但文档是空的"，最难查；④ 占位文字里能说的是**外层部件名**（`oleObject4.bin`），
+  内层真名（`img.rgb`）只在告警里——冒烟断言要按这个分工写，不然就是假失败
+
+- **验证（四腿）**：**结构测试 80 断言**（容器三条读分支 + 坏件一律不抛 + Ole10Native 两种写法 +
+  类型分派与各种上限 + `embedHtml` 五种内层 + docx 接缝五种形状 + 格内展平）；**本机真件腿**——
+  Word 写的 `oleObject1.bin` 读回 `\x01Ole10Native=1555443` 字节、内层判为 `img.rgb`（1519KB 裸位图）、
+  按边界说明处理且不产正文（内容只按结构核对，不进仓库也不入日志）；**CDP 真机冒烟 24 断言全绿、
+  页面异常 0 条**（docx 五种形状与 ODT 两种形状都**落在真实 DOM** 上验：4 张表格节点、`<td>` 里零嵌套表、
+  `h1` 带级别、状态栏有边界账，再各自存 docx / odt 重开确认字不是一次性的）；
+  `cargo test --lib` 39 通过（Rust 零改动）+ tsc/build 绿。**本轮写侧零改动**（只读不写），
+  所以 Word 实机腿不适用——没有新东西要它验，这一条如实记着而不是补一条空腿
 
 ## 性能（v0.3）
 
@@ -1039,15 +1093,18 @@ src/                  React 前端
   lib/docx.ts         docx 导入导出（ProseMirror JSON ↔ docx，字色/字族/字号/高亮/页眉页脚/TOC 域/批注/页面设置 sectPr（纸张·四边距·w:cols 栏数栏距）/页码格式（PAGE·NUMPAGES）/分页符/表格合并映射（首行行级 tableHeader、列表 numbering.config 真编号）、单元格四边 `w:tcBorders`（**显式去边写 `w:val="nil"`**——none 压不住表级默认边框）、`w:shd` 底纹、`w:vAlign` 竖排、`w:tblInd` 表缩进、`w:vertAlign` 上下标、段落 `w:spacing`（行距 + 段前段后，**只写声明过的**）/`w:shd`/`w:pBdr`、脚注与尾注（`footnotes`/`endnotes` 记录 + 正文各带自动编号 `<w:footnoteRef/>`、多段拆多个 `w:p`、部件与 rels 注册））；文本节点兼容顶层 text 与 attrs.text；字节经 Packer.toBase64String + atob 取（toBuffer 走 jszip 的 nodebuffer 通道，浏览器里没有 Buffer））
   lib/ooxml.ts        迷你 OOXML XML 解析器（零依赖、不碰 DOM）：parseXml/find/findDesc/all/allL/attr/attrL/val/valNum/textOf + decodeEnt 实体表——让 docx 读侧能在 Node 里直测
   lib/ooxml-graphics.ts 图形部件读侧（v0.42，零依赖、不碰 DOM 所以 Node 侧可直测）：`smartArtToHtml(dataXml, inCell)` 解 DiagramML dataModel 的 ptLst/cxnLst（parOf 建树 + srcOrd 定序、空节点下钻、首次认父挡回边、`a:fld` 域编号不采）→ 嵌套 `bulletList`（格内改段落 `margin-left` 表层级）；`chartToHtml(chartSpaceXml, inCell)` 解 ChartML 缓存值（下钻找系列、`strRef`/`numRef` 中间层、`c:pt/@idx` 空洞留格、`multiLvlStrRef` 各级拼一格、轴标题不当图表标题）→ 标题段 + 数据表，无缓存只取标题；两者都返 `{html, kept}` 让调用方按"真取回多少"说告警
-  lib/docx-fidelity.ts OOXML → HTML 保真导入器（v0.37）：run 级 rPr（粗斜/删除线/下划线/字色/高亮/字族/字号/上下标 `w:vertAlign`）、段落 pPr（jc/`w:ind` 左右与首行悬挂四种缩进写法/pStyle 样式链）、numPr+numbering.xml → 有序无序与 ilvl 层级（**跳档按 numId 折基准层**，不凭空补中间层）、表格 gridSpan/vMerge + tblGrid 列宽 + 单元格四边 `w:tcBorders`（含 val=nil 的显式去边）/底纹 `w:shd fill`/竖排 `w:vAlign`/表级 `w:tblInd`、段落 `w:spacing`（行距两档 + 段前后，含按行的 `w:*Lines` 估算）/`w:shd` 底纹/`w:pBdr` 四边、脚注与尾注引用（`w:footnoteReference`/`w:endnoteReference` 按 `w:id` 配 `word/footnotes.xml`·`endnotes.xml` 正文，跳过 separator/continuationSeparator，正文缺失记告警且不留空标记）、图片 rels→dataURL、内外超链接、分页符、批注三态锚点、域代码文字不外泄、**域编号重算**（v0.43：`fldChar` begin/separate/end 三道门接 `docx-fields` 的 `FieldEngine`——`SEQ` 现算并压掉缓存、`REF` 无缓存按书签段落文本兜底（书签表渲染前预扫）、算不了的沿缓存且无缓存记边界、`fldSimple` 同路、被跳过的分支不占号）、`w:object` 嵌入对象（v0.43：预览是 EMF/WMF 解不开时在原位置留一行可见占位，ProgID + rels 反查的部件文件名；能出预览图就不叠占位）、文本框 `w:txbxContent`（`wps:txbx` 与旧式 `v:textbox`）展平为段落、OMML 公式线性化、`mc:AlternateContent` 只取 Choice（空则退 Fallback，避免同一份正文翻倍）、drawing 锚点经 rels 找图示/图表部件（v0.42，部件缺失与关系缺失各记一条告警）；认不出就抛错或 blocks=0，调用方回退 mammoth
-  lib/docx-fields.ts 域重算引擎（v0.43，零依赖、纯 Node 可直测）：`parseInstr` 拆 `命令 参数 \开关`（**开关 token 原样保留大小写**——Word 就按它决定结果形态）、`seqText` 按 `\* ROMAN`/`roman`/`ALPHABETIC`/`alphabetic`/`Alpha` 出对应形态、`FieldEngine`（`from(doc)` 渲染前扫全篇建书签表（只排 `_GoBack`，`_Ref…`/`_Toc…` 必须留）+ `seqValue` 跟着文档顺序走 + `refText` 兜底段落文本）、`recomputable`（只有带 label 的 SEQ 现算）、`fieldLabel`/`paraText`（域代码与已删文字不算正文）：tableCell/tableHeader 的 bdTop/bdRight/bdBottom/bdLeft + background + vAlign、table 的 marginLeft 全局属性（只声明属性不改内容模型）；边框统一规范串 `"0.67px solid #8899aa"`，三态 null 未声明/'none' 显式去边/有值；`inlineBorder()` 读 CSSOM longhand（shorthand 对 none 返回空串）、`IndentTableView` 子类补 marginLeft（resizable 的节点视图不传 HTMLAttributes）、`eighthsToPx`/`pxToEighths` 管 1/8 磅换算、命令 setCellBackground/setCellVAlign
+  lib/cfb.ts          复合文档（OLE 2 / MS-C 容器）读侧（v0.44，零依赖、不碰 DOM）：`isCfb` 认魔数、`openCfb(bytes)` 走 DIFAT（109 直槽 + 链）→ FAT（扇区编号即下标）→ 128 字节目录项的红黑树（left/right 兄弟 + child 指孩子根，`assigned` 兼防环），小于 4096 的流从根存储链装的迷你流按 64 字节迷你扇区拼；扇区 512/4096、v3/v4 都认，**结构不合返回 null 不抛**（坏件要"少部分内容照出"而不是整篇打不开），截断的件按 `floor(len/sec)-1` 收边界、v4 高 32 位非零的流只报名字不去碰
+  lib/ole.ts          OLE 嵌入对象的**内容**提取（v0.44）：`unwrapEmbed` 拆容器（现代形状=部件本身就是原生文件；老形状=复合文档里的流 `\x01Ole10Native`），`oleNativePayload` 按实测字段布局走一遍、走不通再按"哪枚 DWORD 能把数据吃到接近结尾"扫兜底（数据不贴着流末尾，按流长反推必错）；`classifyEmbed` 先魔数后文件名，`embedHtml(content, depth)` 分派 docx（递归 `docxToHtmlFidelity`，depth≥2 停）/ xlsx（只要值，`r="C5"` 定位、空列不挤位）/ CSV（首行嗅探分隔符 + RFC4180 引号）/ txt（空行分段，UTF-8 出替换符换 GBK 重试），取不出的一律给带真名与大小的 `note`；上限 24MB / 200 行 × 40 列 × 4 表 / 64KB × 200 段，**截断写进告警不静默少给**；`inlineFlatten` 把块级正文压成行内（单元格放不下第二层表）
+  lib/docx-fidelity.ts OOXML → HTML 保真导入器（v0.37）：run 级 rPr（粗斜/删除线/下划线/字色/高亮/字族/字号/上下标 `w:vertAlign`）、段落 pPr（jc/`w:ind` 左右与首行悬挂四种缩进写法/pStyle 样式链）、numPr+numbering.xml → 有序无序与 ilvl 层级（**跳档按 numId 折基准层**，不凭空补中间层）、表格 gridSpan/vMerge + tblGrid 列宽 + 单元格四边 `w:tcBorders`（含 val=nil 的显式去边）/底纹 `w:shd fill`/竖排 `w:vAlign`/表级 `w:tblInd`、段落 `w:spacing`（行距两档 + 段前后，含按行的 `w:*Lines` 估算）/`w:shd` 底纹/`w:pBdr` 四边、脚注与尾注引用（`w:footnoteReference`/`w:endnoteReference` 按 `w:id` 配 `word/footnotes.xml`·`endnotes.xml` 正文，跳过 separator/continuationSeparator，正文缺失记告警且不留空标记）、图片 rels→dataURL、内外超链接、分页符、批注三态锚点、域代码文字不外泄、**域编号重算**（v0.43：`fldChar` begin/separate/end 三道门接 `docx-fields` 的 `FieldEngine`——`SEQ` 现算并压掉缓存、`REF` 无缓存按书签段落文本兜底（书签表渲染前预扫）、算不了的沿缓存且无缓存记边界、`fldSimple` 同路、被跳过的分支不占号）、`w:object` 嵌入对象（v0.43 预览是 EMF/WMF 解不开时留一行可见占位，ProgID + rels 反查的部件文件名；**v0.44 先走 `lib/ole` 取内容**——取到就把内层正文接为段落兄弟块（格内改压行内）且不再叠占位，取不到才留占位）、文本框 `w:txbxContent`（`wps:txbx` 与旧式 `v:textbox`）展平为段落、OMML 公式线性化、`mc:AlternateContent` 只取 Choice（空则退 Fallback，避免同一份正文翻倍）、drawing 锚点经 rels 找图示/图表部件（v0.42，部件缺失与关系缺失各记一条告警）；认不出就抛错或 blocks=0，调用方回退 mammoth
+  lib/docx-fields.ts 域重算引擎（v0.43，零依赖、纯 Node 可直测）：`parseInstr` 拆 `命令 参数 \开关`（**开关 token 原样保留大小写**——Word 就按它决定结果形态）、`seqText` 按 `\* ROMAN`/`roman`/`ALPHABETIC`/`alphabetic`/`Alpha` 出对应形态、`FieldEngine`（`from(doc)` 渲染前扫全篇建书签表（只排 `_GoBack`，`_Ref…`/`_Toc…` 必须留）+ `seqValue` 跟着文档顺序走 + `refText` 兜底段落文本）、`recomputable`（只有带 label 的 SEQ 现算）、`fieldLabel`/`paraText`（域代码与已删文字不算正文）
+  lib/cell-style.ts   单元格样式扩展（v0.38）：tableCell/tableHeader 的 bdTop/bdRight/bdBottom/bdLeft + background + vAlign、table 的 marginLeft 全局属性（只声明属性不改内容模型）；边框统一规范串 `"0.67px solid #8899aa"`，三态 null 未声明/'none' 显式去边/有值；`inlineBorder()` 读 CSSOM longhand（shorthand 对 none 返回空串）、`IndentTableView` 子类补 marginLeft（resizable 的节点视图不传 HTMLAttributes）、`eighthsToPx`/`pxToEighths` 管 1/8 磅换算、命令 setCellBackground/setCellVAlign
   lib/paragraph-style.ts 段落排版扩展（v0.39）：paragraph/heading 的 lineHeight/lineRule/spaceBefore/spaceAfter/background/bdTop..bdLeft 全局属性，一组属性拼**一条** style（多条各写一份会互相盖掉）；`ooxmlLine`/`lineToOoxml`/`ruleOf` 管 1/240 行与二十分之一磅两套语义，"最小值"档 CSS 表达不了就修行内自定义属性 `--oof-lr` 带回；命令 setParagraphStyle/setLineSpacing/setSpaceAround/setParaBackground
   lib/indent-extension.ts 段落全局属性 indentLeft/indentFirst（32px 一档、上限 320px）+ setIndent/indent/outdent 命令 + Ctrl+] / Ctrl+[ + 悬挂缩进感知的出退格
   lib/toc-extension.ts TipTap 目录原子节点：按标题实时汇总、点击跳转
   lib/page-break-extension.ts TipTap pageBreak 原子块（`div[data-oo-pagebreak]`）+ insertPageBreak 命令 + Ctrl+Enter 快捷键
   lib/comment-extension.ts comment mark（cid 锚定批注）+ 加/删/定位/汇总工具
   lib/note-extension.ts 脚注/尾注的 `note` 内联原子节点（attrs kind/text，正文不摊进文档流）：`encodeNoteText`/`decodeNoteText` 管属性里的换行（XML/HTML 解析器会把属性值里的 LF 归一成空格），`notesOf`/`noteOrdinalOf`/`locateNote` 按文档顺序现算编号，命令 insertNote/setNoteText/deleteNote（只填 tr + 用给到的 dispatch，绝不自己 view.dispatch）
-  lib/odt.ts          ProseMirror JSON ↔ ODT（JSZip 打包导出 + DOMParser 导入，字符样式（字族/字号/字色/上下标 `style:text-position`，落在 content.xml 自动样式）/合并表/图片尺寸/页码域与总页数/page-layout 页面设置（纸张·四边距·style:columns 多栏）/分页符 fo:break-before/单元格自动样式 `fo:border-*`（宽度写 pt，读回走 `odfBorderCss` 保留 0.67px 这类细线不整数取整）+`fo:background-color`+`style:vertical-align`、表级 `fo:margin-left`、段落直接格式 `fo:margin-top/-bottom` + `fo:line-height`（倍数写 % + proportional、绝对值写 pt + fixed/minimum，两档在 ODF 里分得清而 CSS 分不清）+ `fo:background-color` + `fo:border-*`（宽度写 pt），读侧按名字跳过具名样式与 `office:styles` 里那批，以免把整篇默认摊成每段的直接格式；脚注/尾注写 ODF 1.2 内联 `text:footnote-reference` + 同 `text:id` 的 `text:footnote`（citation 写字面序号、段间 `text:line-break`、正文段挂 `FN` 自动样式），读侧三种外壳都收（新版两个元素名 + 旧版 `text:note`/`text:note-class`/`text:note-body`），正文表先扫全文建全表，故 id 不连续或正文排在引用之前也配得上；`draw:frame` 认三类内容（`draw:image` 位图 / `draw:text-box` 文本框展平为 `<br/>` 连成的行内文字 / `draw:object` 嵌入件——`Objects/objectN/content.xml` 里有 MathML 就线性化成文本，没有就只记一条边界），读侧统一产 `warnings`（同类聚合成「文案×N」）交状态栏显示）
+  lib/odt.ts          ProseMirror JSON ↔ ODT（JSZip 打包导出 + DOMParser 导入，字符样式（字族/字号/字色/上下标 `style:text-position`，落在 content.xml 自动样式）/合并表/图片尺寸/页码域与总页数/page-layout 页面设置（纸张·四边距·style:columns 多栏）/分页符 fo:break-before/单元格自动样式 `fo:border-*`（宽度写 pt，读回走 `odfBorderCss` 保留 0.67px 这类细线不整数取整）+`fo:background-color`+`style:vertical-align`、表级 `fo:margin-left`、段落直接格式 `fo:margin-top/-bottom` + `fo:line-height`（倍数写 % + proportional、绝对值写 pt + fixed/minimum，两档在 ODF 里分得清而 CSS 分不清）+ `fo:background-color` + `fo:border-*`（宽度写 pt），读侧按名字跳过具名样式与 `office:styles` 里那批，以免把整篇默认摊成每段的直接格式；脚注/尾注写 ODF 1.2 内联 `text:footnote-reference` + 同 `text:id` 的 `text:footnote`（citation 写字面序号、段间 `text:line-break`、正文段挂 `FN` 自动样式），读侧三种外壳都收（新版两个元素名 + 旧版 `text:note`/`text:note-class`/`text:note-body`），正文表先扫全文建全表，故 id 不连续或正文排在引用之前也配得上；`draw:frame` 认三类内容（`draw:image` 位图 / `draw:text-box` 文本框展平为 `<br/>` 连成的行内文字 / `draw:object` 嵌入件——`Objects/objectN/content.xml` 里有 MathML 就线性化成文本，否则 v0.44 走 `lib/ole` 取内层内容：`<office:binary-data>` 内联 base64 与 `Objects/objN/` 目录两种形状都解，摊出的块级正文由 `tail()` 作段落兄弟块接回、单元格内压成行内文本），`content.xml` 解析失败时抛出说得出是哪份 XML（否则表现为"打开了一篇空白"），读侧统一产 `warnings`（同类聚合成「文案×N」）交状态栏显示）
   lib/find-replace.ts 查找/替换 ProseMirror 插件：按文本块匹配存 state、装饰高亮、findNext/findPrev/replaceOne/replaceAll 命令（命中上限 FR_HIT_CAP=2000 截断并标 `N+`）
   lib/templates.ts    首页模板注册表与纯函数 seed：11 个模板（公文/会议纪要/周报 → ProseMirror JSON+meta，记账表/库存清单 → WorkbookPayload 含公式冻结，六套演示配色 → Deck）
   lib/ppt.ts          .opd 幻灯片数据模型（版式/主题/序列化）
@@ -1145,7 +1202,7 @@ cargo check        # Rust 后端检查（在 src-tauri 下）
 - [x] 文档保真续项五：文本框展平（`w:txbxContent` 新旧两种外壳 + ODF `draw:text-box`，位置与环绕不保但字不丢）+ 公式线性化（OMML 与 MathML 翻成同一套 `x^2`/`a/b`/`√(y)`/`∑_i^n`）+ `mc:AlternateContent` 只取一支（Word 16.0 只读腿按 `wdTextFrameStory` 逐句核对）
 - [x] 文档保真续项六之一：SmartArt（`diagrams/dataN.xml` 的 DiagramML 数据模型 → 嵌套列表）与图表（`charts/chartN.xml` 的 ChartML 缓存值 → 标题 + 数据表）读回，格内走层级缩进展平，还原不了的记边界
 - [x] 文档保真续项六之二：域**编号重算**（`SEQ` 按文档顺序现算并压掉缓存、`\* ROMAN`/`\* roman`/`\* ALPHABETIC`/`\* alphabetic` 四形态按开关自身大小写、`REF` 无缓存时按书签所在段落文本兜底、`PAGE`/`PAGEREF`/`DOCPROPERTY` 沿缓存且无缓存记边界、`fldSimple` 同路、被跳过的目录不占号）+ OLE 嵌入对象预览解不开时留一行看得见的占位（ProgID + 部件文件名，.odoc/docx/odt 三链路都在）
-- [ ] 文档保真续项六剩下：OLE 嵌入对象的**内容**提取（CFB / 嵌入包里的正文——现在只到"看得见有个对象"这一层）
+- [x] 文档保真续项六剩下：OLE 嵌入对象的**内容**提取（复合文档 `cfb.ts` + `\x01Ole10Native` 的字段布局与兜底扫描 → 内层 docx 递归展开 / xlsx 与 CSV 取值成表 / txt 分段；两条接缝 docx `w:object` 与 ODT `draw:frame`（内联 base64 与 `Objects/objN/` 两种），块级正文作段落兄弟块、格内压行内，取不出的带真名与大小记边界）
 - [ ] 自动更新通道（须先决策：公开仓库或独立托管 update metadata）
 - [ ] macOS 打包（需签名/公证凭据）
 
