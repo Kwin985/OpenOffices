@@ -8,12 +8,13 @@
 // 页眉页脚与页面设置仍走 docxToDocMeta，批注列表仍走 docxToComments。
 // 抛错或拆不出块时调用方回退 mammoth。
 //
-// schema 边界（TipTap 侧没有对应属性，导入时刻意不硬塞，全部记进 warnings）：段落底纹与边框、
-// 行距与段前段后、脚注尾注、图表与 OLE 对象。
-// 表格边框/单元格底纹与竖排/上下标/表格缩进在 v0.38 起已经能读进 cell-style 与上下标 schema。
+// schema 边界（TipTap 侧没有对应属性，导入时刻意不硬塞，全部记进 warnings）：脚注尾注、图表与 OLE 对象。
+// 表格边框/单元格底纹与竖排/上下标/表格缩进在 v0.38 起已经能读进 cell-style 与上下标 schema；
+// 段落行距/段前后/底纹/边框（w:spacing/w:shd/w:pBdr）在 v0.39 起读进 paragraph-style schema。
 
 import { all, allDesc, attr, attrL, attrNum, els, find, findDesc, local, parseXml, textOf, type XEl } from './ooxml'
 import { CELL_EDGES, CSS_BORDER_STYLE, eighthsToPx, rgb2hex } from './cell-style'
+import { ooxmlLine } from './paragraph-style'
 import { commentRowsOf, type DocComment } from './docx'
 
 export interface DocxImport {
@@ -36,6 +37,10 @@ interface ZipLike {
 // 单位换算：1440 twip = 1in = 96px（故 1px = 15 twip）；914400 EMU = 1in（1px = 9525 EMU）；字号按半点存
 const TWIP_PX = 1 / 15
 const EMU_PX = 1 / 9525
+/** 段前/段后只写"按行"时的换算基准：一行按小四（12pt）单倍行距估 */
+const LINE_UNIT_PX = 19
+/** 长度保留两位小数：行距/段间距正是往返要保的那个量，取整会把 0.67px 变成 1px */
+const px2 = (n: number) => Math.round(n * 100) / 100
 const HP_PX = 2 / 3 // 半点 → px（pt = hp/2，px = pt×4/3）
 const PT_PX = 4 / 3
 
@@ -561,7 +566,10 @@ class Fidelity {
     return view.quote ? prefix + `<blockquote>${body}</blockquote>` : prefix + body
   }
 
-  /** 段落样式 → CSS：对齐 + 左缩进 + 首行缩进（缩进落在 lib/indent-extension.ts 的段落属性上） */
+  /**
+   * 段落样式 → CSS：对齐 + 缩进（lib/indent-extension.ts）+ 行距与段前后 + 底纹 + 四边边框
+   * （后三项落在 lib/paragraph-style.ts 的属性上）
+   */
   private paraCss(pPr: XEl | undefined): string {
     const bits: string[] = []
     const jc = val(pPr, 'w:jc')
@@ -590,7 +598,48 @@ class Fidelity {
       if (firstPx) bits.push(`text-indent: ${firstPx}px`)
       else if (hang) bits.push(`text-indent: ${-Math.round(hang * TWIP_PX)}px`)
     }
+    const sp = pPr ? find(pPr, 'w:spacing') : undefined
+    if (sp) {
+      const ln = ooxmlLine(attrNum(sp, 'w:line'), attr(sp, 'w:lineRule'), (n) => px2(n * TWIP_PX))
+      if (ln.length === 2) {
+        const [v, rule] = ln
+        // 倍数写成无单位（CSS 的 line-height 数值就是倍数），绝对值写成 px
+        bits.push(rule === 'auto' ? `line-height: ${v}` : `line-height: ${v}px`)
+        // 最小值行距 CSS 表达不了，就地记一笔让导出去认它
+        if (rule === 'atLeast') bits.push('--oof-lr: atLeast')
+      }
+      const before = this.spaceOf(sp, 'w:before', 'w:beforeLines')
+      const after = this.spaceOf(sp, 'w:after', 'w:afterLines')
+      // 0 是有意义的：Word 用 after="0" 压掉样式里那段间距，不能用真值判断把它当没声明
+      if (before !== undefined) bits.push(`margin-top: ${before}px`)
+      if (after !== undefined) bits.push(`margin-bottom: ${after}px`)
+    }
+    const fill = shadingHex(find(pPr, 'w:shd'))
+    if (fill) bits.push(`background-color: ${fill}`)
+    const pbdr = pPr ? find(pPr, 'w:pBdr') : undefined
+    if (pbdr) {
+      const edges = borderEdges(pbdr)
+      for (const edge of CELL_EDGES) {
+        const v = edges[edge]
+        if (v) bits.push(`border-${edge}: ${v}`)
+      }
+      // 段落的边框离字有 w:space（磅）距离，schema 里没有 padding 这一层，丢了不假装在
+      if (all(pbdr, 'w:top').some((e) => (attrNum(e, 'w:space') ?? 0) > 1)) this.warn('段落边框与文字的间距未保留')
+    }
     return bits.join('; ')
+  }
+
+  /**
+   * 段前/段后：优先 twips 的 `w:before`，只有"按行"写法时退到 `w:beforeLines`（值是行数×100）。
+   * 行的绝对高度取决于字号与行距，这里按小四（12pt）单倍行距的 19px 估，并记一条告警说明是估的。
+   */
+  private spaceOf(sp: XEl, twips: string, lines: string): number | undefined {
+    const tw = attrNum(sp, twips)
+    if (tw !== undefined) return px2(tw * TWIP_PX)
+    const ln = attrNum(sp, lines)
+    if (ln === undefined || ln === 0) return undefined
+    this.warn(`段前/段后按「行」计（${local(sp.name)} ${lines}），已按 19px/行 估算`)
+    return Math.round((ln / 100) * LINE_UNIT_PX * 100) / 100
   }
 
   /** 行内片段落成块：块级插入物（图片/分页符）把段落切开；纯空段仍出一块以保留空行 */
@@ -946,6 +995,14 @@ function borderEdges(el: XEl | undefined): Record<string, string | undefined> {
   return out
 }
 
+/** `w:shd` 的 `w:fill` → 规范 hex；auto/无填充/纯白都给 null（白底等于没底纹） */
+function shadingHex(shd: XEl | undefined): string | null {
+  const fill = attr(shd, 'w:fill') ?? ''
+  if (!fill || fill.toLowerCase() === 'auto') return null
+  const hex = rgb2hex(`#${fill.replace(/^#/, '').toLowerCase()}`)
+  return hex && hex !== '#ffffff' ? hex : null
+}
+
 /** 单元格边框四边 + 底纹 + 竖排对齐 → 一段内联 style（顺序固定，供结构测试直接比对） */
 function cellStyleCss(
   tcPr: XEl | undefined,
@@ -956,11 +1013,8 @@ function cellStyleCss(
     const v = edges[edge]
     if (v) bits.push(`border-${edge}: ${v}`)
   }
-  const fill = attr(find(tcPr, 'w:shd'), 'w:fill') ?? ''
-  if (fill && fill.toLowerCase() !== 'auto') {
-    const hex = rgb2hex(`#${fill.replace(/^#/, '').toLowerCase()}`)
-    if (hex && hex !== '#ffffff') bits.push(`background-color: ${hex}`)
-  }
+  const hex = shadingHex(find(tcPr, 'w:shd'))
+  if (hex) bits.push(`background-color: ${hex}`)
   const va = (val(tcPr, 'w:vAlign') ?? '').toLowerCase()
   const align = va === 'center' ? 'middle' : va === 'top' || va === 'bottom' ? va : ''
   if (align) bits.push(`vertical-align: ${align}`)

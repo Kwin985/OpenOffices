@@ -35,6 +35,7 @@ import { Toc } from '../lib/toc-extension'
 import { PageBreak } from '../lib/page-break-extension'
 import { Indent } from '../lib/indent-extension'
 import { CellStyle, IndentTableView } from '../lib/cell-style'
+import { ParagraphStyle, ruleOf, type LineRule } from '../lib/paragraph-style'
 import { FindReplace, frPluginKey, activeIndexOf } from '../lib/find-replace'
 import { docTemplate } from '../lib/templates'
 import { odtToHtml, prosemirrorToOdtBytes } from '../lib/odt'
@@ -118,13 +119,16 @@ function DocEditor({ tab }: Props) {
       TextAlign.configure({ types: ['heading', 'paragraph'] }),
       Indent.configure({ types: ['heading', 'paragraph'] }),
       TableKit.configure({ table: { resizable: true, View: IndentTableView } }),
-      // textStyle mark + 字色/字体族/字号（底色与行高本编辑器暂不露出）
+      // textStyle mark + 字色/字体族/字号。lineHeight 必须关掉：那是 TextStyleKit 给段落挂的同名属性，
+      // 与本编辑器记 OOXML 行距的 lineHeight（ParagraphStyle）撞名字，两边只能留一个
       TextStyleKit.configure({ backgroundColor: false, lineHeight: false }),
       // 上下标不在 TextStyleKit 里（它们是独立 mark，渲染成 <sup>/<sub>）
       Superscript,
       Subscript,
       // 表格/单元格的边框、底纹、竖排对齐与表格缩进：保真导入落在这些属性上
       CellStyle,
+      // 段落行距/段前后/底纹/四边：docx 的 w:spacing、w:shd、w:pBdr 读进来就靠这一层接住
+      ParagraphStyle,
       Highlight.configure({ multicolor: true }),
       CharacterCount,
       Toc,
@@ -881,6 +885,101 @@ function DocEditor({ tab }: Props) {
         {btn('撤销', () => editor.chain().focus().undo().run())}
         {btn('重做', () => editor.chain().focus().redo().run())}
       </div>
+      {(editor.isActive('paragraph') || editor.isActive('heading')) && (
+        <div className="doc-toolbar doc-para-bar">
+          {(() => {
+            // 光标所在段可能同时是标题，两种节点的属性各读一遍再合并（表格那条同理）
+            const pa = { ...editor.getAttributes('paragraph'), ...editor.getAttributes('heading') }
+            const lh = typeof pa.lineHeight === 'number' ? pa.lineHeight : 0
+            const rule: '' | 'auto' | 'exact' | 'atLeast' = !lh ? '' : ruleOf(lh, String(pa.lineRule ?? '') as LineRule)
+            // 界面上用「磅」，属性里存的是 CSS px（pt×4/3）：Word 的段落间距一向按磅给，别让用户换算
+            const pt = (v: unknown) => (typeof v === 'number' ? Math.round(v * 0.75 * 10) / 10 : null)
+            const toPx = (v: number) => Math.round(v * (4 / 3) * 100) / 100
+            const sbPx = typeof pa.spaceBefore === 'number' ? pa.spaceBefore : null
+            const saPx = typeof pa.spaceAfter === 'number' ? pa.spaceAfter : null
+            const sides = (before: number | null, after: number | null) =>
+              editor.chain().focus().setSpaceAround(before, after).run()
+            const bg = /^#[0-9a-f]{6}$/i.test(String(pa.background ?? '')) ? String(pa.background) : '#fff2cc'
+            const presets = ['', '1', '1.15', '1.5', '2']
+            const off = rule === 'auto' && lh && !presets.includes(String(lh)) ? String(lh) : ''
+            const sel = rule === 'exact' || rule === 'atLeast' ? rule : rule === 'auto' ? (off ? `x${lh}` : String(lh)) : ''
+            return (
+              <>
+                <span className="editor-status">段落：</span>
+                <select
+                  className="tb-select"
+                  value={sel}
+                  title={`行距${lh ? ` ${rule === 'auto' ? `${lh} 倍` : `${pt(lh)} 磅`}` : '（默认）'}`}
+                  onChange={(e) => {
+                    const v = e.target.value
+                    if (!v) editor.chain().focus().setParagraphStyle({ lineHeight: null, lineRule: null }).run()
+                    // 固定值/最小值先给 18 磅（=24px），再用旁边的框调
+                    else if (v === 'exact' || v === 'atLeast') editor.chain().focus().setLineSpacing(24, v).run()
+                    else if (v.startsWith('x')) editor.chain().focus().setLineSpacing(Number(v.slice(1)), 'auto').run()
+                    else editor.chain().focus().setLineSpacing(Number(v), 'auto').run()
+                  }}
+                >
+                  <option value="">行距</option>
+                  <option value="1">单倍</option>
+                  <option value="1.15">1.15 倍</option>
+                  <option value="1.5">1.5 倍</option>
+                  <option value="2">2 倍</option>
+                  {off && <option value={`x${lh}`}>{lh} 倍</option>}
+                  <option value="exact">固定值…</option>
+                  <option value="atLeast">最小值…</option>
+                </select>
+                {(rule === 'exact' || rule === 'atLeast') && (
+                  <label className="doc-hf-field" title="绝对行距（磅）">
+                    <input
+                      className="tb-input doc-num"
+                      type="number"
+                      step="0.5"
+                      min="1"
+                      value={pt(lh) ?? ''}
+                      onChange={(e) => {
+                        const v = e.target.valueAsNumber
+                        if (Number.isFinite(v) && v > 0) editor.chain().focus().setLineSpacing(toPx(v), rule).run()
+                      }}
+                    />
+                    磅
+                  </label>
+                )}
+                {[
+                  { label: '段前', cur: sbPx, set: (v: number | null) => sides(v, saPx) },
+                  { label: '段后', cur: saPx, set: (v: number | null) => sides(sbPx, v) },
+                ].map(({ label, cur, set }) => (
+                  <label key={label} className="doc-hf-field" title={`${label}间距（磅）；0 表示压掉样式里那段间距`}>
+                    {label}
+                    <input
+                      className="tb-input doc-num"
+                      type="number"
+                      step="0.5"
+                      min="0"
+                      value={pt(cur) ?? ''}
+                      onChange={(e) => {
+                        const v = e.target.valueAsNumber
+                        set(Number.isFinite(v) && v >= 0 ? toPx(v) : null)
+                      }}
+                    />
+                    磅
+                  </label>
+                ))}
+                {btn('无间距', () => sides(null, null), false, '清掉段前段后，回到样式默认')}
+                <span className="tb-sep" />
+                <label className="tb-color" title="段落底纹（Word 的段落「字符底纹/底纹」，导出 docx/odt 带走）">
+                  段落底纹
+                  <input
+                    type="color"
+                    value={bg}
+                    onChange={(e) => editor.chain().focus().setParaBackground(e.target.value).run()}
+                  />
+                </label>
+                {btn('无底纹', () => editor.chain().focus().setParaBackground(null).run(), false, '清掉段落底纹')}
+              </>
+            )
+          })()}
+        </div>
+      )}
       {editor.isActive('table') && (
         <div className="doc-toolbar doc-table-bar">
           {btn('↑行', () => editor.chain().focus().addRowBefore().run(), false, '在上方插入行')}

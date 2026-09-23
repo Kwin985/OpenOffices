@@ -751,6 +751,53 @@
   `w:vertAlign` 上下标、`w:shd fill=FFF2CC`、`w:vAlign` center/bottom 恰两处、未声明的格子仍不写 vAlign、
   `w:right w:val="nil"` 被 Word 原样写回）；`cargo test --lib` 39 通过（Rust 零改动）；tsc/build 绿
 
+## 段落排版保真：行距 · 段前段后 · 底纹与四边（v0.39）
+
+- **闭合 v0.38 剩下的段落边界**：`w:spacing`（`w:line`/`w:lineRule` 行距 + `w:before`/`w:after` 段前段后）、
+  段落底纹 `w:shd w:fill`、段落四边 `w:pBdr`——读侧进 `lib/docx-fidelity.ts`，schema 落在新开的
+  `lib/paragraph-style.ts`（`lineHeight`/`lineRule`/`spaceBefore`/`spaceAfter`/`background`/`bdTop..bdLeft`
+  挂 paragraph + heading），docx 与 odt 两条保存链路各自回得去；中文公文最伤观感的丢失就是这一档
+- **行距的两套双关对上了**：OOXML 的 `w:line` 在 `lineRule="auto"` 时是 **1/240 行**（Word 默认 259 即 1.08 倍），
+  `exact`/`atLeast` 时是**二十分之一磅**；CSS 的 `line-height` 也是双关（无单位=倍数、`px`=绝对值），
+  但 ODF/CSS 都表达不出"最小值"这一档，于是用行内自定义属性 `--oof-lr: atLeast` 记在原处带回
+  （**实测**穿过 ProseMirror/TipTap 的 detached-CSSOM 重解析不丢，6 块×9 属性零漂移，不需要退化成 `data-*`）；
+  属性上没记 rule 时 `ruleOf()` 按量级猜档（>6 只可能是 px 绝对值，没有哪份文档是 20 倍行距）
+- **整篇的默认归样式管，写侧不逐段补**：Word 把它存在 `Normal`、ODF 存在 `Standard`。v0.37 那版给每个段落补
+  `w:after="120"`，等于把「没声明」这个信息擦掉——**导出再开长出一屏假的段后距**（本轮往返断言抓到的）。
+  现在只写用户声明过的那几项；ODF 读侧同理由：`resolvePara` 沿样式链走时按名字跳过具名样式
+  （`office:styles` 里那批 + `FIXED_PARA_STYLES` 的 Standard/PQ/H1..H4/PSn），否则继承来的默认会被摊成每段的直接格式
+- **0 是真值**：Word 用 `w:after="0"` 压掉样式里那段间距，所以判空一律 `!== undefined` / `owned()`，
+  用 `if (v)` 会把 0 静默变成"没声明"；同一条纪律在 `ownedPx()`（docx 写侧）与单元格边框三态里已经立过
+- **单位各钉一处**：ODF 段间距与绝对行距写 **pt**（px↔pt 是精确换算，`cm` 写第三位小数会磨掉零点几 px，
+  缩进仍写 cm），读回走新的 `lenPx()`（保留两位小数），旧的整数取整 `len2px` 只留给缩进/边距；
+  段落边框宽度仍是 1/8 磅制的 `w:sz`（0.67px ↔ sz4 ↔ 0.5pt）
+- **UI**：段落上下文条 `.doc-para-bar`——行距下拉（单倍/1.15/1.5/2 + 固定值/最小值 + 自定义 `x倍数`）、
+  段前段后两个数字框与「无间距」、底纹取色与「无底纹」；**界面按「磅」显示、属性里存 CSS px**（pt×4/3），
+  不让用户换算。`TextStyleKit` 的 `lineHeight` 必须关掉：那是它给段落挂的**同名**属性，
+  与这里记 OOXML 行距的 `lineHeight` 撞名字，两边只能留一个
+- **主动记 warnings 的边界**：段落边框离字的 `w:space`（>1 磅时告警，schema 里没有 padding 这一层）、
+  按「行」计的段前段后（只有 `w:beforeLines`/`w:afterLines` 时按 19px/行估算并说明是估的）
+- **坑**：① **PowerShell 的假绿断言**——`Ok((cond), "msg")` 位置传参时 `(cond, "msg")` 被绑成**一个数组参数**，
+  `$c` 恒真、`$msg` 恒空（表现是一屏 PASS 却没有文字），须 `param([bool]$c, [string]$m)` 显形参；
+  同类还有 `$ps` 是自动变量（赋值静默无效）、段落格式在 `$p.Format`/`$p.Range.ParagraphFormat`
+  （`$p.ParagraphFormat` 在这个 adapter 返回 null）、`WdBorderType` 是**负数**（top -1/left -2/bottom -3/right -4）
+  且 `Border.Enable` 读不回（比 `LineStyle`）；② 比较函数要把"读不到"当失败——COM 返回空串/Null 时按 0 参与比较，
+  会造出「P5 没凭空长出间距」这种假过，`Near()` 现在直接拒 null/空；
+  ③ TipTap v3 内置 `trailingNode` 会在文档以标题结尾时补一个空段落，"六段全部挂上"实得 7——
+  归因后用 `tmp/probe39.mjs` 抓到，断言放宽为 ≥6 并**显式核对多出来那条是空段落**（而不是放任数据错位）；
+  ④ Word 的换算与归一：2 倍行距落到 `wdLineSpaceDouble` 而非 `Multiple`、`Multiple` 的 `LineSpacing` 单位是磅
+  （1.08×12pt 报 12.95）、`nil` 显式去边读回 `LineStyle 9999999`（与 0=none 分得开）、底纹色是 BGR 整数（`#fff2cc` → 13431551）；
+  ⑤ Word 另存会**抹掉冗余的 `w:after="0"`**（与样式默认等价就不写）、给边框补 `w:space="0"`、颜色改大写、
+  中文 Word 的样式 id 是数字（`Heading2` → `2`）——读侧必须通吃，而"显式 0 的保真"由我们自己那条往返腿断言
+- **验证（四腿）**：结构测试 **52 断言**（docx/odt 写侧字面 + 保真导入读回，含 1/240 与二十分之一磅两套、
+  `w:after="0"`、`atLeast`、按行估算）；CDP 真机冒烟 **43 断言全绿、页面异常 0 条**（6 块×9 属性：schema →
+  真实 DOM → `getHTML`/`setContent` 的 CSSOM 重解析零漂移 → 存 docx 重开 → 存 odt 重开 → 工具条真点出来生效）
+  + **Word 另存的那份再被本应用读回 9 断言**；**Word 16.0 实机 20 断言**（`P1 rule 5 / line 12.95 / before 10.8 / after 0`、
+  底纹 13431551、上边 single/sz4/`#8899aa`、下边 9999999、固定值 4/18pt、最小值 3/14.25pt、未声明段零凭空值、
+  标题 `OutlineLevel 2` + 24pt + 段后 9pt）；Word 原样另存件 **OOXML 差分 24 断言**（`w:line="259"`/`w:before="216"`、
+  `w:sz="4"`、`w:val="nil"` 原样写回、`w:fill="FFF2CC"`、`w:lineRule="exact|atLeast"` 360/285、
+  无声明段连 `w:pPr` 都不写、有排版的四段才写 `w:spacing`）；`cargo test --lib` 39 通过（Rust 零改动）+ tsc/build 绿
+
 ## 性能（v0.3）
 
 - **按编辑器分包 + 懒加载**：主包 8MB → 首屏约 300KB；Univer（6.1MB）只在首次激活表格标签时加载，
@@ -813,15 +860,16 @@ src/                  React 前端
   lib/univer.ts       Univer 实例工厂（公式 worker + 六个社区预设，含绘图 FOverGridImage）
   lib/univer-io.ts    xlsx 数据+样式（粗斜/颜色/字族/边框/对齐/换行/数字格式）/合并/图表/列宽行高/隐藏行列/冻结窗格 ↔ Univer 快照 转换（样式去重注册）
   lib/chart.ts        ChartPayload → VChart spec → 离屏 canvas PNG dataURL（动态导入分包）
-  lib/docx.ts         docx 导入导出（ProseMirror JSON ↔ docx，字色/字族/字号/高亮/页眉页脚/TOC 域/批注/页面设置 sectPr（纸张·四边距·w:cols 栏数栏距）/页码格式（PAGE·NUMPAGES）/分页符/表格合并映射（首行行级 tableHeader、列表 numbering.config 真编号）、单元格四边 `w:tcBorders`（**显式去边写 `w:val="nil"`**——none 压不住表级默认边框）、`w:shd` 底纹、`w:vAlign` 竖排、`w:tblInd` 表缩进、`w:vertAlign` 上下标）；文本节点兼容顶层 text 与 attrs.text；字节经 Packer.toBase64String + atob 取（toBuffer 走 jszip 的 nodebuffer 通道，浏览器里没有 Buffer））
+  lib/docx.ts         docx 导入导出（ProseMirror JSON ↔ docx，字色/字族/字号/高亮/页眉页脚/TOC 域/批注/页面设置 sectPr（纸张·四边距·w:cols 栏数栏距）/页码格式（PAGE·NUMPAGES）/分页符/表格合并映射（首行行级 tableHeader、列表 numbering.config 真编号）、单元格四边 `w:tcBorders`（**显式去边写 `w:val="nil"`**——none 压不住表级默认边框）、`w:shd` 底纹、`w:vAlign` 竖排、`w:tblInd` 表缩进、`w:vertAlign` 上下标、段落 `w:spacing`（行距 + 段前段后，**只写声明过的**）/`w:shd`/`w:pBdr`）；文本节点兼容顶层 text 与 attrs.text；字节经 Packer.toBase64String + atob 取（toBuffer 走 jszip 的 nodebuffer 通道，浏览器里没有 Buffer））
   lib/ooxml.ts        迷你 OOXML XML 解析器（零依赖、不碰 DOM）：parseXml/find/findDesc/all/allL/attr/attrL/val/valNum/textOf + decodeEnt 实体表——让 docx 读侧能在 Node 里直测
-  lib/docx-fidelity.ts OOXML → HTML 保真导入器（v0.37）：run 级 rPr（粗斜/删除线/下划线/字色/高亮/字族/字号/上下标 `w:vertAlign`）、段落 pPr（jc/`w:ind` 左右与首行悬挂四种缩进写法/pStyle 样式链）、numPr+numbering.xml → 有序无序与 ilvl 层级、表格 gridSpan/vMerge + tblGrid 列宽 + 单元格四边 `w:tcBorders`（含 val=nil 的显式去边）/底纹 `w:shd fill`/竖排 `w:vAlign`/表级 `w:tblInd`、图片 rels→dataURL、内外超链接、分页符、批注三态锚点、域代码文字不外泄；认不出就抛错或 blocks=0，调用方回退 mammoth
+  lib/docx-fidelity.ts OOXML → HTML 保真导入器（v0.37）：run 级 rPr（粗斜/删除线/下划线/字色/高亮/字族/字号/上下标 `w:vertAlign`）、段落 pPr（jc/`w:ind` 左右与首行悬挂四种缩进写法/pStyle 样式链）、numPr+numbering.xml → 有序无序与 ilvl 层级、表格 gridSpan/vMerge + tblGrid 列宽 + 单元格四边 `w:tcBorders`（含 val=nil 的显式去边）/底纹 `w:shd fill`/竖排 `w:vAlign`/表级 `w:tblInd`、段落 `w:spacing`（行距两档 + 段前后，含按行的 `w:*Lines` 估算）/`w:shd` 底纹/`w:pBdr` 四边、图片 rels→dataURL、内外超链接、分页符、批注三态锚点、域代码文字不外泄；认不出就抛错或 blocks=0，调用方回退 mammoth
   lib/cell-style.ts  单元格样式扩展（v0.38）：tableCell/tableHeader 的 bdTop/bdRight/bdBottom/bdLeft + background + vAlign、table 的 marginLeft 全局属性（只声明属性不改内容模型）；边框统一规范串 `"0.67px solid #8899aa"`，三态 null 未声明/'none' 显式去边/有值；`inlineBorder()` 读 CSSOM longhand（shorthand 对 none 返回空串）、`IndentTableView` 子类补 marginLeft（resizable 的节点视图不传 HTMLAttributes）、`eighthsToPx`/`pxToEighths` 管 1/8 磅换算、命令 setCellBackground/setCellVAlign
+  lib/paragraph-style.ts 段落排版扩展（v0.39）：paragraph/heading 的 lineHeight/lineRule/spaceBefore/spaceAfter/background/bdTop..bdLeft 全局属性，一组属性拼**一条** style（多条各写一份会互相盖掉）；`ooxmlLine`/`lineToOoxml`/`ruleOf` 管 1/240 行与二十分之一磅两套语义，"最小值"档 CSS 表达不了就修行内自定义属性 `--oof-lr` 带回；命令 setParagraphStyle/setLineSpacing/setSpaceAround/setParaBackground
   lib/indent-extension.ts 段落全局属性 indentLeft/indentFirst（32px 一档、上限 320px）+ setIndent/indent/outdent 命令 + Ctrl+] / Ctrl+[ + 悬挂缩进感知的出退格
   lib/toc-extension.ts TipTap 目录原子节点：按标题实时汇总、点击跳转
   lib/page-break-extension.ts TipTap pageBreak 原子块（`div[data-oo-pagebreak]`）+ insertPageBreak 命令 + Ctrl+Enter 快捷键
   lib/comment-extension.ts comment mark（cid 锚定批注）+ 加/删/定位/汇总工具
-  lib/odt.ts          ProseMirror JSON ↔ ODT（JSZip 打包导出 + DOMParser 导入，字符样式（字族/字号/字色/上下标 `style:text-position`，落在 content.xml 自动样式）/合并表/图片尺寸/页码域与总页数/page-layout 页面设置（纸张·四边距·style:columns 多栏）/分页符 fo:break-before/单元格自动样式 `fo:border-*`（宽度写 pt，读回走 `odfBorderCss` 保留 0.67px 这类细线不整数取整）+`fo:background-color`+`style:vertical-align`、表级 `fo:margin-left`）
+  lib/odt.ts          ProseMirror JSON ↔ ODT（JSZip 打包导出 + DOMParser 导入，字符样式（字族/字号/字色/上下标 `style:text-position`，落在 content.xml 自动样式）/合并表/图片尺寸/页码域与总页数/page-layout 页面设置（纸张·四边距·style:columns 多栏）/分页符 fo:break-before/单元格自动样式 `fo:border-*`（宽度写 pt，读回走 `odfBorderCss` 保留 0.67px 这类细线不整数取整）+`fo:background-color`+`style:vertical-align`、表级 `fo:margin-left`、段落直接格式 `fo:margin-top/-bottom` + `fo:line-height`（倍数写 % + proportional、绝对值写 pt + fixed/minimum，两档在 ODF 里分得清而 CSS 分不清）+ `fo:background-color` + `fo:border-*`（宽度写 pt），读侧按名字跳过具名样式与 `office:styles` 里那批，以免把整篇默认摊成每段的直接格式）
   lib/find-replace.ts 查找/替换 ProseMirror 插件：按文本块匹配存 state、装饰高亮、findNext/findPrev/replaceOne/replaceAll 命令（命中上限 FR_HIT_CAP=2000 截断并标 `N+`）
   lib/templates.ts    首页模板注册表与纯函数 seed：11 个模板（公文/会议纪要/周报 → ProseMirror JSON+meta，记账表/库存清单 → WorkbookPayload 含公式冻结，六套演示配色 → Deck）
   lib/ppt.ts          .opd 幻灯片数据模型（版式/主题/序列化）
@@ -909,6 +957,7 @@ cargo check        # Rust 后端检查（在 src-tauri 下）
 - [x] 性能三期：首开挂载不再走 Suspense（外壳+编辑器自持已解析组件，绕开 ~300ms 兜底节流）+ effect 改 layout + 公式 worker 线程池 A/B 裁决为删
 - [x] 文档：docx 保真导入（直接格式/缩进/列表层级/表格合并/图片/批注，mammoth 退为兜底）+ 缩进 schema 与 docx/odt 往返 + Word 实机回归
 - [x] 文档保真续项：上下标 `w:vertAlign` + 单元格四边/底纹/竖排对齐 + 表格缩进/段落右缩进 读入，.odoc/docx/odt 三链路回写（Word 16.0 实机 + Word 另存件差分与再读回双向核对）
+- [x] 文档保真续项三：段落行距（倍数/固定值/最小值）+ 段前段后 + 底纹与四边 `w:spacing`/`w:shd`/`w:pBdr` 读入，docx/odt 回写（Word 16.0 实机 20 断言 + Word 另存件 OOXML 差分 24 断言）
 - [ ] 文档保真续项二：脚注/尾注、题注与交叉域（图表号/题注 SEQ）、文本框与 SmartArt、嵌入对象——当前各记一条"未保留"告警
 - [ ] 自动更新通道（须先决策：公开仓库或独立托管 update metadata）
 - [ ] macOS 打包（需签名/公证凭据）

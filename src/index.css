@@ -911,12 +911,14 @@ button {
 }
 
 .doc-table-bar,
-.doc-img-bar {
+.doc-img-bar,
+.doc-para-bar {
   background: rgba(44, 102, 212, 0.05);
 }
 
 :root[data-theme='dark'] .doc-table-bar,
-:root[data-theme='dark'] .doc-img-bar {
+:root[data-theme='dark'] .doc-img-bar,
+:root[data-theme='dark'] .doc-para-bar {
   background: rgba(91, 140, 255, 0.08);
 }
 

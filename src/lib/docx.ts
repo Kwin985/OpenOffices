@@ -11,8 +11,10 @@ import {
   HeadingLevel,
   type IBorderOptions,
   type IFontAttributesProperties,
+  type ISpacingProperties,
   ImageRun,
   LevelFormat,
+  LineRuleType,
   PageBreak,
   PageNumber,
   Packer,
@@ -27,6 +29,7 @@ import {
   WidthType,
 } from 'docx'
 import { borderParts, pxToEighths } from './cell-style'
+import { lineToOoxml, type LineRule } from './paragraph-style'
 import { decodeEnt } from './ooxml'
 
 export interface PMNode {
@@ -524,6 +527,52 @@ function indentOf(node: PMNode, baseLeftTwip = 0) {
   return Object.keys(o).length ? o : undefined
 }
 
+/** 数值属性 → px；null/NaN 算「没声明」。**不能走 num()**：它把 null 折成 0，而段后距 0 是真值 */
+function ownedPx(v: unknown): number | undefined {
+  return typeof v === 'number' && Number.isFinite(v) ? v : undefined
+}
+
+/**
+ * 段落直接格式 → `w:spacing`（行距 + 段前段后）。
+ * 只写用户声明过的那几项：整篇的默认行距段距归 Word 的 Normal 样式管，
+ * 替每一段补一份默认值会把「没声明」这个信息擦掉（导出再开就长出一屏假的段后距）。
+ * 显式的 0 是真值要照写——Word 就用 `w:after="0"` 压掉样式里那段间距。
+ */
+function spacingOf(node: PMNode): ISpacingProperties | undefined {
+  const o: {
+    line?: number
+    lineRule?: ISpacingProperties['lineRule']
+    before?: number
+    after?: number
+  } = {}
+  const ln = lineToOoxml(
+    ownedPx(node.attrs?.lineHeight) ?? null,
+    (typeof node.attrs?.lineRule === 'string' ? node.attrs.lineRule : null) as LineRule | null,
+    (px) => px * PX_TWIP,
+  )
+  if (ln) {
+    o.line = ln.line
+    o.lineRule = ln.lineRule === 'atLeast' ? LineRuleType.AT_LEAST : ln.lineRule === 'exact' ? LineRuleType.EXACT : LineRuleType.AUTO
+  }
+  const before = ownedPx(node.attrs?.spaceBefore)
+  if (before !== undefined) o.before = Math.round(before * PX_TWIP)
+  const after = ownedPx(node.attrs?.spaceAfter)
+  if (after !== undefined) o.after = Math.round(after * PX_TWIP)
+  return Object.keys(o).length ? o : undefined
+}
+
+/** 段落的三条直接格式（行距段距 / 底纹 / 四边）一次拼好，供 new Paragraph 的参数展开 */
+function paraFormatOf(node: PMNode) {
+  const sp = spacingOf(node)
+  const sh = shadingOf(node.attrs?.background)
+  const bd = bordersOf(node.attrs)
+  return {
+    ...(sp ? { spacing: sp } : {}),
+    ...(sh ? { shading: sh } : {}),
+    ...(bd ? { border: bd } : {}),
+  }
+}
+
 /** CSS 线型词 → OOXML 线型（导入时已归一到这几个词） */
 const OOXML_BORDER: Record<string, (typeof BorderStyle)[keyof typeof BorderStyle]> = {
   solid: BorderStyle.SINGLE,
@@ -550,8 +599,8 @@ function cellBorder(v: unknown): IBorderOptions | undefined {
   return { style: OOXML_BORDER[p.style] ?? BorderStyle.SINGLE, size: pxToEighths(p.px), color: p.hex.slice(1) }
 }
 
-/** 单元格四边 → w:tcBorders；一条都没有就不写这个元素 */
-function cellBorders(attrs: Record<string, unknown> | undefined) {
+/** 四边 → w:tcBorders（表格）或 w:pBdr（段落）；两者同形，一条都没有就不写这个元素 */
+function bordersOf(attrs: Record<string, unknown> | undefined) {
   const b = {
     top: cellBorder(attrs?.bdTop),
     bottom: cellBorder(attrs?.bdBottom),
@@ -559,6 +608,12 @@ function cellBorders(attrs: Record<string, unknown> | undefined) {
     right: cellBorder(attrs?.bdRight),
   }
   return Object.values(b).some(Boolean) ? b : undefined
+}
+
+/** 底纹 → w:shd；Word 的 fill 是不带 # 的十六进制 */
+function shadingOf(v: unknown) {
+  const hex = typeof v === 'string' ? v : ''
+  return hex ? { type: ShadingType.CLEAR, fill: hex.replace('#', '').toLowerCase() } : undefined
 }
 
 /** 上下标：Word 把 vertAlign 记在 rPr，与粗斜体同级，所以是两个互斥的 run 属性 */
@@ -621,7 +676,7 @@ function blocksOf(nodes: PMNode[], depth = 0, dt: DocTrack = { used: new Set(), 
             // 读回来更会把它当成普通段落（编号从此消失）。
             ...(ordered ? { numbering: { reference: ORDERED_REF, level: Math.min(2, depth) } } : { bullet: { level: depth } }),
             indent: indentOf(main),
-            spacing: { after: 60 },
+            ...paraFormatOf(main),
           }),
         )
         out.push(...blocksOf(blocks.slice(1), depth, dt))
@@ -637,6 +692,7 @@ function blocksOf(nodes: PMNode[], depth = 0, dt: DocTrack = { used: new Set(), 
           outlineLevel: Math.max(0, Math.min(8, level - 1)),
           indent: indentOf(node),
           alignment: alignOf(node),
+          ...paraFormatOf(node),
           heading:
             level === 1 ? HeadingLevel.HEADING_1
             : level === 2 ? HeadingLevel.HEADING_2
@@ -711,14 +767,14 @@ function blocksOf(nodes: PMNode[], depth = 0, dt: DocTrack = { used: new Set(), 
                   // TipTap 合并语义 colspan/rowspan → gridSpan + vMerge（docx 库内部展开 restart/continue）
                   const cs = Number(cell.attrs?.colspan ?? 1) || 1
                   const rs = Number(cell.attrs?.rowspan ?? 1) || 1
-                  const borders = cellBorders(cell.attrs)
-                  const bg = typeof cell.attrs?.background === 'string' ? cell.attrs.background : ''
+                  const borders = bordersOf(cell.attrs)
+                  const bg = shadingOf(cell.attrs?.background)
                   const va = cell.attrs?.vAlign
                   return new TableCell({
                     ...(cs > 1 ? { columnSpan: cs } : {}),
                     ...(rs > 1 ? { rowSpan: rs } : {}),
                     ...(borders ? { borders } : {}),
-                    ...(bg ? { shading: { type: ShadingType.CLEAR, fill: bg.replace('#', '').toLowerCase() } } : {}),
+                    ...(bg ? { shading: bg } : {}),
                     ...(va === 'top' || va === 'middle' || va === 'bottom'
                       ? { verticalAlign: va === 'middle' ? VerticalAlignTable.CENTER : va === 'top' ? VerticalAlignTable.TOP : VerticalAlignTable.BOTTOM }
                       : {}),
@@ -736,7 +792,7 @@ function blocksOf(nodes: PMNode[], depth = 0, dt: DocTrack = { used: new Set(), 
         children: inlineBlockChildren(node, dt),
         alignment: alignOf(node),
         indent: indentOf(node),
-        spacing: { after: 120 },
+        ...paraFormatOf(node),
       }),
     )
   }

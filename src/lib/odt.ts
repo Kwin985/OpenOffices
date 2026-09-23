@@ -11,7 +11,8 @@ import {
   type PageSetup,
   type PMNode,
 } from './docx'
-import { bdAttr, borderParts, CELL_EDGES, cssBorder, rgb2hex } from './cell-style'
+import { bdAttr, borderParts, CELL_EDGES, cssBorder, rgb2hex, type CellEdge } from './cell-style'
+import { ruleOf, type LineRule } from './paragraph-style'
 
 const OD_MIME = 'application/vnd.oasis.opendocument.text'
 
@@ -19,6 +20,8 @@ const OD_MIME = 'application/vnd.oasis.opendocument.text'
 const mm2cm = (mm: number) => `${(mm / 10).toFixed(2)}cm`
 // CSS px → ODF 长度：缩进写 cm，三位小数以免往返掉精度（32px ≈ 0.847cm）
 const px2cm = (px: number) => `${(px / 37.795).toFixed(3)}cm`
+// CSS px → ODF 长度：段前段后与绝对行距写 pt（px↔pt 是精确换算，cm 第三位小数就会磨掉零点几 px）
+const px2pt = (px: number) => `${Math.round(px * 75) / 100}pt`
 /** ODF 承认的四边框线型；inset/outset 之类翻成 solid，至少宽度与颜色还在 */
 const ODF_BORDER_STYLE: Record<string, string> = { solid: 'solid', dashed: 'dashed', dotted: 'dotted', double: 'double' }
 /** 规范边框串（`1px solid #8899aa`）→ fo:border-* 的值（宽度用 pt：px↔pt 换算是精确的） */
@@ -50,20 +53,25 @@ function odfBorderCss(v: string | null | undefined): string | null {
     : n * 37.795
   return cssBorder(`${Math.round(px * 100) / 100}px${m[3]}`)
 }
-/** ODF 长度 → CSS px；负值照收（悬挂缩进就是负的 fo:text-indent） */
-function len2px(v: string | null | undefined): number | undefined {
+/** ODF 长度 → CSS px（保留两位小数）；行距/段间距正是往返要保的量，取整会把 0.67px 抬成 1px */
+function lenPx(v: string | null | undefined): number | undefined {
   if (!v) return undefined
   const m = v.trim().match(/^(-?[\d.]+)(cm|mm|in|"|pt|px)?$/)
   if (!m) return undefined
   const n = Number(m[1])
-  if (!Number.isFinite(n) || n === 0) return undefined
+  if (!Number.isFinite(n)) return undefined
   const px =
     m[2] === 'mm' ? n * 37.795
     : m[2] === 'in' || m[2] === '"' ? n * 96
     : m[2] === 'pt' ? (n * 96) / 72
     : m[2] === 'px' ? n
     : n * 37.795
-  return Math.round(px)
+  return Math.round(px * 100) / 100
+}
+/** ODF 长度 → CSS px；负值照收（悬挂缩进就是负的 fo:text-indent），0 按「没有缩进」 */
+function len2px(v: string | null | undefined): number | undefined {
+  const px = lenPx(v)
+  return px === undefined || px === 0 ? undefined : Math.round(px)
 }
 /** CSS 属性值 → ODF 的 fo:text-align（start/center/end/justify） */
 const FO_ALIGN: Record<string, string> = { left: 'start', center: 'center', right: 'end', justify: 'justify' }
@@ -74,6 +82,32 @@ function num(v: unknown): number {
   const n = typeof v === 'number' ? v : Number.parseInt(String(v ?? ''), 10)
   return Number.isFinite(n) ? n : 0
 }
+
+/** 数值属性 → 数字；null/NaN 一律算「没声明」。**0 是真值**，所以不能用 num() 或 if(v) 判 */
+function owned(v: unknown): number | undefined {
+  return typeof v === 'number' && Number.isFinite(v) ? v : undefined
+}
+
+/**
+ * 具名段落样式：它们记的是「这一类段落」的默认排版，不是某一格的直接格式。
+ * 本应用把 H1..H4/PC/PQ 和派生的 PSn 一起写进 content.xml 的 automatic-styles，只按"自动样式"分不开，
+ * 故按名字排除（PQ 的 fo:border-left 若当成段落边框，导出再开就成了双份）；
+ * 第三方文件的具名样式在 styles.xml 的 office:styles 里，读侧另外收。
+ */
+const FIXED_PARA_STYLES = new Set([
+  'Standard',
+  'Text_20_Body',
+  'Default_20_Paragraph_20_Style',
+  'PBK',
+  'Header',
+  'Footer',
+  'PC',
+  'PQ',
+  'H1',
+  'H2',
+  'H3',
+  'H4',
+])
 
 /**
  * CSS 字体列表 → ODF 的拉丁/中日韩两个槽。
@@ -204,7 +238,7 @@ class OdtBuilder {
   constructor(private meta?: DocMeta) {}
 
   /**
-   * 段落直接格式（对齐 + 缩进）→ 派生自动样式名。
+   * 段落直接格式（对齐 + 缩进 + 行距段距 + 底纹边框）→ 派生自动样式名。
    * ODF 一个段落只认一个 text:style-name，「居中 + 首行缩进两字符」这类组合只能另起一条样式，
    * 父样式指回基础样式（Standard/H1/PQ），同样的组合复用同一个名字。
    * leftAdd：基础样式自带的左边距（PQ 的 0.8cm），节点上的缩进是在它之外的增量。
@@ -220,8 +254,30 @@ class OdtBuilder {
     const right = Math.max(0, num(node.attrs?.indentRight))
     const first = num(node.attrs?.indentFirst)
     const bl = opts.leftAdd ?? 0
-    if (!align && raw <= bl && !right && !first) return base
-    const key = JSON.stringify({ base, align, left: raw, right, first, bl })
+    const lh = owned(node.attrs?.lineHeight)
+    const lr = typeof node.attrs?.lineRule === 'string' ? node.attrs.lineRule : ''
+    const sb = owned(node.attrs?.spaceBefore)
+    const sa = owned(node.attrs?.spaceAfter)
+    const bg = typeof node.attrs?.background === 'string' ? node.attrs.background : ''
+    const bd: Partial<Record<CellEdge, string>> = {}
+    for (const edge of CELL_EDGES) {
+      const v = node.attrs?.[bdAttr(edge)]
+      if (typeof v === 'string' && v) bd[edge] = v
+    }
+    // 判空一律用 !== undefined：段后距 0 是"压掉样式那段间距"的真值，用 if 会静默丢掉
+    if (
+      !align &&
+      raw <= bl &&
+      !right &&
+      !first &&
+      lh === undefined &&
+      sb === undefined &&
+      sa === undefined &&
+      !bg &&
+      Object.keys(bd).length === 0
+    )
+      return base
+    const key = JSON.stringify({ base, align, left: raw, right, first, bl, lh, lr, sb, sa, bg, bd })
     let name = this.paraStyles.get(key)
     if (!name) {
       name = `PS${++this.paraSeq}`
@@ -233,7 +289,20 @@ class OdtBuilder {
   private paraStyleXml(): string {
     let out = ''
     for (const [key, name] of this.paraStyles) {
-      const s = JSON.parse(key) as { base?: string; align?: string; left?: number; right?: number; first?: number; bl?: number }
+      const s = JSON.parse(key) as {
+        base?: string
+        align?: string
+        left?: number
+        right?: number
+        first?: number
+        bl?: number
+        lh?: number
+        lr?: string
+        sb?: number
+        sa?: number
+        bg?: string
+        bd?: Partial<Record<CellEdge, string>>
+      }
       let pp = ''
       const align = FO_ALIGN[s.align ?? '']
       if (align) pp += ` fo:text-align="${align}"`
@@ -241,6 +310,20 @@ class OdtBuilder {
       if ((s.left ?? 0) > (s.bl ?? 0)) pp += ` fo:margin-left="${px2cm(s.left ?? 0)}"`
       if (s.right) pp += ` fo:margin-right="${px2cm(s.right)}"`
       if (s.first) pp += ` fo:text-indent="${px2cm(s.first)}"`
+      if (s.sb !== undefined) pp += ` fo:margin-top="${px2pt(s.sb)}"`
+      if (s.sa !== undefined) pp += ` fo:margin-bottom="${px2pt(s.sa)}"`
+      if (s.lh !== undefined) {
+        // 倍数写百分比 + proportional；固定值/最小值写 pt，两档在 ODF 里分得清（CSS 分不出）
+        pp +=
+          ruleOf(s.lh, (s.lr || undefined) as LineRule | undefined) === 'auto'
+            ? ` fo:line-height="${Math.round(s.lh * 100)}%" style:line-height="proportional"`
+            : ` fo:line-height="${px2pt(s.lh)}" style:line-height="${s.lr === 'atLeast' ? 'minimum' : 'fixed'}"`
+      }
+      if (s.bg) pp += ` fo:background-color="${s.bg}"`
+      for (const edge of CELL_EDGES) {
+        const v = s.bd?.[edge]
+        if (v) pp += ` fo:border-${edge}="${odtBorder(v)}"`
+      }
       out +=
         `<style:style style:name="${name}" style:family="paragraph" style:parent-style-name="${s.base || 'Standard'}">` +
         `<style:paragraph-properties${pp}/></style:style>`
@@ -635,12 +718,15 @@ export async function odtToHtml(bytes: Uint8Array): Promise<{ html: string; meta
 
   const styles = new Map<string, Element>() // name → style:style / default-style
   const listStyles = new Map<string, boolean>() // name → 是否有序
+  /** styles.xml 的 office:styles 里那批具名样式（Text Body、Heading 1…）：它们的排版是文档默认，不是某段的直接格式 */
+  const namedStyles = new Set<string>()
   for (const d of [cdoc, sdoc]) {
     if (!d) continue
     for (const el of Array.from(d.getElementsByTagName('*'))) {
       if (el.localName === 'style') {
         const name = el.getAttribute('style:name')
         if (name && !styles.has(name)) styles.set(name, el)
+        if (name && el.parentElement?.localName === 'styles') namedStyles.add(name)
       } else if (el.localName === 'list-style') {
         const name = el.getAttribute('style:name')
         if (name)
@@ -707,10 +793,18 @@ export async function odtToHtml(bytes: Uint8Array): Promise<{ html: string; meta
     leftPx?: number
     rightPx?: number
     firstPx?: number
+    /** 行距：倍数（rule=auto）或 px（exact/atLeast） */
+    lh?: number
+    lr?: LineRule
+    sb?: number
+    sa?: number
+    bg?: string
+    bd?: Partial<Record<CellEdge, string>>
   }
 
   const resolvePara = (name: string | null | undefined): ParaFormat => {
     const out: ParaFormat = {}
+    const bd = () => (out.bd ??= {})
     for (const el of styleChain(name)) {
       const pp = pick(el, 'paragraph-properties')
       if (!pp) continue
@@ -722,12 +816,49 @@ export async function odtToHtml(bytes: Uint8Array): Promise<{ html: string; meta
       if (mr !== undefined) out.rightPx = mr
       const ti = len2px(pp.getAttribute('fo:text-indent'))
       if (ti !== undefined) out.firstPx = ti
+      // 下面这几项只从"这一段的样式"取：具名样式（Standard/PQ/H1…）里的那些是整篇的默认，
+      // 摊到每一段上就等于把默认值写成直接格式，导出再开会长出一整篇的显式行距
+      const sn = String(el.getAttribute('style:name'))
+      if (namedStyles.has(sn) || FIXED_PARA_STYLES.has(sn)) continue
+      const sh = lenPx(pp.getAttribute('fo:margin-top'))
+      if (sh !== undefined) out.sb = sh
+      const sv = lenPx(pp.getAttribute('fo:margin-bottom'))
+      if (sv !== undefined) out.sa = sv
+      const lv = pp.getAttribute('fo:line-height')
+      if (lv) {
+        const t = lv.trim().toLowerCase()
+        if (t.endsWith('%')) {
+          const n = Number.parseFloat(t)
+          if (Number.isFinite(n) && n > 0) {
+            out.lh = Math.round(n) / 100
+            out.lr = 'auto'
+          }
+        } else {
+          const px = lenPx(t)
+          if (px !== undefined && px > 0) {
+            out.lh = px
+            // ODF 1.2 的 method 优先；老文件只有 style:line-height（proportional/fixed/minimum/leading）
+            const m = (pp.getAttribute('style:line-height-method') ?? pp.getAttribute('style:line-height') ?? '')
+              .trim()
+              .toLowerCase()
+            out.lr = m === 'minimum' ? 'atLeast' : 'exact'
+          }
+        }
+      }
+      const bg = pp.getAttribute('fo:background-color')
+      if (bg && !/^(auto|transparent|inherit|none)$/.test(bg.trim().toLowerCase())) out.bg = rgb2hex(bg) ?? bg.trim()
+      // 四边各一条 fo:border-<edge>，简写 fo:border 是「四边同值」的兜底
+      const bs = pp.getAttribute('fo:border')
+      for (const edge of CELL_EDGES) {
+        const v = odfBorderCss(pp.getAttribute(`fo:border-${edge}`) ?? bs)
+        if (v) bd()[edge] = v
+      }
     }
     return out
   }
 
   /**
-   * 段落 → 行内 style（textAlign 与 Indent 两个扩展都按行内样式解析）。
+   * 段落 → 行内 style（textAlign / Indent / ParagraphStyle 三个扩展都按行内样式解析）。
    * minusLeft 是容器本身已经给出的左边距（blockquote 即 PQ 的 0.8cm），只把超出的那一档落成缩进属性。
    */
   const paraStyle = (name: string | null | undefined, minusLeft = 0): string => {
@@ -738,6 +869,16 @@ export async function odtToHtml(bytes: Uint8Array): Promise<{ html: string; meta
     if (left > 0) bits.push(`margin-left: ${left}px`)
     if (p.rightPx) bits.push(`margin-right: ${p.rightPx}px`)
     if (p.firstPx) bits.push(`text-indent: ${p.firstPx}px`)
+    if (p.lh !== undefined) bits.push(p.lr === 'auto' || p.lr === undefined ? `line-height: ${p.lh}` : `line-height: ${p.lh}px`)
+    // 「最小值」与「固定值」在 CSS 里同为绝对行高，只有 OOXML 分这两档，靠自定义属性带回去
+    if (p.lr === 'atLeast') bits.push('--oof-lr: atLeast')
+    if (p.sb !== undefined) bits.push(`margin-top: ${p.sb}px`)
+    if (p.sa !== undefined) bits.push(`margin-bottom: ${p.sa}px`)
+    if (p.bg) bits.push(`background-color: ${p.bg}`)
+    for (const edge of CELL_EDGES) {
+      const v = p.bd?.[edge]
+      if (v) bits.push(`border-${edge}: ${v}`)
+    }
     return bits.length ? ` style="${bits.join('; ')}"` : ''
   }
 
