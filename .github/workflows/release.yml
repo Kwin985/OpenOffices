@@ -1,3 +1,10 @@
+# 打包并发布 Release。
+#
+# 计费策略（2026-09-23 收紧：私有仓库每月只有 2000 Actions 分钟，Windows runner 按 2× 计）：
+# - 推 v* tag 只跑 Linux。Windows 那条腿单独占原先约 3/4 的分钟数，改由 workflow_dispatch 勾 build_windows，
+#   或本机 `pnpm tauri build` 出 setup.exe/msi 后手动上传。
+# - tag 路径上不跑 cargo test：每轮发版前本机已过（cargo test --lib + tsc + pnpm build），CI 再跑一遍是重复付费。
+# - 测试和 Windows 都只在手动触发时按需打开，正常发版不再自动跑。
 name: Release
 
 on:
@@ -5,19 +12,40 @@ on:
     tags:
       - 'v*'
   workflow_dispatch:
+    inputs:
+      tagName:
+        description: '要发布的 tag（留空 = 只构建不发布）'
+        required: false
+        default: ''
+      build_linux:
+        description: '构建 Linux 包（1× 计费）'
+        type: boolean
+        required: false
+        default: true
+      build_windows:
+        description: '构建 Windows 包（2× 计费，默认不跑）'
+        type: boolean
+        required: false
+        default: false
+      run_tests:
+        description: '额外跑 cargo test --lib'
+        type: boolean
+        required: false
+        default: false
 
 permissions:
   contents: write
 
+env:
+  # tag push 触发时 tauri-action 不自动推断标签（默认只认 release 事件），不传 tagName 会静默跳过上传；
+  # 手动触发留空即"只构建不发布"，也可在 tagName 输入框里填一个已存在的 tag 来补发。
+  RELEASE_TAG: ${{ github.event.inputs.tagName || (github.event_name == 'push' && github.ref_name || '') }}
+
 jobs:
-  release:
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - platform: windows-latest
-          - platform: ubuntu-22.04
-    runs-on: ${{ matrix.platform }}
+  linux:
+    if: github.event_name == 'push' || inputs.build_linux
+    runs-on: ubuntu-22.04
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
 
@@ -33,11 +61,21 @@ jobs:
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
 
+      - name: Cache apt archives
+        uses: actions/cache@v4
+        with:
+          # 省的是"每次重新下载"那一截（webkit2gtk 一串依赖几十 MB），安装步骤本身省不掉
+          path: |
+            /var/cache/apt/archives
+            /var/lib/apt/lists
+          key: apt-ubuntu22.04-${{ hashFiles('.github/workflows/release.yml') }}
+          restore-keys: |
+            apt-ubuntu22.04-
+
       - name: Linux system deps (webkit2gtk 等 Tauri 打包链)
-        if: matrix.platform == 'ubuntu-22.04'
         run: |
           sudo apt-get update
-          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf
+          sudo apt-get install -y --no-install-recommends libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf
 
       - name: Rust cache
         uses: swatinem/rust-cache@v2
@@ -51,6 +89,7 @@ jobs:
         run: pnpm exec tsc --noEmit
 
       - name: Rust tests
+        if: inputs.run_tests
         working-directory: src-tauri
         run: cargo test --lib
 
@@ -59,9 +98,52 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
-          # tag push 触发时 tauri-action 不自动推断标签（默认只认 release 事件），
-          # 不传 tagName 会静默跳过上传；workflow_dispatch 传空 = 只构建不发布
-          tagName: ${{ github.event_name != 'workflow_dispatch' && github.ref_name || '' }}
-          releaseName: 'OpenOffices ${{ github.ref_name }}'
+          tagName: ${{ env.RELEASE_TAG }}
+          releaseName: 'OpenOffices ${{ env.RELEASE_TAG }}'
+          releaseCommitish: ${{ github.sha }}
+          releaseDraft: false
+
+  windows:
+    if: github.event_name == 'workflow_dispatch' && inputs.build_windows
+    runs-on: windows-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Rust cache
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      - name: Install frontend deps
+        run: pnpm install --frozen-lockfile
+
+      - name: Type check
+        run: pnpm exec tsc --noEmit
+
+      - name: Rust tests
+        if: inputs.run_tests
+        working-directory: src-tauri
+        run: cargo test --lib
+
+      - name: Build bundles and publish release
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tagName: ${{ env.RELEASE_TAG }}
+          releaseName: 'OpenOffices ${{ env.RELEASE_TAG }}'
           releaseCommitish: ${{ github.sha }}
           releaseDraft: false

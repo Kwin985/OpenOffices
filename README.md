@@ -220,6 +220,11 @@
   自动推断标签，缺 `tagName` 输入会静默跳过上传（`No releaseId or tagName provided, skipping
   all uploads...`），显式传 `tagName`/`releaseName`/`releaseDraft: false` 后 Release 正常发布
   win（exe/msi）+ linux（deb/rpm/AppImage）五产物；③Linux 首跑编译一次通过（约 17 分钟）
+- **Actions 分钟止血（2026-09-23）**：私有仓库每月仅 2000 分钟，本周期已用 1833，几乎全被
+  Release CI 吃掉（Windows runner 按 2× 计、占约 3/4）。`release.yml` 改为：推 `v*` tag 只打
+  Linux，Windows 与 `cargo test` 挪到 `workflow_dispatch` 手动勾选（`build_windows` / `run_tests`），
+  正常发版不再自动跑测试；apt 依赖加 `actions/cache` + `--no-install-recommends`；两条 job 各设
+  `timeout-minutes` 兜底。Windows 包改由本机 `pnpm tauri build` 产出后按需上传，或发版时手动触发一次
 - **本机产物链路**：`pnpm tauri build` 全量走通——release+lto 首编 4m54s，产物 NSIS 8.5MB /
   MSI 9.5MB；NSIS 静默安装→`%LOCALAPPDATA%\OpenOffices` 用户级免管理员→注册表 `.ods/.xlsx/
   .opd` 等 ProgId 与 `"%1"` 打开命令齐备→带文件参数启动真实出标签→静默卸载清理干净
@@ -834,7 +839,7 @@ src/                  React 前端
   lib/sync.ts         最近文件端到端加密同步（WebCrypto PBKDF2-SHA256 → AES-256-GCM，.oosync 信封）
   components/         Home（最近文件 + 从模板新建画廊） / Workspace / SheetEditor（保存按 .xlsx/.ods/.csv 三分流） / DocEditor（页面设置含分栏/页码格式、分页参考线、分页符、表格与图片上下文工具条、粘贴成图、查找替换面板、字体族·字号、缩进工具条与 Ctrl+]/[、上下标 X²/X₂、表格上下文条的底纹色与竖排对齐（上/中/下）、版本历史·自动保存、模板 seed、状态栏字数节流；打开 .docx 保真导入优先、mammoth 兜底，保存按 .odoc/.odt/.docx 各自格式原地落盘） / PptEditor / PdfViewer（pdfjs-dist 懒加载，连续多页视口虚拟渲染+Ctrl 缩放+TextLayer 文字选择+全文搜索+缩略图/大纲/标注侧栏+高亮便签与矩形·椭圆·直线·手绘形状（绘制/导入/写回 pdf-lib）+标注编辑（点选/拖移/改色/删除）+「页面」工作区旋转/删除/提取/合并/拆分；≥4MB 走分段读（lib/pdf-range.ts），卸载时 destroy openTask 并 abort transport））
 scripts/              copy-pdfjs-assets.mjs（dev/build 前复制 cmaps/标准字体到 public/pdfjs）
-.github/workflows/    release.yml——tag v* 触发：门禁→win/linux 矩阵打包→GitHub Release
+.github/workflows/    release.yml——tag v* 触发只打 Linux（1× 计费）；Windows（2×）与 cargo test 改手动 dispatch 勾选
 ```
 
 表格文件流：`xlsx/ods 磁盘 → Rust(calamine 值 + xlsx/ods 各自 zip/quick-xml 直解样式·合并·尺寸·字族·隐藏·冻结·公式·图表) → JSON 快照 → Univer 渲染（图表经 VChart 出 PNG 浮动图片）`；CSV 走 `csv.rs` 状态机（UTF-8/GBK 自动）→ 单表载荷；保存按扩展名分流——`.xlsx` 经 `rust_xlsxwriter`（含原生图表部件）、`.ods` 经 `ods.rs` 生成 ODF 包、`.csv` 经 `csv.rs` 写 BOM + CRLF 文本（只存首表）。
