@@ -846,6 +846,43 @@
   多段脚注在 Word 里读回**真是两个 `Paragraphs`**、脚注段挂"脚注文本"样式、正文没被复进主文档流、
   第一段确实带着第一枚引用）；`cargo test --lib` 39 通过（Rust 零改动）+ tsc/build 绿
 
+## 文本框与公式：字不许消失（v0.41）
+
+排序标准是丢东西的严重程度：**文字丢失 > 版式丢失 > 装饰丢失**。这一轮把读侧剩下那两条
+"整块文字凭空不见"的洞堵上（docx 与 ODT 各半），版式则如实记进边界账而不是假装还原。
+
+- **文本框展平**：`w:txbxContent`（现代 `wps:txbx` 与旧式 `v:textbox` 两种外壳）里的段落以前整块丢弃，
+  现在按文档顺序**展平为普通段落**插回原位置——框内段落自带的首行缩进/居中/粗斜继续走同一条段落路径，
+  不另造"文本框节点"（`hasnt(html,'data-oo-textbox')` 是这条纪律的验收）；ODT 侧同构：`draw:frame` 里
+  现在认 `draw:text-box`，框内多段用 `<br/>` 连在所在段落里
+- **`mc:AlternateContent` 只取一支**：同一份正文 Word 会写两遍（`mc:Choice Requires="wps"` +
+  `mc:Fallback` 的 VML），旧代码两支都下钻 → **内容翻倍**；策略定为取 Choice，只有它什么都没产时
+  才退回 Fallback（块级与行内各一处，local name 保大小写所以是 `'AlternateContent'`）
+- **公式线性化**：OMML（`m:oMath`/`m:oMathPara`）与 MathML（ODF 的 `Objects/objectN/content.xml`）
+  翻成同一种可读文本——`a/b`、`x^2`/`x^(ij)`、`a_i`、`√(y)`、`3√(x+1)`、`[v]`、`∑_i^n a`、矩阵 `1 ; 2`；
+  规则：`m:*Pr`（含 `m:ctrlPr`）一个字都不产，含空格或运算符的片段加括号才不歧义，
+  `m:rad` 是"次数在前"而 MathML `mroot` 参数顺序**正好相反**，`annotation`/`annotation-xml`
+  （LaTeX/StarOffice 源码）绝不能漏进正文，`semantics` 只取首子。不引 KaTeX：编辑器里没有承载结构的节点，
+  多一个渲染依赖换来的只是把同一批字画得好看
+- **域代码与题注没坏**：`fldChar` begin/separate/end 三道门（v0.37 起）已让 `SEQ`/`REF`/题注按缓存文本
+  落进正文，本轮实测确认；剩下的诚实边界是 SmartArt（字在 `diagrams/dataN.xml` 那棵树里，摊成扁段落
+  等于说谎）与 OLE 对象，各记一条带 `ProgID` 的具体告警
+- **边界账按类计数**：`warnings` 由"每条一记"改成**同类聚合**（`Map<文案, 次数>`，出口写成
+  `文本框内容已展平为段落（位置与文字环绕未保留）×3`），docx 与 ODT 两条读侧同一套；状态栏照旧显示首条
+- **坑**：① `__oofDocCtl` 这个全局指向"**最后一次渲染**的 doc 面板"，而导出后的 `setTimeout(setStatus(''))`
+  会在开下一个标签之后重渲染旧面板、把全局改回旧实例——冒烟第一次跑就把 `round.odt` 导出成了 docx 那份内容，
+  DEV 钩子必须按 `__oofDocCtlByTab[tabId]` 取；② 断言"翻倍"只能用**计数**（`split(needle).length-1`），
+  `includes` 在内容写两遍时照样绿；③ Word 把文本框正文放在**另一个故事**里（`wdTextFrameStory=5`），
+  正文 `Range.Text` 根本没有它——所以"展平"是我们主动做的合并，Word 腿要按故事类型读；
+  ④ 这台 adapter 的 `Shape.TextFrame.HasTextFrame` **恒假**而 `.TextRange.Text` 照样给回正文，别拿它当门
+- **验证（四腿）**：结构测试 **29 断言**（文本框三段各一次、Choice 空壳退 Fallback、OMML 七种形状单元核对、
+  SmartArt/OLE/EMF 三条具体边界、图片链路未回归）；**Word 16.0 只读腿 10 断言**——同一份手搭件
+  （schema 完整到 Word 真认：6 段 + 2 枚浮动框 + 1 张内联图 + 1 个公式），Word 框内正文与故事逐句对上我们
+  展平出来的那几条，而 Word 自己的公式字面是 `𝑥2+𝑎𝑏`（**零连接符、字母还是数学斜体码点**），
+  恰好证明"读得出字、读不出结构"，我们补的 `^` `/` 就是那层结构；CDP 真机冒烟 **32 断言全绿、页面异常 0 条**
+  （打开 → 真实 DOM 逐句计数 → 展平的件存回 docx/odt → 再开自产物字仍在且不重复）；
+  `cargo test --lib` 39 通过（Rust 零改动）+ tsc/build 绿
+
 ## 性能（v0.3）
 
 - **按编辑器分包 + 懒加载**：主包 8MB → 首屏约 300KB；Univer（6.1MB）只在首次激活表格标签时加载，
@@ -910,7 +947,7 @@ src/                  React 前端
   lib/chart.ts        ChartPayload → VChart spec → 离屏 canvas PNG dataURL（动态导入分包）
   lib/docx.ts         docx 导入导出（ProseMirror JSON ↔ docx，字色/字族/字号/高亮/页眉页脚/TOC 域/批注/页面设置 sectPr（纸张·四边距·w:cols 栏数栏距）/页码格式（PAGE·NUMPAGES）/分页符/表格合并映射（首行行级 tableHeader、列表 numbering.config 真编号）、单元格四边 `w:tcBorders`（**显式去边写 `w:val="nil"`**——none 压不住表级默认边框）、`w:shd` 底纹、`w:vAlign` 竖排、`w:tblInd` 表缩进、`w:vertAlign` 上下标、段落 `w:spacing`（行距 + 段前段后，**只写声明过的**）/`w:shd`/`w:pBdr`、脚注与尾注（`footnotes`/`endnotes` 记录 + 正文各带自动编号 `<w:footnoteRef/>`、多段拆多个 `w:p`、部件与 rels 注册））；文本节点兼容顶层 text 与 attrs.text；字节经 Packer.toBase64String + atob 取（toBuffer 走 jszip 的 nodebuffer 通道，浏览器里没有 Buffer））
   lib/ooxml.ts        迷你 OOXML XML 解析器（零依赖、不碰 DOM）：parseXml/find/findDesc/all/allL/attr/attrL/val/valNum/textOf + decodeEnt 实体表——让 docx 读侧能在 Node 里直测
-  lib/docx-fidelity.ts OOXML → HTML 保真导入器（v0.37）：run 级 rPr（粗斜/删除线/下划线/字色/高亮/字族/字号/上下标 `w:vertAlign`）、段落 pPr（jc/`w:ind` 左右与首行悬挂四种缩进写法/pStyle 样式链）、numPr+numbering.xml → 有序无序与 ilvl 层级、表格 gridSpan/vMerge + tblGrid 列宽 + 单元格四边 `w:tcBorders`（含 val=nil 的显式去边）/底纹 `w:shd fill`/竖排 `w:vAlign`/表级 `w:tblInd`、段落 `w:spacing`（行距两档 + 段前后，含按行的 `w:*Lines` 估算）/`w:shd` 底纹/`w:pBdr` 四边、脚注与尾注引用（`w:footnoteReference`/`w:endnoteReference` 按 `w:id` 配 `word/footnotes.xml`·`endnotes.xml` 正文，跳过 separator/continuationSeparator，正文缺失记告警且不留空标记）、图片 rels→dataURL、内外超链接、分页符、批注三态锚点、域代码文字不外泄；认不出就抛错或 blocks=0，调用方回退 mammoth
+  lib/docx-fidelity.ts OOXML → HTML 保真导入器（v0.37）：run 级 rPr（粗斜/删除线/下划线/字色/高亮/字族/字号/上下标 `w:vertAlign`）、段落 pPr（jc/`w:ind` 左右与首行悬挂四种缩进写法/pStyle 样式链）、numPr+numbering.xml → 有序无序与 ilvl 层级、表格 gridSpan/vMerge + tblGrid 列宽 + 单元格四边 `w:tcBorders`（含 val=nil 的显式去边）/底纹 `w:shd fill`/竖排 `w:vAlign`/表级 `w:tblInd`、段落 `w:spacing`（行距两档 + 段前后，含按行的 `w:*Lines` 估算）/`w:shd` 底纹/`w:pBdr` 四边、脚注与尾注引用（`w:footnoteReference`/`w:endnoteReference` 按 `w:id` 配 `word/footnotes.xml`·`endnotes.xml` 正文，跳过 separator/continuationSeparator，正文缺失记告警且不留空标记）、图片 rels→dataURL、内外超链接、分页符、批注三态锚点、域代码文字不外泄、文本框 `w:txbxContent`（`wps:txbx` 与旧式 `v:textbox`）展平为段落、OMML 公式线性化、`mc:AlternateContent` 只取 Choice（空则退 Fallback，避免同一份正文翻倍）；认不出就抛错或 blocks=0，调用方回退 mammoth
   lib/cell-style.ts  单元格样式扩展（v0.38）：tableCell/tableHeader 的 bdTop/bdRight/bdBottom/bdLeft + background + vAlign、table 的 marginLeft 全局属性（只声明属性不改内容模型）；边框统一规范串 `"0.67px solid #8899aa"`，三态 null 未声明/'none' 显式去边/有值；`inlineBorder()` 读 CSSOM longhand（shorthand 对 none 返回空串）、`IndentTableView` 子类补 marginLeft（resizable 的节点视图不传 HTMLAttributes）、`eighthsToPx`/`pxToEighths` 管 1/8 磅换算、命令 setCellBackground/setCellVAlign
   lib/paragraph-style.ts 段落排版扩展（v0.39）：paragraph/heading 的 lineHeight/lineRule/spaceBefore/spaceAfter/background/bdTop..bdLeft 全局属性，一组属性拼**一条** style（多条各写一份会互相盖掉）；`ooxmlLine`/`lineToOoxml`/`ruleOf` 管 1/240 行与二十分之一磅两套语义，"最小值"档 CSS 表达不了就修行内自定义属性 `--oof-lr` 带回；命令 setParagraphStyle/setLineSpacing/setSpaceAround/setParaBackground
   lib/indent-extension.ts 段落全局属性 indentLeft/indentFirst（32px 一档、上限 320px）+ setIndent/indent/outdent 命令 + Ctrl+] / Ctrl+[ + 悬挂缩进感知的出退格
@@ -918,7 +955,7 @@ src/                  React 前端
   lib/page-break-extension.ts TipTap pageBreak 原子块（`div[data-oo-pagebreak]`）+ insertPageBreak 命令 + Ctrl+Enter 快捷键
   lib/comment-extension.ts comment mark（cid 锚定批注）+ 加/删/定位/汇总工具
   lib/note-extension.ts 脚注/尾注的 `note` 内联原子节点（attrs kind/text，正文不摊进文档流）：`encodeNoteText`/`decodeNoteText` 管属性里的换行（XML/HTML 解析器会把属性值里的 LF 归一成空格），`notesOf`/`noteOrdinalOf`/`locateNote` 按文档顺序现算编号，命令 insertNote/setNoteText/deleteNote（只填 tr + 用给到的 dispatch，绝不自己 view.dispatch）
-  lib/odt.ts          ProseMirror JSON ↔ ODT（JSZip 打包导出 + DOMParser 导入，字符样式（字族/字号/字色/上下标 `style:text-position`，落在 content.xml 自动样式）/合并表/图片尺寸/页码域与总页数/page-layout 页面设置（纸张·四边距·style:columns 多栏）/分页符 fo:break-before/单元格自动样式 `fo:border-*`（宽度写 pt，读回走 `odfBorderCss` 保留 0.67px 这类细线不整数取整）+`fo:background-color`+`style:vertical-align`、表级 `fo:margin-left`、段落直接格式 `fo:margin-top/-bottom` + `fo:line-height`（倍数写 % + proportional、绝对值写 pt + fixed/minimum，两档在 ODF 里分得清而 CSS 分不清）+ `fo:background-color` + `fo:border-*`（宽度写 pt），读侧按名字跳过具名样式与 `office:styles` 里那批，以免把整篇默认摊成每段的直接格式；脚注/尾注写 ODF 1.2 内联 `text:footnote-reference` + 同 `text:id` 的 `text:footnote`（citation 写字面序号、段间 `text:line-break`、正文段挂 `FN` 自动样式），读侧三种外壳都收（新版两个元素名 + 旧版 `text:note`/`text:note-class`/`text:note-body`），正文表先扫全文建全表，故 id 不连续或正文排在引用之前也配得上）
+  lib/odt.ts          ProseMirror JSON ↔ ODT（JSZip 打包导出 + DOMParser 导入，字符样式（字族/字号/字色/上下标 `style:text-position`，落在 content.xml 自动样式）/合并表/图片尺寸/页码域与总页数/page-layout 页面设置（纸张·四边距·style:columns 多栏）/分页符 fo:break-before/单元格自动样式 `fo:border-*`（宽度写 pt，读回走 `odfBorderCss` 保留 0.67px 这类细线不整数取整）+`fo:background-color`+`style:vertical-align`、表级 `fo:margin-left`、段落直接格式 `fo:margin-top/-bottom` + `fo:line-height`（倍数写 % + proportional、绝对值写 pt + fixed/minimum，两档在 ODF 里分得清而 CSS 分不清）+ `fo:background-color` + `fo:border-*`（宽度写 pt），读侧按名字跳过具名样式与 `office:styles` 里那批，以免把整篇默认摊成每段的直接格式；脚注/尾注写 ODF 1.2 内联 `text:footnote-reference` + 同 `text:id` 的 `text:footnote`（citation 写字面序号、段间 `text:line-break`、正文段挂 `FN` 自动样式），读侧三种外壳都收（新版两个元素名 + 旧版 `text:note`/`text:note-class`/`text:note-body`），正文表先扫全文建全表，故 id 不连续或正文排在引用之前也配得上；`draw:frame` 认三类内容（`draw:image` 位图 / `draw:text-box` 文本框展平为 `<br/>` 连成的行内文字 / `draw:object` 嵌入件——`Objects/objectN/content.xml` 里有 MathML 就线性化成文本，没有就只记一条边界），读侧统一产 `warnings`（同类聚合成「文案×N」）交状态栏显示）
   lib/find-replace.ts 查找/替换 ProseMirror 插件：按文本块匹配存 state、装饰高亮、findNext/findPrev/replaceOne/replaceAll 命令（命中上限 FR_HIT_CAP=2000 截断并标 `N+`）
   lib/templates.ts    首页模板注册表与纯函数 seed：11 个模板（公文/会议纪要/周报 → ProseMirror JSON+meta，记账表/库存清单 → WorkbookPayload 含公式冻结，六套演示配色 → Deck）
   lib/ppt.ts          .opd 幻灯片数据模型（版式/主题/序列化）
@@ -1013,7 +1050,8 @@ cargo check        # Rust 后端检查（在 src-tauri 下）
 - [x] 文档保真续项：上下标 `w:vertAlign` + 单元格四边/底纹/竖排对齐 + 表格缩进/段落右缩进 读入，.odoc/docx/odt 三链路回写（Word 16.0 实机 + Word 另存件差分与再读回双向核对）
 - [x] 文档保真续项三：段落行距（倍数/固定值/最小值）+ 段前段后 + 底纹与四边 `w:spacing`/`w:shd`/`w:pBdr` 读入，docx/odt 回写（Word 16.0 实机 20 断言 + Word 另存件 OOXML 差分 24 断言）
 - [x] 文档保真续项四：脚注/尾注真往返（`note` 内联原子节点 + 编号按文档顺序现算 + OOXML `word/footnotes.xml`·`endnotes.xml` 与 ODF 1.2 内联写法双向（含旧版 `text:note` 外壳）+ 文末脚注区编辑与打印）
-- [ ] 文档保真续项二：题注与交叉域（图表号/题注 SEQ）、文本框与 SmartArt、嵌入对象——当前各记一条"未保留"告警
+- [x] 文档保真续项五：文本框展平（`w:txbxContent` 新旧两种外壳 + ODF `draw:text-box`，位置与环绕不保但字不丢）+ 公式线性化（OMML 与 MathML 翻成同一套 `x^2`/`a/b`/`√(y)`/`∑_i^n`）+ `mc:AlternateContent` 只取一支（Word 16.0 只读腿按 `wdTextFrameStory` 逐句核对）
+- [ ] 文档保真续项六（剩下的硬骨头）：SmartArt（文字在 `diagrams/dataN.xml` 那棵树里，摊成扁段落等于说谎）、OLE 嵌入对象的预览、题注与交叉域**编号重算**（当前按文件里的缓存文本读入，域本身不重算）
 - [ ] 自动更新通道（须先决策：公开仓库或独立托管 update metadata）
 - [ ] macOS 打包（需签名/公证凭据）
 

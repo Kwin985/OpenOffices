@@ -8,12 +8,14 @@
 // 页眉页脚与页面设置仍走 docxToDocMeta，批注列表仍走 docxToComments。
 // 抛错或拆不出块时调用方回退 mammoth。
 //
-// schema 边界（TipTap 侧没有对应属性，导入时刻意不硬塞，全部记进 warnings）：图表与 OLE 对象。
+// schema 边界（TipTap 侧没有对应属性，导入时刻意不硬塞，全部记进 warnings）：图表、SmartArt、OLE 对象。
 // 表格边框/单元格底纹与竖排/上下标/表格缩进在 v0.38 起已经能读进 cell-style 与上下标 schema；
 // 段落行距/段前后/底纹/边框（w:spacing/w:shd/w:pBdr）在 v0.39 起读进 paragraph-style schema；
-// 脚注与尾注（word/footnotes.xml、word/endnotes.xml）在 v0.40 起读进 note 节点，正文摊在文末脚注区。
+// 脚注与尾注（word/footnotes.xml、word/endnotes.xml）在 v0.40 起读进 note 节点，正文摊在文末脚注区；
+// 文本框（w:txbxContent）与公式（m:oMath）在 v0.41 起不再整块消失：前者展平为段落（位置与环绕不保），
+// 后者线性化成 `x^2`、`(-b+√(b^2-4ac))/(2a)` 这类可读文本（结构不保）——"字没了"比"版式没保真"严重一级。
 
-import { all, allDesc, attr, attrL, attrNum, els, find, findDesc, local, parseXml, textOf, type XEl } from './ooxml'
+import { all, allDesc, attr, attrL, attrNum, els, find, findDesc, findL, local, parseXml, textOf, type XEl } from './ooxml'
 import { CELL_EDGES, CSS_BORDER_STYLE, eighthsToPx, rgb2hex } from './cell-style'
 import { ooxmlLine } from './paragraph-style'
 import { commentRowsOf, type DocComment } from './docx'
@@ -407,6 +409,8 @@ interface InlineState {
   show: boolean
   /** 下一段文字必须另起一片：批注区间按片段下标切分，与邻片合并就会把边界吃掉 */
   split: boolean
+  /** 格内流：文本框展平时要沿用同一个判定（格里的列表不并进外层列表栈） */
+  inCell: boolean
 }
 
 function push(st: InlineState, html: string) {
@@ -436,9 +440,9 @@ function wrapComment(pieces: Piece[], from: number, cid: number): Piece[] {
 // ---- 导入器 ---------------------------------------------------------------
 
 class Fidelity {
-  warnings = new Set<string>
-  comments: DocComment[] = []
-  /** 已开未关的批注区间 id：跨段续挂（mark 不能跨块，故每段各一枚 span） */
+  /** 告警文案 → 出现次数：一份文件里三个文本框是同一条边界，但"三处"比"一项"更有信息量 */
+  warnings = new Map<string, number>()
+  comments: DocComment[] = []  /** 已开未关的批注区间 id：跨段续挂（mark 不能跨块，故每段各一枚 span） */
   private openRanges = new Set<number>()
   private rels = new Map<string, { target: string; external: boolean }>()
   private media = new Map<string, Promise<string | null>>()
@@ -455,7 +459,12 @@ class Fidelity {
   ) {}
 
   private warn(msg: string) {
-    this.warnings.add(msg)
+    this.warnings.set(msg, (this.warnings.get(msg) ?? 0) + 1)
+  }
+
+  /** 出口形态：按首次出现顺序，重复的写成「文案×N」 */
+  warningList(): string[] {
+    return [...this.warnings].map(([m, n]) => (n > 1 ? `${m}×${n}` : m))
   }
 
   load(zip: ZipLike) {
@@ -524,6 +533,19 @@ class Fidelity {
         items += r.items
         continue
       }
+      // Word 给同一个构件常写新旧两条外壳（mc:Choice 走新命名空间，mc:Fallback 走 legacy VML），
+      // 两条的正文是同一份。全收下就会翻倍，所以只取一条：Choice 优先，它什么都没产出才退回 Fallback。
+      if (t === 'AlternateContent') {
+        let produced = false
+        for (const branch of [findL(n, 'Choice'), findL(n, 'Fallback')]) {
+          if (!branch || produced) continue
+          const r = await this.sequence(branch.children, list, inCell)
+          html += r.html
+          items += r.items
+          if (r.html) produced = true
+        }
+        continue
+      }
       if (t === 'p') {
         // 列表项之间由 ListState 负责开合；非列表段落出现即把整串列表关掉
         const numbered = !inCell && this.numOf(n).id !== undefined
@@ -574,7 +596,7 @@ class Fidelity {
       prefix = list.before(num.level, !!def && def.numFmt !== 'bullet', num.id)
     }
 
-    const pieces = await this.inline(el, base)
+    const pieces = await this.inline(el, base, inCell)
     if (view.preformatted) return prefix + `<pre><code>${escText(plainText(el))}</code></pre>`
 
     const style = this.paraCss(effPPr)
@@ -680,11 +702,11 @@ class Fidelity {
 
   // --- 行内 ---
 
-  private async inline(el: XEl, base: RunProps): Promise<Piece[]> {
+  private async inline(el: XEl, base: RunProps, inCell: boolean): Promise<Piece[]> {
     // 跨段批注：上一段开着没关的区间，在本段开头继续（mark 不能跨块，故每段各一枚 span）
     const openAt = new Map<number, number>()
     for (const cid of this.openRanges) openAt.set(cid, 0)
-    const st: InlineState = { pieces: [], openAt, fld: 0, show: false, split: false }
+    const st: InlineState = { pieces: [], openAt, fld: 0, show: false, split: false, inCell }
     await this.children(el, base, st)
     for (const [cid, from] of st.openAt) {
       st.pieces.splice(from, st.pieces.length - from, ...wrapComment(st.pieces, from, cid))
@@ -773,13 +795,38 @@ class Fidelity {
         push(st, noteSpan(kind, body))
         return
       }
-      case 'object':
-        this.warn('嵌入对象（w:object）未导入')
+      case 'object': {
+        // 预览位图常是 EMF/WMF（浏览器解不了），能出图就出图；出不了图至少告警里带上对象类型
+        const img = await this.bitmap(node)
+        if (img) st.pieces.push({ kind: 'block', html: img })
+        const prog = attr(findDesc(node, 'OLEObject'), 'ProgID') ?? attr(findDesc(node, 'OLEObject'), 'Type')
+        this.warn(`嵌入对象${prog ? `（${prog}）` : ''}未导入`)
         return
+      }
+      case 'AlternateContent': {
+        // 同一构件的新旧两条外壳（mc:Choice + mc:Fallback），正文是同一份：Choice 有产出就不看 Fallback
+        let produced = false
+        for (const branch of [findL(node, 'Choice'), findL(node, 'Fallback')]) {
+          if (!branch || produced) continue
+          const before = st.pieces.length
+          await this.children(branch, props, st)
+          if (st.pieces.length > before) produced = true
+        }
+        return
+      }
+      case 'oMath':
+      case 'oMathPara': {
+        // OMML 结构（分式、根号、矩阵）TipTap 侧没有承载它的节点，线性化成可读文本：
+        // 走默认的 children 会把 m:t 的字符粘成 "a2b2"，这里至少把 a/b、x^2、√y 那层意思写出来
+        if (st.fld > 0 && !st.show) return
+        this.warn('公式（OMML）已线性化为文本，结构（分式/根号/上下标/矩阵）不保真')
+        push(st, marked(escText(ommlLinear(node)).replace(/\u0001/g, '<br>'), props))
+        return
+      }
       case 'drawing':
       case 'pict': {
-        const img = await this.drawing(node)
-        if (img) st.pieces.push({ kind: 'block', html: img })
+        const html = await this.drawing(node, st.inCell)
+        if (html) st.pieces.push({ kind: 'block', html })
         return
       }
       case 'hyperlink': {
@@ -787,7 +834,7 @@ class Fidelity {
         const rel = rid ? this.rels.get(rid) : undefined
         const anchor = attr(node, 'w:anchor')
         // 子状态：链接内的批注区间若没在链接里闭合，下标要按"追加到主序列的位置"换算
-        const sub: InlineState = { pieces: [], openAt: new Map(), fld: st.fld, show: st.show, split: false }
+        const sub: InlineState = { pieces: [], openAt: new Map(), fld: st.fld, show: st.show, split: false, inCell: st.inCell }
         await this.children(node, props, sub)
         st.fld = sub.fld
         st.show = sub.show
@@ -860,14 +907,40 @@ class Fidelity {
 
   // --- 图片 ---
 
-  private async drawing(el: XEl): Promise<string | null> {
+  // --- 图形：位图、文本框 ---
+
+  /**
+   * 一个 drawing/pict 里可能同时有位图与文本框，也可能只有文本框。
+   * 文本框（w:txbxContent）里的正文原来会整块消失——那是"字没了"，比版式没保真严重一级，
+   * 所以这里把它展平成正经的段落块落进文档流，位置与文字环绕仍旧只记一条告警。
+   */
+  private async drawing(el: XEl, inCell: boolean): Promise<string | null> {
+    const parts: string[] = []
+    const img = await this.bitmap(el)
+    if (img) parts.push(img)
+    for (const tb of allDesc(el, 'txbxContent')) {
+      const r = await this.sequence(tb.children, new ListState(), inCell)
+      if (!r.html) continue
+      parts.push(r.html)
+      // 计数由 warn() 自己聚合（同类出现 N 次出口写成「文案×N」）
+      this.warn('文本框内容已展平为段落（位置与文字环绕未保留）')
+    }
+    if (parts.length) return parts.join('')
+    if (findDesc(el, 'chart')) this.warn('图表（chart）未导入')
+    else if (allDesc(el, 'graphicData').some((g) => /drawingml.*diagram/.test(attr(g, 'uri') ?? '')))
+      // SmartArt 的文字不在 document.xml 里，而在 rels 指向的 diagrams/dataN.xml（一棵 dgm:pt 树），
+      // 摊平成段落会把层级关系说成列表，所以这一类仍旧只报边界、不硬塞
+      this.warn('SmartArt（diagram）未导入')
+    // 有位图引用但解不开（EMF/WMF 这类）时 bitmap() 已经报过更准的那条，别再补一句"无位图"
+    else if (!findDesc(el, 'blip') && !findDesc(el, 'imagedata')) this.warn('矢量图形（drawing 无位图）未导入')
+    return null
+  }
+
+  /** 位图部分：找不到可解码的图像就返回 null（交给调用方决定是否另有文本框可出） */
+  private async bitmap(el: XEl): Promise<string | null> {
     const blip = findDesc(el, 'blip') ?? findDesc(el, 'imagedata')
     const rid = blip ? (attrL(blip, 'embed') ?? attrL(blip, 'id')) : undefined
-    if (!rid) {
-      if (findDesc(el, 'chart')) this.warn('图表（chart）未导入')
-      else this.warn('矢量图形（drawing 无位图）未导入')
-      return null
-    }
+    if (!rid) return null
     const rel = this.rels.get(rid)
     if (!rel) {
       this.warn('图片关系缺失')
@@ -999,6 +1072,68 @@ class Fidelity {
 
 const PAGE_BREAK = '<div data-oo-pagebreak class="doc-page-break"></div>'
 
+/** 需要加括号才不歧义的片段：含运算符、空白，或本身就是多项式 */
+const grouped = (s: string) => (/[\s/^_()+*\-]/.test(s) ? `(${s})` : s)
+/** 上标额外看长度：`x^ij` 不加括号读不出 i 是不是也在指数上 */
+const groupedSup = (s: string) => (/[\s/^_()+*\-]/.test(s) || s.length > 1 ? `(${s})` : s)
+
+/**
+ * OMML → 线性文本（`x^2+y^2`、`(-b+√(b^2-4ac))/(2a)`、`∑_i^n a_i`）。
+ *
+ * 为什么不走 MathML/KaTeX：TipTap 侧没有承载公式结构的节点，塞一枚只读图片又要多引一份渲染库；
+ * 而"字不许消失"这条底线不需要结构——把分式/根号/上下标写成键盘能打的连接符，用户至少看得懂、改得了。
+ * 规则刻意保守：只连不编，认不出的构件一律并进子节点；`m:*Pr` 那批属性构件（含 m:ctrlPr 里那坨
+ * w:rPr）没有式子内容，跳过。返回值里的 \u0001 是换行占位，由调用方换成 <br>。
+ */
+export function ommlLinear(el: XEl): string {
+  const t = local(el.name)
+  if (t === 't') return textOf(el)
+  if (t === 'br') return '\u0001'
+  if (t.endsWith('Pr')) return ''
+  const kids = els(el)
+  const part = (name: string) => kids.filter((k) => local(k.name) === name).map(ommlLinear).join('')
+  switch (t) {
+    case 'f': {
+      const num = part('num')
+      const den = part('den')
+      return `${grouped(num)}/${grouped(den)}`
+    }
+    case 'sSup':
+      return `${grouped(part('e'))}^${groupedSup(part('sup'))}`
+    case 'sSub':
+      return `${grouped(part('e'))}_${grouped(part('sub'))}`
+    case 'sSubSup':
+      return `${grouped(part('e'))}_${grouped(part('sub'))}^${groupedSup(part('sup'))}`
+    case 'rad': {
+      const deg = part('deg')
+      return `${deg ? `${deg}√` : '√'}(${part('e')})`
+    }
+    case 'd': {
+      // 定界符字符写在 m:dPr/m:begChr 的 m:val 上，缺省是圆括号
+      const dPr = findL(el, 'dPr')
+      const beg = attrL(findL(dPr, 'begChr') ?? undefined, 'val') ?? '('
+      const end = attrL(findL(dPr, 'endChr') ?? undefined, 'val') ?? ')'
+      return `${beg}${part('e')}${end}`
+    }
+    case 'nary': {
+      const chr = attrL(findL(findL(el, 'naryPr') ?? undefined, 'chr') ?? undefined, 'val') ?? '∫'
+      const sub = part('sub')
+      const sup = part('sup')
+      return `${chr}${sub ? `_${sub}` : ''}${sup ? `^${sup}` : ''} ${grouped(part('e'))}`
+    }
+    case 'func':
+      return `${part('fName')}(${part('e')})`
+    case 'limLow':
+      return `${part('e')}_${grouped(part('lim'))}`
+    case 'limUpp':
+      return `${part('e')}^${groupedSup(part('lim'))}`
+    case 'm':
+      return kids.filter((k) => local(k.name) === 'mr').map(ommlLinear).join(' ; ')
+    default:
+      return kids.map(ommlLinear).join('')
+  }
+}
+
 /** 单边元素（w:top/w:bottom/…）→ 规范串；`w:val="none"/"nil"/"hidden"` 是「这条边明确不要」 */
 function edgeCss(b: XEl): string {
   const style = CSS_BORDER_STYLE[(attr(b, 'w:val') ?? 'single').toLowerCase()] ?? 'solid'
@@ -1112,5 +1247,5 @@ export async function docxToHtmlFidelity(bytes: Uint8Array): Promise<DocxImport>
   f.setNotes(await read('word/footnotes.xml'), await read('word/endnotes.xml'))
   f.setComments(await read('word/comments.xml'), await read('word/commentsExtended.xml'))
   const { html, blocks } = await f.run(documentXml)
-  return { html, comments: f.comments, blocks, warnings: [...f.warnings] }
+  return { html, comments: f.comments, blocks, warnings: f.warningList() }
 }

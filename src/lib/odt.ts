@@ -721,11 +721,67 @@ function pick(el: Element, localName: string): Element | null {
   return null
 }
 
+/** 后代里首个指定 local name 的元素（不含自身）：draw:frame 与内容之间还隔着一层的情形 */
+function findLocal(el: Element, localName: string): Element | null {
+  for (const d of Array.from(el.getElementsByTagName('*'))) if (d.localName === localName) return d
+  return null
+}
+
+/** 需要加括号才不歧义的片段（与 docx 侧 ommlLinear 同一条规则，两套标记语言翻成同一种线性写法） */
+function mathGrouped(s: string): string {
+  return /[\s/^_()+*\-]/.test(s) ? `(${s})` : s
+}
+
+const MATH_LEAF = new Set(['mi', 'mn', 'mo', 'mtext', 'ms'])
+
+/**
+ * MathML（呈现标记那一层）→ 线性文本。ODF 的公式存在 Objects/objectN/content.xml 里，
+ * 本编辑器没有承载结构的节点，至少把字与运算关系留在文档里。
+ * `annotation`/`annotation-xml` 里是 StarOffice 源码或 LaTeX 串，不是要显示的文字，一律跳过。
+ */
+function mathmlLinear(el: Element): string {
+  const t = el.localName
+  if (t === 'annotation' || t === 'annotation-xml') return ''
+  if (MATH_LEAF.has(t)) return el.textContent ?? ''
+  const kids = Array.from(el.children)
+  const at = (i: number) => (kids[i] ? mathmlLinear(kids[i]) : '')
+  switch (t) {
+    case 'mfrac':
+      return `${mathGrouped(at(0))}/${mathGrouped(at(1))}`
+    case 'msup':
+      return `${mathGrouped(at(0))}^${at(1)}`
+    case 'msub':
+      return `${mathGrouped(at(0))}_${mathGrouped(at(1))}`
+    case 'msubsup':
+      return `${mathGrouped(at(0))}_${mathGrouped(at(1))}^${at(2)}`
+    case 'munder':
+      return `${mathGrouped(at(0))}_${mathGrouped(at(1))}`
+    case 'mover':
+      return `${mathGrouped(at(0))}^${at(1)}`
+    case 'munderover':
+      return `${mathGrouped(at(0))}_${mathGrouped(at(1))}^${at(2)}`
+    case 'msqrt':
+      return `√(${kids.map(mathmlLinear).join('')})`
+    case 'mroot':
+      // MathML 的 mroot 是「被开方数在前、次数在后」，与 OOXML 的 m:rad 正好相反
+      return `${mathGrouped(at(1))}√(${mathGrouped(at(0))})`
+    case 'semantics':
+      // semantics 的第一个孩子才是要显示的那份，后面是等价写法与注释
+      return kids.length ? mathmlLinear(kids[0]) : ''
+    case 'mtable':
+      return kids.map(mathmlLinear).join(' ; ')
+    case 'mtr':
+      return kids.map(mathmlLinear).join(' , ')
+    default:
+      return kids.map(mathmlLinear).join('')
+  }
+}
+
 function escapeHtml(s: string): string {
   return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
 }
 
-export async function odtToHtml(bytes: Uint8Array): Promise<{ html: string; meta: DocMeta }> {
+export async function odtToHtml(bytes: Uint8Array): Promise<{ html: string; meta: DocMeta; warnings: string[] }> {
   const { default: JSZip } = await import('jszip')
   const zip = await JSZip.loadAsync(bytes)
   const contentText = await zip.file('content.xml')?.async('string')
@@ -734,6 +790,10 @@ export async function odtToHtml(bytes: Uint8Array): Promise<{ html: string; meta
   const parser = new DOMParser()
   const cdoc = parser.parseFromString(contentText, 'text/xml')
   const sdoc = stylesText ? parser.parseFromString(stylesText, 'text/xml') : null
+
+  /** 与 docx 保真导入同一套边界账：同类只记一条，出口写成「文案×N」，显示在状态栏而不是静默丢 */
+  const warnCount = new Map<string, number>()
+  const warn = (m: string) => warnCount.set(m, (warnCount.get(m) ?? 0) + 1)
 
   const styles = new Map<string, Element>() // name → style:style / default-style
   const listStyles = new Map<string, boolean>() // name → 是否有序
@@ -1025,6 +1085,22 @@ export async function odtToHtml(bytes: Uint8Array): Promise<{ html: string; meta
     return p
   }
 
+  /** 嵌入对象的正文：公式部件（Objects/objectN/content.xml）里有 MathML，其它对象没有可读文字 */
+  const objectText = async (href: string): Promise<string> => {
+    const base = href.replace(/^\.\//, '').replace(/\/$/, '')
+    for (const p of [`${base}/content.xml`, base]) {
+      const f = zip.file(p)
+      if (!f) continue
+      const doc = parser.parseFromString(await f.async('string'), 'text/xml')
+      const root = doc.documentElement
+      if (!root || doc.querySelector('parsererror')) continue
+      // 只认有呈现标记的那类；剩下是 StarOffice 源码或二进制注释，塞进正文等于凭空造字
+      if (Array.from(root.getElementsByTagName('*')).some((x) => MATH_LEAF.has(x.localName))) return mathmlLinear(root)
+      return ''
+    }
+    return ''
+  }
+
   async function renderInline(el: Element): Promise<string> {
     let out = ''
     for (const child of Array.from(el.childNodes)) {
@@ -1049,19 +1125,55 @@ export async function odtToHtml(bytes: Uint8Array): Promise<{ html: string; meta
             out += `<a href="${escapeHtml(e.getAttribute('xlink:href') ?? '')}">${await renderInline(e)}</a>`
             break
           case 'frame': {
+            // 一个 draw:frame 里装的是同类的一件东西：位图 / 文本框 / 嵌入对象（公式走这条）
             let src = ''
+            let imgEl: Element | null = null
             for (const d of Array.from(e.getElementsByTagName('*'))) {
               if (d.localName === 'image') {
-                src = await imageDataUrl(d.getAttribute('xlink:href') ?? '')
+                imgEl = d
                 break
               }
+            }
+            if (imgEl) {
+              src = await imageDataUrl(imgEl.getAttribute('xlink:href') ?? '')
             }
             if (src) {
               const wmm = cm2mm(e.getAttribute('svg:width'))
               out += wmm
                 ? `<img src="${src}" style="width:${Math.round((wmm / 25.4) * 96)}px"/>`
                 : `<img src="${src}"/>`
+              break
             }
+            // 文本框：正文原来整块消失（比版式没保真严重一级），现在展平进所在段落，行与行之间用换行连
+            const box = findLocal(e, 'text-box')
+            if (box) {
+              const lines: string[] = []
+              for (const p of Array.from(box.children)) {
+                if (!['p', 'h', 'list'].includes(p.localName)) continue
+                const s = (await renderInline(p)).replace(/<br\/?>/g, ' ')
+                if (s.trim()) lines.push(s)
+              }
+              if (lines.length) {
+                out += lines.join('<br/>')
+                warn('文本框内容已展平为文字（位置与文字环绕未保留）')
+              } else warn('空文本框未导入')
+              break
+            }
+            const obj = findLocal(e, 'object') ?? findLocal(e, 'animate')
+            const href = obj?.getAttribute('xlink:href') ?? null
+            if (href) {
+              const s = await objectText(href)
+              if (s) {
+                out += escapeHtml(s)
+                warn('公式已线性化为文本，结构不保真')
+                break
+              }
+              warn('嵌入对象（draw:object）未导入')
+              break
+            }
+            if (findLocal(e, 'chart') || Array.from(e.getElementsByTagName('*')).some((d) => d.localName === 'chart'))
+              warn('图表对象未导入')
+            else warn('矢量图形（draw:frame 无位图）未导入')
             break
           }
           case 'noscript':
@@ -1230,5 +1342,9 @@ export async function odtToHtml(bytes: Uint8Array): Promise<{ html: string; meta
     }
     if (Object.keys(page).length) meta.page = page
   }
-  return { html, meta }
+  return {
+    html,
+    meta,
+    warnings: [...warnCount].map(([m, n]) => (n > 1 ? `${m}×${n}` : m)),
+  }
 }
