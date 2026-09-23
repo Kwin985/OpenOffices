@@ -27,5 +27,8 @@ dist-ssr
 /src-tauri/target/
 /src-tauri/gen/schemas/
 
+# 冒烟探针、结构测试与夹具脚本，每轮收尾清理，不入库
+/tmp/
+
 # pdf.js 资源由 scripts/copy-pdfjs-assets.mjs 从 node_modules 同步，不入库
 /public/pdfjs
