@@ -926,6 +926,54 @@
   列表层级读到 1·2·3 三级 / 图表数据表逐格对得上；手搭件：骨架能开、ChartML 认成图表且 `Chart.ChartTitle` 读得回缓存标题）；
   `cargo test --lib` 39 通过（Rust 零改动）+ tsc/build 绿
 
+## 域编号重算与嵌入对象可见化（v0.43）
+
+续项六的第二刀。题注、交叉引用、页码这些**域**在文件里是"代码 + 上次算出的缓存"两份，
+v0.37 起我们只把缓存抄进正文——于是别的工具编辑过的文档会带着对不上的号原样呈现
+（实测夹具里三枚题注的缓存是 `1、2、2`）。这一轮把"哪些号我们能算、哪些不能"划清，
+并且**算得出的绝不抄缓存、算不出的绝不假装**。
+
+- **`SEQ` 一律现算**（`src/lib/docx-fields.ts`）：它是纯文档顺序计数器，跟着渲染走一遍就有答案。
+  三条纪律：① 缓存结果**照采但不留**（`separate` 之后的那段被 suppress，出口写我们算的那份）；
+  ② **被跳过的分支不占号**——所以计数不能预扫、必须嵌在渲染顺序里（目录 `w:sdt` 整块跳过时里面几十枚
+  `PAGEREF` 一枚都不许消耗 `SEQ`）；③ 只有代码没有 `separate` 的域（部分工具这么写）也在出口补现算值，
+  不留空。同名 label 各一条序列，`图` 与 `表` 互不影响
+- **大小写由开关自己决定，不是由缓存决定**：Word 按 `\* ROMAN` / `\* roman` / `\* ALPHABETIC` /
+  `\* alphabetic` **这个 token 自身的大小写**给出 I / i / A / a（16.0 实机逐枚测得）。旧代码把开关
+  统一转小写再各自硬编码，`ROMAN` 恰好对、`ALPHABETIC` 就错成了小写——这条是 Word 腿抓到的真 bug
+- **`REF`：有缓存照原样，没缓存按书签段落文本兜底**（Word 常只写代码）。书签表必须在渲染**之前**
+  扫全篇建好——交叉引用可以指向后面的段落，逐段渲染到那儿才知道就晚了；表格单元格里建的进表也认。
+  只排掉 `_GoBack`（Word 反复挪动的光标书签）：**题注与目录的自动书签就叫 `_Ref…`/`_Toc…`，
+  按"下划线开头"整类过滤会把 REF 唯一能兜底的那张表清成空的**。查不到的书签不硬塞文本，只记一条边界
+- **`PAGE`/`PAGEREF`/`DOCPROPERTY`/`STYLEREF` 沿用缓存**：分页取决于版心，我们的排版与 Word 不同，
+  现算出来的页码**比抄缓存更容易错**；没有缓存时明确记 `PAGEREF（_RefX）没有缓存结果，未重算`
+  （此前是静默变空）。自家 TOC 件重开不报这条——`docPartGallery` 那条守卫先整块跳过了目录
+- **OLE 嵌入对象：预览解不开也要看得见**：EMF/WMF 预览浏览器解不了，以前只剩一条告警、文档里
+  什么都不留；现在在原位置放一行正文占位 `〔嵌入对象：Excel.Sheet.12，Microsoft_Excel_Worksheet.xlsx，内容未提取〕`
+  （ProgID 取自 `o:OLEObject`，文件名经 rels 反查），能出预览图（PNG/JPEG）就出图、**不叠占位**。
+  占位是真正文节点，所以 .odoc 存盘重开、docx/odt 导出再开都在。**内容（CFB / 嵌入包）提取仍未做**，
+  如实留在路线图未勾项里
+
+- **坑**：① **PowerShell 位置传参 `Ok($cond,'文案')` 会把整个括号当成一个数组参数** → `$msg` 恒 null、
+  `$cond` 恒非空数组恒真，上一轮那条腿的"6 通过 3 失败"全部无意义。改成空格分参 `Ok (条件) '文案'` 并在
+  helper 里 `param([bool]$Cond,[string]$Msg)` 显形参；判据是**失败时文案要能变**（本轮先证 `Ok($false,…)` 也打印 ok）
+  ② Word 在**只读**文档上 `Fields.Update()` 返回 `0`（假），可结果确实重算了——别拿返回值当"更新失败"
+  ③ 域前后的空格必须在 `w:t` **里面**（Word 为此写 `xml:space="preserve"`）：XML 元素**之间**的空白不是文档文本，
+  夹具把空格夹在两个标签中间，就造出一个"我们把域后的空格吃掉了"的假 bug
+  ④ 手搭夹具里 `w:p` 不能套 `w:p`（Word 判"文件可能已经损坏"），书签 helper 只收 run 级内容——本轮先怀疑 Word
+  不认我们的件，直到同一份件用 docx 库写出来 Word 秒开，才把账归到骨架上
+  ⑤ 超链接的外部目标要带 `TargetMode="External"`，OLE 要同时有预览图 rel 与 `embeddings/` 部件 rel，
+  目录 `sdt` 要有 `docPartGallery`——少一条，测试就是在验一个形状不对的件
+
+- **验证（四腿）**：**结构测试 38 断言**（SEQ 顺序/同名 label/ROMAN 与 roman/ALPHABETIC 与 Alpha 四形态/
+  无 separate 也现算 / REF 有缓存照原样 + 无缓存前向兜底 + 格内书签 + 查不到不塞文本 / PAGE·PAGEREF·DOCPROPERTY
+  沿缓存与无缓存记边界 / fldSimple 同路 / 超链接内不重复不漏字 / OLE 三种预览各走各的路 / 目录不占号 +
+  自家件导出→重开不出现"没有缓存结果"）；**CDP 真机冒烟 27 断言全绿、页面异常 0 条**（打开 →
+  真实 DOM 逐枚计数 → .odoc 正文性 → 存 docx 重开 → 存 odt 重开 → 关掉再开，编号三次一致）；
+  **Word 16.0 只读腿 11 断言**——同一份夹具让 Word 自己 `Fields.Update`，`1|2|3|1|I|II|A|i|图 1|1`
+  与我们算的逐枚相同（含大小写两形态），并核回更新前缓存确实是 `1|2|2|9|I|II|z|XVIII|图 1|7`；
+  `cargo test --lib` 39 通过（Rust 零改动）+ tsc/build 绿
+
 ## 性能（v0.3）
 
 - **按编辑器分包 + 懒加载**：主包 8MB → 首屏约 300KB；Univer（6.1MB）只在首次激活表格标签时加载，
@@ -991,8 +1039,8 @@ src/                  React 前端
   lib/docx.ts         docx 导入导出（ProseMirror JSON ↔ docx，字色/字族/字号/高亮/页眉页脚/TOC 域/批注/页面设置 sectPr（纸张·四边距·w:cols 栏数栏距）/页码格式（PAGE·NUMPAGES）/分页符/表格合并映射（首行行级 tableHeader、列表 numbering.config 真编号）、单元格四边 `w:tcBorders`（**显式去边写 `w:val="nil"`**——none 压不住表级默认边框）、`w:shd` 底纹、`w:vAlign` 竖排、`w:tblInd` 表缩进、`w:vertAlign` 上下标、段落 `w:spacing`（行距 + 段前段后，**只写声明过的**）/`w:shd`/`w:pBdr`、脚注与尾注（`footnotes`/`endnotes` 记录 + 正文各带自动编号 `<w:footnoteRef/>`、多段拆多个 `w:p`、部件与 rels 注册））；文本节点兼容顶层 text 与 attrs.text；字节经 Packer.toBase64String + atob 取（toBuffer 走 jszip 的 nodebuffer 通道，浏览器里没有 Buffer））
   lib/ooxml.ts        迷你 OOXML XML 解析器（零依赖、不碰 DOM）：parseXml/find/findDesc/all/allL/attr/attrL/val/valNum/textOf + decodeEnt 实体表——让 docx 读侧能在 Node 里直测
   lib/ooxml-graphics.ts 图形部件读侧（v0.42，零依赖、不碰 DOM 所以 Node 侧可直测）：`smartArtToHtml(dataXml, inCell)` 解 DiagramML dataModel 的 ptLst/cxnLst（parOf 建树 + srcOrd 定序、空节点下钻、首次认父挡回边、`a:fld` 域编号不采）→ 嵌套 `bulletList`（格内改段落 `margin-left` 表层级）；`chartToHtml(chartSpaceXml, inCell)` 解 ChartML 缓存值（下钻找系列、`strRef`/`numRef` 中间层、`c:pt/@idx` 空洞留格、`multiLvlStrRef` 各级拼一格、轴标题不当图表标题）→ 标题段 + 数据表，无缓存只取标题；两者都返 `{html, kept}` 让调用方按"真取回多少"说告警
-  lib/docx-fidelity.ts OOXML → HTML 保真导入器（v0.37）：run 级 rPr（粗斜/删除线/下划线/字色/高亮/字族/字号/上下标 `w:vertAlign`）、段落 pPr（jc/`w:ind` 左右与首行悬挂四种缩进写法/pStyle 样式链）、numPr+numbering.xml → 有序无序与 ilvl 层级（**跳档按 numId 折基准层**，不凭空补中间层）、表格 gridSpan/vMerge + tblGrid 列宽 + 单元格四边 `w:tcBorders`（含 val=nil 的显式去边）/底纹 `w:shd fill`/竖排 `w:vAlign`/表级 `w:tblInd`、段落 `w:spacing`（行距两档 + 段前后，含按行的 `w:*Lines` 估算）/`w:shd` 底纹/`w:pBdr` 四边、脚注与尾注引用（`w:footnoteReference`/`w:endnoteReference` 按 `w:id` 配 `word/footnotes.xml`·`endnotes.xml` 正文，跳过 separator/continuationSeparator，正文缺失记告警且不留空标记）、图片 rels→dataURL、内外超链接、分页符、批注三态锚点、域代码文字不外泄、文本框 `w:txbxContent`（`wps:txbx` 与旧式 `v:textbox`）展平为段落、OMML 公式线性化、`mc:AlternateContent` 只取 Choice（空则退 Fallback，避免同一份正文翻倍）、drawing 锚点经 rels 找图示/图表部件（v0.42，部件缺失与关系缺失各记一条告警）；认不出就抛错或 blocks=0，调用方回退 mammoth
-  lib/cell-style.ts  单元格样式扩展（v0.38）：tableCell/tableHeader 的 bdTop/bdRight/bdBottom/bdLeft + background + vAlign、table 的 marginLeft 全局属性（只声明属性不改内容模型）；边框统一规范串 `"0.67px solid #8899aa"`，三态 null 未声明/'none' 显式去边/有值；`inlineBorder()` 读 CSSOM longhand（shorthand 对 none 返回空串）、`IndentTableView` 子类补 marginLeft（resizable 的节点视图不传 HTMLAttributes）、`eighthsToPx`/`pxToEighths` 管 1/8 磅换算、命令 setCellBackground/setCellVAlign
+  lib/docx-fidelity.ts OOXML → HTML 保真导入器（v0.37）：run 级 rPr（粗斜/删除线/下划线/字色/高亮/字族/字号/上下标 `w:vertAlign`）、段落 pPr（jc/`w:ind` 左右与首行悬挂四种缩进写法/pStyle 样式链）、numPr+numbering.xml → 有序无序与 ilvl 层级（**跳档按 numId 折基准层**，不凭空补中间层）、表格 gridSpan/vMerge + tblGrid 列宽 + 单元格四边 `w:tcBorders`（含 val=nil 的显式去边）/底纹 `w:shd fill`/竖排 `w:vAlign`/表级 `w:tblInd`、段落 `w:spacing`（行距两档 + 段前后，含按行的 `w:*Lines` 估算）/`w:shd` 底纹/`w:pBdr` 四边、脚注与尾注引用（`w:footnoteReference`/`w:endnoteReference` 按 `w:id` 配 `word/footnotes.xml`·`endnotes.xml` 正文，跳过 separator/continuationSeparator，正文缺失记告警且不留空标记）、图片 rels→dataURL、内外超链接、分页符、批注三态锚点、域代码文字不外泄、**域编号重算**（v0.43：`fldChar` begin/separate/end 三道门接 `docx-fields` 的 `FieldEngine`——`SEQ` 现算并压掉缓存、`REF` 无缓存按书签段落文本兜底（书签表渲染前预扫）、算不了的沿缓存且无缓存记边界、`fldSimple` 同路、被跳过的分支不占号）、`w:object` 嵌入对象（v0.43：预览是 EMF/WMF 解不开时在原位置留一行可见占位，ProgID + rels 反查的部件文件名；能出预览图就不叠占位）、文本框 `w:txbxContent`（`wps:txbx` 与旧式 `v:textbox`）展平为段落、OMML 公式线性化、`mc:AlternateContent` 只取 Choice（空则退 Fallback，避免同一份正文翻倍）、drawing 锚点经 rels 找图示/图表部件（v0.42，部件缺失与关系缺失各记一条告警）；认不出就抛错或 blocks=0，调用方回退 mammoth
+  lib/docx-fields.ts 域重算引擎（v0.43，零依赖、纯 Node 可直测）：`parseInstr` 拆 `命令 参数 \开关`（**开关 token 原样保留大小写**——Word 就按它决定结果形态）、`seqText` 按 `\* ROMAN`/`roman`/`ALPHABETIC`/`alphabetic`/`Alpha` 出对应形态、`FieldEngine`（`from(doc)` 渲染前扫全篇建书签表（只排 `_GoBack`，`_Ref…`/`_Toc…` 必须留）+ `seqValue` 跟着文档顺序走 + `refText` 兜底段落文本）、`recomputable`（只有带 label 的 SEQ 现算）、`fieldLabel`/`paraText`（域代码与已删文字不算正文）：tableCell/tableHeader 的 bdTop/bdRight/bdBottom/bdLeft + background + vAlign、table 的 marginLeft 全局属性（只声明属性不改内容模型）；边框统一规范串 `"0.67px solid #8899aa"`，三态 null 未声明/'none' 显式去边/有值；`inlineBorder()` 读 CSSOM longhand（shorthand 对 none 返回空串）、`IndentTableView` 子类补 marginLeft（resizable 的节点视图不传 HTMLAttributes）、`eighthsToPx`/`pxToEighths` 管 1/8 磅换算、命令 setCellBackground/setCellVAlign
   lib/paragraph-style.ts 段落排版扩展（v0.39）：paragraph/heading 的 lineHeight/lineRule/spaceBefore/spaceAfter/background/bdTop..bdLeft 全局属性，一组属性拼**一条** style（多条各写一份会互相盖掉）；`ooxmlLine`/`lineToOoxml`/`ruleOf` 管 1/240 行与二十分之一磅两套语义，"最小值"档 CSS 表达不了就修行内自定义属性 `--oof-lr` 带回；命令 setParagraphStyle/setLineSpacing/setSpaceAround/setParaBackground
   lib/indent-extension.ts 段落全局属性 indentLeft/indentFirst（32px 一档、上限 320px）+ setIndent/indent/outdent 命令 + Ctrl+] / Ctrl+[ + 悬挂缩进感知的出退格
   lib/toc-extension.ts TipTap 目录原子节点：按标题实时汇总、点击跳转
@@ -1096,7 +1144,8 @@ cargo check        # Rust 后端检查（在 src-tauri 下）
 - [x] 文档保真续项四：脚注/尾注真往返（`note` 内联原子节点 + 编号按文档顺序现算 + OOXML `word/footnotes.xml`·`endnotes.xml` 与 ODF 1.2 内联写法双向（含旧版 `text:note` 外壳）+ 文末脚注区编辑与打印）
 - [x] 文档保真续项五：文本框展平（`w:txbxContent` 新旧两种外壳 + ODF `draw:text-box`，位置与环绕不保但字不丢）+ 公式线性化（OMML 与 MathML 翻成同一套 `x^2`/`a/b`/`√(y)`/`∑_i^n`）+ `mc:AlternateContent` 只取一支（Word 16.0 只读腿按 `wdTextFrameStory` 逐句核对）
 - [x] 文档保真续项六之一：SmartArt（`diagrams/dataN.xml` 的 DiagramML 数据模型 → 嵌套列表）与图表（`charts/chartN.xml` 的 ChartML 缓存值 → 标题 + 数据表）读回，格内走层级缩进展平，还原不了的记边界
-- [ ] 文档保真续项六剩下：OLE 嵌入对象的预览、题注与交叉域**编号重算**（当前按文件里的缓存文本读入，域本身不重算）
+- [x] 文档保真续项六之二：域**编号重算**（`SEQ` 按文档顺序现算并压掉缓存、`\* ROMAN`/`\* roman`/`\* ALPHABETIC`/`\* alphabetic` 四形态按开关自身大小写、`REF` 无缓存时按书签所在段落文本兜底、`PAGE`/`PAGEREF`/`DOCPROPERTY` 沿缓存且无缓存记边界、`fldSimple` 同路、被跳过的目录不占号）+ OLE 嵌入对象预览解不开时留一行看得见的占位（ProgID + 部件文件名，.odoc/docx/odt 三链路都在）
+- [ ] 文档保真续项六剩下：OLE 嵌入对象的**内容**提取（CFB / 嵌入包里的正文——现在只到"看得见有个对象"这一层）
 - [ ] 自动更新通道（须先决策：公开仓库或独立托管 update metadata）
 - [ ] macOS 打包（需签名/公证凭据）
 

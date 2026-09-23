@@ -8,7 +8,7 @@
 // 页眉页脚与页面设置仍走 docxToDocMeta，批注列表仍走 docxToComments。
 // 抛错或拆不出块时调用方回退 mammoth。
 //
-// schema 边界（TipTap 侧没有对应属性，导入时刻意不硬塞，全部记进 warnings）：OLE 对象。
+// schema 边界（TipTap 侧没有对应属性，导入时刻意不硬塞，全部记进 warnings）：OLE 对象的**内容**。
 // 表格边框/单元格底纹与竖排/上下标/表格缩进在 v0.38 起已经能读进 cell-style 与上下标 schema；
 // 段落行距/段前后/底纹/边框（w:spacing/w:shd/w:pBdr）在 v0.39 起读进 paragraph-style schema；
 // 脚注与尾注（word/footnotes.xml、word/endnotes.xml）在 v0.40 起读进 note 节点，正文摊在文末脚注区；
@@ -16,8 +16,13 @@
 // 后者线性化成 `x^2`、`(-b+√(b^2-4ac))/(2a)` 这类可读文本（结构不保）——"字没了"比"版式没保真"严重一级。
 // SmartArt 与图表在 v0.42 起按各自数据部件（diagrams/dataN.xml 的 dgm:pt 树、charts/chartN.xml 的
 // c:*Cache）出嵌套列表与数据表：字与数不再整块不见，但版式类型、配色、连线方向与坐标轴仍旧不还原。
+// 域（field）在 v0.43 起分两种待遇：SEQ 题注号是纯顺序计数，一律按当前文档顺序现算（文件里的缓存
+// 在别的工具编辑过之后会与实际序号不符）；PAGE/PAGEREF/DOCPROPERTY 这类我们算不出正确值的仍读缓存。
+// 只有代码没有结果的域（交叉引用、别的工具写出的件）以前会静默变空，现在 REF 退回收尾书签所在段落
+// 的文本，其余记一条"没有缓存结果，未重算"。
 
 import { all, allDesc, attr, attrL, attrNum, els, find, findDesc, findL, local, parseXml, textOf, type XEl } from './ooxml'
+import { FieldEngine, fieldLabel, parseInstr, recomputable } from './docx-fields'
 import { chartToHtml, smartArtToHtml } from './ooxml-graphics'
 import { CELL_EDGES, CSS_BORDER_STYLE, eighthsToPx, rgb2hex } from './cell-style'
 import { ooxmlLine } from './paragraph-style'
@@ -418,18 +423,43 @@ interface InlineState {
   /** 域代码深度与"是否已到结果显示段" */
   fld: number
   show: boolean
+  /** 从外到内的域栈：SEQ 这类要现算的在 begin 就把指令原文读全，结果段用现算值顶掉缓存 */
+  stack: OpenField[]
+  /** 已产出的行内容片计数：判断"这个域到底有没有产出结果"用（域没有结果时正文会静默变空） */
+  outSeq: number
   /** 下一段文字必须另起一片：批注区间按片段下标切分，与邻片合并就会把边界吃掉 */
   split: boolean
   /** 格内流：文本框展平时要沿用同一个判定（格里的列表不并进外层列表栈） */
   inCell: boolean
 }
 
+/** 一个开着的域：instr 是攒起来的域代码原文，suppress 表示结果段由我们现算、不读文件里的缓存 */
+interface OpenField {
+  instr: string
+  cmd: string
+  arg: string
+  switches: string[]
+  suppress: boolean
+  /** 已由我们现算产出过结果（SEQ 走这条），避免 separate 与 end 两处重复计数 */
+  done: boolean
+  /** 进入时 push() 的计数与片段数，出口比对就知道缓存有没有产出（块级产出只加片段数） */
+  at: number
+  piecesAt: number
+}
+
 function push(st: InlineState, html: string) {
   if (!html) return
+  st.outSeq += 1
   const last = st.pieces[st.pieces.length - 1]
   if (last?.kind === 'inline' && !st.split) last.html += html
   else st.pieces.push({ kind: 'inline', html })
   st.split = false
+}
+
+/** 最内层开着的域是否由我们现算（现算时文件里的缓存文本要压掉，否则一份编号出两遍） */
+function suppressField(st: InlineState): boolean {
+  const f = st.stack[st.stack.length - 1]
+  return !!f && f.suppress
 }
 
 /** 批注区间原位包 span：块级插入物（图片/分页符）前的行内容先闭合，块原样保留 */
@@ -460,6 +490,8 @@ class Fidelity {
   /** 图形类部件（diagrams/dataN.xml、charts/chartN.xml）的 XML 文本缓存 */
   private parts = new Map<string, Promise<string>>()
   private zip: ZipLike | null = null
+  /** 书签表与 SEQ 计数（交叉引用可以指向后面的段落，所以正文渲染前先扫一遍整篇） */
+  private fields = new FieldEngine()
   /** w:id → 正文（脚注与尾注各自的编号空间，故分两张表）；引用处按此查正文 */
   private noteBodies: Record<'footnote' | 'endnote', Map<number, string>> = {
     footnote: new Map(),
@@ -513,6 +545,7 @@ class Fidelity {
     // w:body 是 w:document 的孩子，而 parseXml 的根是 '#doc'，所以要深找一层
     const body = findDesc(doc, 'w:body')
     if (!body) throw new Error('document.xml 缺 w:body')
+    this.fields = FieldEngine.from(body)
     const list = new ListState()
     const r = await this.sequence(body.children, list)
     return { html: r.html + list.flush(), blocks: r.items }
@@ -719,7 +752,7 @@ class Fidelity {
     // 跨段批注：上一段开着没关的区间，在本段开头继续（mark 不能跨块，故每段各一枚 span）
     const openAt = new Map<number, number>()
     for (const cid of this.openRanges) openAt.set(cid, 0)
-    const st: InlineState = { pieces: [], openAt, fld: 0, show: false, split: false, inCell }
+    const st: InlineState = { pieces: [], openAt, fld: 0, show: false, stack: [], outSeq: 0, split: false, inCell }
     await this.children(el, base, st)
     for (const [cid, from] of st.openAt) {
       st.pieces.splice(from, st.pieces.length - from, ...wrapComment(st.pieces, from, cid))
@@ -737,19 +770,24 @@ class Fidelity {
   private async visit(node: XEl, props: RunProps, st: InlineState): Promise<void> {
     const t = local(node.name)
     switch (t) {
-      // 段落属性、书签、校对标记、域代码原文、已删除内容：都不产出可见文字
+      // 段落属性、书签、校对标记、已删除内容：都不产出可见文字
       case 'pPr':
       case 'proofErr':
       case 'bookmarkStart':
       case 'bookmarkEnd':
       case 'commentReference':
       case 'lastRenderedPageBreak':
-      case 'instrText':
       case 'delInstrText':
       case 'delText':
       case 'del':
       case 'moveFrom':
         return
+      case 'instrText': {
+        // 域代码原文本身不显示，但 SEQ/REF 要靠它才知道该现算什么
+        const f = st.stack[st.stack.length - 1]
+        if (f) f.instr += textOf(node)
+        return
+      }
       case 'commentRangeStart': {
         const cid = Number(attr(node, 'w:id'))
         if (Number.isFinite(cid)) {
@@ -774,10 +812,16 @@ class Fidelity {
         if (k === 'begin') {
           st.fld += 1
           st.show = false
-        } else if (k === 'separate') st.show = true
-        else if (k === 'end') {
+          st.stack.push({ instr: '', cmd: '', arg: '', switches: [], suppress: false, done: false, at: st.outSeq, piecesAt: st.pieces.length })
+        } else if (k === 'separate') {
+          st.show = true
+          const f = st.stack[st.stack.length - 1]
+          if (f && !f.cmd) this.resolveField(f, props, st)
+        } else if (k === 'end') {
           st.fld = Math.max(0, st.fld - 1)
           st.show = false
+          const f = st.stack.pop()
+          if (f) this.closeField(f, props, st)
         }
         return
       }
@@ -809,10 +853,20 @@ class Fidelity {
         return
       }
       case 'object': {
-        // 预览位图常是 EMF/WMF（浏览器解不了），能出图就出图；出不了图至少告警里带上对象类型
+        // 预览位图常是 EMF/WMF（浏览器解不了），能出图就出图；出不了图也要在正文里留一行可见占位，
+        // 否则"这里原本有一个嵌入的 Excel 工作表"这件事在打开的文档里彻底看不见，只在状态栏闪一下
         const img = await this.bitmap(node)
         if (img) st.pieces.push({ kind: 'block', html: img })
-        const prog = attr(findDesc(node, 'OLEObject'), 'ProgID') ?? attr(findDesc(node, 'OLEObject'), 'Type')
+        const ole = findDesc(node, 'OLEObject')
+        const prog = attr(ole, 'ProgID') ?? attr(ole, 'Type')
+        const rel = this.rels.get(attrL(ole, 'id') ?? '')
+        const file = rel?.target.split('/').pop()
+        const what = [prog, file].filter(Boolean).join('，')
+        if (!img)
+          st.pieces.push({
+            kind: 'block',
+            html: `<p>〔嵌入对象${what ? `：${esc(what)}` : ''}，内容未提取〕</p>`,
+          })
         this.warn(`嵌入对象${prog ? `（${prog}）` : ''}未导入`)
         return
       }
@@ -831,7 +885,7 @@ class Fidelity {
       case 'oMathPara': {
         // OMML 结构（分式、根号、矩阵）TipTap 侧没有承载它的节点，线性化成可读文本：
         // 走默认的 children 会把 m:t 的字符粘成 "a2b2"，这里至少把 a/b、x^2、√y 那层意思写出来
-        if (st.fld > 0 && !st.show) return
+        if (st.fld > 0 && (!st.show || suppressField(st))) return
         this.warn('公式（OMML）已线性化为文本，结构（分式/根号/上下标/矩阵）不保真')
         push(st, marked(escText(ommlLinear(node)).replace(/\u0001/g, '<br>'), props))
         return
@@ -846,26 +900,57 @@ class Fidelity {
         const rid = attrL(node, 'id')
         const rel = rid ? this.rels.get(rid) : undefined
         const anchor = attr(node, 'w:anchor')
-        // 子状态：链接内的批注区间若没在链接里闭合，下标要按"追加到主序列的位置"换算
-        const sub: InlineState = { pieces: [], openAt: new Map(), fld: st.fld, show: st.show, split: false, inCell: st.inCell }
+        // 子状态：链接内的批注区间若没在链接里闭合，下标要按"追加到主序列的位置"换算；
+        // 域栈必须共用（超链接里开着域、域里套超链接都是常见写法），产出计数按增量并回主状态
+        const sub: InlineState = {
+          pieces: [],
+          openAt: new Map(),
+          fld: st.fld,
+          show: st.show,
+          stack: st.stack,
+          outSeq: 0,
+          split: false,
+          inCell: st.inCell,
+        }
         await this.children(node, props, sub)
         st.fld = sub.fld
         st.show = sub.show
+        st.outSeq += sub.outSeq
         const base = st.pieces.length
         for (const [cid, from] of sub.openAt) st.openAt.set(cid, base + from)
         const href = rel?.external ? rel.target : anchor ? `#${anchor}` : undefined
         if (!href) {
           for (const p of sub.pieces) st.pieces.push(p)
+          st.outSeq += sub.pieces.length
           return
         }
         for (const p of sub.pieces)
           st.pieces.push(p.kind === 'inline' ? { kind: 'inline', html: `<a href="${esc(href)}">${p.html}</a>` } : p)
+        st.outSeq += sub.pieces.length
+        return
+      }
+      case 'fldSimple': {
+        // 简单域把代码写在属性上、结果当自己的孩子：同一条 SEQ 在这里也要现算，
+        // 否则只有代码没有结果的那些（别的工具写的件）会静默变成空
+        const f: OpenField = {
+          instr: attr(node, 'w:instr') ?? '',
+          cmd: '',
+          arg: '',
+          switches: [],
+          suppress: false,
+          done: false,
+          at: st.outSeq,
+          piecesAt: st.pieces.length,
+        }
+        if (!this.resolveField(f, props, st)) {
+          await this.children(node, props, st)
+          this.closeField(f, props, st)
+        }
         return
       }
       // 容器类：原样下钻
       case 'sdt':
       case 'sdtContent':
-      case 'fldSimple':
       case 'ins':
       case 'customXml':
       case 'smartTag':
@@ -893,7 +978,7 @@ class Fidelity {
           if (typeof c === 'string') continue
           const ct = local(c.name)
           if (ct === 't') {
-            if (st.fld > 0 && !st.show) continue
+            if (st.fld > 0 && (!st.show || suppressField(st))) continue
             text += textOf(c)
           } else if (ct === 'br') {
             if (attr(c, 'w:type') === 'page') {
@@ -916,6 +1001,45 @@ class Fidelity {
         await this.children(node, props, st)
         return
     }
+  }
+
+  // --- 域：能现算的现算，算不了的按缓存读并说清楚 ---
+
+  /**
+   * 指令读全之后先判一次：SEQ 是纯顺序计数，缓存值在别的工具编辑过之后会与文档顺序不符
+   * （1、2、2、5 这种），所以一律按当前遇到第几枚同名 SEQ 现算，并压掉文件里的结果文本。
+   * 返回 true 表示结果已由我们产出。
+   */
+  private resolveField(f: OpenField, props: RunProps, st: InlineState): boolean {
+    if (f.done) return true
+    const i = parseInstr(f.instr)
+    if (!i.cmd) return false
+    f.cmd = i.cmd
+    f.arg = i.arg
+    f.switches = i.switches
+    if (!recomputable(i)) return false
+    f.done = true
+    f.suppress = true
+    push(st, marked(escText(this.fields.seqValue(i.arg, i.switches)), props))
+    return true
+  }
+
+  /** 域闭合：有缓存结果就用它（PAGE/PAGEREF 这类我们算不了），什么都没有时 REF 退到书签所在段落文本 */
+  private closeField(f: OpenField, props: RunProps, st: InlineState) {
+    if (f.done) return
+    // 有的写件把结果直接跟在代码后面、不写 separate：这种 SEQ 到出口才读得全指令，照样现算
+    if (!f.cmd && this.resolveField(f, props, st)) return
+    if (!f.cmd) return
+    if (st.outSeq > f.at || st.pieces.length > f.piecesAt) return
+    if (f.cmd === 'REF' && f.arg) {
+      const t = this.fields.refText(f.arg)
+      if (t) {
+        push(st, marked(escText(t), props))
+        this.warn(`交叉引用（${f.arg}）没有缓存结果，已按书签所在段落文本补`)
+        return
+      }
+    }
+    this.warn(`域（${fieldLabel(f)}）没有缓存结果，未重算`)
   }
 
   // --- 图片 ---
