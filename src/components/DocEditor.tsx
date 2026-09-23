@@ -30,6 +30,14 @@ import {
   type PMNode,
 } from '../lib/docx'
 import { Comment, addCommentMark, findCommentAnchor, removeCommentMark } from '../lib/comment-extension'
+import {
+  Note,
+  NOTE_LABEL,
+  locateNote,
+  noteOrdinalOf,
+  notesOf,
+  type NoteKind,
+} from '../lib/note-extension'
 import type { DocxImport } from '../lib/docx-fidelity'
 import { Toc } from '../lib/toc-extension'
 import { PageBreak } from '../lib/page-break-extension'
@@ -99,6 +107,7 @@ function DocEditor({ tab }: Props) {
   const [docH, setDocH] = useState(0)
   const [cmOpen, setCmOpen] = useState(false)
   const [draft, setDraft] = useState<{ cid: number; text: string } | null>(null)
+  const [noteDraft, setNoteDraft] = useState<{ kind: NoteKind; text: string } | null>(null)
   const [, setTick] = useState(0)
   const [frOpen, setFrOpen] = useState(false)
   const [frQ, setFrQ] = useState('')
@@ -134,6 +143,8 @@ function DocEditor({ tab }: Props) {
       Toc,
       PageBreak,
       Comment,
+      // 脚注/尾注：行内原子节点，正文存在节点属性上（三条保存链路都从这一份事实出发）
+      Note,
       FindReplace,
     ],
     content: '<p></p>',
@@ -189,6 +200,8 @@ function DocEditor({ tab }: Props) {
       exportDocxTo: (path: string) => exportDocxTo(path),
       exportOdtTo: (path: string) => exportOdtTo(path),
       counts: () => counts,
+      notes: () => notesOf(editor),
+      insertNote: (kind: NoteKind, text: string) => editor.commands.insertNote(kind, text),
     }
     const byTab = (w.__oofDocCtlByTab as Record<string, typeof ctl> | undefined) ?? {}
     byTab[tab.id] = ctl
@@ -707,7 +720,26 @@ function DocEditor({ tab }: Props) {
     el?.scrollIntoView({ behavior: 'smooth', block: 'center' })
   }
 
+  const startNote = (kind: NoteKind) => {
+    if (!editor) return
+    setNoteDraft({ kind, text: '' })
+  }
+
+  const confirmNote = () => {
+    if (!editor || !noteDraft) return
+    const text = noteDraft.text.trim()
+    const kind = noteDraft.kind
+    setNoteDraft(null)
+    // 空正文当作取消：与批注一致，避免正文里长出一枚没有内容的圈号
+    if (!text) return
+    if (!editor.chain().focus().insertNote(kind, text).run()) {
+      setStatus('当前光标位置不能插入脚注/尾注')
+      setTimeout(() => setStatus(''), 1800)
+    }
+  }
+
   if (!editor) return null
+  const notes = notesOf(editor)
   const fr = frPluginKey.getState(editor.state)
   const frActive = fr && fr.matches.length ? activeIndexOf(fr, editor.state.selection.from, editor.state.selection.to) : -1
   const btn = (label: string, onClick: () => void, active = false, title?: string) => (
@@ -734,6 +766,26 @@ function DocEditor({ tab }: Props) {
         {btn('页面设置', () => setPgOpen((v) => !v), pgOpen || !!meta.page, '纸张与页边距：同步应用到视图、打印与 docx/odt 导出')}
         {btn('批注', () => setCmOpen((v) => !v), cmOpen || comments.length > 0, '批注侧栏：选中文字后可添加批注，导出为 docx 原生批注')}
         {btn('新建批注', startComment, !!draft, '选中正文文字后点击，为其添加一条批注')}
+        {btn('脚注', () => startNote('footnote'), noteDraft?.kind === 'footnote', '在光标处插入脚注：正文写在文末脚注区，导出 docx/odt 为原生脚注')}
+        {btn('尾注', () => startNote('endnote'), noteDraft?.kind === 'endnote', '在光标处插入尾注：编号与脚注各排各的')}
+        {noteDraft && (
+          <span className="tb-link-form" onClick={(e) => e.stopPropagation()}>
+            <input
+              autoFocus
+              className="tb-input"
+              style={{ width: 220 }}
+              value={noteDraft.text}
+              placeholder={`${NOTE_LABEL[noteDraft.kind]}正文，回车确定`}
+              onChange={(e) => setNoteDraft({ ...noteDraft, text: e.target.value })}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') confirmNote()
+                if (e.key === 'Escape') setNoteDraft(null)
+              }}
+            />
+            <button className="tb-btn" onClick={confirmNote}>确定</button>
+            <button className="tb-btn" onClick={() => setNoteDraft(null)}>取消</button>
+          </span>
+        )}
         {btn('查找替换', () => setFrOpen((v) => !v), frOpen, 'Ctrl+F 打开：查找、定位、替换')}
         {btn('历史版本', () => setHistOpen((v) => !v), histOpen, '会话内快照：每 60 秒自动留存，可一键恢复')}
         {btn('打印 / PDF', () => window.print(), false, '调用系统打印，可选择另存为 PDF')}
@@ -1254,6 +1306,38 @@ function DocEditor({ tab }: Props) {
             >
               <EditorContent editor={editor} />
             </div>
+            {notes.length > 0 && (
+              // 我们做不出"每页页脚"那一版式，故脚注正文摊在正文末尾：屏幕上是可编辑的文本框，
+              // 打印时换成静态块（同一份文字），随正文一起进 PDF / docx
+              <div className="doc-notes">
+                {(['footnote', 'endnote'] as NoteKind[]).map((kind) => {
+                  const rows = notes.filter((r) => r.kind === kind)
+                  if (!rows.length) return null
+                  return (
+                    <div key={kind} className="doc-notes-group">
+                      <div className="doc-notes-title">
+                        {NOTE_LABEL[kind]} {rows.length}
+                      </div>
+                      {rows.map((r) => (
+                        <div key={r.index} className="doc-note-row">
+                          <span className="doc-note-num">{noteOrdinalOf(notes, r)}</span>
+                          <textarea
+                            className="doc-note-input"
+                            rows={1}
+                            value={r.text}
+                            placeholder="（正文为空）"
+                            onChange={(e) => editor.commands.setNoteText(r.index, e.target.value)}
+                          />
+                          <div className="doc-note-static">{r.text}</div>
+                          {btn('定位', () => locateNote(editor, r), false, '滚动到正文里的标记')}
+                          {btn('删除', () => editor.commands.deleteNote(r.index), false, '删掉标记与正文')}
+                        </div>
+                      ))}
+                    </div>
+                  )
+                })}
+              </div>
+            )}
             {(meta.footerText || meta.footerPageNumber) && (
               <div className="doc-hf doc-hf-foot">
                 {meta.footerText}

@@ -8,14 +8,16 @@
 // 页眉页脚与页面设置仍走 docxToDocMeta，批注列表仍走 docxToComments。
 // 抛错或拆不出块时调用方回退 mammoth。
 //
-// schema 边界（TipTap 侧没有对应属性，导入时刻意不硬塞，全部记进 warnings）：脚注尾注、图表与 OLE 对象。
+// schema 边界（TipTap 侧没有对应属性，导入时刻意不硬塞，全部记进 warnings）：图表与 OLE 对象。
 // 表格边框/单元格底纹与竖排/上下标/表格缩进在 v0.38 起已经能读进 cell-style 与上下标 schema；
-// 段落行距/段前后/底纹/边框（w:spacing/w:shd/w:pBdr）在 v0.39 起读进 paragraph-style schema。
+// 段落行距/段前后/底纹/边框（w:spacing/w:shd/w:pBdr）在 v0.39 起读进 paragraph-style schema；
+// 脚注与尾注（word/footnotes.xml、word/endnotes.xml）在 v0.40 起读进 note 节点，正文摊在文末脚注区。
 
 import { all, allDesc, attr, attrL, attrNum, els, find, findDesc, local, parseXml, textOf, type XEl } from './ooxml'
 import { CELL_EDGES, CSS_BORDER_STYLE, eighthsToPx, rgb2hex } from './cell-style'
 import { ooxmlLine } from './paragraph-style'
 import { commentRowsOf, type DocComment } from './docx'
+import { encodeNoteText } from './note-extension'
 
 export interface DocxImport {
   html: string
@@ -441,6 +443,11 @@ class Fidelity {
   private rels = new Map<string, { target: string; external: boolean }>()
   private media = new Map<string, Promise<string | null>>()
   private zip: ZipLike | null = null
+  /** w:id → 正文（脚注与尾注各自的编号空间，故分两张表）；引用处按此查正文 */
+  private noteBodies: Record<'footnote' | 'endnote', Map<number, string>> = {
+    footnote: new Map(),
+    endnote: new Map(),
+  }
 
   constructor(
     private book: StyleBook,
@@ -463,6 +470,16 @@ class Fidelity {
       const external = (attr(r, 'TargetMode') ?? '') === 'External'
       this.rels.set(id, { target: external ? target : normTarget(target), external })
     }
+  }
+
+  /**
+   * 脚注与尾注正文：document.xml 里的引用只带 w:id，正文在 word/footnotes.xml 与 word/endnotes.xml。
+   * 部件缺失时这里只是空表——引用处查不到正文才记告警（同一句话 Set 去重，不会一条一段地刷屏）。
+   */
+  setNotes(footnotesXml: string, endnotesXml: string) {
+    const warn = (m: string) => this.warn(m)
+    this.noteBodies.footnote = noteBodiesOf(footnotesXml, 'footnote', warn)
+    this.noteBodies.endnote = noteBodiesOf(endnotesXml, 'endnote', warn)
   }
 
   setComments(commentsXml: string, extXml: string) {
@@ -746,9 +763,16 @@ class Fidelity {
         this.warn('符号（w:sym）未导入')
         return
       case 'footnoteReference':
-      case 'endnoteReference':
-        this.warn('脚注/尾注引用未导入')
+      case 'endnoteReference': {
+        const kind: 'footnote' | 'endnote' = t === 'endnoteReference' ? 'endnote' : 'footnote'
+        const body = this.noteBodies[kind].get(attrNum(node, 'w:id') ?? NaN)
+        if (body === undefined) {
+          this.warn(`${kind === 'endnote' ? '尾注' : '脚注'}正文缺失`)
+          return
+        }
+        push(st, noteSpan(kind, body))
         return
+      }
       case 'object':
         this.warn('嵌入对象（w:object）未导入')
         return
@@ -1026,6 +1050,47 @@ function tableIndentCss(px: number): string {
   return `margin-left: ${px}px; width: calc(100% - ${px}px)`
 }
 
+/** 属性值里的引号要转义：脚注正文是用户文字，落在 data-* 属性上 */
+function escAttr(s: string): string {
+  return esc(s).replace(/"/g, '&quot;')
+}
+
+/** 脚注/尾注标记：正文只存在 data 属性里（进 DOM 文本就会混进正文与字数），序号由 CSS counter 现算 */
+function noteSpan(kind: 'footnote' | 'endnote', text: string): string {
+  return `<span class="doc-note" data-oo-note-kind="${kind}" data-oo-note-text="${escAttr(encodeNoteText(text))}"></span>`
+}
+
+/**
+ * footnotes.xml / endnotes.xml → `w:id` → 纯文本正文（段落之间以 \n 分隔）。
+ * 结构性那两条（separator / continuationSeparator）不是正文，必须跳过——它们里面就是一条 `w:footnoteRef` 加一根线。
+ */
+function noteBodiesOf(
+  xml: string,
+  tag: 'footnote' | 'endnote',
+  warn: (msg: string) => void,
+): Map<number, string> {
+  const out = new Map<number, string>()
+  if (!xml.trim()) return out
+  const root = findDesc(parseXml(xml), `w:${tag}s`)
+  if (!root) return out
+  const label = tag === 'footnote' ? '脚注' : '尾注'
+  for (const el of all(root, `w:${tag}`)) {
+    const type = (attr(el, 'w:type') ?? '').toLowerCase()
+    if (type === 'separator' || type === 'continuationseparator') continue
+    const id = Number(attr(el, 'w:id'))
+    if (!Number.isFinite(id)) continue
+    if (find(el, 'w:tbl')) warn(`${label}正文里的表格未保留`)
+    if (findDesc(el, 'w:drawing') || findDesc(el, 'w:pict')) warn(`${label}正文里的图片未保留`)
+    out.set(
+      id,
+      all(el, 'w:p')
+        .map((p) => plainText(p))
+        .join('\n'),
+    )
+  }
+  return out
+}
+
 function plainText(el: XEl): string {
   return allDesc(el, 't')
     .map((c) => textOf(c))
@@ -1044,6 +1109,7 @@ export async function docxToHtmlFidelity(bytes: Uint8Array): Promise<DocxImport>
   const f = new Fidelity(readStyles(await read('word/styles.xml')), readNumbering(await read('word/numbering.xml')))
   f.load(zip)
   f.setRels(await read('word/_rels/document.xml.rels'))
+  f.setNotes(await read('word/footnotes.xml'), await read('word/endnotes.xml'))
   f.setComments(await read('word/comments.xml'), await read('word/commentsExtended.xml'))
   const { html, blocks } = await f.run(documentXml)
   return { html, comments: f.comments, blocks, warnings: [...f.warnings] }

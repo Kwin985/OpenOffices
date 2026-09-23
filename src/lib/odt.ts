@@ -1,5 +1,6 @@
 // ODT（OpenDocument 文本）导出/导入：ProseMirror JSON ⇄ content.xml，零新依赖（JSZip + DOMParser）。
-// 范围：批注与目录节点不写 ODT；图片以 dataURL 内嵌进 Pictures/；页眉页脚/页码走 master-page。
+// 范围：批注与目录节点不写 ODT；脚注/尾注走 ODF 1.2 的 text:footnote(REFERENCE) 内联写法；
+// 图片以 dataURL 内嵌进 Pictures/；页眉页脚/页码走 master-page。
 
 import {
   DEFAULT_COL_GAP,
@@ -12,6 +13,7 @@ import {
   type PMNode,
 } from './docx'
 import { bdAttr, borderParts, CELL_EDGES, cssBorder, rgb2hex, type CellEdge } from './cell-style'
+import { encodeNoteText } from './note-extension'
 import { ruleOf, type LineRule } from './paragraph-style'
 
 const OD_MIME = 'application/vnd.oasis.opendocument.text'
@@ -165,6 +167,8 @@ class OdtBuilder {
   private paraSeq = 0
   private cellSeq = 0
   private tableSeq = 0
+  /** 脚注/尾注各自一套编号与 text:id 前缀（ODF 的 id 要引用与正文两处对上，编号按文档顺序现算） */
+  private noteSeq: Record<'footnote' | 'endnote', number> = { footnote: 0, endnote: 0 }
 
   /**
    * 单元格直接格式（四边边框 + 底纹 + 竖排对齐）→ table-cell 家族自动样式。
@@ -366,6 +370,8 @@ class OdtBuilder {
       .join('')
     const pc = `<style:style style:name="PC" style:family="paragraph" style:parent-style-name="Standard"><style:paragraph-properties fo:background-color="#f3f4f6" fo:margin-left="0.4cm"/><style:text-properties style:font-name="Courier New" fo:font-size="9.5pt"/></style:style>`
     const pq = `<style:style style:name="PQ" style:family="paragraph" style:parent-style-name="Standard"><style:paragraph-properties fo:margin-left="0.8cm" fo:border-left="0.06cm solid #d1d5db" fo:padding-left="0.3cm"/></style:style>`
+    // 脚注/尾注正文段落：小一号字，Word 与 LO 的脚注文本都短正文两档
+    const fn = `<style:style style:name="FN" style:family="paragraph" style:parent-style-name="Standard"><style:text-properties fo:font-size="9pt"/></style:style>`
     const aligns = this.paraStyleXml()
     const lb = `<text:list-style style:name="LB">${[1, 2, 3]
       .map(
@@ -379,7 +385,7 @@ class OdtBuilder {
           `<text:list-level-style-number text:level="${l}" style:num-suffix="." style:num-format="1"><style:list-level-properties text:list-level-position-and-space-mode="label-alignment"><style:list-level-label-alignment text:label-followed-by="listtab" fo:text-indent="-0.7cm" fo:margin-left="${(0.7 * l).toFixed(2)}cm"/></style:list-level-properties></text:list-level-style-number>`,
       )
       .join('')}</text:list-style>`
-    return this.charStyleXml() + this.cellStyleXml() + this.tableStyleXml() + headings + pc + pq + aligns + lb + lo
+    return this.charStyleXml() + this.cellStyleXml() + this.tableStyleXml() + headings + pc + pq + fn + aligns + lb + lo
   }
 
   private registerImage(src: string): ImageEntry | null {
@@ -451,6 +457,19 @@ class OdtBuilder {
         } else if (!src.startsWith('data:')) {
           out += `<draw:frame text:anchor-type="as-char" ${wAttr}${hAttr}><draw:image xlink:href="${esc(src)}" xlink:type="simple"/></draw:frame>`
         }
+      } else if (n.type === 'note') {
+        // ODF 1.2：引用与正文是同一段落里相邻的两个元素，靠同一个 text:id 配对。
+        // 编号写进 citation 的字面量而不是留空——本导出每次重算文档顺序，所以字面量不会过期，
+        // 而只吃字面量的老阅读器（LO 早期版本、一些在线预览）也能显示出圈号。
+        const kind: 'footnote' | 'endnote' = n.attrs?.kind === 'endnote' ? 'endnote' : 'footnote'
+        const text = typeof n.attrs?.text === 'string' ? n.attrs.text : ''
+        const seq = ++this.noteSeq[kind]
+        const id = `${kind === 'endnote' ? 'ooen' : 'oofn'}${seq}`
+        const ref = kind === 'endnote' ? 'text:endnote-reference' : 'text:footnote-reference'
+        const bodyEl = kind === 'endnote' ? 'text:endnote' : 'text:footnote'
+        const cite = kind === 'endnote' ? 'text:endnote-citation' : 'text:footnote-citation'
+        const body = text.split('\n').map(esc).join('<text:line-break/>')
+        out += `<${ref} text:id="${id}"/><${bodyEl} text:id="${id}"><text:p text:style-name="FN"><${cite}>${seq}</${cite}>${body}</text:p></${bodyEl}>`
       } else if (n.content) {
         out += this.inline(n.content)
       }
@@ -939,6 +958,56 @@ export async function odtToHtml(bytes: Uint8Array): Promise<{ html: string; meta
     return html
   }
 
+  /**
+   * 脚注/尾注正文表：`text:id` → 正文元素。
+   * 三种外壳都收：ODF 1.2 的 `text:footnote` / `text:endnote`，与旧版（ODF 1.0/1.1、一些转换器）
+   * 的单一 `text:note`（靠 `text:note-class` 分辨类型，正文再套一层 `text:note-body`）。
+   * 建全表而不是"找下一个兄弟"：引用与正文按规范相邻，但第三方文件里位置未必守规矩。
+   */
+  const noteBodies = new Map<string, Element>()
+  for (const el of Array.from(cdoc.getElementsByTagName('*'))) {
+    if (el.localName === 'footnote' || el.localName === 'endnote' || el.localName === 'note') {
+      const id = el.getAttribute('text:id')
+      if (id && !noteBodies.has(id)) noteBodies.set(id, el)
+    }
+  }
+
+  /** 正文元素内的段落文本（不含 citation 的那个数字）；段间与段内换行都归一成 \n，与 docx 侧同一套约定 */
+  function noteBodyText(body: Element): string {
+    const holder = Array.from(body.children).find((c) => c.localName === 'note-body') ?? body
+    const paras = Array.from(holder.children).filter((c) => c.localName === 'p' || c.localName === 'h')
+    const lines = (paras.length ? paras : [holder]).map((p) => notePlainText(p))
+    return lines.join('\n')
+  }
+
+  function notePlainText(el: Element): string {
+    let s = ''
+    for (const c of Array.from(el.childNodes)) {
+      if (c.nodeType === 3) s += c.nodeValue ?? ''
+      else if (c.nodeType === 1) {
+        const e = c as Element
+        // citation 里是字面编号（老格式必须写），跟着正文读就会漏进用户文字
+        if (/(^|-)citation$/.test(e.localName)) continue
+        if (e.localName === 's') s += ' '.repeat(Math.max(1, Number(e.getAttribute('text:c') ?? 1)))
+        else if (e.localName === 'tab') s += '    '
+        else if (e.localName === 'line-break') s += '\n'
+        else s += notePlainText(e)
+      }
+    }
+    return s
+  }
+
+  /** 标记节点：正文只进 data 属性，序号交给 CSS counter（与 docx 保真导入写的完全同一个 span） */
+  function noteSpanHtml(kind: 'footnote' | 'endnote', text: string): string {
+    // 先编码换行（属性值里的 LF 会被解析器归一成空格），再转义 & < > "
+    const a = encodeNoteText(text)
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+    return `<span class="doc-note" data-oo-note-kind="${kind}" data-oo-note-text="${a}"></span>`
+  }
+
   const imgCache = new Map<string, Promise<string>>()
   const imageDataUrl = (href: string): Promise<string> => {
     if (href.startsWith('data:')) return Promise.resolve(href)
@@ -997,8 +1066,22 @@ export async function odtToHtml(bytes: Uint8Array): Promise<{ html: string; meta
           }
           case 'noscript':
             break
+          case 'footnote-reference':
+          case 'endnote-reference':
+          case 'note-reference': {
+            // 旧版把类型记在 text:note-class 上，新版拆成两个元素名；两种都认
+            const cls = (e.getAttribute('text:note-class') ?? '').toLowerCase()
+            const kind: 'footnote' | 'endnote' =
+              e.localName === 'endnote-reference' || cls === 'endnote' ? 'endnote' : 'footnote'
+            const body = noteBodies.get(e.getAttribute('text:id') ?? '')
+            // 有号没正文（损坏件或被截断的转换）就不产标记：留一枚空圈号会在下一次导出时长成一条真空白脚注
+            if (body) out += noteSpanHtml(kind, noteBodyText(body))
+            break
+          }
+          case 'footnote':
+          case 'endnote':
           case 'note':
-            break // 脚注文本不进正文
+            break // 正文已随引用处渲染成标记节点，再摊进段落就成了"脚注文字混进正文"
           default:
             out += await renderInline(e)
         }

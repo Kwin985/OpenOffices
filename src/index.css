@@ -805,6 +805,104 @@ button {
   border-radius: 999px;
 }
 
+/* 脚注/尾注标记：序号由 CSS counter 现算——与 Word/ODF 的自动编号同一条规则（按文档顺序，
+   脚注与尾注各自从 1 起），所以插入、删除、前后移动都会自动重排，不需要跑 JS 回写编号。
+   标记本身是行内原子节点，正文存在 data-oo-note-text 上（不进 DOM 文本，免得混进正文与字数） */
+.doc-content {
+  counter-reset: oo-fn oo-en;
+}
+
+.doc-note {
+  vertical-align: super;
+  font-size: 0.72em;
+  line-height: 0;
+  padding: 0 3px;
+  margin: 0 1px;
+  color: var(--accent);
+  background: rgba(44, 102, 212, 0.1);
+  border-radius: 4px;
+  cursor: default;
+  user-select: none;
+}
+
+.doc-note[data-oo-note-kind='footnote'] {
+  counter-increment: oo-fn;
+}
+
+.doc-note[data-oo-note-kind='footnote']::before {
+  content: counter(oo-fn);
+}
+
+.doc-note[data-oo-note-kind='endnote'] {
+  counter-increment: oo-en;
+}
+
+.doc-note[data-oo-note-kind='endnote']::before {
+  content: counter(oo-en);
+}
+
+/* 文末脚注区：我们做不出"每页页脚"，故脚注正文摊在正文末尾（屏幕可编辑、打印随正文一起出） */
+.doc-notes {
+  margin-top: 26px;
+  padding-top: 8px;
+  border-top: 1px solid var(--border);
+  font-size: 12.5px;
+}
+
+.doc-notes-group {
+  margin-bottom: 8px;
+}
+
+.doc-notes-title {
+  color: var(--text-2);
+  font-size: 11.5px;
+  margin-bottom: 3px;
+}
+
+.doc-note-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  margin-bottom: 4px;
+}
+
+.doc-note-num {
+  flex-shrink: 0;
+  width: 18px;
+  text-align: right;
+  color: var(--accent);
+  line-height: 22px;
+}
+
+.doc-note-input {
+  flex: 1;
+  min-height: 22px;
+  resize: vertical;
+  background: var(--bg);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 3px 6px;
+  font-size: 12.5px;
+  font-family: inherit;
+}
+
+.doc-note-input:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+.doc-note-static {
+  display: none;
+  flex: 1;
+  white-space: pre-wrap;
+  line-height: 22px;
+}
+
+.doc-note-row .tb-btn {
+  flex-shrink: 0;
+}
+
 /* 多栏：正文容器按设置分栏，栏间距由内联 column-gap 决定 */
 .doc-cols {
   column-fill: auto;
@@ -1860,6 +1958,16 @@ button {
 
   .doc-page-break::after {
     content: none;
+  }
+
+  /* 脚注区：打印要的是正文本身，编辑用的输入框与操作按钮不上纸 */
+  .doc-note-input,
+  .doc-note-row .tb-btn {
+    display: none;
+  }
+
+  .doc-note-static {
+    display: block;
   }
 
   /* 分页控制：标题不与其后正文分离，原子块不跨页折断，段落避免孤行寡行 */

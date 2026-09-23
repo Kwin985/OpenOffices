@@ -5,8 +5,10 @@ import {
   CommentRangeStart,
   CommentReference,
   Document,
+  EndnoteReferenceRun,
   ExternalHyperlink,
   Footer,
+  FootnoteReferenceRun,
   Header,
   HeadingLevel,
   type IBorderOptions,
@@ -404,7 +406,14 @@ function openComment(out: ParagraphChildLike[], cs: CommentTrack, cid: number) {
   }
 }
 
-type ParagraphChildLike = TextRun | ExternalHyperlink | CommentRangeStart | CommentRangeEnd | CommentReference
+type ParagraphChildLike =
+  | TextRun
+  | ExternalHyperlink
+  | CommentRangeStart
+  | CommentRangeEnd
+  | CommentReference
+  | FootnoteReferenceRun
+  | EndnoteReferenceRun
 
 function markAttr(node: PMNode, mark: string, attr: string): string | undefined {
   const m = node.marks?.find((x) => x.type === mark)
@@ -412,7 +421,7 @@ function markAttr(node: PMNode, mark: string, attr: string): string | undefined 
   return typeof v === 'string' ? v : undefined
 }
 
-function inlineToChildren(node: PMNode, inherited: Inherited = {}, cs?: CommentTrack): ParagraphChildLike[] {
+function inlineToChildren(node: PMNode, inherited: Inherited = {}, cs?: CommentTrack, dt?: DocTrack): ParagraphChildLike[] {
   const out: ParagraphChildLike[] = []
   for (const child of node.content ?? []) {
     if (child.type === 'text') {
@@ -479,8 +488,19 @@ function inlineToChildren(node: PMNode, inherited: Inherited = {}, cs?: CommentT
       } else if (src) {
         out.push(new TextRun({ text: `[图片: ${src}]`, italics: true }))
       }
+    } else if (child.type === 'note') {
+      const kind: NoteKind = child.attrs?.kind === 'endnote' ? 'endnote' : 'footnote'
+      const text = typeof child.attrs?.text === 'string' ? child.attrs.text : ''
+      if (dt) {
+        // 序号在遍历时现编：Word 与我们的屏幕/面板都按文档顺序自动编号，文件里没有第二个编号字段
+        dt.seq[kind] += 1
+        dt.notes[kind].set(dt.seq[kind], text)
+        out.push(kind === 'endnote' ? new EndnoteReferenceRun(dt.seq[kind]) : new FootnoteReferenceRun(dt.seq[kind]))
+      } else {
+        out.push(new TextRun({ text: `[${kind === 'endnote' ? '尾注' : '脚注'}: ${text}]`, italics: true }))
+      }
     } else {
-      out.push(...inlineToChildren(child, inherited, cs))
+      out.push(...inlineToChildren(child, inherited, cs, dt))
     }
   }
   return out
@@ -489,7 +509,7 @@ function inlineToChildren(node: PMNode, inherited: Inherited = {}, cs?: CommentT
 // 每个 cid 全局只写一组区间（Word 对同 id 多组 commentRange 判定文档损坏）；块间独立开闭
 function inlineBlockChildren(node: PMNode, dt: DocTrack): ParagraphChildLike[] {
   const cs: CommentTrack = { cur: null, used: dt.used, ranges: dt.ranges, skipped: dt.skipped }
-  const arr = inlineToChildren(node, {}, cs)
+  const arr = inlineToChildren(node, {}, cs, dt)
   closeComment(arr, cs)
   return arr
 }
@@ -646,6 +666,27 @@ interface DocTrack {
   used: Set<number>
   ranges: Set<number>
   skipped: Set<number>
+  /** 脚注/尾注正文：键是导出时现编的序号（1 起，两类各自计数），与 Word 的自动编号同一条规则 */
+  notes: Record<NoteKind, Map<number, string>>
+  seq: Record<NoteKind, number>
+}
+
+type NoteKind = 'footnote' | 'endnote'
+
+/** Document 构造参数里的脚注/尾注两栏：没内容时整条不给，避免给普通文档凭空挂上正文部件 */
+type NoteRecordOption = {
+  footnotes?: Record<string, { children: Paragraph[] }>
+  endnotes?: Record<string, { children: Paragraph[] }>
+}
+
+function newDocTrack(): DocTrack {
+  return {
+    used: new Set(),
+    ranges: new Set(),
+    skipped: new Set(),
+    notes: { footnote: new Map(), endnote: new Map() },
+    seq: { footnote: 0, endnote: 0 },
+  }
 }
 
 /** 导出用的编号定义名：Document.numbering.config 与段落 numbering.reference 必须同名 */
@@ -660,7 +701,7 @@ const ORDERED_LEVELS = [0, 1, 2].map((level) => ({
   style: { paragraph: { indent: { left: 720 * (level + 1), hanging: 360 } } },
 }))
 
-function blocksOf(nodes: PMNode[], depth = 0, dt: DocTrack = { used: new Set(), ranges: new Set(), skipped: new Set() }): (Paragraph | Table | TableOfContents)[] {
+function blocksOf(nodes: PMNode[], depth = 0, dt: DocTrack = newDocTrack()): (Paragraph | Table | TableOfContents)[] {
   const out: (Paragraph | Table | TableOfContents)[] = []
   for (const node of nodes) {
     if (node.type === 'bulletList' || node.type === 'orderedList') {
@@ -800,7 +841,7 @@ function blocksOf(nodes: PMNode[], depth = 0, dt: DocTrack = { used: new Set(), 
 }
 
 export async function prosemirrorToDocxBytes(json: PMNode, meta?: DocMeta): Promise<Uint8Array> {
-  const dt: DocTrack = { used: new Set(), ranges: new Set(), skipped: new Set() }
+  const dt = newDocTrack()
   const section: {
     children: (Paragraph | Table | TableOfContents)[]
     properties?: {
@@ -884,10 +925,33 @@ export async function prosemirrorToDocxBytes(json: PMNode, meta?: DocMeta): Prom
   // docx 只有在存在 parentId 时才生成 commentsExtended.xml（resolved 标志随它落盘），
   // 给 -1 触发该分支且 idToParaId.get(-1) 为 undefined，不会写出伪造的 parentParaId
   const anyResolved = anchored.some((c) => c.resolved)
+  // 脚注/尾注正文落进 word/footnotes.xml 与 word/endnotes.xml（分隔符条目由 docx 库自己补齐）。
+  // 正文里的换行按段落展开——与导入侧「逐个 <w:p> 取文字、段间补 \n」互为逆运算。
+  const noteParts = (kind: NoteKind): NoteRecordOption => {
+    const m = dt.notes[kind]
+    if (!m.size) return {}
+    const rec: Record<string, { children: Paragraph[] }> = {}
+    for (const [id, text] of m) {
+      rec[String(id)] = {
+        children: text
+          .split('\n')
+          .map(
+            (line) =>
+              new Paragraph({
+                style: kind === 'footnote' ? 'FootnoteText' : 'EndnoteText',
+                children: line ? [new TextRun({ text: line })] : [],
+              }),
+          ),
+      }
+    }
+    return kind === 'footnote' ? { footnotes: rec } : { endnotes: rec }
+  }
   const doc = new Document({
     creator: 'OpenOffices',
     title: 'OpenOffices 文档',
     features: { updateFields: true },
+    ...noteParts('footnote'),
+    ...noteParts('endnote'),
     ...(anchored.length
       ? {
           comments: {
