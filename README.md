@@ -883,6 +883,49 @@
   （打开 → 真实 DOM 逐句计数 → 展平的件存回 docx/odt → 再开自产物字仍在且不重复）；
   `cargo test --lib` 39 通过（Rust 零改动）+ tsc/build 绿
 
+## 图形部件：SmartArt 与图表的字也不许消失（v0.42）
+
+续项六的第一刀。这两个部件的正文都不在 `document.xml` 里——SmartArt 的字在
+`word/diagrams/dataN.xml` 的**数据模型**树里、图表的数据在 `word/charts/chartN.xml` 的**缓存值**里，
+以前一律只留一条"未导入"告警，整块文字凭空不见。现在的纪律照旧：**还原不了的如实在账，能还原的进文档模型**，
+不新造节点（层级走 `bulletList`、数据走 `table`、格内层级走段落 `indentLeft`）。
+
+- **SmartArt（DiagramML）**：`dgm:relIds r:dm` → dataModel 的 `ptLst` + `cxnLst`，按 `parOf` 边建树、
+  `srcOrd` 定兄弟序（真实文件里 pt 与 cxn 都是乱序的）→ **嵌套无序列表**，一个节点一个条目、
+  节点标签里的多行 `a:p` 并成一行。三处脏数据要兜：无字节点（`type="doc"` 的根、以及中间空节点）**不下钻就丢整支子树**，
+  所以照钻但不成条目；同一节点被两处认父、还有 `sib` 边与反向边成环 → 以"首次认父"为准并挡住回边；
+  `a:fld type="diagNum"` 的缓存编号**绝不采**（那是宿主现算的域，采了就把"9."画进正文）
+- **图表（ChartML）**：`c:chart r:id` → chartSpace，系列按名字下钻找（`c:barChart`/`c:lineChart`/… 都吃得下），
+  每行一个类目、每列一个系列 → 标题段 + **数据表**；`c:cat`/`c:val` 中间那层 `strRef`/`numRef` 别忘，
+  `c:pt/@idx` 的**空洞留成空格**（压成顺序就把后一列前移了）、`multiLvlStrRef` 各级拼进同一格、
+  系列名可能是字面 `c:v` 而非引用、坐标轴自己的 `c:title` 不能混进图表标题；
+  纯引用无缓存（Word 里"待重算"的图）→ 只取回标题 + 一条告警，**不出空表**
+- **落在表格里就展平**：`<w:tc>` 只能装段落，所以格内的图示/图表按深度写 `margin-left`（一档 32px）而不是列表或表格
+- **边界账**（同类聚合 ×N）：`SmartArt 已按数据模型的父子层级展平（图形版式、配色与连线方向未保留）×2`、
+  `图表已按文件里的缓存值取回数据（图表类型、坐标轴与配色未保留）×2`、`图表部件里没有缓存数值，只取回标题`、
+  `SmartArt部件里没有可读的文字`、`SmartArt关系缺失…`、`图表部件未找到：word/charts/ghost.xml`
+- **三处真 bug 全由"存出去再开回来"那两条腿抓到**（都早于本轮，纯读侧单元测试照不到）：
+  ① docx 写侧把一格里的**所有子节点并成一个 `<w:p>`** —— 第二行起既没换行也没了自己的缩进/对齐，
+  而图示部件落进格子恰好就是多段，于是整格在 Word 里糊成一行；改成逐块出 `w:p`，并补"空否则会成损坏件"的守卫
+  （`w:tc` 至少要一个 `w:p`）；
+  ② docx 读侧遇到 `ilvl` **跳档**（Word 真会写 0 直接跳 2）就凭空补中间层，屏幕上一排没字的空子弹；
+  第一版只 clamp 上限，结果兄弟项被当成子女爬成楼梯（新加的等值断言抓到），最终按 `numId` 记**基准层**折算；
+  ③ 形状约束：TipTap 的 `listItem` 是 `paragraph+`，而我们的 docx 写侧只认条目的第一段——
+  所以渲染端改成"一个节点一段"，不去造写侧承不下来的形状（造了就是静默丢字）
+- **坑**：① `ListLevelNumber` 挂在 **`Range.ListFormat`** 上，不在 `Paragraph.Format` 上——
+  写成后者恒得 `$null`，于是"三级列表"这条断言假失败，还被记成"这台机器读不出层级"（其实 1/2/3 级全读得回）；
+  ② 手搭图形部件 Word 认不认，**必须和骨架分开归因**：同一套 `[Content_Types]`/rels/正文不放部件时 Word 能开，
+  放了 ChartML 也能开（前提两处规格：`c:spPr` 要在 `c:tx` **之后**、柱图必须 catAx + valAx **两个轴都在**且各带
+  `scaling`/`crossAx`——读侧对顺序不敏感，所以自家结构测试全绿也照不出来），
+  而 DiagramML 那份仍判「文件可能已经损坏」：`layoutDef` 要真版式（`constrLst`/`algLst`）与配色方案才画得出来。
+  这一条如实记进边界而不是继续手钻：应用只**读**别人写的图示部件，从不产出 DiagramML
+- **验证（四腿）**：结构测试 **41 断言**（层级/多段/环与反边/srcOrd 序/域编号不采/格内展平/空洞 idx/多层分类轴/
+  无缓存只取标题 + 整包从 zip 到 HTML + 干净件与边界件同读）；CDP 真机冒烟 **64 断言全绿、页面异常 0 条**
+  （打开 → 真实 DOM → 存 docx 重开 → 存 odt 重开，含格内多段那条形状）；
+  **Word 16.0 只读腿 11 断言**（我们的导出件：39 段 / 2 表 / 格内 6 段且第二段 `LeftIndent=24pt` /
+  列表层级读到 1·2·3 三级 / 图表数据表逐格对得上；手搭件：骨架能开、ChartML 认成图表且 `Chart.ChartTitle` 读得回缓存标题）；
+  `cargo test --lib` 39 通过（Rust 零改动）+ tsc/build 绿
+
 ## 性能（v0.3）
 
 - **按编辑器分包 + 懒加载**：主包 8MB → 首屏约 300KB；Univer（6.1MB）只在首次激活表格标签时加载，
@@ -947,7 +990,8 @@ src/                  React 前端
   lib/chart.ts        ChartPayload → VChart spec → 离屏 canvas PNG dataURL（动态导入分包）
   lib/docx.ts         docx 导入导出（ProseMirror JSON ↔ docx，字色/字族/字号/高亮/页眉页脚/TOC 域/批注/页面设置 sectPr（纸张·四边距·w:cols 栏数栏距）/页码格式（PAGE·NUMPAGES）/分页符/表格合并映射（首行行级 tableHeader、列表 numbering.config 真编号）、单元格四边 `w:tcBorders`（**显式去边写 `w:val="nil"`**——none 压不住表级默认边框）、`w:shd` 底纹、`w:vAlign` 竖排、`w:tblInd` 表缩进、`w:vertAlign` 上下标、段落 `w:spacing`（行距 + 段前段后，**只写声明过的**）/`w:shd`/`w:pBdr`、脚注与尾注（`footnotes`/`endnotes` 记录 + 正文各带自动编号 `<w:footnoteRef/>`、多段拆多个 `w:p`、部件与 rels 注册））；文本节点兼容顶层 text 与 attrs.text；字节经 Packer.toBase64String + atob 取（toBuffer 走 jszip 的 nodebuffer 通道，浏览器里没有 Buffer））
   lib/ooxml.ts        迷你 OOXML XML 解析器（零依赖、不碰 DOM）：parseXml/find/findDesc/all/allL/attr/attrL/val/valNum/textOf + decodeEnt 实体表——让 docx 读侧能在 Node 里直测
-  lib/docx-fidelity.ts OOXML → HTML 保真导入器（v0.37）：run 级 rPr（粗斜/删除线/下划线/字色/高亮/字族/字号/上下标 `w:vertAlign`）、段落 pPr（jc/`w:ind` 左右与首行悬挂四种缩进写法/pStyle 样式链）、numPr+numbering.xml → 有序无序与 ilvl 层级、表格 gridSpan/vMerge + tblGrid 列宽 + 单元格四边 `w:tcBorders`（含 val=nil 的显式去边）/底纹 `w:shd fill`/竖排 `w:vAlign`/表级 `w:tblInd`、段落 `w:spacing`（行距两档 + 段前后，含按行的 `w:*Lines` 估算）/`w:shd` 底纹/`w:pBdr` 四边、脚注与尾注引用（`w:footnoteReference`/`w:endnoteReference` 按 `w:id` 配 `word/footnotes.xml`·`endnotes.xml` 正文，跳过 separator/continuationSeparator，正文缺失记告警且不留空标记）、图片 rels→dataURL、内外超链接、分页符、批注三态锚点、域代码文字不外泄、文本框 `w:txbxContent`（`wps:txbx` 与旧式 `v:textbox`）展平为段落、OMML 公式线性化、`mc:AlternateContent` 只取 Choice（空则退 Fallback，避免同一份正文翻倍）；认不出就抛错或 blocks=0，调用方回退 mammoth
+  lib/ooxml-graphics.ts 图形部件读侧（v0.42，零依赖、不碰 DOM 所以 Node 侧可直测）：`smartArtToHtml(dataXml, inCell)` 解 DiagramML dataModel 的 ptLst/cxnLst（parOf 建树 + srcOrd 定序、空节点下钻、首次认父挡回边、`a:fld` 域编号不采）→ 嵌套 `bulletList`（格内改段落 `margin-left` 表层级）；`chartToHtml(chartSpaceXml, inCell)` 解 ChartML 缓存值（下钻找系列、`strRef`/`numRef` 中间层、`c:pt/@idx` 空洞留格、`multiLvlStrRef` 各级拼一格、轴标题不当图表标题）→ 标题段 + 数据表，无缓存只取标题；两者都返 `{html, kept}` 让调用方按"真取回多少"说告警
+  lib/docx-fidelity.ts OOXML → HTML 保真导入器（v0.37）：run 级 rPr（粗斜/删除线/下划线/字色/高亮/字族/字号/上下标 `w:vertAlign`）、段落 pPr（jc/`w:ind` 左右与首行悬挂四种缩进写法/pStyle 样式链）、numPr+numbering.xml → 有序无序与 ilvl 层级（**跳档按 numId 折基准层**，不凭空补中间层）、表格 gridSpan/vMerge + tblGrid 列宽 + 单元格四边 `w:tcBorders`（含 val=nil 的显式去边）/底纹 `w:shd fill`/竖排 `w:vAlign`/表级 `w:tblInd`、段落 `w:spacing`（行距两档 + 段前后，含按行的 `w:*Lines` 估算）/`w:shd` 底纹/`w:pBdr` 四边、脚注与尾注引用（`w:footnoteReference`/`w:endnoteReference` 按 `w:id` 配 `word/footnotes.xml`·`endnotes.xml` 正文，跳过 separator/continuationSeparator，正文缺失记告警且不留空标记）、图片 rels→dataURL、内外超链接、分页符、批注三态锚点、域代码文字不外泄、文本框 `w:txbxContent`（`wps:txbx` 与旧式 `v:textbox`）展平为段落、OMML 公式线性化、`mc:AlternateContent` 只取 Choice（空则退 Fallback，避免同一份正文翻倍）、drawing 锚点经 rels 找图示/图表部件（v0.42，部件缺失与关系缺失各记一条告警）；认不出就抛错或 blocks=0，调用方回退 mammoth
   lib/cell-style.ts  单元格样式扩展（v0.38）：tableCell/tableHeader 的 bdTop/bdRight/bdBottom/bdLeft + background + vAlign、table 的 marginLeft 全局属性（只声明属性不改内容模型）；边框统一规范串 `"0.67px solid #8899aa"`，三态 null 未声明/'none' 显式去边/有值；`inlineBorder()` 读 CSSOM longhand（shorthand 对 none 返回空串）、`IndentTableView` 子类补 marginLeft（resizable 的节点视图不传 HTMLAttributes）、`eighthsToPx`/`pxToEighths` 管 1/8 磅换算、命令 setCellBackground/setCellVAlign
   lib/paragraph-style.ts 段落排版扩展（v0.39）：paragraph/heading 的 lineHeight/lineRule/spaceBefore/spaceAfter/background/bdTop..bdLeft 全局属性，一组属性拼**一条** style（多条各写一份会互相盖掉）；`ooxmlLine`/`lineToOoxml`/`ruleOf` 管 1/240 行与二十分之一磅两套语义，"最小值"档 CSS 表达不了就修行内自定义属性 `--oof-lr` 带回；命令 setParagraphStyle/setLineSpacing/setSpaceAround/setParaBackground
   lib/indent-extension.ts 段落全局属性 indentLeft/indentFirst（32px 一档、上限 320px）+ setIndent/indent/outdent 命令 + Ctrl+] / Ctrl+[ + 悬挂缩进感知的出退格
@@ -1051,7 +1095,8 @@ cargo check        # Rust 后端检查（在 src-tauri 下）
 - [x] 文档保真续项三：段落行距（倍数/固定值/最小值）+ 段前段后 + 底纹与四边 `w:spacing`/`w:shd`/`w:pBdr` 读入，docx/odt 回写（Word 16.0 实机 20 断言 + Word 另存件 OOXML 差分 24 断言）
 - [x] 文档保真续项四：脚注/尾注真往返（`note` 内联原子节点 + 编号按文档顺序现算 + OOXML `word/footnotes.xml`·`endnotes.xml` 与 ODF 1.2 内联写法双向（含旧版 `text:note` 外壳）+ 文末脚注区编辑与打印）
 - [x] 文档保真续项五：文本框展平（`w:txbxContent` 新旧两种外壳 + ODF `draw:text-box`，位置与环绕不保但字不丢）+ 公式线性化（OMML 与 MathML 翻成同一套 `x^2`/`a/b`/`√(y)`/`∑_i^n`）+ `mc:AlternateContent` 只取一支（Word 16.0 只读腿按 `wdTextFrameStory` 逐句核对）
-- [ ] 文档保真续项六（剩下的硬骨头）：SmartArt（文字在 `diagrams/dataN.xml` 那棵树里，摊成扁段落等于说谎）、OLE 嵌入对象的预览、题注与交叉域**编号重算**（当前按文件里的缓存文本读入，域本身不重算）
+- [x] 文档保真续项六之一：SmartArt（`diagrams/dataN.xml` 的 DiagramML 数据模型 → 嵌套列表）与图表（`charts/chartN.xml` 的 ChartML 缓存值 → 标题 + 数据表）读回，格内走层级缩进展平，还原不了的记边界
+- [ ] 文档保真续项六剩下：OLE 嵌入对象的预览、题注与交叉域**编号重算**（当前按文件里的缓存文本读入，域本身不重算）
 - [ ] 自动更新通道（须先决策：公开仓库或独立托管 update metadata）
 - [ ] macOS 打包（需签名/公证凭据）
 

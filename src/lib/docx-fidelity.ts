@@ -8,14 +8,17 @@
 // 页眉页脚与页面设置仍走 docxToDocMeta，批注列表仍走 docxToComments。
 // 抛错或拆不出块时调用方回退 mammoth。
 //
-// schema 边界（TipTap 侧没有对应属性，导入时刻意不硬塞，全部记进 warnings）：图表、SmartArt、OLE 对象。
+// schema 边界（TipTap 侧没有对应属性，导入时刻意不硬塞，全部记进 warnings）：OLE 对象。
 // 表格边框/单元格底纹与竖排/上下标/表格缩进在 v0.38 起已经能读进 cell-style 与上下标 schema；
 // 段落行距/段前后/底纹/边框（w:spacing/w:shd/w:pBdr）在 v0.39 起读进 paragraph-style schema；
 // 脚注与尾注（word/footnotes.xml、word/endnotes.xml）在 v0.40 起读进 note 节点，正文摊在文末脚注区；
 // 文本框（w:txbxContent）与公式（m:oMath）在 v0.41 起不再整块消失：前者展平为段落（位置与环绕不保），
 // 后者线性化成 `x^2`、`(-b+√(b^2-4ac))/(2a)` 这类可读文本（结构不保）——"字没了"比"版式没保真"严重一级。
+// SmartArt 与图表在 v0.42 起按各自数据部件（diagrams/dataN.xml 的 dgm:pt 树、charts/chartN.xml 的
+// c:*Cache）出嵌套列表与数据表：字与数不再整块不见，但版式类型、配色、连线方向与坐标轴仍旧不还原。
 
 import { all, allDesc, attr, attrL, attrNum, els, find, findDesc, findL, local, parseXml, textOf, type XEl } from './ooxml'
+import { chartToHtml, smartArtToHtml } from './ooxml-graphics'
 import { CELL_EDGES, CSS_BORDER_STYLE, eighthsToPx, rgb2hex } from './cell-style'
 import { ooxmlLine } from './paragraph-style'
 import { commentRowsOf, type DocComment } from './docx'
@@ -366,16 +369,24 @@ function marked(inner: string, p: RunProps): string {
  */
 class ListState {
   private stack: { id: string; level: number; ordered: boolean }[] = []
+  /** numId → 这一串列表的基准层：文档写 ilvl=2 而上游没有可挂靠的父项时，那层"2"我们当 0 用 */
+  private base = new Map<string, number>()
 
   before(level: number, ordered: boolean, id: string): string {
     let s = ''
-    while (this.stack.length && this.stack[this.stack.length - 1].level > level) s += this.pop()
+    // 跳档不造中间层：Word 常写「ilvl 直接从 0 跳到 2」（父项在上一页、或列表被手改过），
+    // 凭空补出来的每一层都是一个空条目，屏幕上就是一排没有字的子弹。
+    // 折算按 numId 记基准层，同串的后续项照同一个折算走——否则每来一项往下多爬一层，兄弟被当成子女。
+    if (!this.stack.length) this.base.set(id, level)
+    const prev = this.stack[this.stack.length - 1]
+    const eff = Math.max(0, Math.min(level - (this.base.get(id) ?? 0), (prev?.level ?? level) + 1))
+    while (this.stack.length && this.stack[this.stack.length - 1].level > eff) s += this.pop()
     const top = this.stack[this.stack.length - 1]
-    if (top && top.level === level) {
+    if (top && top.level === eff) {
       if (top.id !== id) s += this.pop()
       else return s + '</li><li>'
     }
-    while (!this.stack.length || this.stack[this.stack.length - 1].level < level) {
+    while (!this.stack.length || this.stack[this.stack.length - 1].level < eff) {
       s += `<${ordered ? 'ol' : 'ul'}><li>`
       this.stack.push({ id, level: (this.stack[this.stack.length - 1]?.level ?? -1) + 1, ordered })
     }
@@ -446,6 +457,8 @@ class Fidelity {
   private openRanges = new Set<number>()
   private rels = new Map<string, { target: string; external: boolean }>()
   private media = new Map<string, Promise<string | null>>()
+  /** 图形类部件（diagrams/dataN.xml、charts/chartN.xml）的 XML 文本缓存 */
+  private parts = new Map<string, Promise<string>>()
   private zip: ZipLike | null = null
   /** w:id → 正文（脚注与尾注各自的编号空间，故分两张表）；引用处按此查正文 */
   private noteBodies: Record<'footnote' | 'endnote', Map<number, string>> = {
@@ -913,6 +926,7 @@ class Fidelity {
    * 一个 drawing/pict 里可能同时有位图与文本框，也可能只有文本框。
    * 文本框（w:txbxContent）里的正文原来会整块消失——那是"字没了"，比版式没保真严重一级，
    * 所以这里把它展平成正经的段落块落进文档流，位置与文字环绕仍旧只记一条告警。
+   * SmartArt 与图表同理（v0.42 起）：字与数在 rels 指向的另一份部件里，见 graphics()。
    */
   private async drawing(el: XEl, inCell: boolean): Promise<string | null> {
     const parts: string[] = []
@@ -925,15 +939,73 @@ class Fidelity {
       // 计数由 warn() 自己聚合（同类出现 N 次出口写成「文案×N」）
       this.warn('文本框内容已展平为段落（位置与文字环绕未保留）')
     }
+    const gfx = await this.graphics(el, inCell)
+    if (gfx.html) parts.push(gfx.html)
     if (parts.length) return parts.join('')
-    if (findDesc(el, 'chart')) this.warn('图表（chart）未导入')
-    else if (allDesc(el, 'graphicData').some((g) => /drawingml.*diagram/.test(attr(g, 'uri') ?? '')))
-      // SmartArt 的文字不在 document.xml 里，而在 rels 指向的 diagrams/dataN.xml（一棵 dgm:pt 树），
-      // 摊平成段落会把层级关系说成列表，所以这一类仍旧只报边界、不硬塞
-      this.warn('SmartArt（diagram）未导入')
-    // 有位图引用但解不开（EMF/WMF 这类）时 bitmap() 已经报过更准的那条，别再补一句"无位图"
-    else if (!findDesc(el, 'blip') && !findDesc(el, 'imagedata')) this.warn('矢量图形（drawing 无位图）未导入')
+    // graphics() 认出了 diagram/chart 引用却没取到字时已经报过更准的那条（关系缺失、部件没找到、无缓存）
+    if (!gfx.saw) {
+      // 有位图引用但解不开（EMF/WMF 这类）时 bitmap() 已经报过更准的那条，别再补一句"无位图"
+      if (!findDesc(el, 'blip') && !findDesc(el, 'imagedata')) this.warn('矢量图形（drawing 无位图）未导入')
+    }
     return null
+  }
+
+  /**
+   * SmartArt 与图表：document.xml 里只剩一个关系 id（dgm:relIds 的 r:dm、c:chart 的 r:id），
+   * 文字与数值全在被 rels 指向的 word/diagrams/dataN.xml 与 word/charts/chartN.xml 里。
+   * v0.41 之前这里只记一条"未导入"，于是整块 SmartArt 的字在打开的文件里凭空不见。
+   * 现在取回的是部件里真实存在的东西：层级（dgm:cxn 的 parOf 边）→ 嵌套列表，缓存值 → 数据表；
+   * 版式类型、配色、连线方向、坐标轴这些仍然不还原，但改成明确写出"没保住哪几样"的告警。
+   */
+  private async graphics(el: XEl, inCell: boolean): Promise<{ html: string; saw: boolean }> {
+    let html = ''
+    let saw = false
+    for (const g of allDesc(el, 'graphicData')) {
+      const uri = attr(g, 'uri') ?? ''
+      const kind = /diagram/.test(uri) ? 'diagram' : /chart/.test(uri) ? 'chart' : undefined
+      if (!kind) continue
+      saw = true
+      const box = kind === 'diagram' ? findDesc(g, 'relIds') : findDesc(g, 'chart')
+      const rid = box ? attrL(box, kind === 'diagram' ? 'dm' : 'id') : undefined
+      const label = kind === 'diagram' ? 'SmartArt' : '图表'
+      const rel = rid ? this.rels.get(rid) : undefined
+      if (!rel) {
+        this.warn(`${label}关系缺失（图形数据部件没跟着文件走）`)
+        continue
+      }
+      const xml = await this.partText(rel.target)
+      if (!xml) {
+        this.warn(`${label}部件未找到：${rel.target}`)
+        continue
+      }
+      const out = kind === 'diagram' ? smartArtToHtml(xml, inCell) : chartToHtml(xml, inCell)
+      // 只捞回一个标题也照样落进文档流：字不许因为"没数据"就消失
+      if (out.html) html += out.html
+      if (!out.kept) {
+        this.warn(
+          out.html
+            ? '图表部件里没有缓存数值，只取回标题'
+            : `${label}部件里没有可读的文字${kind === 'chart' ? '或数值' : ''}`,
+        )
+        continue
+      }
+      this.warn(
+        kind === 'diagram'
+          ? 'SmartArt 已按数据模型的父子层级展平（图形版式、配色与连线方向未保留）'
+          : '图表已按文件里的缓存值取回数据（图表类型、坐标轴与配色未保留）',
+      )
+    }
+    return { html, saw }
+  }
+
+  /** 图形类部件的文本（同一份 data1.xml 被两处引用时只解一次） */  private partText(path: string): Promise<string> {
+    let p = this.parts.get(path)
+    if (!p) {
+      const f = this.zip?.file(path)
+      p = f ? f.async('string').catch(() => '') : Promise.resolve('')
+      this.parts.set(path, p)
+    }
+    return p
   }
 
   /** 位图部分：找不到可解码的图像就返回 null（交给调用方决定是否另有文本框可出） */

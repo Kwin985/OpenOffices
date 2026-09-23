@@ -811,6 +811,9 @@ function blocksOf(nodes: PMNode[], depth = 0, dt: DocTrack = newDocTrack()): (Pa
                   const borders = bordersOf(cell.attrs)
                   const bg = shadingOf(cell.attrs?.background)
                   const va = cell.attrs?.vAlign
+                  // 一格多段要一段一个 w:p：早先图省事把所有子节点并成一个段落，
+                  // 于是格内的第二行起既没有换行也没有自己的缩进/对齐（读回来整格糊成一行）
+                  const cellBlocks = blocksOf(cell.content ?? [], 0, dt)
                   return new TableCell({
                     ...(cs > 1 ? { columnSpan: cs } : {}),
                     ...(rs > 1 ? { rowSpan: rs } : {}),
@@ -819,7 +822,8 @@ function blocksOf(nodes: PMNode[], depth = 0, dt: DocTrack = newDocTrack()): (Pa
                     ...(va === 'top' || va === 'middle' || va === 'bottom'
                       ? { verticalAlign: va === 'middle' ? VerticalAlignTable.CENTER : va === 'top' ? VerticalAlignTable.TOP : VerticalAlignTable.BOTTOM }
                       : {}),
-                    children: [new Paragraph({ children: inlineBlockChildren(cell, dt) })],
+                    // OOXML 要求 w:tc 里至少一个 w:p（空否则会成损坏件）
+                    children: cellBlocks.length ? cellBlocks : [new Paragraph({ children: [] })],
                   })
                 }),
               }),
