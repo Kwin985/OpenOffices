@@ -13,6 +13,7 @@
     "opener:default",
     "dialog:default",
     "fs:default",
+    "updater:allow-check",
     "fs:allow-read-file",
     "fs:allow-write-file",
     "fs:allow-read-text-file",

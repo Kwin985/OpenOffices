@@ -235,7 +235,8 @@
   capabilities 缺 `core:window:allow-destroy` 时 ACL 拒绝、窗口静默卡死；dev 期全用强杀故未暴露。
   同期修正异步确认框时序：`preventDefault()` 必须同步调用、用户同意后再自行 `destroy()`，
   否则"未保存确认"形同虚设
-- **后续发布项**：自动更新通道（私有仓库无公开 metadata URL，须先定公开或另托管）、macOS 打包
+- **后续发布项**：自动更新通道（v0.45 已出**检测层**：本机签名的清单 + 提示 + 跳下载页；应用内下载安装
+  仍待真实更新源托管决策）、macOS 打包
 
 ## 表格保真补全（v0.18）
 
@@ -1028,6 +1029,51 @@ CSV、txt…）。这一轮把这层套娃拆到能读到底为止——读不�
   `cargo test --lib` 39 通过（Rust 零改动）+ tsc/build 绿。**本轮写侧零改动**（只读不写），
   所以 Word 实机腿不适用——没有新东西要它验，这一条如实记着而不是补一条空腿
 
+## 自动更新：检测层（v0.45）
+
+- **这一刀只做检测**：点"检查更新"→ 有新版就提示（版本号、发布日期、一行更新说明）+「前往下载页」用浏览器
+  打开；**不在应用内下载与安装**。这么切不是没做完，是因为更新源托管在哪还没定——而检测层恰好是
+  不需要那个决定也能全绿验证的部分（清单是真的、签名是真的、链路是真的，只有"上架到哪个地址"是占位）
+- **信任根在仓库外**：`pnpm tauri signer generate` 出的 Ed25519 密钥对，私钥存 `~/.tauri/openoffices.updater.key`
+  （口令另存 `.pass`），**不进仓库、不进 git 历史、不打进日志**；公钥进 `tauri.conf.json` 的
+  `plugins.updater.pubkey`。代价说清楚：**这把私钥没有备份，就等于全体老用户从此再也收不到更新**
+  （换钥匙 = 旧客户端验不过新签名，只能重装）
+- **清单契约是本机真件量出来的，不是照文档猜的**：`createUpdaterArtifacts: true` 在 CLI 2.11 签的是
+  **安装包本身**（`..._x64-setup.exe` 与 `..._x64_en-US.msi` 各带一枚 `.sig`），**没有 `*.nsis.zip`**
+  （那是 `v1Compatible` 的老形状）；插件两种都吃——`infer::archive::is_zip` 判 zip，否则落成 `.exe` 直接跑。
+  三条平台键各有其人：`windows-x86_64-nsis`、`windows-x86_64-msi`，再加通用 `windows-x86_64`
+  兜给 dev 跑的裸 exe（exe 里的 bundle type 是打包时 patch 进去的，dev 那份没有，`get_urls` 就只找 `{os}-{arch}`）
+- **`.sig` 是 minisign 文本，签名钉在具体文件上**：第三行 trusted comment 带 `file:<包名>`，所以"清单里的 url
+  与传上去的包不配对"这种错，用户端的表现就是验签失败——发版脚本自己先把这一对核了再出清单
+- **失败必须说得出为什么**：`lib/update.ts` 把所有异常收敛成 `{state:'failed'}` 且**永不外抛**（抛出去的表现
+  是"点了没反应"），`describeError` 按插件 `error.rs` 的真实字面归因成中文——源上没清单 / 没配端点 /
+  非 https / 缺本平台条目 / 签名不合 / base64 解不开 / 日期不合 / 连不上；认不出来的一律原样带出，**不编原因**。
+  `download_page` 从 `rawJson` 取（插件不认这个自定义字段，我们的检测层要它才写得下去），且只认 `http(s)`，
+  `javascript:` 那种直接丢掉
+- **权限最小化**：capabilities 只补 `updater:allow-check`（不给 download/install，因为没接线）；
+  `getVersion` 在 `core:default` 里、开浏览器在 `opener:default` 里，都是现成的
+- **体积账（同一条命令、同一份 dist，只挂/摘这一个插件）**：release exe 7,093,760 → 9,001,984 字节，
+  **+1.82 MiB（+27%）**。涨在它自带一整套：`Cargo.lock` 多出 36 个包——rustls/ring/webpki 整条 HTTPS 栈、
+  minisign-verify、tar，以及**第二份 zip（4.6.1，与我们自己的 8.6 并存，不是复用）**。安装包侧压缩后
+  v0.37.0 → v0.45.0 的 setup.exe 是 9,161,284 → 9,950,952 字节（+789,668），但这中间八个轮次的界面资源都混在
+  里面，所以这一笔不能整本记给插件
+- **坑**：① capabilities 里留着 `updater:allow-check` 而 Cargo.toml 摘掉插件，**tauri 的构建脚本直接失败**
+  （`Permission updater:allow-check not found`）——体积 A/B 必须两处一起摘，这就是"权限面与依赖面是绑死的"；
+  ② 单实例锁按 **identifier** 判，dev 与用户已装的正式版共享同一把，要并存就
+  `-c '{"identifier":"com.openoffices.smoketest"}'` 而不是去杀他的进程；③ https 闸门只在发布版生效，
+  本机端到端腿用 `pnpm tauri dev -c` 注入 `http://127.0.0.1:8123/latest.json`，**仓库里存的仍是 https**；
+  ④ 开关型参数不能用取值型 `arg()` 解析（`--skip-build` 排在末尾时读到 `undefined`，等于没传，
+  于是"只重生成清单"静默跑成一整次完整构建）
+- **验证（四腿）**：结构测试 **36 断言**（清单三平台键形状 + 端点是 https + 公钥在位 + capability 只给 check +
+  私钥不入仓不入脚本 + 发版脚本按"已签名安装包"找产物）；**本机端到端真件腿 17 断言**——拿真实构建的
+  `latest.json` 与真 `.sig`，先自核签名与 url 的 `file:` 配对，再挂成本地静态源喂给应用：**同版本判"已是最新"**，
+  把版本号改成 99.0.0（签名与 url 都还是真的）后应用内真的报"发现新版本 99.0.0"并带出真发布日期、真更新说明、
+  可用的下载页按钮；**CDP 真机冒烟 22 断言全绿、页面异常 0 条**（available / latest / 404 / 缺本平台条目 /
+  坏 `pub_date` / 返回 HTML / `javascript:` 下载页 / 源不可达 八种形状）；`cargo test --lib` 39 通过 + tsc/build 绿
+- **下一刀（应用内下载安装）要动什么**：capability 补 `updater:allow-download` + `allow-install`（或
+  `allow-download-and-install`）、更新源定到一个真实 https 地址、前端改调 `downloadAndInstall()` 再
+  `relaunch()`（Windows 装完默认自己重启，`restart_after_install` 是 true），那时 `download_page` 就可以不写了
+
 ## 性能（v0.3）
 
 - **按编辑器分包 + 懒加载**：主包 8MB → 首屏约 300KB；Univer（6.1MB）只在首次激活表格标签时加载，
@@ -1070,6 +1116,7 @@ CSV、txt…）。这一轮把这层套娃拆到能读到底为止——读不�
 | [quick-xml](https://github.com/tafia/quick-xml) | Rust OOXML 流式解析 | MIT |
 | [zustand](https://github.com/pmndrs/zustand) | 前端状态管理 | MIT |
 | [tauri-plugin-single-instance](https://github.com/tauri-apps/plugins-workspace) | 单实例启动 + 二次启动 argv 转发（文件关联体验） | MIT / Apache-2.0 |
+| [tauri-plugin-updater](https://github.com/tauri-apps/plugins-workspace) | 自动更新**检测层**（`check` 一次拿版本/说明/日期；自带 rustls 栈与 minisign 验签，release exe +1.82 MiB 实测） | MIT / Apache-2.0 |
 | React 19 + Vite | UI 框架与构建 | MIT |
 
 ## 架构
@@ -1082,8 +1129,8 @@ src-tauri/            Rust 后端
   src/xlsx_chart.rs   zip + quick-xml 直读 chartN.xml + drawing 锚点，系列值按实时网格解析；has_charts 只做 zip 文件名嗅探
   src/ods.rs          ODS 双向：write_ods（async 外壳 + write_ods_sync，共用 xlsx 载荷 → ODF zip，样式/尺寸去重与合并、冻结 settings.xml、公式 of:= 换算）+ read_ods_styles（直解边框/对齐/换行/列宽行高/字族/隐藏 collapse/重复单元格/合并跨度/公式 + settings.xml 冻结）
   src/pdf.rs          export_pdf 命令：with_webview → WebView2 PrintToPdf（四边距英寸四元组 + 纸张宽高/朝向，cfg windows）；file_len + read_range（raw IPC 返回 Vec<u8>，async + spawn_blocking，供大 PDF 分段读）
-  src/lib.rs          OPEN_EXTS 与 argv 文件过滤纯函数、take_startup_files 命令、single-instance 文件转发
-  capabilities/       dialog + fs 权限与路径作用域
+  src/lib.rs          OPEN_EXTS 与 argv 文件过滤纯函数、take_startup_files 命令、single-instance 文件转发；插件链只注册 updater 的 check 能力（前端仅授 `updater:allow-check`，下载与安装没接线）
+  capabilities/       dialog + fs 权限与路径作用域 + updater:allow-check（只给检查，下载/安装未接线）
 src/                  React 前端
   store.ts            标签页 / 最近文件 / 主题（zustand）
   App.tsx             全局快捷键、拖拽打开、文件关联打开（启动 argv + 单实例转发）、关闭确认、懒加载路由
@@ -1120,8 +1167,11 @@ src/                  React 前端
   lib/registry.ts     跨组件保存器注册表（Ctrl+S 路由到当前标签）
   lib/open.ts         路径→标签 打开 / 带确认关闭
   lib/sync.ts         最近文件端到端加密同步（WebCrypto PBKDF2-SHA256 → AES-256-GCM，.oosync 信封）
-  components/         Home（最近文件 + 从模板新建画廊） / Workspace / SheetEditor（保存按 .xlsx/.ods/.csv 三分流） / DocEditor（页面设置含分栏/页码格式、分页参考线、分页符、表格与图片上下文工具条、粘贴成图、查找替换面板、字体族·字号、缩进工具条与 Ctrl+]/[、上下标 X²/X₂、表格上下文条的底纹色与竖排对齐（上/中/下）、脚注/尾注（工具栏插入 + 文末分区编辑与定位/删除，打印时文本框换静态块）、版本历史·自动保存、模板 seed、状态栏字数节流；打开 .docx 保真导入优先、mammoth 兜底，保存按 .odoc/.odt/.docx 各自格式原地落盘） / PptEditor / PdfViewer（pdfjs-dist 懒加载，连续多页视口虚拟渲染+Ctrl 缩放+TextLayer 文字选择+全文搜索+缩略图/大纲/标注侧栏+高亮便签与矩形·椭圆·直线·手绘形状（绘制/导入/写回 pdf-lib）+标注编辑（点选/拖移/改色/删除）+「页面」工作区旋转/删除/提取/合并/拆分；≥4MB 走分段读（lib/pdf-range.ts），卸载时 destroy openTask 并 abort transport））
-scripts/              copy-pdfjs-assets.mjs（dev/build 前复制 cmaps/标准字体到 public/pdfjs）
+  lib/update.ts       自动更新的**检测层**（v0.45）：`checkForUpdate()` 动态导入 updater 插件走一次 `check`，任何失败都收敛成 `{state:'failed'}` 不往外抛（抛出去的表现就是"点了没反应"）；`describeError` 按插件 error.rs 的真实字面把"源上没清单/没配端点/非 https/缺本平台条目/签名/base64/日期/连不上"归成中文，认不出的一律原样带出不编原因；`infoOf` 从 `rawJson` 里取自定义字段 `download_page`，只认 http(s) 才给按钮
+  components/         Home（最近文件 + 从模板新建画廊 + 版本号与"检查更新"） / Workspace / SheetEditor（保存按 .xlsx/.ods/.csv 三分流） / DocEditor（页面设置含分栏/页码格式、分页参考线、分页符、表格与图片上下文工具条、粘贴成图、查找替换面板、字体族·字号、缩进工具条与 Ctrl+]/[、上下标 X²/X₂、表格上下文条的底纹色与竖排对齐（上/中/下）、脚注/尾注（工具栏插入 + 文末分区编辑与定位/删除，打印时文本框换静态块）、版本历史·自动保存、模板 seed、状态栏字数节流；打开 .docx 保真导入优先、mammoth 兜底，保存按 .odoc/.odt/.docx 各自格式原地落盘） / PptEditor / PdfViewer（pdfjs-dist 懒加载，连续多页视口虚拟渲染+Ctrl 缩放+TextLayer 文字选择+全文搜索+缩略图/大纲/标注侧栏+高亮便签与矩形·椭圆·直线·手绘形状（绘制/导入/写回 pdf-lib）+标注编辑（点选/拖移/改色/删除）+「页面」工作区旋转/删除/提取/合并/拆分；≥4MB 走分段读（lib/pdf-range.ts），卸载时 destroy openTask 并 abort transport））
+scripts/              copy-pdfjs-assets.mjs（dev/build 前复制 cmaps/标准字体到 public/pdfjs） /
+                      updater-release.mjs（发版：开 createUpdaterArtifacts 本机建签名包 → 读回真 .sig 与产物 →
+                      出带三平台键的 latest.json → 打印要上传的清单；私钥只走子进程环境变量，`pnpm release:updater`）
 .github/workflows/    release.yml——tag v* 触发只打 Linux（1× 计费）；Windows（2×）与 cargo test 改手动 dispatch 勾选
 ```
 
@@ -1203,7 +1253,11 @@ cargo check        # Rust 后端检查（在 src-tauri 下）
 - [x] 文档保真续项六之一：SmartArt（`diagrams/dataN.xml` 的 DiagramML 数据模型 → 嵌套列表）与图表（`charts/chartN.xml` 的 ChartML 缓存值 → 标题 + 数据表）读回，格内走层级缩进展平，还原不了的记边界
 - [x] 文档保真续项六之二：域**编号重算**（`SEQ` 按文档顺序现算并压掉缓存、`\* ROMAN`/`\* roman`/`\* ALPHABETIC`/`\* alphabetic` 四形态按开关自身大小写、`REF` 无缓存时按书签所在段落文本兜底、`PAGE`/`PAGEREF`/`DOCPROPERTY` 沿缓存且无缓存记边界、`fldSimple` 同路、被跳过的目录不占号）+ OLE 嵌入对象预览解不开时留一行看得见的占位（ProgID + 部件文件名，.odoc/docx/odt 三链路都在）
 - [x] 文档保真续项六剩下：OLE 嵌入对象的**内容**提取（复合文档 `cfb.ts` + `\x01Ole10Native` 的字段布局与兜底扫描 → 内层 docx 递归展开 / xlsx 与 CSV 取值成表 / txt 分段；两条接缝 docx `w:object` 与 ODT `draw:frame`（内联 base64 与 `Objects/objN/` 两种），块级正文作段落兄弟块、格内压行内，取不出的带真名与大小记边界）
-- [ ] 自动更新通道（须先决策：公开仓库或独立托管 update metadata）
+- [x] 自动更新通道（**检测层**，v0.45）：本机 Ed25519 密钥对签发的清单 + `check` 一次拿版本/说明/日期，
+      有新版本就提示并**用浏览器打开下载页**；失败一律归成中文一句（源上没清单/非 https/缺本平台条目/签名不合…），
+      认不出来的原样带出不编原因；不做应用内下载与安装，所以不需要先定更新源托管在哪
+- [ ] 自动更新：应用内**下载并安装**（要先决策：真实更新源托管在哪、`updater:allow-download`+`allow-install` 权限、
+      以及"装完自动重启"的取舍——见 v0.45 一节末尾的接线清单）
 - [ ] macOS 打包（需签名/公证凭据）
 
 ## License

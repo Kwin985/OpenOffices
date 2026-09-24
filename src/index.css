@@ -153,6 +153,34 @@ button {
   margin-top: 4px;
 }
 
+/* 检查更新：结果就摆在版本号旁边，一行放不下换行，不撑破 hero */
+.home-update {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  margin-top: 8px;
+  font-size: 12px;
+  color: var(--text-2);
+}
+
+.home-update .update-status.error {
+  color: #d33;
+  max-width: 620px;
+}
+
+.home-update .update-notes {
+  max-width: 420px;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.home-update .link-btn:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+
 .home-actions {
   display: flex;
   gap: 10px;

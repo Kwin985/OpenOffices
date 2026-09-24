@@ -1,6 +1,6 @@
 [package]
 name = "openoffices"
-version = "0.44.0"
+version = "0.45.0"
 description = "A Tauri App"
 authors = ["you"]
 edition = "2021"
@@ -33,6 +33,12 @@ zip = { version = "8.6", default-features = false, features = ["deflate"] }
 quick-xml = "0.42"
 # CSV 读侧中文兼容（Excel 另存的 GBK 文件）；已在依赖树（url/tauri 传递），提为直接依赖零体积增量
 encoding_rs = "0.8"
+# 自动更新通道（MIT/Apache，Tauri 官方插件）。体积账实测（同一条 `cargo build --release`、同一份 dist，
+# 只挂/摘这一个插件）：exe 从 7,093,760 → 9,001,984 字节，+1.82 MiB。涨在它自带一套 HTTPS 栈与解包器：
+# Cargo.lock 多出 36 个包（rustls/ring/webpki 整条、minisign-verify、tar，以及第二份 zip 4.6.1——和我们
+# 自己的 zip 8.6 并存，不是复用）。做成"只检测、下载与安装交给浏览器"是本版本刻意收窄范围，不是没做完：
+# 接线 download+install 时才需要额外权限，见 README 的 v0.45 一节。
+tauri-plugin-updater = "2"
 
 # WebView2 PrintToPdf（导出 PDF）；两者已在依赖树（wry 传递），提为直接依赖零体积增量
 [target.'cfg(windows)'.dependencies]

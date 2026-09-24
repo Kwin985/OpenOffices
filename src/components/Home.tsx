@@ -1,10 +1,13 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { open } from '@tauri-apps/plugin-dialog'
+import { openUrl } from '@tauri-apps/plugin-opener'
+import { getVersion } from '@tauri-apps/api/app'
 import { useApp, type DocKind } from '../store'
 import { pickOpenFile, pickSaveFile, readText, writeText } from '../lib/fs'
 import { encryptRecents, decryptRecents } from '../lib/sync'
 import { openPath } from '../lib/open'
 import { TEMPLATES } from '../lib/templates'
+import { checkForUpdate, type UpdateState } from '../lib/update'
 
 const KIND_META: Record<DocKind, { label: string; icon: string; cls: string; desc: string; sample: string }> = {
   doc: { label: '文档', icon: '文', cls: 'kind-doc', desc: '富文本写作 · docx 导入导出', sample: '未命名文档' },
@@ -36,6 +39,20 @@ export default function Home() {
   const mergeRecents = useApp((s) => s.mergeRecents)
   const [pass, setPass] = useState('')
   const [syncStatus, setSyncStatus] = useState('')
+  const [version, setVersion] = useState('')
+  const [update, setUpdate] = useState<UpdateState | null>(null)
+
+  useEffect(() => {
+    // 版本号取自安装包本身（不是构建时常量）：用户要确认的是"我装的这一个"新不新
+    getVersion()
+      .then(setVersion)
+      .catch(() => setVersion('未知'))
+  }, [])
+
+  const runUpdateCheck = async () => {
+    setUpdate({ state: 'checking' })
+    setUpdate(await checkForUpdate())
+  }
 
   const exportSync = async () => {
     if (!pass) {
@@ -90,6 +107,39 @@ export default function Home() {
         <div>
           <h1>OpenOffices</h1>
           <p>开源驱动的本地办公套件 · 数据不出本机</p>
+          <div className="home-update">
+            <span className="update-version">版本 {version || '…'}</span>
+            <button className="link-btn" onClick={() => void runUpdateCheck()} disabled={update?.state === 'checking'}>
+              {update?.state === 'checking' ? '检查中…' : '检查更新'}
+            </button>
+            {update?.state === 'latest' && <span className="update-status">已是最新版本</span>}
+            {update?.state === 'failed' && (
+              <span className="update-status error" title={update.message}>
+                {update.message}
+              </span>
+            )}
+            {update?.state === 'available' && (
+              <>
+                <span className="update-status">
+                  发现新版本 {update.info.version}
+                  {update.info.date ? `（${update.info.date}）` : ''}
+                </span>
+                {update.info.notes && (
+                  <span className="update-notes" title={update.info.notes}>
+                    {update.info.notes}
+                  </span>
+                )}
+                {update.info.page ? (
+                  <button className="link-btn" onClick={() => void openUrl(update.info.page)}>
+                    前往下载页
+                  </button>
+                ) : (
+                  // 清单没写 download_page 时不猜地址：宁可不给按钮，也不给一个拼出来的 URL
+                  <span className="update-status">该版本未提供下载页地址</span>
+                )}
+              </>
+            )}
+          </div>
         </div>
       </div>
 

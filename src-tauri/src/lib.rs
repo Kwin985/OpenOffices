@@ -52,6 +52,8 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())
+        // 只注册插件本身：应用侧只用到 check（前端仅授予 updater:allow-check），下载与安装没接线
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .manage(StartupFiles(Mutex::new(initial)))
         .invoke_handler(tauri::generate_handler![
             xlsx::read_xlsx,
