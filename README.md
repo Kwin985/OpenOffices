@@ -1224,6 +1224,62 @@ CSV、txt…）。这一轮把这层套娃拆到能读到底为止——读不�
   一个没动）；**CDP 真机冒烟 44 断言全绿、页面异常 0 条**（文件→界面按门面逐格读：五条批注正文与气泡尺寸、
   外链与内链各在位 → 界面上再写一条 → 存 → 重开：原五条署名仍在、新写那条作者仍是空）；**tsc + build 绿**
 
+## 纸是纸，屏幕是屏幕：暗色主题的导出保真（v0.49）
+
+- **v0.47 那条兜底只兜住了一半**：当时给 `html,body` 补了白底，量到的是"表格导出不又是屏幕的浅灰蓝"。
+  这轮把三条链路（文档 / 表格 / 演示）× 两个屏幕主题各导一份 PDF 数像素，才发现暗色主题往纸上漏色
+  有**两条独立的路**，第二条整个没被管到：
+  ① `:root[data-theme='dark']{color-scheme:dark}` 让浏览器把**画布底色**（不是任何元素的底色）涂成深色，
+  而 `PrintToPdf` 连画布一起抓走——于是纸上凭空一层深灰底。这条**连 `background:#fff !important` 都压不住**：
+  实测同一份空白表格页有 31.6% 的像素是深色、文档页 96.6%，而只在 `documentElement` 上把
+  `color-scheme` 改回 `light`，同页深色像素就从 246808 掉到 296。能治它的只有 `color-scheme` 本身
+  ② 主题色以 `var()` 落在真元素上（`.doc-page{background:var(--panel)}`、`body{color:var(--text)}`、
+  `.doc-content a{color:var(--accent)}`），或以**字面量**写在 `:root[data-theme='dark'] .doc-content pre{…}`
+  这类规则里——后者连"打印态覆盖变量"都救不回来，因为它压根不走变量
+- **于是把规则定成一句**：屏幕上的颜色必须先穿过一枚 CSS 变量，才能在打印态被一次换掉。`src/index.css`
+  给 `:root` 补 `--code-bg`/`--quote-bg`（并把暗色段那两条字面底色规则**整条删掉**，改由变量说话），
+  再加一段 `@media print` 同时命中 `:root` 与 `:root[data-theme='dark']`，把 `color-scheme` 压回 `light`
+  并重新声明整套纸面调色板（`--bg/--panel` 白、`--text #111`、`--text-2 #444`、`--border`、`--accent`
+  固定成亮主题那支蓝、`--code-bg/--quote-bg` 回到比纸略深的一档）。**段的位置在暗色段之后**——同特异度
+  的 `:root[data-theme='dark']` 由源序说话，放前面就是白写。往后新增的主题色只要走变量就自动被管住，
+  不必逐个选择器打补丁（结构测试就断这条：暗色段里凡是命中 `doc-page|doc-content|doc-toc|doc-note|sheet-print|ppt-print|ppt-slide-static`
+  的选择器，一个字面颜色都不许留）
+- **只覆盖"纸本身"的颜色，内容声明的一律照旧上纸**——而且演示链路是**对照组**而不是受益者：幻灯片背景来自
+  `{background: slide.bg ?? master?.bg ?? t.bg}` 的**字面**内联样式，一页声明为深蓝 `#14203a` 的片子在暗主题
+  和亮主题下都贡献 275078 个像素（量化后 `#112233`），谁也不许把它抹白。同理活下来的还有段落底纹
+  `background-color:#fff2cc`（13043 像素）、红字 `#cc0000`（277 像素）、表格单元格 `bg/cl`（`#112244` 1823、
+  `#eeffff` 1741 像素）
+- **屏幕辅助不上纸**：查找替换的命中高亮 `.fr-hit`/`.fr-active`（`rgba(255,200,40,.35)`/`rgba(255,150,0,.6)`）
+  在打印态收成 `background:transparent !important` 并去掉描边——它由 `lib/find-replace.ts` 的装饰产生，
+  搜到哪儿黄到哪儿，纸上没有"搜索"这回事。`pdfprint.ts` 那条元素级白底兜底保留不动：覆盖层链路和文档链路
+  各兜各的，顶掉谁都会掉一半
+- **判据的分工是这轮最值钱的一条**：**像素直方图管整张纸，`getComputedStyle` 管单个属性**。四比特/通道的
+  量化会把 `#f5f6f7`、`#f5f8fc` 这类近白并进 `#ffffff`，"代码块在纸上还该有一层比纸略深的底"在像素层面
+  根本测不到——硬要按像素断言，测的是空气。所以逐属性那条腿走 `Emulation.setEmulatedMedia({media:'print'})`
+  （真机 WebView2 认这个仿真，不必只从导出件反推），像素腿只管"整页暗色占比"和"两份纸是否一模一样"
+- **最强的不变量不是"白底够多"而是"换主题不改纸"**：同一条链路在暗、亮两主题各导一份 PDF，两份直方图的
+  **总变差恰好为 0**（三条链路都是 0，暗色像素数之差也是 0）。按单色计数会踩的坑它一并绕开——屏幕主题色
+  `#17181c` 量化后正是打印墨色的 `#111111`，"深色像素变多"未必是缺陷，"两份纸逐档相同"才是
+- **修好之后的数**：文档 3222/781636 = **0.4%**（基线 96.6%）、表格 460/781636 = **0.1%**（基线 31.6%），
+  剩下的深色像素全是正文墨色与抗锯齿边角
+- **坑（都出在测量脚本自己身上，但每一条都能把结论造假）**：① 六位十六进制取红通道是 `>>16` 不是 `>>20`——
+  写错以后所有"内容声明色还在不在"的计数都是 0，12 条断言集体假绿；② DOM 会把行内 `style` 属性序列化成
+  `rgb(204, 0, 0)`，所以 `span[style*="cc0000"]` 这类选择器**永远选不到东西**（表现为属性读到 `null`），
+  要按 `getComputedStyle(x).color` 现找；③ `rgba(255, 150, 0, 0.6)` 的字符串不是以 `255` 开头，
+  用 `indexOf('255')===0` 判"高亮还画着"会把成功判成失败——判"没画"只能按 `rgba(0, 0, 0, 0)` 正面比；
+  ④ 打印仿真的复位要给 `{media:''}`，传空对象不等于取消仿真
+- **顺手量到一条先前就存在、本轮不修的缺陷**：演示导出的 PDF 纸张是**竖版** `MediaBox [0 0 540 960]`
+  （7.5×13.33 英寸），幻灯片被压成纸中间的一条横带。原因是 `PptEditor` 传的 `pageSizeInches:[13.335,7.5]`
+  已经是横向，而 `src-tauri/src/pdf.rs` 见 `w > h` 又按"先交换边长再转置 Orientation"处理了一遍——**转两圈
+  回到竖版**。修复前后的两份产物逐字节同一毛病，故与本轮改动无关，已按未勾项写进路线图而不是顺手改掉
+- **验证（四腿）**：**结构测试 28 断言**（打印段两个选择器都在 + 八枚调色板逐条 + 段序必须在暗色段之后 +
+  暗色段"能上纸的选择器"零字面底色 + 两条 load-bearing 的 `var()` 链路点名（`.doc-page`→`--panel`、
+  `body`→`--text`）+ `print-color-adjust:exact` 与 `pdfprint.ts` 白底兜底不许被顶掉 + 自测假例必须打 FAIL）；
+  **CDP 真机像素腿 65 断言全绿、页面异常 0 条**（三链路 × 暗/亮各导一份，pdf.js 逐张画布做直方图 + 两主题
+  对照 + 屏幕态与打印仿真态逐属性对照，共 6 份 PDF 与 2 份屏幕快照）；**`cargo test --lib` 57 通过**
+  （本轮 Rust 零改动，四条腿里它管的是"没碰坏导出"而不是"碰了什么"）；**tsc + build 绿**（改动只有
+  `src/index.css` 一个文件：+40 −12）
+
 ## 性能（v0.3）
 
 - **按编辑器分包 + 懒加载**：主包 8MB → 首屏约 300KB；Univer（6.1MB）只在首次激活表格标签时加载，
@@ -1286,6 +1342,7 @@ src-tauri/            Rust 后端
 src/                  React 前端
   store.ts            标签页 / 最近文件 / 主题（zustand）
   App.tsx             全局快捷键、拖拽打开、文件关联打开（启动 argv + 单实例转发）、关闭确认、懒加载路由
+  index.css           外壳样式、两套主题，以及**纸面与屏幕主题的断钩处**（v0.49）：屏幕上的颜色一律先落进 CSS 变量（`--bg/--panel/--text/--text-2/--border/--accent/--code-bg/--quote-bg`），`@media print` 里一段同时命中 `:root` 与 `:root[data-theme='dark']` 的规则把 `color-scheme` 压回 `light` 并重声明整套纸面调色板（**段必须排在暗色段之后**，同特异度靠源序说话），顺手清掉屏幕辅助（`.fr-hit`/`.fr-active` 的查找命中高亮）；内容自己声明的字面色（段落底纹、单元格底色、幻灯片背景）不经过这条规则，所以照旧上纸
   lib/univer.ts       Univer 实例工厂（公式 worker + 八个社区预设：核心/筛选/排序/条件格式/数据验证/查找替换/绘图 + **批注与超链接**（v0.48，超链接的 `urlHandler` 把外链交给系统默认浏览器——桌面上 `window.open` 会开出一个新 WebView 窗口））
   lib/univer-io.ts    xlsx 数据+样式（粗斜/颜色/字族/边框/对齐/换行/数字格式）/合并/图表/列宽行高/隐藏行列/冻结窗格 ↔ Univer 快照 转换（样式去重注册）；**规则走侧通道**——取完单元格再按 sheetId 把 `extractRules(resources)` 的结果对回每张表，`warnings` 由 `aggregateNotes` 聚合；**批注与链接同一条侧通道**（v0.48）：取侧交给 `extractCellSide`，放侧把 `resources` 写成 `[noteResourceOf(...)]`（实测裸写就能被门面读回）、链接写成带 `customRanges` 的富文本格（**公式格上那枚先记账不硬放**，只有链接没内容的格子也要占一格）；`payloadToWorkbook` 因此多收一个 `accounts` 出参
   lib/sheet-rules.ts  三类规则的前端桥（v0.46）：`extractRules` 从工作簿快照的 `resources` 里按表取规则（Univer 三个插件各写各的 JSON，条件格式按快照原序交回=高优先级在前），`applySheetRules` 经门面放回界面（**条件格式倒着插**，因为这一版门面按插入顺序的倒序吐规则；builder 无 `setRanges`，作用区在 `build()` 之后挂产物），`buildDataValidation` 只建门面表达得出的四类 + custom；归一化（`normColor` 收 rgb/#、`normDateValue` 收 ISO、`listOf` 拆 JSON 数组串与区域引用、`neg === pos` 的负色丢掉）与 `aggregateNotes`（同类收成"文案×N"）都在这，`textLength`/`time`/`any` 这类摆不进模型的退成边界账而不是硬建一条
@@ -1335,7 +1392,7 @@ scripts/              copy-pdfjs-assets.mjs（dev/build 前复制 cmaps/标准�
 保真导入器抛错或拆不出块时回退 `mammoth 正文 + zip 直读页眉页脚/批注/sectPr`（v0.37）；`.odt` 走 `lib/odt.ts` 双向；
 保存按标签扩展名分流——新建文档存 `.odoc` JSON（含 meta）、`.odt` 与 `.docx` 标签各自格式原地写回（导出走 docx/odt 链路）。
 演示文件流：`pptx → JSZip 解包 OOXML → Deck 模型 → 编辑器`；保存为 `.opd` JSON 或经 pptxgenjs 导出 pptx。
-PDF 文件流：查看 `pdf 磁盘 → 小于 4MB 整本 readBytes / 大于 4MB 经 file_len + read_range 分段喂给 pdf.js（首屏只取 64KB 文件头）→ pdfjs-dist（worker + canvas）`；标注 `选区高亮/便签/拖拽画的矩形·椭圆·直线·手绘 → 内存模型（rects[0] 包围盒 + polys 几何）→ Ctrl+S 时 pdf-lib 低层写 Annotation 字典回原文件`；文档导出 `@media print 排版（分栏/分页符/避免跨页折断）+ @page margin box 逐页页眉页脚页码 → Rust export_pdf（PrintSettings 纸张与四边距）→ WebView2 PrintToPdf 落盘`；演示导出 `Deck → createRoot 离屏挂载 StaticSlide 分页 → 同上`；表格导出 `Univer 快照 → WorkbookPayload → lib/sheet-print.ts 自绘 HTML 网格 → 同上（canvas 抓不到故走数据侧重排）`；页面管理 `内存标注先写回 → pdf-lib 旋转/删除/提取/合并/拆分覆盖写回 → 重载并从 /Annots 重新导入标注（旋转页坐标按 /Rotate 经 pdf-geo.ts 换算）`。
+PDF 文件流：查看 `pdf 磁盘 → 小于 4MB 整本 readBytes / 大于 4MB 经 file_len + read_range 分段喂给 pdf.js（首屏只取 64KB 文件头）→ pdfjs-dist（worker + canvas）`；标注 `选区高亮/便签/拖拽画的矩形·椭圆·直线·手绘 → 内存模型（rects[0] 包围盒 + polys 几何）→ Ctrl+S 时 pdf-lib 低层写 Annotation 字典回原文件`；文档导出 `@media print 排版（分栏/分页符/避免跨页折断）+ @page margin box 逐页页眉页脚页码 + 打印态纸面调色板（`color-scheme` 压回 light、主题色经变量换掉，v0.49）→ Rust export_pdf（PrintSettings 纸张与四边距）→ WebView2 PrintToPdf 落盘`；演示导出 `Deck → createRoot 离屏挂载 StaticSlide 分页 → 同上`；表格导出 `Univer 快照 → WorkbookPayload → lib/sheet-print.ts 自绘 HTML 网格 → 同上（canvas 抓不到故走数据侧重排）`；页面管理 `内存标注先写回 → pdf-lib 旋转/删除/提取/合并/拆分覆盖写回 → 重载并从 /Annots 重新导入标注（旋转页坐标按 /Rotate 经 pdf-geo.ts 换算）`。
 
 ## 开发
 
@@ -1414,6 +1471,15 @@ cargo check        # Rust 后端检查（在 src-tauri 下）
 - [x] 自动更新通道（**检测层**，v0.45）：本机 Ed25519 密钥对签发的清单 + `check` 一次拿版本/说明/日期，
       有新版本就提示并**用浏览器打开下载页**；失败一律归成中文一句（源上没清单/非 https/缺本平台条目/签名不合…），
       认不出来的原样带出不编原因；不做应用内下载与安装，所以不需要先定更新源托管在哪
+- [x] 导出保真：**暗色主题的纸面与屏幕脱钩**（漏色有两条独立的路——`color-scheme:dark` 让浏览器把**画布底色**
+      涂深而被 PrintToPdf 抓走（这条连 `background:#fff !important` 都压不住），以及主题色以 `var()`/字面量落在
+      真元素上；治法是"屏幕色必须先穿过一枚 CSS 变量"+ 一段排在暗色段之后的 `@media print` 调色板，
+      内容自己声明的字面色（段落底纹 / 单元格底色 / 幻灯片背景）照旧上纸，查找命中高亮不上纸。
+      判据：三链路 × 暗/亮各导一份 PDF，直方图**总变差 0**＝换主题不改纸；文档 96.6%→0.4%、表格 31.6%→0.1%）
+- [ ] 演示导出 PDF 的纸张方向：`MediaBox` 是**竖版** `[0 0 540 960]`，幻灯片被压成纸中间一条横带——
+      `PptEditor` 传的 `pageSizeInches:[13.335,7.5]` 已是横向，而 `src-tauri/src/pdf.rs` 见 `w > h` 又
+      "交换边长 + 转置 Orientation"处理了一遍（转两圈回到竖版）。v0.49 数像素时量到，与主题修复无关，
+      如实记下不当轮顺手改
 - [ ] 自动更新：应用内**下载并安装**（要先决策：真实更新源托管在哪、`updater:allow-download`+`allow-install` 权限、
       以及"装完自动重启"的取舍——见 v0.45 一节末尾的接线清单）
 - [ ] macOS 打包（需签名/公证凭据）

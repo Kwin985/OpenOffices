@@ -8,6 +8,9 @@
   --doc: #2c66d4;
   --sheet: #21a366;
   --ppt: #e8732a;
+  /* 屏幕上的"代码块底"和"引用块底"也是主题色，写成变量才能在打印态一次换掉 */
+  --code-bg: #f2f3f5;
+  --quote-bg: #f6f9fe;
   font-family: 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', system-ui, sans-serif;
 }
 
@@ -1171,10 +1174,10 @@ button {
   margin: 10px 0;
   padding: 4px 14px;
   color: var(--text-2);
-  background: #f6f9fe;
+  background: var(--quote-bg);
 }
 .doc-content pre {
-  background: #f2f3f5;
+  background: var(--code-bg);
   border-radius: 6px;
   padding: 10px 14px;
   font-family: Consolas, 'Courier New', monospace;
@@ -1183,7 +1186,7 @@ button {
   margin: 10px 0;
 }
 .doc-content code {
-  background: #f2f3f5;
+  background: var(--code-bg);
   border-radius: 4px;
   padding: 1px 5px;
   font-family: Consolas, monospace;
@@ -2088,21 +2091,14 @@ button {
   --doc: #5b8cff;
   --sheet: #35c07e;
   --ppt: #f08a45;
+  --code-bg: #262a31;
+  --quote-bg: #262a31;
   color-scheme: dark;
 }
 
 :root[data-theme='dark'] .editor-toolbar,
 :root[data-theme='dark'] .topbar {
   background: var(--panel);
-}
-
-:root[data-theme='dark'] .doc-content blockquote {
-  background: #262a31;
-}
-
-:root[data-theme='dark'] .doc-content pre,
-:root[data-theme='dark'] .doc-content code {
-  background: #262a31;
 }
 
 :root[data-theme='dark'] .tb-active {
@@ -2118,6 +2114,38 @@ button {
 :root[data-theme='dark'] .home-card,
 :root[data-theme='dark'] .recent-item:hover {
   background: var(--panel);
+}
+
+/* ---------- 打印态：纸是纸，屏幕是屏幕 ---------- */
+/* 暗色主题往纸上漏色有两条路，都得在这儿堵住：
+   ① :root 的 color-scheme:dark 让浏览器把「画布底色」涂成深色，PrintToPdf 连画布一起抓走，
+      于是纸上凭空一层深灰底 —— 这条连 html,body{background:#fff !important} 都压不住（实测）；
+   ② 主题色以 var() 落在元素上（.doc-page 的纸面、代码块与引用块的底、正文与次要文字），
+      所以覆盖变量而不是逐个选择器打补丁 —— 新增的主题色只要走变量就自动被管住。
+   只覆盖「纸本身」的颜色：文档自己声明的段落底纹与字色、表格单元格底色、幻灯片的主题背景
+   都是字面色，不经过这条规则，照旧上纸。 */
+@media print {
+  :root,
+  :root[data-theme='dark'] {
+    color-scheme: light;
+    --bg: #ffffff;
+    --panel: #ffffff;
+    --border: #d8dce3;
+    --text: #111111;
+    --text-2: #444444;
+    /* 正文里的链接色也走变量：暗色下它是淡蓝 #5b8cff，白纸上会浅得读不清，
+       而且"同一篇文档换个屏幕主题导出，纸上的颜色不一样"本身就不该成立 */
+    --accent: #2c66d4;
+    --code-bg: #f5f6f7;
+    --quote-bg: #f5f8fc;
+  }
+
+  /* 查找命中的黄色高亮是屏幕辅助，不该跟着正文上纸 */
+  .fr-hit,
+  .fr-active {
+    background: transparent !important;
+    outline: none !important;
+  }
 }
 
 /* 标签右键菜单 */
