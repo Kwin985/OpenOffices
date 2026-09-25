@@ -551,6 +551,9 @@ pub fn read_ods_styles(path: &str) -> HashMap<String, SheetFmt> {
         ("<table:database-range", "ODS 里的筛选设置暂未读入（被筛掉的行按隐藏行保留）"),
         ("<table:content-validations", "ODS 里的数据验证暂未读入"),
         ("<table:conditional-format", "ODS 里的条件格式暂未读入"),
+        // 批注是格子的孩子（office:annotation 里装着作者的 text:p），链接是 text:a
+        ("<office:annotation", "ODS 里的单元格批注暂未读入"),
+        ("<text:a ", "ODS 里的单元格链接暂未读入"),
     ] {
         if xml.contains(needle) {
             missed.push(note.to_string());
@@ -1649,6 +1652,64 @@ mod tests {
         assert_eq!(at(0, 0), Some(json!("月份")));
         assert_eq!(at(1, 1), Some(json!(10)));
         assert_eq!(s.name, "数据");
+    }
+
+    #[test]
+    fn ods_notes_and_links_report_their_boundaries() {
+        let wb = WorkbookPayload {
+            sheets: vec![SheetPayload {
+                name: "数据".into(),
+                cells: vec![
+                    cell(0, 0, json!("月份")),
+                    cell(0, 1, json!("销量")),
+                    cell(1, 0, json!("一月")),
+                    cell(1, 1, json!(10)),
+                ],
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        let (mut content, styles) = ods_xml(&wb);
+        // 别人的件长这样：批注是格子的第一个孩子（作者的 text:p 也在里面），链接是格子里的 text:a。
+        // 前缀必须声明到位——漏了 xlink/dc 会让整份 XML 解析失败，表现为"没报错但是空表"
+        content = content.replace(
+            "office:version=\"1.2\"><office:automatic-styles>",
+            "xmlns:dc=\"http://purl.org/dc/elements/1.1/\" \
+             xmlns:xlink=\"http://www.w3.org/1999/xlink\" \
+             office:version=\"1.2\"><office:automatic-styles>",
+        );
+        content = content.replace(
+            "<text:p>月份</text:p>",
+            "<office:annotation><dc:creator>张三</dc:creator><text:p>这里要复核</text:p></office:annotation>\
+             <text:p>月份</text:p>",
+        );
+        content = content.replace(
+            "<text:p>一月</text:p>",
+            "<text:p><text:a xlink:type=\"simple\" xlink:href=\"https://example.com/a?x=1&amp;y=2\">\
+             一月</text:a></text:p>",
+        );
+        let path = std::env::temp_dir()
+            .join(format!("openoffices-ods-side-{}.ods", std::process::id()))
+            .to_string_lossy()
+            .to_string();
+        std::fs::write(&path, zip_ods(&content, &styles)).expect("write");
+        let back = crate::xlsx::read_xlsx_sync(path.clone()).expect("带批注与链接的 ODS 读回失败");
+        std::fs::remove_file(&path).ok();
+
+        let notes = back.warnings.join("|");
+        assert!(notes.contains("批注"), "批注账要说得出: {notes}");
+        assert!(notes.contains("链接"), "链接账要说得出: {notes}");
+        assert_eq!(notes.matches("ODS 里的").count(), 2, "两样各一条: {notes}");
+        // 记账不吞值：批注的字不能混进格子（那是正文与气泡的分界），链接的字照常说得出
+        let s = &back.sheets[0];
+        let at = |r: u32, c: u32| {
+            s.cells
+                .iter()
+                .find(|x| x.r == r && x.c == c)
+                .and_then(|x| x.v.clone())
+        };
+        assert_eq!(at(0, 0), Some(json!("月份")), "批注的字不该渗进正文: {:?}", at(0,0));
+        assert_eq!(at(1, 0), Some(json!("一月")), "链接读不懂，字还得照常出");
     }
 
     #[test]

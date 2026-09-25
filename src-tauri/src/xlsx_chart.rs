@@ -13,7 +13,7 @@ use serde_json::Value;
 
 pub(crate) type Grid = HashMap<(u32, u32), Value>;
 
-fn resolve_rel(base: &str, target: &str) -> String {
+pub(crate) fn resolve_rel(base: &str, target: &str) -> String {
     let target = target.trim_start_matches('/');
     if target.starts_with("xl/") {
         return target.to_string();
@@ -32,7 +32,7 @@ fn resolve_rel(base: &str, target: &str) -> String {
     stack.join("/")
 }
 
-fn rels_of(path: &str) -> String {
+pub(crate) fn rels_of(path: &str) -> String {
     let (dir, file) = path.rsplit_once('/').unwrap_or(("", path));
     format!("{dir}/_rels/{file}.rels")
 }

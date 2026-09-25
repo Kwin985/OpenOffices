@@ -3,12 +3,14 @@ import type { IWorkbookData, IWorksheetData, IObjectMatrixPrimitiveType, ICellDa
 import type {
   BorderLine,
   CellBorder,
+  CellNotePayload,
   CellStyle,
   MergeRange,
   SheetPayload,
   WorkbookPayload,
 } from './fs'
 import { aggregateNotes, extractRules } from './sheet-rules'
+import { extractCellSide, richTextBox, richTextOf, univerUrlOf, noteResourceOf } from './sheet-cell-side'
 
 const MIN_ROWS = 100
 const MIN_COLS = 26
@@ -124,18 +126,48 @@ function flattenStyle(sd: Record<string, unknown> | undefined | null): CellStyle
   return Object.keys(out).length > 0 ? out : null
 }
 
-export function payloadToWorkbook(payload: WorkbookPayload, name: string): IWorkbookData {
+/** accounts：放侧的边界账（链接摆不进界面这类），由调用方接去状态栏 */
+export function payloadToWorkbook(
+  payload: WorkbookPayload,
+  name: string,
+  accounts: string[] = [],
+): IWorkbookData {
   const sheets: Record<string, Partial<IWorksheetData>> = {}
   const sheetOrder: string[] = []
   const styles: Record<string, unknown> = {}
   const styleIds = new Map<string, string>()
+  // 载荷里的链接认表名，Univer 的 #gid= 认表 id，先建一张对照表
+  const nameToId = new Map(payload.sheets.map((s, i) => [s.name, `sheet-${i}`]))
+  const noteSheets: Array<{ id: string; notes?: CellNotePayload[] }> = []
   payload.sheets.forEach((sheet, i) => {
     const id = `sheet-${i}`
     const ws = emptySheet(id, sheet.name)
     const cellData: IObjectMatrixPrimitiveType<ICellData> = {}
     let maxR = 0
     let maxC = 0
+    // 链接要写成富文本格（Univer 显示这一格吃的是 p 而不是 v），公式格上那枚先记账不硬放
+    const linkAt = new Map<string, string>()
+    for (const l of sheet.links ?? []) {
+      const url = univerUrlOf(l, nameToId)
+      if (!url) {
+        accounts.push(
+          `第 ${l.r + 1} 行第 ${l.c + 1} 列的链接（${l.location ?? l.url ?? '没有目标'}）界面上放不出这么一枚`,
+        )
+        continue
+      }
+      linkAt.set(`${l.r},${l.c}`, url)
+    }
+    const placed = new Set<string>()
+    const putLink = (r: number, c: number, data: ICellData, text: string) => {
+      const url = linkAt.get(`${r},${c}`)
+      if (!url) return
+      // 与门面建出来的形状保持一致：这一格在会话里就是文本（实测数字挂链接也是先转文本）
+      data.v = text
+      data.t = CellValueType.STRING
+      data.p = richTextBox(url, text, `oo-${id}-${r}-${c}`) as unknown as ICellData['p']
+    }
     for (const cell of sheet.cells) {
+      const key = `${cell.r},${cell.c}`
       const row = (cellData[cell.r] ??= {})
       const data: ICellData = {
         v: cell.v ?? null,
@@ -159,11 +191,31 @@ export function payloadToWorkbook(payload: WorkbookPayload, name: string): IWork
         }
         data.s = sid as ICellData['s']
       }
+      if (linkAt.has(key)) {
+        if (cell.f) {
+          accounts.push(`第 ${cell.r + 1} 行第 ${cell.c + 1} 列是公式格又挂了链接，链接未放进界面`)
+        } else {
+          putLink(cell.r, cell.c, data, cell.v == null ? '' : String(cell.v))
+        }
+      }
+      placed.add(key)
       row[cell.c] = data
       if (cell.r > maxR) maxR = cell.r
       if (cell.c > maxC) maxC = cell.c
     }
+    // 只有链接、格子里没内容的：也要占一格，否则这枚链接在会话里没有落脚的地方
+    for (const [key, url] of linkAt) {
+      if (placed.has(key)) continue
+      const [r, c] = key.split(',').map(Number)
+      const row = (cellData[r] ??= {})
+      const data: ICellData = { v: '', t: CellValueType.STRING }
+      data.p = richTextBox(url, '', `oo-${id}-${r}-${c}`) as unknown as ICellData['p']
+      row[c] = data
+      if (r > maxR) maxR = r
+      if (c > maxC) maxC = c
+    }
     ws.cellData = cellData
+    noteSheets.push({ id, ...(sheet.notes?.length ? { notes: sheet.notes } : {}) })
     // 列宽/行高/隐藏：载荷像素与 Univer columnData.w / rowData.h 同单位；hd=1 即隐藏
     type ColDatum = { w?: number; hd?: number }
     type RowDatum = { h?: number; hd?: number }
@@ -219,7 +271,8 @@ export function payloadToWorkbook(payload: WorkbookPayload, name: string): IWork
     styles,
     sheetOrder,
     sheets,
-    resources: [],
+    // 批注只有这一条通道：实测裸写 resources 与走门面建出来的产物一模一样
+    resources: [noteResourceOf(noteSheets)].filter((r): r is { name: string; data: string } => !!r),
   } as unknown as IWorkbookData
 }
 
@@ -227,9 +280,19 @@ export function workbookToPayload(data: IWorkbookData): WorkbookPayload {
   const sheets: WorkbookPayload['sheets'] = []
   const bySheetId = new Map<string, SheetPayload>()
   const styleSource = (data.styles ?? {}) as Record<string, Record<string, unknown>>
+  // 批注在 resources、超链接在每格的富文本区间里，两处都不走门面（实测裸写就能被门面读回）
+  const sideArgs: Array<{ id: string; name: string; cellData: unknown }> = []
+  for (const id of data.sheetOrder) {
+    const s = data.sheets[id]
+    if (s) sideArgs.push({ id, name: s.name ?? id, cellData: s.cellData })
+  }
+  const cellSide = extractCellSide((data as unknown as { resources?: unknown }).resources, sideArgs)
   for (const sheetId of data.sheetOrder) {
     const sheet = data.sheets[sheetId]
     if (!sheet) continue
+    const side = cellSide.side.get(sheetId)
+    // 挂链接的格子只有 p 没有 v（门面建链接时不写 v），所以按"这格有没有链接"决定要不要留
+    const linkKeys = new Set((side?.links ?? []).map((l) => `${l.r},${l.c}`))
     const cells: WorkbookPayload['sheets'][number]['cells'] = []
     const matrix = (sheet.cellData ?? {}) as Record<string, Record<string, ICellData | undefined> | undefined>
     for (const [rStr, row] of Object.entries(matrix)) {
@@ -237,14 +300,15 @@ export function workbookToPayload(data: IWorkbookData): WorkbookPayload {
       const r = Number(rStr)
       for (const [cStr, cell] of Object.entries(row)) {
         const c = Number(cStr)
-        const value = cell?.v
+        // 富文本优先：实测挂了链接又改了显示文本的格子，v 留的是旧值而 dataStream 才是看到的
+        const value = richTextOf(cell) ?? cell?.v
         const formula = typeof cell?.f === 'string' && cell.f.length > 0 ? cell.f : null
         const raw = cell?.s
         const style =
           typeof raw === 'string'
             ? flattenStyle(styleSource[raw])
             : flattenStyle(raw as Record<string, unknown> | undefined)
-        if ((value == null || value === '') && !formula && !style) continue
+        if ((value == null || value === '') && !formula && !style && !linkKeys.has(`${r},${c}`)) continue
         cells.push({
           r,
           c,
@@ -303,6 +367,8 @@ export function workbookToPayload(data: IWorkbookData): WorkbookPayload {
       ...(hiddenCols.length ? { hiddenCols } : {}),
       ...(hiddenRows.length ? { hiddenRows } : {}),
       ...(freeze ? { freeze } : {}),
+      ...(side?.notes?.length ? { notes: side.notes } : {}),
+      ...(side?.links?.length ? { links: side.links } : {}),
     }
     sheets.push(out)
     bySheetId.set(sheetId, out)
@@ -317,6 +383,6 @@ export function workbookToPayload(data: IWorkbookData): WorkbookPayload {
     if (rule.dataValidations) payload.dataValidations = rule.dataValidations
     if (rule.condFormats) payload.condFormats = rule.condFormats
   }
-  const warnings = aggregateNotes(notes)
+  const warnings = aggregateNotes([...notes, ...cellSide.notes])
   return { sheets, ...(warnings.length ? { warnings } : {}) }
 }

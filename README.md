@@ -1172,6 +1172,58 @@ CSV、txt…）。这一轮把这层套娃拆到能读到底为止——读不�
   没画过的纯红一枚都没有、`-5` 不在文本层而 `-1` 在（证 `showValue=false`）、按宽高比认出那张图表位图、
   主题底色从 1269783 像素降到抗锯齿的边角）；**`cargo test --lib` 49 通过 + tsc/build 绿**
 
+## 表格批注与超链接：作者的编号不能按名字排（v0.48）
+
+- **这两样不住在 `cellData` 的 `v`/`s` 里**：批注住快照 `resources` 的 `SHEET_NOTE_PLUGIN`（按
+  表 id → 行 → 列 分家），超链接住 `cellData[r][c].p.body.customRanges`（Univer 把链接当成富文本的
+  一种自定义区间，区间类型还有书签/字段好几种，只认 HYPERLINK 那一枚）。此前 `payloadToWorkbook` 把
+  `resources` 硬写成 `[]`、链接格整块按普通富文本丢掉——别人文件里的批注与链接打开看不见，我们存一次盘就没了
+- **与 v0.46 那三类规则不同，这次两头都是纯函数**：实测把 `resources` 与 `p` 裸写进快照，门面的
+  `getNote()` / `getHyperLinks()` 都读得回来，所以 `lib/sheet-cell-side.ts` 只做取与放的换算，
+  不发命令、不碰 DOM、Node 里直测——**上一轮"放必须走门面"的教训没有自动管到下一批东西，得再量一次**
+- **Univer 的模型装不下两样东西**：`ISheetNote` 里没有作者这一项，链接也没有悬停提示的位置。打开时把
+  `author` / `tip` 按表名另留一份，存盘前 `restampCellSide` 按格子回贴；界面上新写的批注因此作者仍是空
+  （**不冒用文件里任何一个人的名字**），这是故意的而不是没做
+- **读侧把两种写法归一**：老式 `xl/commentsN.xml`（`<authors>` 是表、`comment@authorId` 是下标，一格一枚时
+  Excel 还会把作者写在正文第一行——**只有认得出作者才剥这层前缀**）与新式 `xl/threadedComments/*.xml`
+  （作者住 `xl/persons/person.xml`，不同工具写的键不一样，两种都收）；Excel 为兼容会把同一条批注**两份都写**，
+  按格子归并不重复收、回复并进正文并记一笔「有 N 条批注的回复被并进了正文（我们的模型不分层）」。部件归属
+  只能靠 sheet 的 rels 认，`sheetN ↔ commentsN` 那种猜法会认错，认不出属于哪张表的部件**单独记包级账**，
+  不挂在某一张表上冒充归属。气泡的宽高与"是否一直开着"既不在 comments 也不在 worksheet，而在
+  `vmlDrawing` 的 `<v:shape>` 上（`style` 给 pt、`<x:Visible/>` 给常开），而默认那一档 128×74 读回来要
+  **归一回"没声明"**，否则每个没设过尺寸的气泡都会从此开始写尺寸
+- **写侧最值钱的一笔：作者表的顺序**：rust_xlsxwriter 0.99.1 把 `<authors>` 按**名字排序**写出（内部是
+  `BTreeMap`，packager 只把键抄出来），而 `<comment authorId>` 用的是"按格子序首次出现"的编号。于是
+  A1=李四、A2=张三 的件在 Excel 里把 A1 显示成张三——**署名串到了别人头上**。载荷里那张表我们自己按格子序
+  数得出来，存盘时两序不一致就把那一张的 `<authors>` 按编号重排再写回；核对严到「作者多重集」与
+  「`<comment ref>` 的文档序」两项都对上才动手，**数不上宁可不动并记账**（改错的件比不改更糟）。顺带：
+  crate 给"没有作者"准备的槽位写的是字面量 `Author`，指过去等于替用户签了个名，所以 `set_default_note_author("")`
+  让第 0 格真是空串
+- **链接的两条通道**：外部地址在 sheet 的 rels 里（`r:id` → `Target`，`TargetMode="External"`），表内跳转
+  才是 `location` 字面（`Sheet2!A1` / `'Sales Data'!A1:G5`），载荷里分成 `url` 与 `location` 而不是揉成
+  一个串——Univer 那边表内跳转是 `#gid=<表 id>&range=...`，认的是表 **id**，所以放侧要建表名→id 的对照表，
+  表名含空格或长得像单元格引用（`A1`）时按 OOXML 的规矩加单引号（`''` 才是引号本身）
+- **记账的地方**：作者超 52 字（Excel 的上限）**只丢作者不丢正文**——裁过的名字放进别人文件里是另一个人；
+  既无外部地址又无表内目标的链接未写入；没有 scheme 的目标（指向同目录另一个文件）按 OOXML 的 `file:`
+  形状补一次再试，还不行就报出具体格子与目标；**公式格上那枚链接只记账不硬放**（放了会把公式吃掉）；
+  只有链接、格子里没内容的也要占一格，否则这枚链接在会话里没有落脚的地方
+- **ODS/CSV 说得出缺什么**：ODF 里这两样确实存在（`office:annotation` 是格子的孩子、`text:a` 是格子里的
+  行内链接），探针按这两枚 needle 记「暂未读入」，而**自产物一条都不许多报**（对照组）；顺带量到 calamine
+  没把批注正文渗进格值，所以"暂未读入"是真的没读而不是读串了。CSV 与 ODS 的"保存会丢什么"文案各补一句
+- **坑**：① `FRange.getNote()` 返回的是 `ISheetNote` **对象**（`{note,width,height,show,…}`）不是字符串，
+  照字符串写断言会一路"通过"到真机才发现读的是空气；② Univer 给链接格留下的 `v` 是**旧值**（显示吃的是 `p`），
+  取侧一律 `richTextOf(cell) ?? cell.v`，否则改了名存一次、重开又是上一版的文字；③ 冒烟里"批注条数"数成了
+  resources 的**行数**（同一行三枚只算一枚），改计数时才发现自己把两张表混成了一笔账；④ 冒烟会就地保存，
+  直接开夹具等于把写侧原产物覆盖成二手件——改成每轮从原产物复制一份工作副本，夹具才留得住第一次写出的字节
+- **验证（四腿）**：**结构测试 75 断言**（表名加引号的两种情况 + `location`↔`#gid=` 双向 + 富文本区间取与放
+  + 作者两种键 + 回贴只贴对的那几格、不覆盖用户在界面上的改动 + 桥两头往返 + "链接格的 v 是旧值"这一条危害
+  被点名）；**`cargo test --lib` 57 通过**（新增 7：批注与链接往返、作者表落在**编号序**、两张表的作者表互不
+  串、threaded 与 legacy 归并、没署名的保持没署名、默认尺寸不声明、放不下的自己报自己）；**Excel 16.0 只读腿
+  16 断言 × 两遍**（写侧原产物与应用重存过的件各一遍：五位作者逐个对得上、`D1` 的作者确为空串、`C1` 的气泡
+  开着、`F1` 的 Address 与 ScreenTip、`G1` 只有 SubAddress 且**没有**外部地址、第二张表另算一份作者表、格值
+  一个没动）；**CDP 真机冒烟 44 断言全绿、页面异常 0 条**（文件→界面按门面逐格读：五条批注正文与气泡尺寸、
+  外链与内链各在位 → 界面上再写一条 → 存 → 重开：原五条署名仍在、新写那条作者仍是空）；**tsc + build 绿**
+
 ## 性能（v0.3）
 
 - **按编辑器分包 + 懒加载**：主包 8MB → 首屏约 300KB；Univer（6.1MB）只在首次激活表格标签时加载，
@@ -1221,21 +1273,23 @@ CSV、txt…）。这一轮把这层套娃拆到能读到底为止——读不�
 
 ```
 src-tauri/            Rust 后端
-  src/xlsx.rs         read_xlsx (calamine) / write_xlsx (rust_xlsxwriter) 命令，含样式、合并区、尺寸/字族、隐藏/冻结、公式（含缓存值）、图表与**三类规则（筛选/数据验证/条件格式，v0.46 的载荷类型 RangeRect/SheetFilterPayload/DataValidationPayload/CondFormatPayload 也在这里）**往返；write_xlsx 返回 `Vec<String>` 边界账；命令为 async + spawn_blocking（同步跑主线程会让窗口冻结），`.csv` 读侧分流到 csv.rs，图表网格按 has_charts 惰性构建；测试里带一份**条件格式打印夹具**（v0.47：八列各一种判定型，写出真 xlsx 供 Excel 逐格对色）
+  src/xlsx.rs         read_xlsx (calamine) / write_xlsx (rust_xlsxwriter) 命令，含样式、合并区、尺寸/字族、隐藏/冻结、公式（含缓存值）、图表与**三类规则（筛选/数据验证/条件格式，v0.46 的载荷类型 RangeRect/SheetFilterPayload/DataValidationPayload/CondFormatPayload 也在这里）**、**批注与超链接（v0.48 的载荷类型 CellNotePayload/CellLinkPayload）**往返；write_xlsx 返回 `Vec<String>` 边界账；命令为 async + spawn_blocking（同步跑主线程会让窗口冻结），`.csv` 读侧分流到 csv.rs，图表网格按 has_charts 惰性构建，`.xlsx` 才另开一趟 zip 读独立部件的批注与链接；测试里带一份**条件格式打印夹具**（v0.47：八列各一种判定型，写出真 xlsx 供 Excel 逐格对色）
   src/csv.rs          CSV 往返：RFC4180 逐字符状态机（引号/转义/字段内换行）+ 分隔符嗅探（, ; 制表符）+ UTF-8 失败退 GBK 解码 + 写侧 BOM/CRLF，read_payload 供 read_xlsx 分流、write_csv 为独立命令
   src/xlsx_style.rs   zip + quick-xml 直读 xlsx 的 styles.xml（StyleBook：fonts/fills/borders/cellXfs/numFmts，**外加 `<dxfs>` 条件格式样式表 `parse_dxfs`**——dxf 不走 fontId/fillId 索引、实心底纹在 bgColor 而非 fgColor，故单独一趟）/ mergeCells / col·row 尺寸（字符宽·pt→px）/ 隐藏行列 / 冻结 pane / 公式 `<f>`（GeneralRef 实体重建 + unescape，calamine 无样式/公式 API）
   src/xlsx_rules.rs   三类规则的双向（v0.46）：写侧 `write_sheet_rules`（autoFilter + filterColumn 的 list/custom 两种形状、dataValidation 六类型与日期序列号换算、条件格式四大类 cellIs/containsText/timePeriod/top10/aboveAverage/duplicate/unique/expression + colorScale/dataBar/iconSet，含 dxf 与 x14 的 gradient/negativeBarColorSameAsPositive）、读侧 `read_sheet_rules`（quick-xml 事件流 + `cfRule` 的 begin/end 临时态、`dxfId` 查表、colId 换回绝对列、`showDropDown` 反义、整列引用等读不懂的片段原样交回由调用方记账），摆不进 / 读不出的**一律返回账目不静默少给**
+  src/xlsx_cell_side.rs 单元格两位邻居的双向（v0.48）：读侧 `read_cell_side` 另开一趟 zip 按表名对回**独立部件**——legacy `commentsN.xml`（`<authors>` 表 + `authorId` 下标、正文里那行「作者:」前缀只在认得出作者时剥）、threaded `threadedComments/*.xml`（作者查 `persons/person.xml`，两种键名都收，回复并进正文并记账）、两者的归一、气泡尺寸与常开来自 `vmlDrawing`（pt→px，默认那档 128×74 **归一回不声明**）、超链接的 `ref` 在 worksheet 而外部地址在其 rels（`TargetMode="External"`）、表内跳转才是 `location` 字面；写侧 `write_sheet_side`（链接先落文本再补普通格，无 scheme 的目标按 `file:` 补试；`Note` 带作者/尺寸/常开，作者超 52 字只丢作者；`set_default_note_author("")` 让"没人署过"真是空串）+ `save_workbook`（**rust_xlsxwriter 的 `<authors>` 按名字排序而 `authorId` 按格子序登记**，两序不一致时按载荷数出来的那张表重排 `<authors>`，多重集或 `<comment ref>` 文档序对不上就宁可不改并记账）；认不出的形状一律记账
   src/xlsx_chart.rs   zip + quick-xml 直读 chartN.xml + drawing 锚点，系列值按实时网格解析；has_charts 只做 zip 文件名嗅探
-  src/ods.rs          ODS 双向：write_ods（async 外壳 + write_ods_sync，共用 xlsx 载荷 → ODF zip，样式/尺寸去重与合并、冻结 settings.xml、公式 of:= 换算）+ read_ods_styles（直解边框/对齐/换行/列宽行高/字族/隐藏 collapse/重复单元格/合并跨度/公式 + settings.xml 冻结）+ **ODF 规则只记账不硬读**（content.xml 里有 `table:database-range`/`table:content-validations`/`table:conditional-format` 就说得出"暂未读入"，自产物不许凭空记出账）
+  src/ods.rs          ODS 双向：write_ods（async 外壳 + write_ods_sync，共用 xlsx 载荷 → ODF zip，样式/尺寸去重与合并、冻结 settings.xml、公式 of:= 换算）+ read_ods_styles（直解边框/对齐/换行/列宽行高/字族/隐藏 collapse/重复单元格/合并跨度/公式 + settings.xml 冻结）+ **ODF 规则只记账不硬读**（content.xml 里有 `table:database-range`/`table:content-validations`/`table:conditional-format` 就说得出"暂未读入"，v0.48 起再加两枚 needle：格子的孩子 `office:annotation`（批注，作者的 `dc:creator` 也在里面）与行内 `text:a`（链接），自产物不许凭空记出一条账）
   src/pdf.rs          export_pdf 命令：with_webview → WebView2 PrintToPdf（四边距英寸四元组 + 纸张宽高/朝向，cfg windows）；file_len + read_range（raw IPC 返回 Vec<u8>，async + spawn_blocking，供大 PDF 分段读）
   src/lib.rs          OPEN_EXTS 与 argv 文件过滤纯函数、take_startup_files 命令、single-instance 文件转发；插件链只注册 updater 的 check 能力（前端仅授 `updater:allow-check`，下载与安装没接线）
   capabilities/       dialog + fs 权限与路径作用域 + updater:allow-check（只给检查，下载/安装未接线）
 src/                  React 前端
   store.ts            标签页 / 最近文件 / 主题（zustand）
   App.tsx             全局快捷键、拖拽打开、文件关联打开（启动 argv + 单实例转发）、关闭确认、懒加载路由
-  lib/univer.ts       Univer 实例工厂（公式 worker + 六个社区预设，含绘图 FOverGridImage）
-  lib/univer-io.ts    xlsx 数据+样式（粗斜/颜色/字族/边框/对齐/换行/数字格式）/合并/图表/列宽行高/隐藏行列/冻结窗格 ↔ Univer 快照 转换（样式去重注册）；**规则走侧通道**——取完单元格再按 sheetId 把 `extractRules(resources)` 的结果对回每张表，`warnings` 由 `aggregateNotes` 聚合
+  lib/univer.ts       Univer 实例工厂（公式 worker + 八个社区预设：核心/筛选/排序/条件格式/数据验证/查找替换/绘图 + **批注与超链接**（v0.48，超链接的 `urlHandler` 把外链交给系统默认浏览器——桌面上 `window.open` 会开出一个新 WebView 窗口））
+  lib/univer-io.ts    xlsx 数据+样式（粗斜/颜色/字族/边框/对齐/换行/数字格式）/合并/图表/列宽行高/隐藏行列/冻结窗格 ↔ Univer 快照 转换（样式去重注册）；**规则走侧通道**——取完单元格再按 sheetId 把 `extractRules(resources)` 的结果对回每张表，`warnings` 由 `aggregateNotes` 聚合；**批注与链接同一条侧通道**（v0.48）：取侧交给 `extractCellSide`，放侧把 `resources` 写成 `[noteResourceOf(...)]`（实测裸写就能被门面读回）、链接写成带 `customRanges` 的富文本格（**公式格上那枚先记账不硬放**，只有链接没内容的格子也要占一格）；`payloadToWorkbook` 因此多收一个 `accounts` 出参
   lib/sheet-rules.ts  三类规则的前端桥（v0.46）：`extractRules` 从工作簿快照的 `resources` 里按表取规则（Univer 三个插件各写各的 JSON，条件格式按快照原序交回=高优先级在前），`applySheetRules` 经门面放回界面（**条件格式倒着插**，因为这一版门面按插入顺序的倒序吐规则；builder 无 `setRanges`，作用区在 `build()` 之后挂产物），`buildDataValidation` 只建门面表达得出的四类 + custom；归一化（`normColor` 收 rgb/#、`normDateValue` 收 ISO、`listOf` 拆 JSON 数组串与区域引用、`neg === pos` 的负色丢掉）与 `aggregateNotes`（同类收成"文案×N"）都在这，`textLength`/`time`/`any` 这类摆不进模型的退成边界账而不是硬建一条
+  lib/sheet-cell-side.ts 批注与超链接的前端桥（v0.48，纯函数、零 DOM、Node 直测）：`extractCellSide` 从 `resources` 的 `SHEET_NOTE_PLUGIN` 按表取批注、从每格 `p.body.customRanges`（`rangeType` 只认 HYPERLINK）取链接，`noteResourceOf` 反向建 resources（实测裸写即可被门面读回，所以**不发消息不走门面**），`richTextOf`/`richTextBox` 负责"链接格吃的是 p 不是 v"这一层，`univerUrlOf`/`locationOfUniverUrl` 在 OOXML 的 `Sheet2!A1` 与 Univer 的 `#gid=<表 id>&range=` 之间换算（`quoteSheetName`：含空格或长得像单元格引用的表名要加单引号、`''` 是引号本身），`restampCellSide` 存盘前按格子把 Univer 模型装不下的 `author`/`tip` 回贴（**只在缺的时候贴**，界面上新写的那一枚不冒用别人的署名），装不下的形状退成边界账而不是挑个像样的凑数
   lib/chart.ts        ChartPayload → VChart spec → 离屏 canvas PNG dataURL（动态导入分包）
   lib/docx.ts         docx 导入导出（ProseMirror JSON ↔ docx，字色/字族/字号/高亮/页眉页脚/TOC 域/批注/页面设置 sectPr（纸张·四边距·w:cols 栏数栏距）/页码格式（PAGE·NUMPAGES）/分页符/表格合并映射（首行行级 tableHeader、列表 numbering.config 真编号）、单元格四边 `w:tcBorders`（**显式去边写 `w:val="nil"`**——none 压不住表级默认边框）、`w:shd` 底纹、`w:vAlign` 竖排、`w:tblInd` 表缩进、`w:vertAlign` 上下标、段落 `w:spacing`（行距 + 段前段后，**只写声明过的**）/`w:shd`/`w:pBdr`、脚注与尾注（`footnotes`/`endnotes` 记录 + 正文各带自动编号 `<w:footnoteRef/>`、多段拆多个 `w:p`、部件与 rels 注册））；文本节点兼容顶层 text 与 attrs.text；字节经 Packer.toBase64String + atob 取（toBuffer 走 jszip 的 nodebuffer 通道，浏览器里没有 Buffer））
   lib/ooxml.ts        迷你 OOXML XML 解析器（零依赖、不碰 DOM）：parseXml/find/findDesc/all/allL/attr/attrL/val/valNum/textOf + decodeEnt 实体表——让 docx 读侧能在 Node 里直测
@@ -1356,6 +1410,7 @@ cargo check        # Rust 后端检查（在 src-tauri 下）
 - [x] 文档保真续项六剩下：OLE 嵌入对象的**内容**提取（复合文档 `cfb.ts` + `\x01Ole10Native` 的字段布局与兜底扫描 → 内层 docx 递归展开 / xlsx 与 CSV 取值成表 / txt 分段；两条接缝 docx `w:object` 与 ODT `draw:frame`（内联 base64 与 `Objects/objN/` 两种），块级正文作段落兄弟块、格内压行内，取不出的带真名与大小记边界）
 - [x] 表格保真五期：筛选 / 数据验证 / 条件格式 **xlsx 全链路往返**（Univer `resources` 双向桥 + 门面放回界面 + OOXML autoFilter/dataValidation/cfRule·dxf·x14 读写，Excel 16.0 实机核对；被筛掉的行喂打印；ODS/CSV 只记边界账不谎称读回）
 - [x] 表格保真六期：**PDF 打印保真**（条件格式在打印侧按载荷重算一遍→底色/字色/粗斜/数据条/色阶真上色，六处判据与 Excel 16.0 的 `DisplayFormat` 逐格核对；图表位图按锚点格覆盖进网格并让锚点撑开边界，"图浮在数据块外就整个不见"就此修掉；打印纸面兜白底（外壳的 `var(--bg)` 曾把整页铺成屏幕色）；算不出的一律进状态栏记账）
+- [x] 表格保真七期：**批注 / 超链接 xlsx 全链路往返**（批注走 `resources` 的 `SHEET_NOTE_PLUGIN`、链接走每格的富文本 `customRanges`，两头都是纯函数所以**不放命令**；legacy `commentsN.xml` 与 `threadedComments`/`person.xml` 两种写法归一、气泡尺寸与常开从 `vmlDrawing` 认回；作者与悬停提示 Univer 装不下，按格子回贴且界面新写的那枚不冒用别人署名；写侧修掉 rust_xlsxwriter 把 `<authors>` 按名字排序而 `authorId` 按格子序登记的**串署名**缺陷（核对不过宁可不改）；Excel 16.0 只读腿对写侧原产物与应用重存件各跑一遍；ODS/CSV 只记边界账不谎称读回）
 - [x] 自动更新通道（**检测层**，v0.45）：本机 Ed25519 密钥对签发的清单 + `check` 一次拿版本/说明/日期，
       有新版本就提示并**用浏览器打开下载页**；失败一律归成中文一句（源上没清单/非 https/缺本平台条目/签名不合…），
       认不出来的原样带出不编原因；不做应用内下载与安装，所以不需要先定更新源托管在哪

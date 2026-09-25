@@ -171,6 +171,34 @@ export interface CellPayload {
   s?: CellStyle | null
 }
 
+/**
+ * 单元格批注。Univer 的批注模型只有正文与气泡尺寸（ISheetNote 里没有作者这一项），
+ * 所以 author 是"打开时从文件里读到、存盘时按格子回贴"的元数据。
+ */
+export interface CellNotePayload {
+  r: number
+  c: number
+  text: string
+  author?: string
+  /** 气泡宽/高（像素，缺省用写侧的默认值） */
+  width?: number
+  height?: number
+  /** 打开文件时是否把气泡摊开 */
+  show?: boolean
+}
+
+/** 单元格超链接。url（外部地址）与 location（表内跳转）二选一 */
+export interface CellLinkPayload {
+  r: number
+  c: number
+  /** 外部地址，含 mailto: 这类带方案的链接 */
+  url?: string
+  /** 表内跳转目标，形状照 OOXML hyperlink@location：Sheet2!A1 / 'Sales Data'!A1:G5 */
+  location?: string
+  /** 悬停提示（OOXML hyperlink@tooltip）。Univer 装不下，与 author 同路回贴 */
+  tip?: string
+}
+
 export interface SheetPayload {
   name: string
   cells: CellPayload[]
@@ -190,6 +218,8 @@ export interface SheetPayload {
   filter?: SheetFilterPayload
   dataValidations?: DataValidationPayload[]
   condFormats?: CondFormatPayload[]
+  notes?: CellNotePayload[]
+  links?: CellLinkPayload[]
 }
 
 export interface WorkbookPayload {

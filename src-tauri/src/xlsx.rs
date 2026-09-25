@@ -5,6 +5,7 @@ use serde_json::Value;
 use std::collections::HashMap;
 use std::path::Path;
 
+use crate::xlsx_cell_side;
 use crate::xlsx_chart;
 use crate::xlsx_style;
 
@@ -344,6 +345,39 @@ pub struct CondFormatBar {
     pub grad: Option<bool>,
 }
 
+/// 单元格批注。legacy comments（xl/commentsN.xml）与 threadedComments 归一成同一形状：
+/// 作者与正文分开存，不抄 Excel 写在正文里的那行「作者:」前缀
+#[derive(Serialize, Deserialize, Clone, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct CellNotePayload {
+    pub r: u32,
+    pub c: u32,
+    pub text: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub author: Option<String>,
+    /// 气泡宽高（像素，与 Univer 同单位）；缺省按 Excel 的 128×74
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub width: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub height: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub show: Option<bool>,
+}
+
+/// 单元格超链接：url（外部地址）与 location（本簿内跳转 "表名!A1"）二选一，tip 是悬停提示
+#[derive(Serialize, Deserialize, Clone, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct CellLinkPayload {
+    pub r: u32,
+    pub c: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub url: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub location: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tip: Option<String>,
+}
+
 #[derive(Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct SheetPayload {
@@ -371,6 +405,10 @@ pub struct SheetPayload {
     pub data_validations: Vec<DataValidationPayload>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub cond_formats: Vec<CondFormatPayload>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub notes: Vec<CellNotePayload>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub links: Vec<CellLinkPayload>,
 }
 
 #[derive(Serialize, Deserialize, Default)]
@@ -469,6 +507,14 @@ pub fn read_xlsx_sync(path: String) -> Result<WorkbookPayload, Error> {
     };
     let mut sheets = Vec::new();
     let mut rule_notes: Vec<String> = Vec::new();
+    // 批注与超链接住在独立部件（comments / threadedComments / rels），另开一趟 zip 按表对回来；
+    // xls 不是 zip、ods 有自己的部件名，都只在这条路上读
+    let mut sides = if path.to_ascii_lowercase().ends_with(".xlsx") {
+        xlsx_cell_side::read_cell_side(&path)
+    } else {
+        Default::default()
+    };
+    rule_notes.append(&mut sides.accounts);
     // 一格值同时进 cells 和"图表取数"用的网格；后者只在簿子真含图表时才需要（多数没有）
     let keep_grid = xlsx_chart::has_charts(&path);
     let mut grids: std::collections::HashMap<String, xlsx_chart::Grid> =
@@ -536,6 +582,8 @@ pub fn read_xlsx_sync(path: String) -> Result<WorkbookPayload, Error> {
                 });
             }
         }
+        // 批注与链接：按表名对回独立部件的读数（remove 而不是 get——一张表的读数只该用一次）
+        let side = sides.by_sheet.remove(&name);
         sheets.push(SheetPayload {
             name,
             cells,
@@ -553,6 +601,8 @@ pub fn read_xlsx_sync(path: String) -> Result<WorkbookPayload, Error> {
             cond_formats: fmt
                 .map(|f| f.rules.cond_formats.clone())
                 .unwrap_or_default(),
+            notes: side.as_ref().map(|s| s.notes.clone()).unwrap_or_default(),
+            links: side.as_ref().map(|s| s.links.clone()).unwrap_or_default(),
             ..Default::default()
         });
     }
@@ -659,7 +709,7 @@ fn format_for(s: Option<&CellStyle>) -> Format {
     f
 }
 
-fn cell_text(v: &Value) -> String {
+pub(crate) fn cell_text(v: &Value) -> String {
     match v {
         Value::String(s) => s.clone(),
         other => other.to_string(),
@@ -697,10 +747,16 @@ fn px_to_cm(px: u32) -> u32 {
 pub fn write_xlsx_sync(path: String, workbook: WorkbookPayload) -> Result<Vec<String>, Error> {
     let mut wb = Workbook::new();
     let mut notes = Vec::new();
+    // 每张表交回来的作者表（下标即 authorId），存盘时拿它核对产物里的 <authors>
+    let mut tables: Vec<Option<xlsx_cell_side::AuthorTable>> = Vec::new();
     for sheet in &workbook.sheets {
         let ws = wb.add_worksheet();
         ws.set_name(&sheet.name)
             .map_err(|e| Error(format!("工作表命名失败: {e}")))?;
+        // 批注与超链接先写：链接落一格文本，后面的普通格写入只覆盖值与格式，<hyperlink> 元素照旧在
+        let side = xlsx_cell_side::write_sheet_side(ws, sheet);
+        notes.extend(side.accounts);
+        tables.push(side.authors);
         // 合并区先写（含左上角值与格式），普通单元格再补齐；被合并覆盖的格子跳过
         let in_merge = |r: u32, c: u32| {
             sheet.merges.iter().any(|m| {
@@ -820,7 +876,10 @@ pub fn write_xlsx_sync(path: String, workbook: WorkbookPayload) -> Result<Vec<St
         // 三类规则（筛选 / 数据验证 / 条件格式）：写不进去的东西带回来记账，不在存盘时静默少给
         notes.extend(write_sheet_rules(ws, sheet));
     }
-    wb.save(&path).map_err(|e| Error(format!("保存失败: {e}")))?;
+    // 批注的作者表可能要和产物对一次账（crate 把那张表按名字排序写了，编号却是格子序），
+    // 所以对不上时不只是记账——先重排，重排不了的才记账
+    notes.extend(xlsx_cell_side::save_workbook(path.as_str(), &mut wb, tables.as_slice())
+        .map_err(Error)?);
     Ok(notes)
 }
 

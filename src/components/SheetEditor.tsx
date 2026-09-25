@@ -8,6 +8,8 @@ import { createSheetApp } from '../lib/univer'
 import { payloadToWorkbook, workbookToPayload } from '../lib/univer-io'
 import { aggregateNotes, applySheetRules } from '../lib/sheet-rules'
 import type { SheetRules } from '../lib/sheet-rules'
+import { restampCellSide } from '../lib/sheet-cell-side'
+import type { CellSide } from '../lib/sheet-cell-side'
 import { baseName, pickSaveFile, readXlsx, writeCsv, writeOds, writeXlsx } from '../lib/fs'
 import type { ChartPayload, ChartRangeRef, ChartSeriesPayload, WorkbookPayload } from '../lib/fs'
 import { renderChartPng } from '../lib/chart'
@@ -170,6 +172,9 @@ function SheetEditor({ tab }: Props) {
   const containerRef = useRef<HTMLDivElement>(null)
   const apiRef = useRef<FUniver | null>(null)
   const chartsRef = useRef(new Map<string, ChartItem>())
+  // 打开时读到的批注作者与链接提示：Univer 的模型装不下它们（外来 resource 也活不过
+  // createWorkbook，实测），所以自己按表名留一份，存盘前按格子回贴
+  const cellSideRef = useRef(new Map<string, CellSide>())
   const [status, setStatus] = useState<string>(tab.path ? '正在加载…' : '')
   const [chartCount, setChartCount] = useState(0)
   const [dialogOpen, setDialogOpen] = useState(false)
@@ -212,6 +217,7 @@ function SheetEditor({ tab }: Props) {
     let ready = false
     let api: FUniver | null = null
     chartsRef.current = new Map()
+    cellSideRef.current = new Map()
     setChartCount(0)
     const worker = new Worker(new URL('../univer-worker.ts', import.meta.url), {
       type: 'module',
@@ -230,8 +236,16 @@ function SheetEditor({ tab }: Props) {
         const dump = await loading
         if (disposed) return
         const name = tab.path ? baseName(tab.path) : tab.title || '未命名表格'
-        const snap = payloadToWorkbook(dump, name)
+        // 放侧的账（链接摆不进界面这类）与读侧的账一起进状态栏
+        const putNotes: string[] = []
+        const snap = payloadToWorkbook(dump, name, putNotes)
         const wb = api.createWorkbook(snap)
+        // 作者与提示文字是 Univer 模型装不下的东西，这里按表名留一份，存盘前回贴
+        cellSideRef.current = new Map(
+          dump.sheets
+            .filter((s) => s.notes?.length || s.links?.length)
+            .map((s) => [s.name, { notes: s.notes, links: s.links } as CellSide]),
+        )
         // 还原已存图表：PNG 渲染并行（VChart 是纯计算），落格串行（同一 sheet 的命令队列）
         const items = dump.sheets.flatMap((s) =>
           (s.charts ?? []).map((chart) => ({ sheetName: s.name, chart })),
@@ -259,7 +273,7 @@ function SheetEditor({ tab }: Props) {
         // 规则（筛选/数据验证/条件格式）只能由门面放回界面：快照里的 resources 是我们自己
         // 读出来记账的，Univer 建工作簿时并不会照它还原
         // Rust 读侧的边界账先接上：文件里有、模型装不下的东西，打开这一趟就要说得出
-        const notes: string[] = [...(dump.warnings ?? [])]
+        const notes: string[] = [...putNotes, ...(dump.warnings ?? [])]
         if (wb) {
           for (const s of dump.sheets) {
             const rules: SheetRules = {
@@ -351,6 +365,10 @@ function SheetEditor({ tab }: Props) {
   // 保存与导出 PDF 吃的是同一份产物，否则"文件里有图、打印里没图"又会各说一次话
   const payloadWithCharts = (wb: FWorkbook, snapshot: IWorkbookData): WorkbookPayload => {
     const payload = workbookToPayload(snapshot)
+    // 回贴作者与悬停提示：这两样 Univer 的模型装不下，不回贴就是"存一次盘，全都没了"
+    for (const sheet of payload.sheets) {
+      restampCellSide(sheet, cellSideRef.current.get(sheet.name))
+    }
     // 调和删除 → 同步锚点 → 取最新数值 → 按工作表附着
     for (const [id, item] of [...chartsRef.current]) {
       const ws = wb.getSheetByName(item.sheetName)
@@ -416,14 +434,19 @@ function SheetEditor({ tab }: Props) {
       renameTab(tab.id, baseName(path), path)
       markRecent(path, 'sheet')
       const hasCharts = payload.sheets.some((s) => s.charts?.length)
+      const hasSide = payload.sheets.some((s) => s.notes?.length || s.links?.length)
       const hasRules = payload.sheets.some(
         (s) => s.filter || s.dataValidations?.length || s.condFormats?.length,
       )
       // 格式本身装不下的东西先说，接着一句接写侧带回来的账（有条规则摆不进 OOXML 这类）
       const lost: string[] = []
-      if (isCsv) lost.push('CSV 只含首个工作表，公式、样式、合并、图表与筛选/数据验证/条件格式都不保留')
+      if (isCsv)
+        lost.push(
+          'CSV 只含首个工作表，公式、样式、合并、图表、批注/链接与筛选/数据验证/条件格式都不保留',
+        )
       if (isOds) {
         if (hasCharts) lost.push('ODS 暂不含图表')
+        if (hasSide) lost.push('ODS 暂不含批注与超链接')
         if (hasRules) lost.push('ODS 暂不含筛选、数据验证与条件格式')
       }
       const notes = [...lost, ...writeNotes]

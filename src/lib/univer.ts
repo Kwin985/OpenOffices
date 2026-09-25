@@ -7,6 +7,8 @@ import { UniverSheetsConditionalFormattingPreset } from '@univerjs/presets/prese
 import { UniverSheetsDataValidationPreset } from '@univerjs/presets/preset-sheets-data-validation'
 import { UniverSheetsFindReplacePreset } from '@univerjs/presets/preset-sheets-find-replace'
 import { UniverSheetsDrawingPreset } from '@univerjs/presets/preset-sheets-drawing'
+import { UniverSheetsNotePreset } from '@univerjs/presets/preset-sheets-note'
+import { UniverSheetsHyperLinkPreset } from '@univerjs/presets/preset-sheets-hyper-link'
 import UniverPresetSheetsCoreZhCN from '@univerjs/presets/preset-sheets-core/locales/zh-CN'
 import UniverPresetSheetsFilterZhCN from '@univerjs/presets/preset-sheets-filter/locales/zh-CN'
 import UniverPresetSheetsSortZhCN from '@univerjs/presets/preset-sheets-sort/locales/zh-CN'
@@ -14,6 +16,9 @@ import UniverPresetSheetsConditionalFormattingZhCN from '@univerjs/presets/prese
 import UniverPresetSheetsDataValidationZhCN from '@univerjs/presets/preset-sheets-data-validation/locales/zh-CN'
 import UniverPresetSheetsFindReplaceZhCN from '@univerjs/presets/preset-sheets-find-replace/locales/zh-CN'
 import UniverPresetSheetsDrawingZhCN from '@univerjs/presets/preset-sheets-drawing/locales/zh-CN'
+import UniverPresetSheetsNoteZhCN from '@univerjs/presets/preset-sheets-note/locales/zh-CN'
+import UniverPresetSheetsHyperLinkZhCN from '@univerjs/presets/preset-sheets-hyper-link/locales/zh-CN'
+import { openUrl } from '@tauri-apps/plugin-opener'
 import '@univerjs/presets/lib/styles/preset-sheets-core.css'
 import '@univerjs/presets/lib/styles/preset-sheets-filter.css'
 import '@univerjs/presets/lib/styles/preset-sheets-sort.css'
@@ -21,6 +26,8 @@ import '@univerjs/presets/lib/styles/preset-sheets-conditional-formatting.css'
 import '@univerjs/presets/lib/styles/preset-sheets-data-validation.css'
 import '@univerjs/presets/lib/styles/preset-sheets-find-replace.css'
 import '@univerjs/presets/lib/styles/preset-sheets-drawing.css'
+import '@univerjs/presets/lib/styles/preset-sheets-note.css'
+import '@univerjs/presets/lib/styles/preset-sheets-hyper-link.css'
 
 export interface SheetApp {
   univer: Univer
@@ -39,6 +46,8 @@ export function createSheetApp(container: HTMLElement, worker: Worker): SheetApp
         UniverPresetSheetsDataValidationZhCN,
         UniverPresetSheetsFindReplaceZhCN,
         UniverPresetSheetsDrawingZhCN,
+        UniverPresetSheetsNoteZhCN,
+        UniverPresetSheetsHyperLinkZhCN,
       ),
     },
     presets: [
@@ -52,6 +61,15 @@ export function createSheetApp(container: HTMLElement, worker: Worker): SheetApp
       UniverSheetsDataValidationPreset(),
       UniverSheetsFindReplacePreset(),
       UniverSheetsDrawingPreset(),
+      UniverSheetsNotePreset(),
+      // 桌面上的 window.open 会开一个新 WebView 窗口，外部链接一律交给系统默认浏览器
+      UniverSheetsHyperLinkPreset({
+        urlHandler: {
+          navigateToOtherWebsite: (url) => {
+            void openUrl(url).catch(() => {})
+          },
+        },
+      }),
     ],
   })
   if (import.meta.env.DEV) {

@@ -2,6 +2,7 @@ mod csv;
 mod pdf;
 mod ods;
 mod xlsx;
+mod xlsx_cell_side;
 mod xlsx_chart;
 mod xlsx_rules;
 mod xlsx_style;
