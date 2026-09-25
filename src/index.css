@@ -1982,6 +1982,13 @@ button {
     display: none;
   }
 
+  /* 屏幕上的 900px 打字区纯属编辑辅助，纸上要的是正文本身：
+     矮纸（横向 210mm 高、A5、自定义短页）的可印高度不足 900px，
+     这块空的高度会把正文尾巴顶到下一页，凭空多出一整页空白 */
+  .doc-content {
+    min-height: 0 !important;
+  }
+
   .doc-page-break {
     break-after: page;
     border-top: none;

@@ -76,6 +76,19 @@ pub async fn export_pdf(
     }
 }
 
+/// 纸张写法换算：调用方传的是"想要的纸面尺寸"（横向就宽>高），这里**一次性**折成 PrintSettings 的语义。
+/// WebView2 把 PageWidth/PageHeight 当**竖版纸**的两条边长，转置完全由 Orientation 负责——
+/// 本机实测：照字面传 13.335×7.5（不论 Orientation 给什么）得 MediaBox 540×960，幻灯片被压成纸中间一条横带。
+/// 这条换算只在此处发生一次，前端三条链路都不自己换位。
+#[cfg_attr(not(windows), allow(dead_code))]
+fn page_box(w_in: f64, h_in: f64) -> (f64, f64, bool) {
+    if w_in > h_in {
+        (h_in, w_in, true)
+    } else {
+        (w_in, h_in, false)
+    }
+}
+
 #[cfg(windows)]
 unsafe fn kick_print(
     webview: tauri::webview::PlatformWebview,
@@ -96,45 +109,64 @@ unsafe fn kick_print(
     let wv7: ICoreWebView2_7 = wv.cast().map_err(|e| e.to_string())?;
     let env6: ICoreWebView2Environment6 = webview.environment().cast().map_err(|e| e.to_string())?;
     let settings = env6.CreatePrintSettings().map_err(|e| e.to_string())?;
-    let _ = || -> Result<(), String> {
-        // 失败即用默认设置（例如旧运行时不支持某项）
-        settings.SetShouldPrintBackgrounds(true).map_err(|e| e.to_string())?;
-        settings.SetShouldPrintHeaderAndFooter(false).map_err(|e| e.to_string())?;
-        match margins {
-            // 四边各自给定（幻灯片全出血传 0，文档传页面设置的 mm→英寸）
-            Some((top, right, bottom, left)) => {
-                settings.SetMarginTop(top).map_err(|e| e.to_string())?;
-                settings.SetMarginRight(right).map_err(|e| e.to_string())?;
-                settings.SetMarginBottom(bottom).map_err(|e| e.to_string())?;
-                settings.SetMarginLeft(left).map_err(|e| e.to_string())?;
-            }
-            None => {
-                settings.SetMarginTop(0.5).map_err(|e| e.to_string())?;
-                settings.SetMarginBottom(0.5).map_err(|e| e.to_string())?;
-                settings.SetMarginLeft(0.6).map_err(|e| e.to_string())?;
-                settings.SetMarginRight(0.6).map_err(|e| e.to_string())?;
-            }
+    // 纸张/边距/背景这几步失败一律原样报出：静默退成默认设置的后果是"导出成功但纸不对"，
+    // 而那种 PDF 在文件管理器里看着一切正常，只有逐页量人才发现内容压成了横带
+    settings
+        .SetShouldPrintBackgrounds(true)
+        .map_err(|e| format!("设置打印背景失败：{e}"))?;
+    settings
+        .SetShouldPrintHeaderAndFooter(false)
+        .map_err(|e| format!("设置页眉页脚失败：{e}"))?;
+    match margins {
+        // 四边各自给定（幻灯片全出血传 0，文档传页面设置的 mm→英寸）
+        Some((top, right, bottom, left)) => {
+            settings
+                .SetMarginTop(top)
+                .map_err(|e| format!("设置上边距失败：{e}"))?;
+            settings
+                .SetMarginRight(right)
+                .map_err(|e| format!("设置右边距失败：{e}"))?;
+            settings
+                .SetMarginBottom(bottom)
+                .map_err(|e| format!("设置下边距失败：{e}"))?;
+            settings
+                .SetMarginLeft(left)
+                .map_err(|e| format!("设置左边距失败：{e}"))?;
         }
-        // CSS @page size 在 PrintToPdf 里定不了纸张，须显式给宽高（英寸）。
-        // PageWidth/Height 语义是"纵向纸"的边长，Orientation 再整体转置，故横向要先交换。
-        if let Some((w, h)) = page {
-            let landscape = w > h;
+        None => {
             settings
-                .SetPageWidth(if landscape { h } else { w })
-                .map_err(|e| e.to_string())?;
+                .SetMarginTop(0.5)
+                .map_err(|e| format!("设置上边距失败：{e}"))?;
             settings
-                .SetPageHeight(if landscape { w } else { h })
-                .map_err(|e| e.to_string())?;
+                .SetMarginBottom(0.5)
+                .map_err(|e| format!("设置下边距失败：{e}"))?;
             settings
-                .SetOrientation(if landscape {
-                    COREWEBVIEW2_PRINT_ORIENTATION_LANDSCAPE
-                } else {
-                    COREWEBVIEW2_PRINT_ORIENTATION_PORTRAIT
-                })
-                .map_err(|e| e.to_string())?;
+                .SetMarginLeft(0.6)
+                .map_err(|e| format!("设置左边距失败：{e}"))?;
+            settings
+                .SetMarginRight(0.6)
+                .map_err(|e| format!("设置右边距失败：{e}"))?;
         }
-        Ok(())
-    }();
+    }
+    // 纸张两处都说：CSS @page size 在 PrintToPdf 里**是算数的**（实测：文档那份常驻 head 的 @page
+    // 会决定下一次打印作业用纸），所以覆盖层链路自己写一份 @page（lib/pdfprint.ts 的 ownPageRule），
+    // 这里再按同一组数显式给 PrintSettings，两边不许留空白给对方猜
+    if let Some((w, h)) = page {
+        let (pw, ph, landscape) = page_box(w, h);
+        settings
+            .SetPageWidth(pw)
+            .map_err(|e| format!("设置纸宽失败：{e}"))?;
+        settings
+            .SetPageHeight(ph)
+            .map_err(|e| format!("设置纸高失败：{e}"))?;
+        settings
+            .SetOrientation(if landscape {
+                COREWEBVIEW2_PRINT_ORIENTATION_LANDSCAPE
+            } else {
+                COREWEBVIEW2_PRINT_ORIENTATION_PORTRAIT
+            })
+            .map_err(|e| format!("设置纸张方向失败：{e}"))?;
+    }
     let wide: Vec<u16> = path.encode_utf16().chain(std::iter::once(0)).collect();
     let handler = PrintToPdfCompletedHandler::create(Box::new(move |status, ok| {
         let msg = if status.is_ok() && ok {
@@ -152,7 +184,25 @@ unsafe fn kick_print(
 
 #[cfg(test)]
 mod tests {
-    use super::read_range_sync;
+    use super::{page_box, read_range_sync};
+
+    // 纸面尺寸 → PrintSettings：宽>高必须折成"短边当宽 + LANDSCAPE"，
+    // 因为 WebView2 把 PageWidth/Height 当竖版边长，照字面传会得竖版纸（实测 MediaBox 540×960）
+    #[test]
+    fn landscape_folds_to_short_edge_plus_orientation() {
+        // 演示的 16:9（13.335×7.5 英寸）与表格的 A4 横向
+        assert_eq!(page_box(13.335, 7.5), (7.5, 13.335, true));
+        assert_eq!(page_box(11.69, 8.27), (8.27, 11.69, true));
+    }
+
+    #[test]
+    fn portrait_and_square_stay_put() {
+        // 文档 A4 竖版一字不动；等边不算横向（别让一枚四舍五入把方向翻了）
+        assert_eq!(page_box(8.27, 11.69), (8.27, 11.69, false));
+        assert_eq!(page_box(5.0, 5.0), (5.0, 5.0, false));
+        // 宽只高出一点点也是另一种纸
+        assert_eq!(page_box(8.28, 8.27), (8.27, 8.28, true));
+    }
 
     fn tmp_path(tag: &str) -> String {
         std::env::temp_dir()

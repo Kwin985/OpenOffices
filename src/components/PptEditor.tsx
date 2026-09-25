@@ -246,7 +246,7 @@ function PptEditor({ tab }: Props) {
     )
     try {
       await exportPdfWithOverlay(path, box, {
-        pageStyle: '@page{ margin: 0; }',
+        // 全出血：边距 0 由 pdfprint 同时写进 CSS @page 与 PrintSettings，两通道同一组数
         marginsInches: 0,
         pageSizeInches: [13.335, 7.5], // 338.7×190.5mm，正好容纳 1280×720px 幻灯片
       })

@@ -1,21 +1,68 @@
 // 打印导出公共链路：把任意 DOM 作为“打印覆盖层”挂到 body，临时注入打印样式
-// （放开外壳视口裁剪、打印时只留覆盖层、纸张尺寸走 Rust 侧 PrintSettings），
+// （放开外壳视口裁剪、打印时只留覆盖层、纸张/边距由这份作业自己声明完整），
 // 调 WebView2 PrintToPdf 落盘后清理。
 import { invoke } from '@tauri-apps/api/core'
 
 export interface PrintOpts {
-  /** 追加的打印专用 CSS，通常是 @page{margin:…}；纸张尺寸请传 pageSizeInches */
+  /** 追加的打印专用 CSS（会排在本次作业自己那份 @page 之后）；纸张尺寸请传 pageSizeInches */
   pageStyle?: string
   /** 页边距（英寸），四边同值；要逐边不同请传 marginsSides */
   marginsInches?: number
-  /** 四边页边距（英寸，top/right/bottom/left）；PrintSettings 的边距优先于 CSS @page margin */
+  /** 四边页边距（英寸，top/right/bottom/left）；CSS @page 与 PrintSettings 都按这组数说 */
   marginsSides?: [number, number, number, number]
-  /** 纸张宽高（英寸）；@page size 在 PrintToPdf 里不可靠，须显式指定 */
+  /** 最终纸面宽高（英寸）——要横向就传宽>高，别再自己换位：
+   *  "竖版边长 + Orientation 转置"这套换算只在 Rust 侧做一次，这里同时照写成 CSS @page size */
   pageSizeInches?: [number, number]
 }
 
 async function twoFrames(): Promise<void> {
   await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(() => r(null))))
+}
+
+/** 边距的兜底默认与 Rust 侧 PrintSettings 的 None 分支同一套数；这里显式算出来，
+ *  好让 CSS @page 与 PrintSettings 说同一句话（不去禁用别人的样式表：一张 <style> 里既有 @page
+ *  也有正文样式，整张禁用会把打印样式一起带走——实测演示会印成无底色的 1 页） */
+const DEFAULT_MARGINS: [number, number, number, number] = [0.5, 0.6, 0.5, 0.6]
+
+export function printMarginsInches(opts: PrintOpts): [number, number, number, number] {
+  if (opts.marginsSides) return opts.marginsSides
+  if (opts.marginsInches !== undefined) {
+    const m = opts.marginsInches
+    return [m, m, m, m]
+  }
+  return DEFAULT_MARGINS
+}
+
+/** 空白所有页眉页脚位：文档标签那份 @page 带着 @top-center/@bottom-center 的页眉页码，
+ *  它和我们各自的 @page 块会按文档序合并，后写的说话——所以这里逐个位复位成 normal */
+const PAGE_BOXES = [
+  '@top-left',
+  '@top-center',
+  '@top-right',
+  '@top-left-corner',
+  '@top-right-corner',
+  '@bottom-left',
+  '@bottom-center',
+  '@bottom-right',
+  '@bottom-left-corner',
+  '@bottom-right-corner',
+  '@left-top',
+  '@left-middle',
+  '@left-bottom',
+  '@right-top',
+  '@right-middle',
+  '@right-bottom',
+]
+
+/** 本次打印作业的 @page：纸张、边距、页眉页脚位全都自己说一遍，不吃别人留在 head 里的那份。
+ *  实测（WebView2 150）：导过一次 A4 竖版文档后紧接着导演示，会得到 MediaBox 540×960 的**竖版纸**
+ *  ——文档那份 @page 常驻 head（#oo-page-rule 还要给页眉页脚用），PrintToPdf 连它的 size 一起认，
+ *  幻灯片就被压成纸中间一条带。 */
+export function ownPageRule(opts: PrintOpts): string {
+  const m = printMarginsInches(opts)
+  const size = opts.pageSizeInches ? `size:${opts.pageSizeInches[0]}in ${opts.pageSizeInches[1]}in;` : ''
+  const boxes = PAGE_BOXES.map((b) => `${b}{content:normal;}`).join('')
+  return `@page{ ${size} margin:${m[0]}in ${m[1]}in ${m[2]}in ${m[3]}in; ${boxes} }`
 }
 
 // 等待覆盖层内所有图片解码完成，避免 PDF 丢图
@@ -53,6 +100,7 @@ export async function exportPdfWithOverlay(
       /* 豁免 index.css 的 body *{visibility:hidden} 文档打印规则 */
       #oof-print-host, #oof-print-host *{ visibility: visible !important; }
     }
+    ${ownPageRule(opts)}
     ${opts.pageStyle ?? ''}
   `
   document.head.appendChild(style)
@@ -61,9 +109,9 @@ export async function exportPdfWithOverlay(
     await twoFrames()
     await invoke('export_pdf', {
       filePath,
-      margins:
-        opts.marginsSides ??
-        (opts.marginsInches === undefined ? null : [opts.marginsInches, opts.marginsInches, opts.marginsInches, opts.marginsInches]),
+      // 边距两处同说同一组数：CSS @page（上面那份）与 PrintSettings。
+      // 不传 null 让 Rust 兜默认，否则两边说的不是一套数，谁赢就成了运气
+      margins: printMarginsInches(opts),
       page: opts.pageSizeInches ?? null,
     })
   } finally {

@@ -222,7 +222,9 @@ function DocEditor({ tab }: Props) {
   }
 
   // 打印 @page 跟随页面设置；页眉/页脚/页码走 @page margin box，Chromium 会逐页重绘
-  // （PrintToPdf 忽略 CSS @page size/margin，纸张与四边距另由 export_pdf 的 PrintSettings 决定）
+  // （这份规则常驻 head：它既是本页打印的纸张声明，也是页眉页脚的宿主。代价是 PrintToPdf 真的会认
+  //  CSS @page size（实测 WebView2 150），导过一次文档再导演示会得到文档那张竖版纸——
+  //  所以覆盖层链路要自己把 @page 说全并复位 margin box，见 lib/pdfprint.ts 的 ownPageRule）
   useEffect(() => {
     let el = document.getElementById('oo-page-rule') as HTMLStyleElement | null
     if (!el) {
@@ -479,7 +481,7 @@ function DocEditor({ tab }: Props) {
   // WebView2 原生 PrintToPdf：主窗口按 @media print 样式矢量落盘，需当前文档标签处于激活态
   const exportPdfTo = async (path: string) => {
     setStatus('正在生成 PDF…')
-    // 纸张与四边距走 PrintSettings（CSS @page 在 PrintToPdf 下不生效），与屏幕所见一致
+    // 纸张与四边距两处同说：PrintSettings（本函数）+ CSS @page（上面那份常驻规则），值都从 eff 来
     const mm2in = (v: number) => v / 25.4
     await invoke('export_pdf', {
       filePath: path,

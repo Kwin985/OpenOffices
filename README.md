@@ -1269,9 +1269,10 @@ CSV、txt…）。这一轮把这层套娃拆到能读到底为止——读不�
   用 `indexOf('255')===0` 判"高亮还画着"会把成功判成失败——判"没画"只能按 `rgba(0, 0, 0, 0)` 正面比；
   ④ 打印仿真的复位要给 `{media:''}`，传空对象不等于取消仿真
 - **顺手量到一条先前就存在、本轮不修的缺陷**：演示导出的 PDF 纸张是**竖版** `MediaBox [0 0 540 960]`
-  （7.5×13.33 英寸），幻灯片被压成纸中间的一条横带。原因是 `PptEditor` 传的 `pageSizeInches:[13.335,7.5]`
-  已经是横向，而 `src-tauri/src/pdf.rs` 见 `w > h` 又按"先交换边长再转置 Orientation"处理了一遍——**转两圈
-  回到竖版**。修复前后的两份产物逐字节同一毛病，故与本轮改动无关，已按未勾项写进路线图而不是顺手改掉
+  （7.5×13.33 英寸），幻灯片被压成纸中间的一条横带。当时按 `pageSizeInches:[13.335,7.5]` 与
+  `src-tauri/src/pdf.rs` 的"交换边长 + 转置 Orientation"换算推测成**转了两圈**，按未勾项写进路线图。
+  **v0.50 的单变量探针否掉了这个归因**：那段换算本来就是对的（`page_box(13.335,7.5)` 只换位一次），
+  真实原因是文档标签常驻 `head` 的那份 `@page` 串到了下一次打印作业上——症状是真的，猜的原因是错的
 - **验证（四腿）**：**结构测试 28 断言**（打印段两个选择器都在 + 八枚调色板逐条 + 段序必须在暗色段之后 +
   暗色段"能上纸的选择器"零字面底色 + 两条 load-bearing 的 `var()` 链路点名（`.doc-page`→`--panel`、
   `body`→`--text`）+ `print-color-adjust:exact` 与 `pdfprint.ts` 白底兜底不许被顶掉 + 自测假例必须打 FAIL）；
@@ -1279,6 +1280,47 @@ CSV、txt…）。这一轮把这层套娃拆到能读到底为止——读不�
   对照 + 屏幕态与打印仿真态逐属性对照，共 6 份 PDF 与 2 份屏幕快照）；**`cargo test --lib` 57 通过**
   （本轮 Rust 零改动，四条腿里它管的是"没碰坏导出"而不是"碰了什么"）；**tsc + build 绿**（改动只有
   `src/index.css` 一个文件：+40 −12）
+
+## 一张纸只说一次话：纸张方向契约与 `@page` 串台（v0.50）
+
+- **契约先钉死**：`export_pdf` 的 `page` 参数**一律是"想要的纸面尺寸"（要横向就宽>高）**，三条导出链路
+  都不许自己换位。WebView2 的 `PrintSettings` 把 `PageWidth/PageHeight` 当作**竖版纸的两条边长**，
+  转置完全由 `Orientation` 负责，所以"短边当宽 + LANDSCAPE"这次换算**只在 `src-tauri/src/pdf.rs` 的
+  `page_box()` 发生一次**（本机实测：照字面传 13.335×7.5 得到的 `MediaBox` 是 540×960，幻灯片压成横带）
+- **设置失败不再静默**：`kick_print` 里背景/页眉页脚/四边距/纸宽纸高/方向五步全部 `map_err` 原样报出。
+  静默退默认设置的后果是"导出成功但纸不对"，而那种 PDF 在文件管理器里看着一切正常，只有逐页量人才发现
+- **v0.49 记下的那条未勾项是真缺陷，但归因是错的**：`page_box()` 没有转两圈。单变量探针（同一进程内依次跑）
+  量出来的是一条谁也没想到的通道——**上一次打印作业会污染下一次**：
+  ① 刷新后直接导演示 → `960×540`、底色占 `1.0`；② 演示→演示 → 干净；③ **导过一次 A4 竖版文档**再导演示
+  → `540×960`、底色只占 `0.34`；④ 摘掉 `head` 里那份 `#oo-page-rule` 再演 → 又回到 `960×540` / `1.0`。
+  元凶是 `DocEditor` **常驻** `document.head` 的 `@page`（它还要给页眉页脚用，标签关了也不移除），
+  而 PrintToPdf **真的会认 CSS `@page` 的 `size`**——这条直接推翻了 v0.33 记在代码注释里的"PrintToPdf 忽略
+  CSS `@page size/margin`"，注释按实证改掉了
+- **修法不是"管住别人"，而是"把自己说全"**：`lib/pdfprint.ts` 的每条覆盖层作业输出一条自己的
+  `@page{ size:…in …in; margin:…; @top-left…@right-bottom{content:normal;} }`（十六个页眉页脚位逐个复位，
+  因为文档那份 `@page` 的 margin box 会同住进别人的作业）。同一个 `head` 里两条 `@page` 按**文档序**合并、
+  后来者说话，而这份样式正是打印时最后追加的那枚。第一版实现走的是另一条路——遍历 `head` 里所有含
+  `@page` 字样的 `<style>` 并 `el.disabled = true`，**实测直接判负**：`index.css` 的注释里就写着
+  "@page margin box"，于是整张样式表被禁用，演示印成**一页无底色的裸文字**（`cover 0.063`、页数 2→1）。
+  一张表里既有要禁的也有要留的，禁整张就是拿别人的正文样式当代价
+- **边距也自说自话**：`printMarginsInches()` 把"没给边距"时的默认值明写在 TS 侧（`0.5/0.6/0.5/0.6` 英寸），
+  同一组数同时进 CSS `@page` 与 `PrintSettings`。以前是"前端传 `null` 让 Rust 兜底 + CSS 那份 @page 由别人留着"，
+  两边谁赢成了运气。演示的全出血因此不再需要自己写 `pageStyle:'@page{margin:0}'`
+- **矮纸不再凭空多一页**：`.doc-content` 在屏幕上有 `min-height:900px` 的打字区，而横向 A4 的可印高度只有
+  475px——正文尾巴被这块空高度顶到下一页，导出的 PDF 就是"一页正文 + 一页空白"。`@media print` 里补
+  `min-height:0 !important`（那是编辑辅助，不是内容），实测同一份正文：横向自定义纸 2 页 → **1 页**、
+  A5 矮纸同样 1 页，而 A4 长文仍按内容分 2 页、换 A5 变 3 页（分页由纸的可印高度决定，与空区无关）
+- **量"纸"只能量产物**：覆盖层宿主在非打印媒体下是 `display:none`，`getBoundingClientRect()` 读出 `0×0`
+  是**正确行为**，不是 bug——所以"幻灯片到底铺满了没有"只能从导出的 PDF 反推（pdf.js 画布数底色占比 +
+  墨迹包围盒 + 文本层判"页眉有没有串过来"），别拿 DOM 的几何当打印几何
+- **验证（四腿）**：结构测试 **18 断言**（边距三档来路 + `marginsInches:0` 不能被当成"没给" + 纸面/边距成对
+  出现在同一条 `@page` + 十六个 margin box 全复位 + 一次作业只输出一条 `@page` + 没给纸张就不声明 `size` +
+  自测假例必须打 FAIL）；**CDP 真机 44 断言全绿、页面异常 0 条**（三条链路各自的 `MediaBox`/无 `/Rotate`/
+  铺满比例，**以及按"先文档（带页眉页码）→ 演示 → 表格 → 再文档"的污染序列跑**：演示 `960×540` `cover 0.994`、
+  表格 `842×595` 左边距 `0.60in` 上边距 `0.55in`、文档的页眉没有出现在演示与表格的任何一页上、而文档自己
+  再导时页眉还在；临时样式与宿主用完清零、没有一份样式留在禁用态）；`cargo test --lib` **59 通过**
+  （含 `page_box` 两条新单测：横向折成"短边 + LANDSCAPE"、竖版与等边不换位、8.28×8.27 也算另一种纸）；
+  tsc + build 绿
 
 ## 性能（v0.3）
 
@@ -1336,13 +1378,13 @@ src-tauri/            Rust 后端
   src/xlsx_cell_side.rs 单元格两位邻居的双向（v0.48）：读侧 `read_cell_side` 另开一趟 zip 按表名对回**独立部件**——legacy `commentsN.xml`（`<authors>` 表 + `authorId` 下标、正文里那行「作者:」前缀只在认得出作者时剥）、threaded `threadedComments/*.xml`（作者查 `persons/person.xml`，两种键名都收，回复并进正文并记账）、两者的归一、气泡尺寸与常开来自 `vmlDrawing`（pt→px，默认那档 128×74 **归一回不声明**）、超链接的 `ref` 在 worksheet 而外部地址在其 rels（`TargetMode="External"`）、表内跳转才是 `location` 字面；写侧 `write_sheet_side`（链接先落文本再补普通格，无 scheme 的目标按 `file:` 补试；`Note` 带作者/尺寸/常开，作者超 52 字只丢作者；`set_default_note_author("")` 让"没人署过"真是空串）+ `save_workbook`（**rust_xlsxwriter 的 `<authors>` 按名字排序而 `authorId` 按格子序登记**，两序不一致时按载荷数出来的那张表重排 `<authors>`，多重集或 `<comment ref>` 文档序对不上就宁可不改并记账）；认不出的形状一律记账
   src/xlsx_chart.rs   zip + quick-xml 直读 chartN.xml + drawing 锚点，系列值按实时网格解析；has_charts 只做 zip 文件名嗅探
   src/ods.rs          ODS 双向：write_ods（async 外壳 + write_ods_sync，共用 xlsx 载荷 → ODF zip，样式/尺寸去重与合并、冻结 settings.xml、公式 of:= 换算）+ read_ods_styles（直解边框/对齐/换行/列宽行高/字族/隐藏 collapse/重复单元格/合并跨度/公式 + settings.xml 冻结）+ **ODF 规则只记账不硬读**（content.xml 里有 `table:database-range`/`table:content-validations`/`table:conditional-format` 就说得出"暂未读入"，v0.48 起再加两枚 needle：格子的孩子 `office:annotation`（批注，作者的 `dc:creator` 也在里面）与行内 `text:a`（链接），自产物不许凭空记出一条账）
-  src/pdf.rs          export_pdf 命令：with_webview → WebView2 PrintToPdf（四边距英寸四元组 + 纸张宽高/朝向，cfg windows）；file_len + read_range（raw IPC 返回 Vec<u8>，async + spawn_blocking，供大 PDF 分段读）
+  src/pdf.rs          export_pdf 命令：with_webview → WebView2 PrintToPdf（四边距英寸四元组 + 纸张宽高/朝向，cfg windows）；**纸张换算是唯一的**：`page_box(w,h)` 把"想要的纸面尺寸"折成 PrintSettings 的"竖版边长 + Orientation"（v0.50，宽>高才转横向，等边不算横向），背景/页眉页脚/四边距/纸宽纸高/方向五步设置失败**一律原样报出**（静默退默认＝"导出成功但纸不对"）；file_len + read_range（raw IPC 返回 Vec<u8>，async + spawn_blocking，供大 PDF 分段读）
   src/lib.rs          OPEN_EXTS 与 argv 文件过滤纯函数、take_startup_files 命令、single-instance 文件转发；插件链只注册 updater 的 check 能力（前端仅授 `updater:allow-check`，下载与安装没接线）
   capabilities/       dialog + fs 权限与路径作用域 + updater:allow-check（只给检查，下载/安装未接线）
 src/                  React 前端
   store.ts            标签页 / 最近文件 / 主题（zustand）
   App.tsx             全局快捷键、拖拽打开、文件关联打开（启动 argv + 单实例转发）、关闭确认、懒加载路由
-  index.css           外壳样式、两套主题，以及**纸面与屏幕主题的断钩处**（v0.49）：屏幕上的颜色一律先落进 CSS 变量（`--bg/--panel/--text/--text-2/--border/--accent/--code-bg/--quote-bg`），`@media print` 里一段同时命中 `:root` 与 `:root[data-theme='dark']` 的规则把 `color-scheme` 压回 `light` 并重声明整套纸面调色板（**段必须排在暗色段之后**，同特异度靠源序说话），顺手清掉屏幕辅助（`.fr-hit`/`.fr-active` 的查找命中高亮）；内容自己声明的字面色（段落底纹、单元格底色、幻灯片背景）不经过这条规则，所以照旧上纸
+  index.css           外壳样式、两套主题，以及**纸面与屏幕主题的断钩处**（v0.49）：屏幕上的颜色一律先落进 CSS 变量（`--bg/--panel/--text/--text-2/--border/--accent/--code-bg/--quote-bg`），`@media print` 里一段同时命中 `:root` 与 `:root[data-theme='dark']` 的规则把 `color-scheme` 压回 `light` 并重声明整套纸面调色板（**段必须排在暗色段之后**，同特异度靠源序说话），顺手清掉屏幕辅助（`.fr-hit`/`.fr-active` 的查找命中高亮）；内容自己声明的字面色（段落底纹、单元格底色、幻灯片背景）不经过这条规则，所以照旧上纸；v0.50 又在这里补了 `.doc-content{min-height:0 !important}`——屏幕上那 900px 是打字辅助，矮纸（横向/A5）的可印高度不足它，正文尾巴会被顶成凭空多出的空白一页
   lib/univer.ts       Univer 实例工厂（公式 worker + 八个社区预设：核心/筛选/排序/条件格式/数据验证/查找替换/绘图 + **批注与超链接**（v0.48，超链接的 `urlHandler` 把外链交给系统默认浏览器——桌面上 `window.open` 会开出一个新 WebView 窗口））
   lib/univer-io.ts    xlsx 数据+样式（粗斜/颜色/字族/边框/对齐/换行/数字格式）/合并/图表/列宽行高/隐藏行列/冻结窗格 ↔ Univer 快照 转换（样式去重注册）；**规则走侧通道**——取完单元格再按 sheetId 把 `extractRules(resources)` 的结果对回每张表，`warnings` 由 `aggregateNotes` 聚合；**批注与链接同一条侧通道**（v0.48）：取侧交给 `extractCellSide`，放侧把 `resources` 写成 `[noteResourceOf(...)]`（实测裸写就能被门面读回）、链接写成带 `customRanges` 的富文本格（**公式格上那枚先记账不硬放**，只有链接没内容的格子也要占一格）；`payloadToWorkbook` 因此多收一个 `accounts` 出参
   lib/sheet-rules.ts  三类规则的前端桥（v0.46）：`extractRules` 从工作簿快照的 `resources` 里按表取规则（Univer 三个插件各写各的 JSON，条件格式按快照原序交回=高优先级在前），`applySheetRules` 经门面放回界面（**条件格式倒着插**，因为这一版门面按插入顺序的倒序吐规则；builder 无 `setRanges`，作用区在 `build()` 之后挂产物），`buildDataValidation` 只建门面表达得出的四类 + custom；归一化（`normColor` 收 rgb/#、`normDateValue` 收 ISO、`listOf` 拆 JSON 数组串与区域引用、`neg === pos` 的负色丢掉）与 `aggregateNotes`（同类收成"文案×N"）都在这，`textLength`/`time`/`any` 这类摆不进模型的退成边界账而不是硬建一条
@@ -1366,7 +1408,7 @@ src/                  React 前端
   lib/find-replace.ts 查找/替换 ProseMirror 插件：按文本块匹配存 state、装饰高亮、findNext/findPrev/replaceOne/replaceAll 命令（命中上限 FR_HIT_CAP=2000 截断并标 `N+`）
   lib/templates.ts    首页模板注册表与纯函数 seed：11 个模板（公文/会议纪要/周报 → ProseMirror JSON+meta，记账表/库存清单 → WorkbookPayload 含公式冻结，六套演示配色 → Deck）
   lib/ppt.ts          .opd 幻灯片数据模型（版式/主题/序列化）
-  lib/pdfprint.ts     打印覆盖层：挂 DOM → 注入打印样式 → export_pdf → 清理；`@media print` 里给 `html,body` 兜白底黑字（v0.47：外壳的 `body{background:var(--bg)}` 曾把整页铺成屏幕的浅灰蓝，三种导出都中招；元素自己声明的颜色不受影响）
+  lib/pdfprint.ts     打印覆盖层：挂 DOM → 注入打印样式 → export_pdf → 清理；`@media print` 里给 `html,body` 兜白底黑字（v0.47：外壳的 `body{background:var(--bg)}` 曾把整页铺成屏幕的浅灰蓝，三种导出都中招；元素自己声明的颜色不受影响）；**每条作业把自己那份 `@page` 说全**（v0.50：`ownPageRule()` 输出 `size` + 四边 `margin` + 十六个 margin box 复位，`printMarginsInches()` 让 CSS 与 PrintSettings 吃同一组数）——PrintToPdf 会认 CSS `@page size`，而文档标签的 `#oo-page-rule` 常驻 `head`，不禁掉别人的说法就会被"上一次打印"污染（实测：导完文档再导演示得到竖版纸 540×960、幻灯片只占 0.34）
   lib/sheet-cf-print.ts  条件格式的**打印侧求值**（v0.47，纯函数零 DOM）：`evalSheetCondFormats(sheet)` 按载荷数组序（=优先级）吃规则，产出 `Map<'行,列', CfPatch>` 与账目——`cell`（number/text/duplicate/unique/rank/average，含"前 N 项算并列""空串条件=格为空""数字与文本归一比较"）、`colorScale`（分位数线性插值 + 越界截最近档）、`dataBar`（0 轴起点、负色、渐变/实色、`showValue=false` 收成 `hideValue`）；`iconSet`/公式判定/日期区间/缺样式的一律**只记账不落笔**；`PRINT_MAX_ROWS`/`PRINT_MAX_COLS` 用来裁 `A:A` 这类整列引用，否则一条规则循环百万格
   lib/sheet-print.ts  WorkbookPayload → 打印 HTML 网格（值/边框/对齐/换行/数字格式/字族/合并/列宽行高/跳过隐藏行列/**跳过被筛掉的行（`filter.filteredOut` 与 hiddenRows 并列）**/**条件格式算出的底色·字色·粗斜·下划线·删除线·数据条（v0.47）**/**图表位图按锚点格绝对覆盖、锚点撑开网格边界（v0.47）**/分页/截断）；返回 `{html, notes}`——页面上只印"这份打印件缺了什么"，其余账目交回调用方进状态栏
   lib/pptx-export.ts  Deck → pptx（pptxgenjs）
@@ -1392,7 +1434,7 @@ scripts/              copy-pdfjs-assets.mjs（dev/build 前复制 cmaps/标准�
 保真导入器抛错或拆不出块时回退 `mammoth 正文 + zip 直读页眉页脚/批注/sectPr`（v0.37）；`.odt` 走 `lib/odt.ts` 双向；
 保存按标签扩展名分流——新建文档存 `.odoc` JSON（含 meta）、`.odt` 与 `.docx` 标签各自格式原地写回（导出走 docx/odt 链路）。
 演示文件流：`pptx → JSZip 解包 OOXML → Deck 模型 → 编辑器`；保存为 `.opd` JSON 或经 pptxgenjs 导出 pptx。
-PDF 文件流：查看 `pdf 磁盘 → 小于 4MB 整本 readBytes / 大于 4MB 经 file_len + read_range 分段喂给 pdf.js（首屏只取 64KB 文件头）→ pdfjs-dist（worker + canvas）`；标注 `选区高亮/便签/拖拽画的矩形·椭圆·直线·手绘 → 内存模型（rects[0] 包围盒 + polys 几何）→ Ctrl+S 时 pdf-lib 低层写 Annotation 字典回原文件`；文档导出 `@media print 排版（分栏/分页符/避免跨页折断）+ @page margin box 逐页页眉页脚页码 + 打印态纸面调色板（`color-scheme` 压回 light、主题色经变量换掉，v0.49）→ Rust export_pdf（PrintSettings 纸张与四边距）→ WebView2 PrintToPdf 落盘`；演示导出 `Deck → createRoot 离屏挂载 StaticSlide 分页 → 同上`；表格导出 `Univer 快照 → WorkbookPayload → lib/sheet-print.ts 自绘 HTML 网格 → 同上（canvas 抓不到故走数据侧重排）`；页面管理 `内存标注先写回 → pdf-lib 旋转/删除/提取/合并/拆分覆盖写回 → 重载并从 /Annots 重新导入标注（旋转页坐标按 /Rotate 经 pdf-geo.ts 换算）`。
+PDF 文件流：查看 `pdf 磁盘 → 小于 4MB 整本 readBytes / 大于 4MB 经 file_len + read_range 分段喂给 pdf.js（首屏只取 64KB 文件头）→ pdfjs-dist（worker + canvas）`；标注 `选区高亮/便签/拖拽画的矩形·椭圆·直线·手绘 → 内存模型（rects[0] 包围盒 + polys 几何）→ Ctrl+S 时 pdf-lib 低层写 Annotation 字典回原文件`；文档导出 `@media print 排版（分栏/分页符/避免跨页折断）+ @page margin box 逐页页眉页脚页码 + 打印态纸面调色板（`color-scheme` 压回 light、主题色经变量换掉，v0.49）→ Rust export_pdf（PrintSettings 纸张与四边距；CSS `@page` 也真的说话，所以每条作业自己声明完整，见 v0.50）→ WebView2 PrintToPdf 落盘`；演示导出 `Deck → createRoot 离屏挂载 StaticSlide 分页 → 同上`；表格导出 `Univer 快照 → WorkbookPayload → lib/sheet-print.ts 自绘 HTML 网格 → 同上（canvas 抓不到故走数据侧重排）`；页面管理 `内存标注先写回 → pdf-lib 旋转/删除/提取/合并/拆分覆盖写回 → 重载并从 /Annots 重新导入标注（旋转页坐标按 /Rotate 经 pdf-geo.ts 换算）`。
 
 ## 开发
 
@@ -1476,10 +1518,11 @@ cargo check        # Rust 后端检查（在 src-tauri 下）
       真元素上；治法是"屏幕色必须先穿过一枚 CSS 变量"+ 一段排在暗色段之后的 `@media print` 调色板，
       内容自己声明的字面色（段落底纹 / 单元格底色 / 幻灯片背景）照旧上纸，查找命中高亮不上纸。
       判据：三链路 × 暗/亮各导一份 PDF，直方图**总变差 0**＝换主题不改纸；文档 96.6%→0.4%、表格 31.6%→0.1%）
-- [ ] 演示导出 PDF 的纸张方向：`MediaBox` 是**竖版** `[0 0 540 960]`，幻灯片被压成纸中间一条横带——
-      `PptEditor` 传的 `pageSizeInches:[13.335,7.5]` 已是横向，而 `src-tauri/src/pdf.rs` 见 `w > h` 又
-      "交换边长 + 转置 Orientation"处理了一遍（转两圈回到竖版）。v0.49 数像素时量到，与主题修复无关，
-      如实记下不当轮顺手改
+- [x] 导出保真：**一张纸只说一次话**（`export_pdf` 的 `page` 契约＝"想要的纸面尺寸"，"竖版边长 + Orientation
+      转置"只在 Rust 侧 `page_box()` 换算一次、五步设置失败一律原样报出；**@page 串台**——文档标签常驻 `head`
+      的那份 `@page` 会被下一次 PrintToPdf 连 `size` 与页眉页脚一起认走，实测"导完文档再导演示"得到竖版纸
+      `540×960`、幻灯片只剩 `0.34` 的一条带，治法是每条覆盖层作业把自己那份 `@page`（纸面 + 四边距 + 十六个
+      margin box 复位）说全，而不是禁用别人的样式表；矮纸的 `min-height:900px` 打字区不再把正文顶成凭空一页）
 - [ ] 自动更新：应用内**下载并安装**（要先决策：真实更新源托管在哪、`updater:allow-download`+`allow-install` 权限、
       以及"装完自动重启"的取舍——见 v0.45 一节末尾的接线清单）
 - [ ] macOS 打包（需签名/公证凭据）
