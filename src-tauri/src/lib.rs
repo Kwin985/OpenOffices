@@ -3,6 +3,7 @@ mod pdf;
 mod ods;
 mod xlsx;
 mod xlsx_chart;
+mod xlsx_rules;
 mod xlsx_style;
 
 use std::sync::Mutex;

@@ -1,6 +1,14 @@
 import { CellValueType, LocaleType } from '@univerjs/presets'
 import type { IWorkbookData, IWorksheetData, IObjectMatrixPrimitiveType, ICellData } from '@univerjs/presets'
-import type { BorderLine, CellBorder, CellStyle, MergeRange, WorkbookPayload } from './fs'
+import type {
+  BorderLine,
+  CellBorder,
+  CellStyle,
+  MergeRange,
+  SheetPayload,
+  WorkbookPayload,
+} from './fs'
+import { aggregateNotes, extractRules } from './sheet-rules'
 
 const MIN_ROWS = 100
 const MIN_COLS = 26
@@ -217,6 +225,7 @@ export function payloadToWorkbook(payload: WorkbookPayload, name: string): IWork
 
 export function workbookToPayload(data: IWorkbookData): WorkbookPayload {
   const sheets: WorkbookPayload['sheets'] = []
+  const bySheetId = new Map<string, SheetPayload>()
   const styleSource = (data.styles ?? {}) as Record<string, Record<string, unknown>>
   for (const sheetId of data.sheetOrder) {
     const sheet = data.sheets[sheetId]
@@ -285,7 +294,7 @@ export function workbookToPayload(data: IWorkbookData): WorkbookPayload {
     const rows = typeof fr.ySplit === 'number' ? fr.ySplit : 0
     const cols = typeof fr.xSplit === 'number' ? fr.xSplit : 0
     const freeze = rows > 0 || cols > 0 ? { rows, cols } : undefined
-    sheets.push({
+    const out: SheetPayload = {
       name: sheet.name ?? `Sheet${sheets.length + 1}`,
       cells,
       merges,
@@ -294,7 +303,20 @@ export function workbookToPayload(data: IWorkbookData): WorkbookPayload {
       ...(hiddenCols.length ? { hiddenCols } : {}),
       ...(hiddenRows.length ? { hiddenRows } : {}),
       ...(freeze ? { freeze } : {}),
-    })
+    }
+    sheets.push(out)
+    bySheetId.set(sheetId, out)
   }
-  return { sheets }
+  // 规则侧通道：筛选/数据验证/条件格式住在 resources 里（Univer 各插件自己序列化的一份），
+  // 快照的 sheet 对象上根本没有它们，所以取完单元格再按 sheetId 对回每张表
+  const { rules, notes } = extractRules((data as unknown as { resources?: unknown }).resources)
+  for (const [sheetId, rule] of rules) {
+    const payload = bySheetId.get(sheetId)
+    if (!payload) continue
+    if (rule.filter) payload.filter = rule.filter
+    if (rule.dataValidations) payload.dataValidations = rule.dataValidations
+    if (rule.condFormats) payload.condFormats = rule.condFormats
+  }
+  const warnings = aggregateNotes(notes)
+  return { sheets, ...(warnings.length ? { warnings } : {}) }
 }

@@ -543,6 +543,24 @@ pub fn read_ods_styles(path: &str) -> HashMap<String, SheetFmt> {
             _ => {}
         }
     }
+    // ODF 的三类规则住在 content.xml 里（筛选是表内的 table:database-range，数据验证与
+    // 条件格式是 automatic-styles 里的容器），LibreOffice 与 Excel 都照这个写法存。
+    // 我们暂不读它们，但"文件里确实有"这件事必须说得出——文案说的是整份文件，故账记在首表。
+    let mut missed: Vec<String> = Vec::new();
+    for (needle, note) in [
+        ("<table:database-range", "ODS 里的筛选设置暂未读入（被筛掉的行按隐藏行保留）"),
+        ("<table:content-validations", "ODS 里的数据验证暂未读入"),
+        ("<table:conditional-format", "ODS 里的条件格式暂未读入"),
+    ] {
+        if xml.contains(needle) {
+            missed.push(note.to_string());
+        }
+    }
+    if !missed.is_empty() {
+        if let Some(f) = order.first().and_then(|n| out.get_mut(n)) {
+            f.rules.notes.append(&mut missed);
+        }
+    }
     // 冻结窗格在 styles.xml 的 ViewSettings/Tables，map-entry 与 content 表序一一对应
     if let Some(sx) = read_entry(&mut zip, "styles.xml") {
         for (i, (rows, cols)) in parse_ods_freezes(&sx).into_iter().enumerate() {
@@ -1221,6 +1239,7 @@ mod tests {
                 ],
                 ..Default::default()
             }],
+            ..Default::default()
         };
         let path = std::env::temp_dir()
             .join(format!("openoffices-ods-f-{}.ods", std::process::id()))
@@ -1268,6 +1287,7 @@ mod tests {
                 charts: vec![],
                 ..Default::default()
             }],
+            ..Default::default()
         };
         let path = std::env::temp_dir()
             .join(format!("openoffices-ods-{}.ods", std::process::id()))
@@ -1309,6 +1329,7 @@ mod tests {
                 freeze: Some(Freeze { rows: 1, cols: 0 }),
                 ..Default::default()
             }],
+            ..Default::default()
         };
         let path = std::env::temp_dir()
             .join(format!("openoffices-ods-hid-{}.ods", std::process::id()))
@@ -1366,6 +1387,7 @@ mod tests {
                 charts: vec![],
                 ..Default::default()
             }],
+            ..Default::default()
         };
         let (content, _styles) = ods_xml(&wb);
         assert!(content.contains("fo:font-weight=\"bold\""), "加粗样式");
@@ -1458,6 +1480,7 @@ mod tests {
                 charts: vec![],
                 ..Default::default()
             }],
+            ..Default::default()
         };
         let path = std::env::temp_dir()
             .join(format!("openoffices-odsfmt-{}.ods", std::process::id()))
@@ -1520,6 +1543,7 @@ mod tests {
                 row_heights: [(0u32, 32.0)].into_iter().collect(),
                 ..Default::default()
             }],
+            ..Default::default()
         };
         let path = std::env::temp_dir()
             .join(format!("openoffices-odsdim-{}.ods", std::process::id()))
@@ -1541,6 +1565,92 @@ mod tests {
         assert_eq!(ff.as_deref(), Some("宋体"), "字体族经 style:font-name 读回");
     }
 
+    /// 只换 content.xml 的测试件：把 ODF 规则的形状摆进本应用写出的那一份里
+    fn zip_ods(content: &str, styles: &str) -> Vec<u8> {
+        let mut zw = ZipWriter::new(Cursor::new(Vec::new()));
+        let stored = SimpleFileOptions::default().compression_method(CompressionMethod::Stored);
+        let deflated = SimpleFileOptions::default().compression_method(CompressionMethod::Deflated);
+        zw.start_file("mimetype", stored).unwrap();
+        zw.write_all(b"application/vnd.oasis.opendocument.spreadsheet")
+            .unwrap();
+        zw.start_file("META-INF/manifest.xml", deflated).unwrap();
+        zw.write_all(manifest_xml().as_bytes()).unwrap();
+        zw.start_file("content.xml", deflated).unwrap();
+        zw.write_all(content.as_bytes()).unwrap();
+        zw.start_file("styles.xml", deflated).unwrap();
+        zw.write_all(styles.as_bytes()).unwrap();
+        zw.finish().unwrap().into_inner()
+    }
+
+    #[test]
+    fn ods_rule_boundaries_are_accounted() {
+        let wb = WorkbookPayload {
+            sheets: vec![SheetPayload {
+                name: "数据".into(),
+                cells: vec![
+                    cell(0, 0, json!("月份")),
+                    cell(0, 1, json!("销量")),
+                    cell(1, 0, json!("一月")),
+                    cell(1, 1, json!(10)),
+                ],
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+
+        // 对照组：我们自己写出的 ODS 不该凭空记出规则账（每次都记等于把状态栏变成噪音）
+        let own = std::env::temp_dir()
+            .join(format!("openoffices-ods-own-{}.ods", std::process::id()))
+            .to_string_lossy()
+            .to_string();
+        std::fs::write(&own, ods_bytes(&wb).expect("ods bytes")).expect("write");
+        let back = crate::xlsx::read_xlsx_sync(own.clone()).expect("读回失败");
+        std::fs::remove_file(&own).ok();
+        assert!(back.warnings.is_empty(), "自产物不该有规则账: {:?}", back.warnings);
+
+        // 别人写的件：三样都在，打开这一趟就要逐样说得出，而不是安静地少给
+        let (mut content, styles) = ods_xml(&wb);
+        content = content.replace(
+            "</office:automatic-styles>",
+            "<table:conditional-format table:target-sheet=\".\" table:target-range-address=\"数据.A1:数据.B2\">\
+             <table:condition table:name=\"c1\" table:apply-style-name=\"ce1\" table:test=\"[.B2]&gt;5\"/>\
+             </table:conditional-format>\
+             <table:content-validations>\
+             <table:content-validation table:name=\"v1\" table:type=\"xs:double\" table:operator=\"top\" table:allow-empty=\"false\" table:formula=\"true()\"/>\
+             </table:content-validations></office:automatic-styles>",
+        );
+        content = content.replace(
+            "<table:table table:name=\"数据\">",
+            "<table:table table:name=\"数据\"><table:database-ranges>\
+             <table:database-range table:name=\"自动筛选0\" table:target-range-address=\"数据.A1:数据.B2\" table:display-filter-buttons=\"true\"/>\
+             </table:database-ranges>",
+        );
+        let path = std::env::temp_dir()
+            .join(format!("openoffices-ods-rules-{}.ods", std::process::id()))
+            .to_string_lossy()
+            .to_string();
+        std::fs::write(&path, zip_ods(&content, &styles)).expect("write");
+        let back = crate::xlsx::read_xlsx_sync(path.clone()).expect("带规则标签的 ODS 读回失败");
+        std::fs::remove_file(&path).ok();
+
+        let notes = back.warnings.join("|");
+        assert!(notes.contains("筛选"), "筛选账要说得出: {notes}");
+        assert!(notes.contains("数据验证"), "数据验证账要说得出: {notes}");
+        assert!(notes.contains("条件格式"), "条件格式账要说得出: {notes}");
+        assert_eq!(notes.matches("ODS 里的").count(), 3, "三类各一条，不重复记");
+        // 记账不能把值也一并吞掉：规则读不懂，字还得照常出
+        let s = &back.sheets[0];
+        let at = |r: u32, c: u32| {
+            s.cells
+                .iter()
+                .find(|x| x.r == r && x.c == c)
+                .and_then(|x| x.v.clone())
+        };
+        assert_eq!(at(0, 0), Some(json!("月份")));
+        assert_eq!(at(1, 1), Some(json!(10)));
+        assert_eq!(s.name, "数据");
+    }
+
     #[test]
     fn ods_zip_layout() {
         let wb = WorkbookPayload {
@@ -1551,6 +1661,7 @@ mod tests {
                 charts: vec![],
                 ..Default::default()
             }],
+            ..Default::default()
         };
         let bytes = ods_bytes(&wb).expect("ods bytes");
         let cur = Cursor::new(bytes);
@@ -1631,6 +1742,7 @@ mod tests {
                 row_heights: [(0u32, 32.0)].into_iter().collect(),
                 ..Default::default()
             }],
+            ..Default::default()
         };
         write_ods_sync(path.clone(), wb).expect("生成夹具 ods 失败");
         println!("fixture: {path}");

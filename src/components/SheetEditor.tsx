@@ -6,6 +6,8 @@ import type { Tab } from '../store'
 import { useApp } from '../store'
 import { createSheetApp } from '../lib/univer'
 import { payloadToWorkbook, workbookToPayload } from '../lib/univer-io'
+import { aggregateNotes, applySheetRules } from '../lib/sheet-rules'
+import type { SheetRules } from '../lib/sheet-rules'
 import { baseName, pickSaveFile, readXlsx, writeCsv, writeOds, writeXlsx } from '../lib/fs'
 import type { ChartPayload, ChartRangeRef, ChartSeriesPayload, WorkbookPayload } from '../lib/fs'
 import { renderChartPng } from '../lib/chart'
@@ -253,13 +255,39 @@ function SheetEditor({ tab }: Props) {
           }
         }
         setChartCount(chartsRef.current.size)
+        // 规则（筛选/数据验证/条件格式）只能由门面放回界面：快照里的 resources 是我们自己
+        // 读出来记账的，Univer 建工作簿时并不会照它还原
+        // Rust 读侧的边界账先接上：文件里有、模型装不下的东西，打开这一趟就要说得出
+        const notes: string[] = [...(dump.warnings ?? [])]
+        if (wb) {
+          for (const s of dump.sheets) {
+            const rules: SheetRules = {
+              filter: s.filter,
+              dataValidations: s.dataValidations,
+              condFormats: s.condFormats,
+            }
+            if (!rules.filter && !rules.dataValidations?.length && !rules.condFormats?.length)
+              continue
+            try {
+              notes.push(...applySheetRules(api, wb, s.name, rules))
+            } catch (e) {
+              console.error('规则还原失败', e)
+              notes.push(`有条规则没能还原（${e instanceof Error ? e.message : String(e)}）`)
+            }
+          }
+        }
+        // 同类文案收成"文案 ×N"，还有别的类就点名条数：状态栏一行装得下，也不让人觉得只有这一条
+        const shown = aggregateNotes(notes)
+        if (shown.length) {
+          setStatus(shown.length > 1 ? `${shown[0]}（另有 ${shown.length - 1} 条说明）` : shown[0])
+          setTimeout(() => setStatus(''), 5000)
+        } else setStatus('')
         api.onCommandExecuted(() => {
           if (ready) markDirty(tab.id, true)
         })
         setTimeout(() => {
           ready = true
         }, 800)
-        setStatus('')
       } catch (e) {
         console.error(e)
         setStatus(`加载失败: ${e instanceof Error ? e.message : String(e)}`)
@@ -371,24 +399,34 @@ function SheetEditor({ tab }: Props) {
       const lower = path.toLowerCase()
       const isOds = lower.endsWith('.ods')
       const isCsv = lower.endsWith('.csv')
+      const writeNotes: string[] = []
       if (isOds) {
         await writeOds(path, payload)
       } else if (isCsv) {
         await writeCsv(path, payload)
       } else {
-        await writeXlsx(path, payload)
+        writeNotes.push(...(await writeXlsx(path, payload)))
       }
       renameTab(tab.id, baseName(path), path)
       markRecent(path, 'sheet')
       const hasCharts = payload.sheets.some((s) => s.charts?.length)
-      setStatus(
-        isCsv
-          ? '已保存（CSV 只含首个工作表，样式与图表不保留）'
-          : isOds && hasCharts
-            ? '已保存（ODS 暂不含图表）'
-            : '已保存',
+      const hasRules = payload.sheets.some(
+        (s) => s.filter || s.dataValidations?.length || s.condFormats?.length,
       )
-      setTimeout(() => setStatus(''), 1500)
+      // 格式本身装不下的东西先说，接着一句接写侧带回来的账（有条规则摆不进 OOXML 这类）
+      const lost: string[] = []
+      if (isCsv) lost.push('CSV 只含首个工作表，公式、样式、合并、图表与筛选/数据验证/条件格式都不保留')
+      if (isOds) {
+        if (hasCharts) lost.push('ODS 暂不含图表')
+        if (hasRules) lost.push('ODS 暂不含筛选、数据验证与条件格式')
+      }
+      const notes = [...lost, ...writeNotes]
+      setStatus(
+        notes.length
+          ? `已保存（${notes[0]}${notes.length > 1 ? `，另有 ${notes.length - 1} 条说明` : ''}）`
+          : '已保存',
+      )
+      setTimeout(() => setStatus(''), notes.length ? 5000 : 1500)
     } catch (e) {
       await message(String(e), { title: '保存失败', kind: 'error' })
     }
@@ -438,6 +476,15 @@ function SheetEditor({ tab }: Props) {
   if (import.meta.env.DEV) {
     const w = window as unknown as Record<string, unknown>
     w.__oofSheet = { exportPdfTo: (p: string) => exportPdfToRef.current(p) }
+    // 按标签取实例：多标签时全局别名会被最后一次渲染改走（v0.41 冒烟踩过）
+    const byTab = (w.__oofSheetByTab ??= {}) as Record<
+      string,
+      { save: (asNew: boolean) => Promise<void>; exportPdfTo: (p: string) => Promise<void> }
+    >
+    byTab[tab.id] = {
+      save: (asNew: boolean) => saveRef.current(asNew),
+      exportPdfTo: (p: string) => exportPdfToRef.current(p),
+    }
   }
 
   return (

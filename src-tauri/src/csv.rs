@@ -108,6 +108,7 @@ pub fn parse_csv(text: &str, sheet_name: &str) -> WorkbookPayload {
             cells,
             ..Default::default()
         }],
+        ..Default::default()
     }
 }
 
@@ -278,6 +279,7 @@ mod tests {
                 ],
                 ..Default::default()
             }],
+            ..Default::default()
         };
         assert_eq!(to_csv(&wb), "007,100\r\n\"a,b\",1.5\r\n");
     }
@@ -295,6 +297,7 @@ mod tests {
                 ],
                 ..Default::default()
             }],
+            ..Default::default()
         };
         let back = parse_csv(&to_csv(&wb), "S");
         let got: Vec<String> = back.sheets[0]
@@ -314,7 +317,7 @@ mod tests {
 
     #[test]
     fn empty_payload_writes_empty_text() {
-        assert_eq!(to_csv(&WorkbookPayload { sheets: vec![] }), "");
+        assert_eq!(to_csv(&WorkbookPayload { sheets: vec![], ..Default::default() }), "");
         let wb = parse_csv("", "S");
         assert!(wb.sheets[0].cells.is_empty());
     }

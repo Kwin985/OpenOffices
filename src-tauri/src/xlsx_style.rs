@@ -8,7 +8,7 @@ use std::io::Read;
 use quick_xml::events::Event;
 use quick_xml::Reader;
 
-use crate::xlsx::{BorderSide, CellBorder, CellStyle, MergeRange};
+use crate::xlsx::{BorderSide, CellBorder, CellStyle, CondFormatStyle, MergeRange};
 
 #[derive(Default, Debug)]
 pub struct SheetFmt {
@@ -24,6 +24,8 @@ pub struct SheetFmt {
     pub freeze: Option<(u32, u32)>,
     /// (行,列) → 公式文本（OOXML 原生不带 '=' 前缀；shared 从格无文本不落表）
     pub formulas: HashMap<(u32, u32), String>,
+    /// 筛选 / 数据验证 / 条件格式，外加"文件里有、模型装不下"的边界账
+    pub rules: crate::xlsx_rules::SheetRulesRead,
 }
 
 /// xlsx 列宽（字符数，MDW=7 + 5px padding）→ 像素
@@ -91,7 +93,7 @@ pub(crate) fn attr_str(e: &quick_xml::events::BytesStart<'_>, key: &str) -> Opti
     None
 }
 
-fn argb_to_hex(v: &str) -> Option<String> {
+pub(crate) fn argb_to_hex(v: &str) -> Option<String> {
     let rgb = match v.len() {
         8 => &v[2..],
         6 => v,
@@ -497,6 +499,69 @@ fn parse_range(s: &str) -> Option<MergeRange> {
     })
 }
 
+/// styles.xml 的 `<dxfs>` 表：条件格式用 `cfRule/@dxfId` 按下标指过来。
+///
+/// dxf 与 cellXfs 不是一套东西——它不写 fontId/fillId 索引，粗斜体与颜色直接住在块里，
+/// 底纹颜色落在 `bgColor`（cellXfs 的实心填充会被 Excel 反过来写成 fgColor），所以单独扫一趟。
+pub(crate) fn parse_dxfs(xml: &str) -> Vec<CondFormatStyle> {
+    let mut out = Vec::new();
+    let Some(start) = xml.find("<dxfs") else { return out };
+    let Some(rel) = xml[start..].find("</dxfs>") else {
+        // `<dxfs count="0"/>`：一条也没有，不必往后扫
+        return out;
+    };
+    let body = &xml[start..start + rel];
+    let mut cur = CondFormatStyle::default();
+    let mut in_font = false;
+    let mut in_fill = false;
+    let mut reader = Reader::from_str(body);
+    while let Ok(ev) = reader.read_event() {
+        match &ev {
+            Event::Start(e) | Event::Empty(e) => match e.local_name().as_ref() {
+                "dxf" => {
+                    if matches!(ev, Event::Empty(_)) {
+                        out.push(std::mem::take(&mut cur));
+                    }
+                }
+                "font" => in_font = true,
+                "fill" => in_fill = true,
+                "b" if in_font => cur.bl = Some(bool_attr(e)),
+                "i" if in_font => cur.it = Some(bool_attr(e)),
+                "strike" if in_font => cur.st = Some(bool_attr(e)),
+                "u" if in_font => {
+                    cur.ul = Some(attr_str(e, "val").map(|v| v != "none").unwrap_or(true))
+                }
+                "color" if in_font && cur.cl.is_none() => {
+                    cur.cl = attr_str(e, "rgb").as_deref().and_then(argb_to_hex);
+                }
+                "bgColor" if in_fill => {
+                    cur.bg = attr_str(e, "rgb").as_deref().and_then(argb_to_hex)
+                }
+                "fgColor" if in_fill && cur.bg.is_none() => {
+                    cur.bg = attr_str(e, "rgb").as_deref().and_then(argb_to_hex)
+                }
+                _ => {}
+            },
+            Event::End(e) => match e.local_name().as_ref() {
+                "font" => in_font = false,
+                "fill" => in_fill = false,
+                "dxf" => out.push(std::mem::take(&mut cur)),
+                _ => {}
+            },
+            Event::Eof => break,
+            _ => {}
+        }
+    }
+    out
+}
+
+/// 三类规则的部件在不在文件里。多数表一样都没有，此时不必再跑一遍 XML
+fn has_rules(xml: &str) -> bool {
+    xml.contains("<autoFilter")
+        || xml.contains("<dataValidation")
+        || xml.contains("<conditionalFormatting")
+}
+
 /// 任何失败都退化为空表（非 xlsx 格式：xls/csv 无样式可读；ods 走 ods.rs 自己的读侧）
 pub fn read_xlsx_styles(path: &str) -> HashMap<String, SheetFmt> {
     let mut out = HashMap::new();
@@ -506,9 +571,16 @@ pub fn read_xlsx_styles(path: &str) -> HashMap<String, SheetFmt> {
         return out;
     };
     let book = parse_styles(&styles_xml);
+    let dxfs = parse_dxfs(&styles_xml);
     for (name, p) in sheet_paths(&mut zip) {
         if let Some(xml) = read_entry(&mut zip, &p) {
-            out.insert(name, parse_sheet(&xml, &book));
+            let mut fmt = parse_sheet(&xml, &book);
+            if has_rules(&xml) {
+                // hidden_rows 先算好再交进去：被筛掉的行与手工藏起来的行在文件里同形
+                let rules = crate::xlsx_rules::read_sheet_rules(&xml, &fmt.hidden_rows, &dxfs);
+                fmt.rules = rules;
+            }
+            out.insert(name, fmt);
         }
     }
     out

@@ -67,6 +67,102 @@ export interface ChartPayload {
   series: ChartSeriesPayload[]
 }
 
+/** 单元格区：0 基、含端点（与 Univer IRange 同形，去掉 unitId/sheetId 这类运行时标识） */
+export interface RangeRect {
+  startRow: number
+  startColumn: number
+  endRow: number
+  endColumn: number
+}
+
+/** 列筛选条件：勾选值（list）与表达式（custom）二选一，正对 OOXML <filterColumn> 的两种子元素 */
+export interface FilterColumnPayload {
+  /** 绝对列号（与 Univer 的存法一致）；OOXML 的 filterColumn colId 是相对筛选区首列的，换算在写侧 */
+  col: number
+  /** 是否把空值也算作命中项 */
+  blank?: boolean
+  list?: string[]
+  custom?: { and?: boolean; items: { op?: string; v: string }[] }
+}
+
+export interface SheetFilterPayload {
+  ref: RangeRect
+  columns: FilterColumnPayload[]
+  /** 当前被筛掉的行号（绝对行）。Univer 按条件现算，只喂打印——OOXML/ODF 里没有这个字段的位置 */
+  filteredOut?: number[]
+}
+
+/** 数据验证：type/op 直接采用 OOXML 字面（whole/decimal/list/date/textLength/custom + between/equal/…） */
+export interface DataValidationPayload {
+  ranges: RangeRect[]
+  type: string
+  op?: string
+  /** OOXML formula1：list 存 `"甲,乙,丙"` 或区域引用，custom 存表达式 */
+  f1?: string
+  f2?: string
+  blank?: boolean
+  /** list 的下拉箭头；OOXML 的 showDropDown="1" 反而是"没有箭头"，换算在写侧 */
+  dropdown?: boolean
+  errStyle?: 'stop' | 'warning' | 'information'
+  errTitle?: string
+  err?: string
+  promptTitle?: string
+  prompt?: string
+}
+
+/** 条件格式的着色部分，对应 OOXML <dxf>（只带表格条件格式真会用到的几样） */
+export interface CondFormatStyle {
+  bg?: string
+  cl?: string
+  bl?: boolean
+  it?: boolean
+  ul?: boolean
+  st?: boolean
+}
+
+/** 色阶的一档：t=min|max|num|percent|percentile|formula|auto */
+export interface CondFormatStop {
+  color: string
+  t: string
+  v?: number | string | null
+}
+
+/** 数据条的端点：数值条不需要颜色 */
+export interface CondFormatBarStop {
+  t: string
+  v?: number | string | null
+}
+
+/** 图标集的一档：op 用 OOXML 字面（greaterThan/greaterThanOrEqual），t/v 同档位端点 */
+export interface CondFormatIconLevel {
+  op: string
+  t: string
+  v?: number | string | null
+}
+
+/** 条件格式一条规则。kind 对齐 OOXML cfRule@type 的四大类；sub 是 highlight 的判定子类 */
+export interface CondFormatPayload {
+  ranges: RangeRect[]
+  kind: 'cell' | 'colorScale' | 'dataBar' | 'iconSet'
+  /** kind=cell：number/text/timePeriod/rank/average/uniqueValues/duplicateValues/formula（读第三方件时由 cellIs/containsText/top10/aboveAverage/… 归一到这几个） */
+  sub?: string
+  op?: string
+  v1?: string | number | null
+  v2?: string | number | null
+  fmt?: CondFormatStyle
+  /** 色阶档位（2 或 3 档，低→高） */
+  scale?: CondFormatStop[]
+  bar?: { min: CondFormatBarStop; max: CondFormatBarStop; pos: string; neg?: string; grad?: boolean }
+  /** 图标集样式名（OOXML iconSet@val，如 3TrafficLights1） */
+  iconStyle?: string
+  /** 图标集档位，按"高→低"排（与 Univer 的 config 同向） */
+  icons?: CondFormatIconLevel[]
+  /** 图标集/数据条是否照常显示单元格里的值 */
+  showValue?: boolean
+  /** 命中即停（OOXML cfRule@stopIfTrue） */
+  stop?: boolean
+}
+
 export interface CellPayload {
   r: number
   c: number
@@ -90,10 +186,16 @@ export interface SheetPayload {
   hiddenRows?: number[]
   /** 冻结窗格：顶部 rows 行 + 左侧 cols 列 */
   freeze?: { rows: number; cols: number }
+  /** 自动筛选（一张表最多一个，同 OOXML） */
+  filter?: SheetFilterPayload
+  dataValidations?: DataValidationPayload[]
+  condFormats?: CondFormatPayload[]
 }
 
 export interface WorkbookPayload {
   sheets: SheetPayload[]
+  /** 读侧的边界账：格式里认出来但界面/模型装不下的东西，打开时要说得出 */
+  warnings?: string[]
 }
 
 const SHEET_EXTS = ['xlsx', 'xls', 'ods', 'csv']
@@ -174,8 +276,9 @@ export async function readXlsx(path: string): Promise<WorkbookPayload> {
   return invoke<WorkbookPayload>('read_xlsx', { path })
 }
 
-export async function writeXlsx(path: string, workbook: WorkbookPayload): Promise<void> {
-  await invoke('write_xlsx', { path, workbook })
+/** 存 xlsx，带回写侧的边界账：摆不进 OOXML 的规则要说得出来，不能静默少给 */
+export async function writeXlsx(path: string, workbook: WorkbookPayload): Promise<string[]> {
+  return invoke<string[]>('write_xlsx', { path, workbook })
 }
 
 export async function writeOds(path: string, workbook: WorkbookPayload): Promise<void> {

@@ -120,8 +120,10 @@ function sheetHtml(sheet: SheetPayload, first: boolean): string {
       for (let c = m.startColumn; c <= Math.min(m.endColumn, maxCol); c++)
         if (r !== m.startRow || c !== m.startColumn) covered.add(`${r},${c}`)
   }
-  // 隐藏行列打印时整列/整行剔除（合并区跨隐藏列的 colspan 按近似保留）
-  const hidR = new Set(sheet.hiddenRows ?? [])
+  // 隐藏行列打印时整列/整行剔除（合并区跨隐藏列的 colspan 按近似保留）。
+  // 被筛掉的行也在这一并列：Univer 只在界面上现算它，快照的行数据里根本没有这些行，
+  // 而第三方件的筛选在 OOXML 里就是 hidden 行——两样落到同一处才不会打出一份没筛的表。
+  const hidR = new Set([...(sheet.hiddenRows ?? []), ...(sheet.filter?.filteredOut ?? [])])
   const hidC = new Set(sheet.hiddenCols ?? [])
   // 列宽：colWidths 即像素，未设定的列用默认宽
   const colAt = (c: number) => {

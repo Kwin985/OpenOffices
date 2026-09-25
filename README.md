@@ -1074,6 +1074,55 @@ CSV、txt…）。这一轮把这层套娃拆到能读到底为止——读不�
   `allow-download-and-install`）、更新源定到一个真实 https 地址、前端改调 `downloadAndInstall()` 再
   `relaunch()`（Windows 装完默认自己重启，`restart_after_install` 是 true），那时 `download_page` 就可以不写了
 
+## 表格规则的往返：筛选 · 数据验证 · 条件格式（v0.46）
+
+- **补的是"设了就凭空不见"这一类**：三样规则从 v0.2 起就能在界面里设，但 `payloadToWorkbook` 把快照的
+  `resources` 硬写成 `[]`、`workbookToPayload` 从不读它，所以**存一次盘整块丢**。按"丢东西的严重程度"排，
+  用户亲手设的判定规则消失比颜色不准更恶劣——这一轮是表格保真线上欠得最久的一笔
+- **规则不住在 sheet 对象上**：Univer 把它们交给各插件自己序列化进工作簿快照的 `resources`
+  （`SHEET_CONDITIONAL_FORMATTING_PLUGIN` / `SHEET_DATA_VALIDATION_PLUGIN` / `SHEET_FILTER_PLUGIN`，
+  每张表按 sheetId 分家）。所以**取**是纯函数 `extractRules`（零 DOM、Node 里直测），**放**必须走门面
+  `applySheetRules`——Univer 建工作簿时并不会照我们自己写的那份 JSON 还原界面，只把载荷塞回快照是假往返
+- **载荷是归一化模型，不是第三方内部 JSON**：`RangeRect` 0 基含端点、`kind`/`sub`/`op`/`type` 一律用 OOXML
+  字面、颜色收成 `#rrggbb`、日期收成 `YYYY-MM-DD`，不存 cfId/uid 这类运行时标识。代价是两侧各写一次换算，
+  换来的是"这条规则从哪来"（界面上设的 / 别人文件里读的）不影响我们存出去的字节
+- **三处 OOXML 反直觉，逐条踩**：`showDropDown="1"` 说的是**没有**下拉箭头、`filterColumn/@colId` 是相对
+  筛选区首列而不是绝对列、日期验证的值是 1900 序列号（`date_serial`/`serial_to_date` 自带 civil→days 换算，
+  不为此引日期库；别的工具直接写日期串时原样交回，**不解成 1899 年**）
+- **`dxf` 与 `cellXfs` 不是一套东西**：条件格式的着色直接住在 `<dxf>` 块里（粗斜体、字色都没有 fontId 索引），
+  实心底纹落在 `bgColor` 而不是 `fgColor`（那是 Excel 反过来才写的），`cfRule/@dxfId` 按下标指 styles.xml 的
+  `<dxfs>` 表，所以单独扫一趟而不是复用 StyleBook
+- **图标集不抄名字表**：`icon_type_for` 逐个问 crate 的 `Display` 拿 OOXML 家族名（`3TrafficLights1`/`4Arrows`…），
+  家族名不在能写出的那批里就记账、不硬凑一个像的；OOXML 的最低档**根本没有 operator**（隐式"≥0"）而 Univer 写
+  `lessThan`，读回来按前者归一，档位数与家族图标数不符时按默认档位写出并记账
+- **被筛掉的行要喂打印**：Univer 只在界面上现算隐藏，快照的行数据里根本没有这些行；而第三方件的筛选在 OOXML 里
+  就是 `hidden` 行——`filter.filteredOut` 与 `hiddenRows` 并成一列剔除，才不会打出一份"没筛过的表"
+- **ODS/CSV 先记账不硬做**：ODF 的三样确实存在（`table:database-range` / `table:content-validations` /
+  `table:conditional-format`，都住在 content.xml），我们暂不读，但"文件里确实有"这一趟就要说得出；
+  对照组同样重要——**我们自己写出的 ODS 不许凭空记出一条规则账**，否则状态栏沦为噪音。CSV 天生无规则，保存时明说
+- **两条账都不断头**：`write_xlsx` 的返回值改成边界账数组（区域不成形、色阶档数不对、图标家族不认识、
+  提示语超 Excel 面板的 32/255 字上限——**超限只能不写这一项并记账，裁过的提示语在别人电脑上是另一句话**），
+  读侧 `WorkbookPayload.warnings`（认不出的判定型、按颜色筛选、`A:A` 这类读不懂的区域片段——只按能认的部分收，
+  **绝不猜一个区域来冒充**），状态栏同类聚合成「文案 ×N（另有 M 条说明）」
+- **坑**：① crate 的 `set_multi_range` 是**整串替换**而不是补在已设区域之后（实测只给"除第一块"会把第一块整个弄丢），
+  所以区域一律先并成一个 `sqref` 再交出去；② rust_xlsxwriter 的默认负色是 Excel 的默认红条，载荷没设负色时
+  **必须显式把负色压成正色**，否则从没碰过负值颜色的文件里会凭空多出 `<x14:negativeFillColor>FF0000`；
+  ③ Univer 的 `nativeColor` 在"根本没设负色"时装的就是我们塞过去的正色，所以取侧要丢掉 `neg === pos`——留着它，
+  "快照直接存"和"读文件再存"两条路会产出两份不同字节；④ `ignore_blank` 必须按载荷的 `blank` 显式给，
+  否则 OOXML 的 `allowBlank`（默认 0）与我们界面的"没明说"不对称，第三方件的 `allowBlank="1"` 存一次就被偷偷抹掉；
+  ⑤ 条件格式要**倒着插**（这一版门面按插入顺序的倒序吐规则，正着插会把整表优先级反过来），而 builder 的
+  `setRanges` 只在 `.d.ts` 里存在、实例上没有，作用区只能 `build()` 之后挂到产物上；⑥ `extractRules(...).rules` 是
+  **Map**（`Object.keys` 恒 `[]`）；⑦ 断言"区内规则相对次序不变"不能拿全局排序后的数组比（自反得毫无意义），
+  要另留一份未排序的原始序
+- **验证（四腿）**：**前端结构测试 53 断言**（三种插件 JSON 外壳各走各的分支 + 颜色/日期/list 归一 +
+  门面建不出来的类型退成边界账而不是硬建 + 同色负色被丢掉）；**Rust 6 个新用例 + `cargo test --lib` 49 通过**
+  （一份 `rules_workbook` 夹具同时喂写侧 XML 落点、读到写的 round-trip、别人写的件逐样报账、dxf 表自解、
+  欠账记得住）；**Excel 16.0 只读腿 26 断言**（真件里 `AutoFilter.Range.Address`=A1:D7、B 列按 30/12 筛后只剩
+  2 行、DV 与 CF 的类型/操作符/公式/颜色逐个对得上，并直接解 zip 核 `negativeBarColorSameAsPositive="1"` 出现
+  2 次而 `x14:negativeFillColor` 0 次、`gradient="0"` 在位——这台 Excel 的 COM 面不暴露 dataBar 细节，
+  负色只能按文件核）；**CDP 真机冒烟 26 断言全绿、页面异常 0 条**（打开→放下与取回逐条一致→实色数据条在 Univer
+  里仍是实色→存 xlsx 重开→重存自产物零记账→ODS 只报边界不谎称读回）；tsc/build 绿
+
 ## 性能（v0.3）
 
 - **按编辑器分包 + 懒加载**：主包 8MB → 首屏约 300KB；Univer（6.1MB）只在首次激活表格标签时加载，
@@ -1123,11 +1172,12 @@ CSV、txt…）。这一轮把这层套娃拆到能读到底为止——读不�
 
 ```
 src-tauri/            Rust 后端
-  src/xlsx.rs         read_xlsx (calamine) / write_xlsx (rust_xlsxwriter) 命令，含样式、合并区、尺寸/字族、隐藏/冻结、公式（含缓存值）与图表往返；命令为 async + spawn_blocking（同步跑主线程会让窗口冻结），`.csv` 读侧分流到 csv.rs，图表网格按 has_charts 惰性构建
+  src/xlsx.rs         read_xlsx (calamine) / write_xlsx (rust_xlsxwriter) 命令，含样式、合并区、尺寸/字族、隐藏/冻结、公式（含缓存值）、图表与**三类规则（筛选/数据验证/条件格式，v0.46 的载荷类型 RangeRect/SheetFilterPayload/DataValidationPayload/CondFormatPayload 也在这里）**往返；write_xlsx 返回 `Vec<String>` 边界账；命令为 async + spawn_blocking（同步跑主线程会让窗口冻结），`.csv` 读侧分流到 csv.rs，图表网格按 has_charts 惰性构建
   src/csv.rs          CSV 往返：RFC4180 逐字符状态机（引号/转义/字段内换行）+ 分隔符嗅探（, ; 制表符）+ UTF-8 失败退 GBK 解码 + 写侧 BOM/CRLF，read_payload 供 read_xlsx 分流、write_csv 为独立命令
-  src/xlsx_style.rs   zip + quick-xml 直读 xlsx 的 styles.xml（StyleBook：fonts/fills/borders/cellXfs/numFmts）/ mergeCells / col·row 尺寸（字符宽·pt→px）/ 隐藏行列 / 冻结 pane / 公式 `<f>`（GeneralRef 实体重建 + unescape，calamine 无样式/公式 API）
+  src/xlsx_style.rs   zip + quick-xml 直读 xlsx 的 styles.xml（StyleBook：fonts/fills/borders/cellXfs/numFmts，**外加 `<dxfs>` 条件格式样式表 `parse_dxfs`**——dxf 不走 fontId/fillId 索引、实心底纹在 bgColor 而非 fgColor，故单独一趟）/ mergeCells / col·row 尺寸（字符宽·pt→px）/ 隐藏行列 / 冻结 pane / 公式 `<f>`（GeneralRef 实体重建 + unescape，calamine 无样式/公式 API）
+  src/xlsx_rules.rs   三类规则的双向（v0.46）：写侧 `write_sheet_rules`（autoFilter + filterColumn 的 list/custom 两种形状、dataValidation 六类型与日期序列号换算、条件格式四大类 cellIs/containsText/timePeriod/top10/aboveAverage/duplicate/unique/expression + colorScale/dataBar/iconSet，含 dxf 与 x14 的 gradient/negativeBarColorSameAsPositive）、读侧 `read_sheet_rules`（quick-xml 事件流 + `cfRule` 的 begin/end 临时态、`dxfId` 查表、colId 换回绝对列、`showDropDown` 反义、整列引用等读不懂的片段原样交回由调用方记账），摆不进 / 读不出的**一律返回账目不静默少给**
   src/xlsx_chart.rs   zip + quick-xml 直读 chartN.xml + drawing 锚点，系列值按实时网格解析；has_charts 只做 zip 文件名嗅探
-  src/ods.rs          ODS 双向：write_ods（async 外壳 + write_ods_sync，共用 xlsx 载荷 → ODF zip，样式/尺寸去重与合并、冻结 settings.xml、公式 of:= 换算）+ read_ods_styles（直解边框/对齐/换行/列宽行高/字族/隐藏 collapse/重复单元格/合并跨度/公式 + settings.xml 冻结）
+  src/ods.rs          ODS 双向：write_ods（async 外壳 + write_ods_sync，共用 xlsx 载荷 → ODF zip，样式/尺寸去重与合并、冻结 settings.xml、公式 of:= 换算）+ read_ods_styles（直解边框/对齐/换行/列宽行高/字族/隐藏 collapse/重复单元格/合并跨度/公式 + settings.xml 冻结）+ **ODF 规则只记账不硬读**（content.xml 里有 `table:database-range`/`table:content-validations`/`table:conditional-format` 就说得出"暂未读入"，自产物不许凭空记出账）
   src/pdf.rs          export_pdf 命令：with_webview → WebView2 PrintToPdf（四边距英寸四元组 + 纸张宽高/朝向，cfg windows）；file_len + read_range（raw IPC 返回 Vec<u8>，async + spawn_blocking，供大 PDF 分段读）
   src/lib.rs          OPEN_EXTS 与 argv 文件过滤纯函数、take_startup_files 命令、single-instance 文件转发；插件链只注册 updater 的 check 能力（前端仅授 `updater:allow-check`，下载与安装没接线）
   capabilities/       dialog + fs 权限与路径作用域 + updater:allow-check（只给检查，下载/安装未接线）
@@ -1135,7 +1185,8 @@ src/                  React 前端
   store.ts            标签页 / 最近文件 / 主题（zustand）
   App.tsx             全局快捷键、拖拽打开、文件关联打开（启动 argv + 单实例转发）、关闭确认、懒加载路由
   lib/univer.ts       Univer 实例工厂（公式 worker + 六个社区预设，含绘图 FOverGridImage）
-  lib/univer-io.ts    xlsx 数据+样式（粗斜/颜色/字族/边框/对齐/换行/数字格式）/合并/图表/列宽行高/隐藏行列/冻结窗格 ↔ Univer 快照 转换（样式去重注册）
+  lib/univer-io.ts    xlsx 数据+样式（粗斜/颜色/字族/边框/对齐/换行/数字格式）/合并/图表/列宽行高/隐藏行列/冻结窗格 ↔ Univer 快照 转换（样式去重注册）；**规则走侧通道**——取完单元格再按 sheetId 把 `extractRules(resources)` 的结果对回每张表，`warnings` 由 `aggregateNotes` 聚合
+  lib/sheet-rules.ts  三类规则的前端桥（v0.46）：`extractRules` 从工作簿快照的 `resources` 里按表取规则（Univer 三个插件各写各的 JSON，条件格式按快照原序交回=高优先级在前），`applySheetRules` 经门面放回界面（**条件格式倒着插**，因为这一版门面按插入顺序的倒序吐规则；builder 无 `setRanges`，作用区在 `build()` 之后挂产物），`buildDataValidation` 只建门面表达得出的四类 + custom；归一化（`normColor` 收 rgb/#、`normDateValue` 收 ISO、`listOf` 拆 JSON 数组串与区域引用、`neg === pos` 的负色丢掉）与 `aggregateNotes`（同类收成"文案×N"）都在这，`textLength`/`time`/`any` 这类摆不进模型的退成边界账而不是硬建一条
   lib/chart.ts        ChartPayload → VChart spec → 离屏 canvas PNG dataURL（动态导入分包）
   lib/docx.ts         docx 导入导出（ProseMirror JSON ↔ docx，字色/字族/字号/高亮/页眉页脚/TOC 域/批注/页面设置 sectPr（纸张·四边距·w:cols 栏数栏距）/页码格式（PAGE·NUMPAGES）/分页符/表格合并映射（首行行级 tableHeader、列表 numbering.config 真编号）、单元格四边 `w:tcBorders`（**显式去边写 `w:val="nil"`**——none 压不住表级默认边框）、`w:shd` 底纹、`w:vAlign` 竖排、`w:tblInd` 表缩进、`w:vertAlign` 上下标、段落 `w:spacing`（行距 + 段前段后，**只写声明过的**）/`w:shd`/`w:pBdr`、脚注与尾注（`footnotes`/`endnotes` 记录 + 正文各带自动编号 `<w:footnoteRef/>`、多段拆多个 `w:p`、部件与 rels 注册））；文本节点兼容顶层 text 与 attrs.text；字节经 Packer.toBase64String + atob 取（toBuffer 走 jszip 的 nodebuffer 通道，浏览器里没有 Buffer））
   lib/ooxml.ts        迷你 OOXML XML 解析器（零依赖、不碰 DOM）：parseXml/find/findDesc/all/allL/attr/attrL/val/valNum/textOf + decodeEnt 实体表——让 docx 读侧能在 Node 里直测
@@ -1156,7 +1207,7 @@ src/                  React 前端
   lib/templates.ts    首页模板注册表与纯函数 seed：11 个模板（公文/会议纪要/周报 → ProseMirror JSON+meta，记账表/库存清单 → WorkbookPayload 含公式冻结，六套演示配色 → Deck）
   lib/ppt.ts          .opd 幻灯片数据模型（版式/主题/序列化）
   lib/pdfprint.ts     打印覆盖层：挂 DOM → 注入打印样式 → export_pdf → 清理
-  lib/sheet-print.ts  WorkbookPayload → 打印 HTML 网格（值/边框/对齐/换行/数字格式/字族/合并/列宽行高/跳过隐藏行列/分页/截断）
+  lib/sheet-print.ts  WorkbookPayload → 打印 HTML 网格（值/边框/对齐/换行/数字格式/字族/合并/列宽行高/跳过隐藏行列/**跳过被筛掉的行（`filter.filteredOut` 与 hiddenRows 并列）**/分页/截断）
   lib/pptx-export.ts  Deck → pptx（pptxgenjs）
   lib/pptx-import.ts  pptx → Deck（JSZip 解包 + OOXML 解析 + 媒体还原）
   lib/pdf-pages.ts    PDF 页面级操作（pdf-lib 覆盖写回）：rotatePagesInPlace / removePagesInPlace（倒序删 + 删空守卫）/ extractPages / mergePdfs / splitPdf，做完由调用方重载
@@ -1168,14 +1219,14 @@ src/                  React 前端
   lib/open.ts         路径→标签 打开 / 带确认关闭
   lib/sync.ts         最近文件端到端加密同步（WebCrypto PBKDF2-SHA256 → AES-256-GCM，.oosync 信封）
   lib/update.ts       自动更新的**检测层**（v0.45）：`checkForUpdate()` 动态导入 updater 插件走一次 `check`，任何失败都收敛成 `{state:'failed'}` 不往外抛（抛出去的表现就是"点了没反应"）；`describeError` 按插件 error.rs 的真实字面把"源上没清单/没配端点/非 https/缺本平台条目/签名/base64/日期/连不上"归成中文，认不出的一律原样带出不编原因；`infoOf` 从 `rawJson` 里取自定义字段 `download_page`，只认 http(s) 才给按钮
-  components/         Home（最近文件 + 从模板新建画廊 + 版本号与"检查更新"） / Workspace / SheetEditor（保存按 .xlsx/.ods/.csv 三分流） / DocEditor（页面设置含分栏/页码格式、分页参考线、分页符、表格与图片上下文工具条、粘贴成图、查找替换面板、字体族·字号、缩进工具条与 Ctrl+]/[、上下标 X²/X₂、表格上下文条的底纹色与竖排对齐（上/中/下）、脚注/尾注（工具栏插入 + 文末分区编辑与定位/删除，打印时文本框换静态块）、版本历史·自动保存、模板 seed、状态栏字数节流；打开 .docx 保真导入优先、mammoth 兜底，保存按 .odoc/.odt/.docx 各自格式原地落盘） / PptEditor / PdfViewer（pdfjs-dist 懒加载，连续多页视口虚拟渲染+Ctrl 缩放+TextLayer 文字选择+全文搜索+缩略图/大纲/标注侧栏+高亮便签与矩形·椭圆·直线·手绘形状（绘制/导入/写回 pdf-lib）+标注编辑（点选/拖移/改色/删除）+「页面」工作区旋转/删除/提取/合并/拆分；≥4MB 走分段读（lib/pdf-range.ts），卸载时 destroy openTask 并 abort transport））
+  components/         Home（最近文件 + 从模板新建画廊 + 版本号与"检查更新"） / Workspace / SheetEditor（保存按 .xlsx/.ods/.csv 三分流，打开时把读到的规则经门面放回界面并把两侧账目显示在状态栏） / DocEditor（页面设置含分栏/页码格式、分页参考线、分页符、表格与图片上下文工具条、粘贴成图、查找替换面板、字体族·字号、缩进工具条与 Ctrl+]/[、上下标 X²/X₂、表格上下文条的底纹色与竖排对齐（上/中/下）、脚注/尾注（工具栏插入 + 文末分区编辑与定位/删除，打印时文本框换静态块）、版本历史·自动保存、模板 seed、状态栏字数节流；打开 .docx 保真导入优先、mammoth 兜底，保存按 .odoc/.odt/.docx 各自格式原地落盘） / PptEditor / PdfViewer（pdfjs-dist 懒加载，连续多页视口虚拟渲染+Ctrl 缩放+TextLayer 文字选择+全文搜索+缩略图/大纲/标注侧栏+高亮便签与矩形·椭圆·直线·手绘形状（绘制/导入/写回 pdf-lib）+标注编辑（点选/拖移/改色/删除）+「页面」工作区旋转/删除/提取/合并/拆分；≥4MB 走分段读（lib/pdf-range.ts），卸载时 destroy openTask 并 abort transport））
 scripts/              copy-pdfjs-assets.mjs（dev/build 前复制 cmaps/标准字体到 public/pdfjs） /
                       updater-release.mjs（发版：开 createUpdaterArtifacts 本机建签名包 → 读回真 .sig 与产物 →
                       出带三平台键的 latest.json → 打印要上传的清单；私钥只走子进程环境变量，`pnpm release:updater`）
 .github/workflows/    release.yml——tag v* 触发只打 Linux（1× 计费）；Windows（2×）与 cargo test 改手动 dispatch 勾选
 ```
 
-表格文件流：`xlsx/ods 磁盘 → Rust(calamine 值 + xlsx/ods 各自 zip/quick-xml 直解样式·合并·尺寸·字族·隐藏·冻结·公式·图表) → JSON 快照 → Univer 渲染（图表经 VChart 出 PNG 浮动图片）`；CSV 走 `csv.rs` 状态机（UTF-8/GBK 自动）→ 单表载荷；保存按扩展名分流——`.xlsx` 经 `rust_xlsxwriter`（含原生图表部件）、`.ods` 经 `ods.rs` 生成 ODF 包、`.csv` 经 `csv.rs` 写 BOM + CRLF 文本（只存首表）。
+表格文件流：`xlsx/ods 磁盘 → Rust(calamine 值 + xlsx/ods 各自 zip/quick-xml 直解样式·合并·尺寸·字族·隐藏·冻结·公式·图表·三类规则) → JSON 快照 → Univer 渲染（图表经 VChart 出 PNG 浮动图片，筛选/数据验证/条件格式经门面放回）`；CSV 走 `csv.rs` 状态机（UTF-8/GBK 自动）→ 单表载荷；保存按扩展名分流——`.xlsx` 经 `rust_xlsxwriter`（含原生图表部件与三类规则的 OOXML 落盘，带回写侧账目）、`.ods` 经 `ods.rs` 生成 ODF 包、`.csv` 经 `csv.rs` 写 BOM + CRLF 文本（只存首表）。
 文档文件流：`docx → lib/docx-fidelity.ts 直读 OOXML（w:rPr/w:pPr 直接格式 + numbering 层级 + 表格合并 + 图片 + 批注 + sectPr 页面设置）→ HTML/元数据 → TipTap`，
 保真导入器抛错或拆不出块时回退 `mammoth 正文 + zip 直读页眉页脚/批注/sectPr`（v0.37）；`.odt` 走 `lib/odt.ts` 双向；
 保存按标签扩展名分流——新建文档存 `.odoc` JSON（含 meta）、`.odt` 与 `.docx` 标签各自格式原地写回（导出走 docx/odt 链路）。
@@ -1253,6 +1304,7 @@ cargo check        # Rust 后端检查（在 src-tauri 下）
 - [x] 文档保真续项六之一：SmartArt（`diagrams/dataN.xml` 的 DiagramML 数据模型 → 嵌套列表）与图表（`charts/chartN.xml` 的 ChartML 缓存值 → 标题 + 数据表）读回，格内走层级缩进展平，还原不了的记边界
 - [x] 文档保真续项六之二：域**编号重算**（`SEQ` 按文档顺序现算并压掉缓存、`\* ROMAN`/`\* roman`/`\* ALPHABETIC`/`\* alphabetic` 四形态按开关自身大小写、`REF` 无缓存时按书签所在段落文本兜底、`PAGE`/`PAGEREF`/`DOCPROPERTY` 沿缓存且无缓存记边界、`fldSimple` 同路、被跳过的目录不占号）+ OLE 嵌入对象预览解不开时留一行看得见的占位（ProgID + 部件文件名，.odoc/docx/odt 三链路都在）
 - [x] 文档保真续项六剩下：OLE 嵌入对象的**内容**提取（复合文档 `cfb.ts` + `\x01Ole10Native` 的字段布局与兜底扫描 → 内层 docx 递归展开 / xlsx 与 CSV 取值成表 / txt 分段；两条接缝 docx `w:object` 与 ODT `draw:frame`（内联 base64 与 `Objects/objN/` 两种），块级正文作段落兄弟块、格内压行内，取不出的带真名与大小记边界）
+- [x] 表格保真五期：筛选 / 数据验证 / 条件格式 **xlsx 全链路往返**（Univer `resources` 双向桥 + 门面放回界面 + OOXML autoFilter/dataValidation/cfRule·dxf·x14 读写，Excel 16.0 实机核对；被筛掉的行喂打印；ODS/CSV 只记边界账不谎称读回）
 - [x] 自动更新通道（**检测层**，v0.45）：本机 Ed25519 密钥对签发的清单 + `check` 一次拿版本/说明/日期，
       有新版本就提示并**用浏览器打开下载页**；失败一律归成中文一句（源上没清单/非 https/缺本平台条目/签名不合…），
       认不出来的原样带出不编原因；不做应用内下载与安装，所以不需要先定更新源托管在哪
