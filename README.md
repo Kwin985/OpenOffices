@@ -1123,6 +1123,55 @@ CSV、txt…）。这一轮把这层套娃拆到能读到底为止——读不�
   负色只能按文件核）；**CDP 真机冒烟 26 断言全绿、页面异常 0 条**（打开→放下与取回逐条一致→实色数据条在 Univer
   里仍是实色→存 xlsx 重开→重存自产物零记账→ODS 只报边界不谎称读回）；tsc/build 绿
 
+## 表格 PDF 打印保真：条件格式的色与图表的图进打印（v0.47）
+
+- **补的是"屏幕上明明有、纸上没有"**：v0.46 让三样规则存得下、开得回，但打印链路只吃静态样式——
+  `sheet-print` 从来不看 `condFormats`，图表又只作为 Univer 的浮动图片活在 canvas 上，而
+  `PrintToPdf` 抓不到画布。于是同一张表，界面上红红绿绿带折线图，导出的 PDF 是一张白底数字表
+- **条件格式在打印侧重算一遍，不抄界面上的色**：Univer 的求值住在画布里拿不到，而载荷本来就带着
+  判定规则（`kind`/`sub`/`op`/`v1`/`fmt`/`scale`/`bar`），所以新建 `lib/sheet-cf-print.ts` 的
+  `evalSheetCondFormats(sheet)` 纯函数自己算出 `{patches: Map<'行,列', CfPatch>, notes: string[]}`。
+  分工照老规矩：**数值 / 文本 / 重复与唯一 / 前 N 与均值 / 色阶 / 数据条算得出就画；公式判定、日期区间、
+  图标集算不出就记账**，一条都不硬凑颜色冒充
+- **六条"Excel 就是这么画的"细节，全靠跟 Excel 对表才对上**：① 色阶的分位数是在排序列上**线性插值**
+  出来的，不是"取第 n 个"；② 数据条在有负有正时把起点放在 **0 轴**上、负值往左长，渐变条靠轴那端浅、
+  尖端深（实色条两端同色）；③ "前 N 项"**含并列**——以第 N 大的那个值为界，同值的整片都算进去；
+  ④ 文本判定的空条件串是"格为空"那一项，不是"包含空串"（后者会命中区域里所有格）；⑤ 数字 `1` 与文本
+  `"1"` 要归一成一个比较键，因为 Excel 那套比较（COUNTIF 语义）不分类型、文本判定也不分大小写；
+  ⑥ 自定义端点可能把数据夹在中间，越界按 Excel 的做法**截到最近一档的颜色**
+- **优先级与"命中即停"落在补丁的合并规则上**：数组顺序=优先级，同一属性**先命中的说话**（后面的规则只在
+  缺口上补自己独有的属性），`stopIfTrue` 之后这一格不再被任何规则碰；`showValue=false` 打印出来是
+  **值真的不在纸上**（`cellText` 直接给空串），不是"画了又被条盖住"；数据条走 `background-image`，
+  与 `background-color` 天然分层，底色和条互不遮挡
+- **图表按锚点格覆盖进网格**：`payloadWithCharts` 抽成保存与导出 PDF **共吃的一份产物**（否则"文件里有图、
+  打印里没图"会各说一次话）→ `renderChartPng` 逐张渲染 → 锚在哪一格就绝对定位在该格左上角，并把那一格的
+  `overflow` 放开（单元格默认裁掉溢出）；锚点落在合并区内时退到合并区左上角
+- **真 bug 一处：图表浮在数据块外面就整个不见**。图表本来就常放在数据右下方，而打印网格的边界只按
+  **数据**定，锚点格落在界外 → 那张图在打印里就此不见了（冒烟里表现为状态栏莫名多出一条"未放置"）。
+  改成锚点也算网格的一部分；这样"未放置"就只剩超打印上限一种原因，账目才说得出具体行/列
+- **另一处真 bug 比本轮功能更值钱：我们的 PDF 一直把屏幕的浅灰蓝铺成纸的颜色**。应用外壳
+  `body{background:var(--bg)}`（`#f3f5f8`）实测占掉 **1269783 / 1759470** 像素——文档、演示、表格三种
+  导出无一例外（暗色主题下就是一页黑底）。`lib/pdfprint.ts` 的 `@media print` 里给 `html,body` 兜底
+  `background:#fff; color:#111`，**只兜"没人管的地方"**：单元格底色、字色这些元素自己声明的照旧说话
+- **页面上只留"这份打印件缺了什么"**：超出打印上限那一类才印进 PDF（拿到纸上看的人才用得上），其余账目
+  交回调用方进状态栏（`已导出 PDF（有条条件格式是图标集…未表现）`，同类仍聚合成"文案×N"）
+- **坑**：① CDP 冒烟整轮卡在**零断言**，元凶是 `ws.on('message', cb)` 的第一个参数是 **Buffer**
+  （`ws.onmessage` 才是带 `.data` 的事件对象），于是 `msg.method` 恒 undefined、
+  `Page.loadEventFired` 永远等不到——从此长脚本都带**按调用超时**与 `uncaughtException` 出口，
+  让下一次卡住能自己报是谁；② pdf.js 的 `page.objs.get(id)` 对**还没解码完的对象是直接抛异常**的，
+  不是返回 undefined，取图片尺寸得 try/catch + 有界重试；③ 断言"图表进了 PDF"**不能按图片对象个数**数——
+  打印机光栅把每根 CSS 渐变数据条都各出一个 XObject（72×16、72×1 的条有六七枚），要按载荷声明的宽高比
+  加尺寸认出那一张（120×90 CSS px → 360×270，正好 3 倍打印 DPI）；④ pdf.js 画布没着墨的地方是**透明
+  像素**，"纸白"必须按 透明 ∪ 近白 来算，否则白底断言测的是空气
+- **验证（四腿）**：**结构测试 87 断言**（六种判定各画各的色 + 并列/端点/插值/窗口的边界 + 命中即停之后
+  不再被碰 + 锚点撑开网格与超上限两种账分开 + 色值不能逃出 style 属性 + 空表给标题但不谎记账）；
+  **Excel 16.0 对照腿 149 断言**（Rust 夹具写出八列各一种判定型的件，PowerShell 逐格抄回
+  `DisplayFormat`/`Interior.Color`/`Font`，48 格的底色·字色·粗体与我们算的**逐格相同**、且全表只记图标集
+  那一笔账；OLE 色是 `0x00BBGGRR` 小端，按 RGB 取会整片错色相）；**CDP 真机冒烟 37 断言全绿、页面异常
+  0 条**（打开→`printPlan` 核对打印将要吃的规则数与账目→导出 PDF→pdf.js 像素采样：八种颜色逐个在位、
+  没画过的纯红一枚都没有、`-5` 不在文本层而 `-1` 在（证 `showValue=false`）、按宽高比认出那张图表位图、
+  主题底色从 1269783 像素降到抗锯齿的边角）；**`cargo test --lib` 49 通过 + tsc/build 绿**
+
 ## 性能（v0.3）
 
 - **按编辑器分包 + 懒加载**：主包 8MB → 首屏约 300KB；Univer（6.1MB）只在首次激活表格标签时加载，
@@ -1172,7 +1221,7 @@ CSV、txt…）。这一轮把这层套娃拆到能读到底为止——读不�
 
 ```
 src-tauri/            Rust 后端
-  src/xlsx.rs         read_xlsx (calamine) / write_xlsx (rust_xlsxwriter) 命令，含样式、合并区、尺寸/字族、隐藏/冻结、公式（含缓存值）、图表与**三类规则（筛选/数据验证/条件格式，v0.46 的载荷类型 RangeRect/SheetFilterPayload/DataValidationPayload/CondFormatPayload 也在这里）**往返；write_xlsx 返回 `Vec<String>` 边界账；命令为 async + spawn_blocking（同步跑主线程会让窗口冻结），`.csv` 读侧分流到 csv.rs，图表网格按 has_charts 惰性构建
+  src/xlsx.rs         read_xlsx (calamine) / write_xlsx (rust_xlsxwriter) 命令，含样式、合并区、尺寸/字族、隐藏/冻结、公式（含缓存值）、图表与**三类规则（筛选/数据验证/条件格式，v0.46 的载荷类型 RangeRect/SheetFilterPayload/DataValidationPayload/CondFormatPayload 也在这里）**往返；write_xlsx 返回 `Vec<String>` 边界账；命令为 async + spawn_blocking（同步跑主线程会让窗口冻结），`.csv` 读侧分流到 csv.rs，图表网格按 has_charts 惰性构建；测试里带一份**条件格式打印夹具**（v0.47：八列各一种判定型，写出真 xlsx 供 Excel 逐格对色）
   src/csv.rs          CSV 往返：RFC4180 逐字符状态机（引号/转义/字段内换行）+ 分隔符嗅探（, ; 制表符）+ UTF-8 失败退 GBK 解码 + 写侧 BOM/CRLF，read_payload 供 read_xlsx 分流、write_csv 为独立命令
   src/xlsx_style.rs   zip + quick-xml 直读 xlsx 的 styles.xml（StyleBook：fonts/fills/borders/cellXfs/numFmts，**外加 `<dxfs>` 条件格式样式表 `parse_dxfs`**——dxf 不走 fontId/fillId 索引、实心底纹在 bgColor 而非 fgColor，故单独一趟）/ mergeCells / col·row 尺寸（字符宽·pt→px）/ 隐藏行列 / 冻结 pane / 公式 `<f>`（GeneralRef 实体重建 + unescape，calamine 无样式/公式 API）
   src/xlsx_rules.rs   三类规则的双向（v0.46）：写侧 `write_sheet_rules`（autoFilter + filterColumn 的 list/custom 两种形状、dataValidation 六类型与日期序列号换算、条件格式四大类 cellIs/containsText/timePeriod/top10/aboveAverage/duplicate/unique/expression + colorScale/dataBar/iconSet，含 dxf 与 x14 的 gradient/negativeBarColorSameAsPositive）、读侧 `read_sheet_rules`（quick-xml 事件流 + `cfRule` 的 begin/end 临时态、`dxfId` 查表、colId 换回绝对列、`showDropDown` 反义、整列引用等读不懂的片段原样交回由调用方记账），摆不进 / 读不出的**一律返回账目不静默少给**
@@ -1206,8 +1255,9 @@ src/                  React 前端
   lib/find-replace.ts 查找/替换 ProseMirror 插件：按文本块匹配存 state、装饰高亮、findNext/findPrev/replaceOne/replaceAll 命令（命中上限 FR_HIT_CAP=2000 截断并标 `N+`）
   lib/templates.ts    首页模板注册表与纯函数 seed：11 个模板（公文/会议纪要/周报 → ProseMirror JSON+meta，记账表/库存清单 → WorkbookPayload 含公式冻结，六套演示配色 → Deck）
   lib/ppt.ts          .opd 幻灯片数据模型（版式/主题/序列化）
-  lib/pdfprint.ts     打印覆盖层：挂 DOM → 注入打印样式 → export_pdf → 清理
-  lib/sheet-print.ts  WorkbookPayload → 打印 HTML 网格（值/边框/对齐/换行/数字格式/字族/合并/列宽行高/跳过隐藏行列/**跳过被筛掉的行（`filter.filteredOut` 与 hiddenRows 并列）**/分页/截断）
+  lib/pdfprint.ts     打印覆盖层：挂 DOM → 注入打印样式 → export_pdf → 清理；`@media print` 里给 `html,body` 兜白底黑字（v0.47：外壳的 `body{background:var(--bg)}` 曾把整页铺成屏幕的浅灰蓝，三种导出都中招；元素自己声明的颜色不受影响）
+  lib/sheet-cf-print.ts  条件格式的**打印侧求值**（v0.47，纯函数零 DOM）：`evalSheetCondFormats(sheet)` 按载荷数组序（=优先级）吃规则，产出 `Map<'行,列', CfPatch>` 与账目——`cell`（number/text/duplicate/unique/rank/average，含"前 N 项算并列""空串条件=格为空""数字与文本归一比较"）、`colorScale`（分位数线性插值 + 越界截最近档）、`dataBar`（0 轴起点、负色、渐变/实色、`showValue=false` 收成 `hideValue`）；`iconSet`/公式判定/日期区间/缺样式的一律**只记账不落笔**；`PRINT_MAX_ROWS`/`PRINT_MAX_COLS` 用来裁 `A:A` 这类整列引用，否则一条规则循环百万格
+  lib/sheet-print.ts  WorkbookPayload → 打印 HTML 网格（值/边框/对齐/换行/数字格式/字族/合并/列宽行高/跳过隐藏行列/**跳过被筛掉的行（`filter.filteredOut` 与 hiddenRows 并列）**/**条件格式算出的底色·字色·粗斜·下划线·删除线·数据条（v0.47）**/**图表位图按锚点格绝对覆盖、锚点撑开网格边界（v0.47）**/分页/截断）；返回 `{html, notes}`——页面上只印"这份打印件缺了什么"，其余账目交回调用方进状态栏
   lib/pptx-export.ts  Deck → pptx（pptxgenjs）
   lib/pptx-import.ts  pptx → Deck（JSZip 解包 + OOXML 解析 + 媒体还原）
   lib/pdf-pages.ts    PDF 页面级操作（pdf-lib 覆盖写回）：rotatePagesInPlace / removePagesInPlace（倒序删 + 删空守卫）/ extractPages / mergePdfs / splitPdf，做完由调用方重载
@@ -1305,6 +1355,7 @@ cargo check        # Rust 后端检查（在 src-tauri 下）
 - [x] 文档保真续项六之二：域**编号重算**（`SEQ` 按文档顺序现算并压掉缓存、`\* ROMAN`/`\* roman`/`\* ALPHABETIC`/`\* alphabetic` 四形态按开关自身大小写、`REF` 无缓存时按书签所在段落文本兜底、`PAGE`/`PAGEREF`/`DOCPROPERTY` 沿缓存且无缓存记边界、`fldSimple` 同路、被跳过的目录不占号）+ OLE 嵌入对象预览解不开时留一行看得见的占位（ProgID + 部件文件名，.odoc/docx/odt 三链路都在）
 - [x] 文档保真续项六剩下：OLE 嵌入对象的**内容**提取（复合文档 `cfb.ts` + `\x01Ole10Native` 的字段布局与兜底扫描 → 内层 docx 递归展开 / xlsx 与 CSV 取值成表 / txt 分段；两条接缝 docx `w:object` 与 ODT `draw:frame`（内联 base64 与 `Objects/objN/` 两种），块级正文作段落兄弟块、格内压行内，取不出的带真名与大小记边界）
 - [x] 表格保真五期：筛选 / 数据验证 / 条件格式 **xlsx 全链路往返**（Univer `resources` 双向桥 + 门面放回界面 + OOXML autoFilter/dataValidation/cfRule·dxf·x14 读写，Excel 16.0 实机核对；被筛掉的行喂打印；ODS/CSV 只记边界账不谎称读回）
+- [x] 表格保真六期：**PDF 打印保真**（条件格式在打印侧按载荷重算一遍→底色/字色/粗斜/数据条/色阶真上色，六处判据与 Excel 16.0 的 `DisplayFormat` 逐格核对；图表位图按锚点格覆盖进网格并让锚点撑开边界，"图浮在数据块外就整个不见"就此修掉；打印纸面兜白底（外壳的 `var(--bg)` 曾把整页铺成屏幕色）；算不出的一律进状态栏记账）
 - [x] 自动更新通道（**检测层**，v0.45）：本机 Ed25519 密钥对签发的清单 + `check` 一次拿版本/说明/日期，
       有新版本就提示并**用浏览器打开下载页**；失败一律归成中文一句（源上没清单/非 https/缺本平台条目/签名不合…），
       认不出来的原样带出不编原因；不做应用内下载与安装，所以不需要先定更新源托管在哪

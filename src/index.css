@@ -2063,6 +2063,15 @@ button {
   break-before: page;
 }
 
+/* 打印网格里的图表位图：浮在锚点格上，跟界面上的浮动图片同一个位置 */
+.sheet-print-chart {
+  position: absolute;
+  left: 0;
+  top: 0;
+  display: block;
+  z-index: 1;
+}
+
 .sheet-print-note {
   color: #b91c1c;
   font-size: 11px;

@@ -44,6 +44,10 @@ export async function exportPdfWithOverlay(
     @media print {
       /* 应用外壳的 html,body{height:100%;overflow:hidden} 会把打印裁成一屏，必须放开才能分页 */
       html, body{ height:auto !important; overflow:visible !important; }
+      /* 纸上不该带着外壳的主题色：body{background:var(--bg)} 会把整页铺成浅灰蓝
+         （暗色主题更是一页黑底），而自绘网格/幻灯片没有一整块白底去盖它。
+         元素自己声明的颜色（单元格底色、字色）照旧说话，这里只兜住"没人管的地方" */
+      html, body{ background:#fff !important; color:#111 !important; }
       body > *:not(#oof-print-host){ display:none !important; }
       #oof-print-host{ display:block !important; }
       /* 豁免 index.css 的 body *{visibility:hidden} 文档打印规则 */

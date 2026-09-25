@@ -1368,6 +1368,44 @@ function PdfViewer({ tab }: Props) {
           content: (a.content ?? a.text ?? '').slice(0, 60),
         })),
       shapes: () => annos.filter(isShape).map((a) => ({ kind: a.kind, page: a.page, color: a.color, box: a.rects[0] })),
+      // 冒烟用：这一页的图元与文字（表格打印保真要核"图真的进去了、藏起来的值真的没进去"）
+      // 图片对象要等解码完才量得到尺寸，所以拿到 objectId 后再等它落地
+      pageProbe: async (n: number) => {
+        const p = await doc?.getPage(n)
+        if (!p) return null
+        const [ops, txt] = await Promise.all([p.getOperatorList(), p.getTextContent()])
+        let imageOps = 0
+        const names = new Set<string>()
+        for (let i = 0; i < ops.argsArray.length; i++) {
+          const a = ops.argsArray[i] as unknown[]
+          if (typeof a?.[0] === 'string' && a[0].startsWith('img_')) {
+            imageOps++
+            names.add(a[0])
+          }
+        }
+        const holder = p as unknown as { objs?: { get?: (k: string) => unknown } }
+        const images: { name: string; w: number; h: number }[] = []
+        for (const name of names) {
+          let box: { width?: number; height?: number } | undefined
+          for (let i = 0; i < 12; i++) {
+            // pdf.js 的 objs.get 对还没解码完的对象是直接抛异常的，不是返回 undefined
+            try {
+              box = holder.objs?.get?.(name) as { width?: number; height?: number } | undefined
+            } catch {
+              box = undefined
+            }
+            if (box?.width) break
+            await new Promise((r) => setTimeout(r, 150))
+          }
+          images.push({ name, w: box?.width ?? 0, h: box?.height ?? 0 })
+        }
+        return {
+          imageOps,
+          uniqueImages: names.size,
+          images,
+          text: txt.items.map((t) => ('str' in t ? t.str : '')).join(' '),
+        }
+      },
       // 冒烟用：标注的显示空间几何原值（验证旋转/删页后几何是否跟着走对）
       geo: () => annos.map((a) => ({ kind: a.kind, page: a.page, r: a.rects[0], polys: a.polys })),
       drawTool: () => drawTool,

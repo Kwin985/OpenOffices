@@ -1424,6 +1424,164 @@ mod tests {
         println!("fixture written: {path}");
     }
 
+    fn cf_print_cells() -> Vec<CellPayload> {
+        let col = |c: u32, vals: &[Value]| -> Vec<CellPayload> {
+            vals.iter()
+                .enumerate()
+                .map(|(r, v)| cell(r as u32, c, v.clone()))
+                .collect()
+        };
+        let mut out = Vec::new();
+        out.extend(col(0, &[json!(-1.0), json!(2.0), json!(5.0), json!(8.0), json!(11.0), json!(14.0)]));
+        out.extend(col(1, &[json!(3.0), json!(7.0), json!(1.0), json!(9.0), json!(4.0), json!(6.0)]));
+        out.extend(col(2, &[json!(2.0), json!(10.0), json!(-5.0), json!(5.0), json!(7.0), json!(1.0)]));
+        out.extend(col(3, &[json!("甲"), json!("乙"), json!("甲"), json!("丙"), json!("乙"), json!("甲")]));
+        out.extend(col(4, &[json!(10.0), json!(20.0), json!(30.0), json!(40.0), json!(50.0), json!(60.0)]));
+        out.extend(col(5, &[json!(5.0), json!(15.0), json!(25.0), json!(35.0), json!(45.0), json!(55.0)]));
+        out.extend(col(6, &[json!("报价单"), json!("合同"), json!("报价调整"), json!("发票"), json!("报价"), json!("收据")]));
+        out.extend(col(7, &[json!(1.0), json!(2.0), json!(3.0), json!(4.0), json!(5.0), json!(6.0)]));
+        out
+    }
+
+    fn cf_stop(t: &str, color: &str, v: Option<Value>) -> CondFormatStop {
+        CondFormatStop { color: color.into(), t: t.into(), v }
+    }
+
+    /// 条件格式打印夹具：每列一种判定型，供「我们打印算出的颜色」与「Excel 自己显示的颜色」对表
+    fn cf_print_workbook() -> WorkbookPayload {
+        let bg = |bg: &str, cl: &str, bl: bool| CondFormatStyle {
+            bg: Some(bg.into()),
+            cl: if cl.is_empty() { None } else { Some(cl.into()) },
+            bl: bl.then_some(true),
+            ..Default::default()
+        };
+        let row6 = |c: u32| rc(0, c, 5, c);
+        WorkbookPayload {
+            sheets: vec![SheetPayload {
+                name: "条件格式".into(),
+                cells: cf_print_cells(),
+                // A：数值判定 + 命中即停 / B：三色色阶 / C：实色数据条且藏值 / D：重复值
+                // E：前 2 名 / F：高于均值 / G：含"报价" / H：图标集（打印只能记账）
+                cond_formats: vec![
+                    CondFormatPayload {
+                        ranges: vec![row6(0)],
+                        kind: "cell".into(),
+                        sub: Some("number".into()),
+                        op: Some("greaterThan".into()),
+                        v1: Some(json!(5)),
+                        fmt: Some(bg("#ffc7ce", "#9c0006", true)),
+                        stop: Some(true),
+                        ..Default::default()
+                    },
+                    CondFormatPayload {
+                        ranges: vec![row6(1)],
+                        kind: "colorScale".into(),
+                        scale: Some(vec![
+                            cf_stop("min", "#ffffff", None),
+                            cf_stop("percentile", "#ffeb9c", Some(json!(50))),
+                            cf_stop("max", "#63be7b", None),
+                        ]),
+                        ..Default::default()
+                    },
+                    CondFormatPayload {
+                        ranges: vec![row6(2)],
+                        kind: "dataBar".into(),
+                        bar: Some(CondFormatBar {
+                            min: CondFormatBarStop { t: "min".into(), v: None },
+                            max: CondFormatBarStop { t: "max".into(), v: None },
+                            pos: "#638ec6".into(),
+                            neg: Some("#ff5f5f".into()),
+                            grad: Some(false),
+                        }),
+                        show_value: Some(false),
+                        ..Default::default()
+                    },
+                    CondFormatPayload {
+                        ranges: vec![row6(3)],
+                        kind: "cell".into(),
+                        sub: Some("duplicateValues".into()),
+                        fmt: Some(bg("#fff2cc", "", false)),
+                        ..Default::default()
+                    },
+                    CondFormatPayload {
+                        ranges: vec![row6(4)],
+                        kind: "cell".into(),
+                        sub: Some("rank".into()),
+                        op: Some("top".into()),
+                        v1: Some(json!(2)),
+                        fmt: Some(bg("#ddebf3", "#1f4e79", true)),
+                        ..Default::default()
+                    },
+                    CondFormatPayload {
+                        ranges: vec![row6(5)],
+                        kind: "cell".into(),
+                        sub: Some("average".into()),
+                        op: Some("greaterThan".into()),
+                        fmt: Some(bg("#e2efda", "", false)),
+                        ..Default::default()
+                    },
+                    CondFormatPayload {
+                        ranges: vec![row6(6)],
+                        kind: "cell".into(),
+                        sub: Some("text".into()),
+                        op: Some("containsText".into()),
+                        v1: Some(json!("报价")),
+                        fmt: Some(bg("#fce4d6", "#974706", false)),
+                        ..Default::default()
+                    },
+                    CondFormatPayload {
+                        ranges: vec![row6(7)],
+                        kind: "iconSet".into(),
+                        icon_style: Some("3TrafficLights1".into()),
+                        icons: Some(vec![
+                            CondFormatIconLevel { op: "greaterThanOrEqual".into(), t: "percentile".into(), v: Some(json!(67)) },
+                            CondFormatIconLevel { op: "greaterThanOrEqual".into(), t: "percentile".into(), v: Some(json!(33)) },
+                            CondFormatIconLevel { op: "greaterThanOrEqual".into(), t: "num".into(), v: Some(json!(0)) },
+                        ]),
+                        ..Default::default()
+                    },
+                ],
+                charts: vec![ChartPayload {
+                    chart_type: "column".into(),
+                    grouping: "standard".into(),
+                    title: "色阶与排名".into(),
+                    anchor_row: 1,
+                    anchor_col: 9,
+                    width: 360,
+                    height: 240,
+                    series: vec![ChartSeries {
+                        name: "E".into(),
+                        cat: Some(rf("条件格式", 0, 0, 5, 0)),
+                        val: rf("条件格式", 0, 4, 5, 4),
+                        cats: vec![],
+                        vals: vec![],
+                    }],
+                }],
+                ..Default::default()
+            }],
+            ..Default::default()
+        }
+    }
+
+    /// CDP 与 Excel 对照腿的夹具：写出带八种条件格式与一张图表的 xlsx，并把读回来的载荷一并落成 JSON
+    /// （JSON 就是应用打开时看到的那份模型， legs 拿它对表才不是各说各话）
+    #[test]
+    #[ignore]
+    fn gen_cf_print_fixture() {
+        let dir = std::env::var("OO_FIXTURE_DIR")
+            .unwrap_or_else(|_| concat!(env!("CARGO_MANIFEST_DIR"), "/../tmp").to_string());
+        std::fs::create_dir_all(&dir).ok();
+        let path = format!("{dir}/fixture-cf-print.xlsx");
+        let notes = write_xlsx_sync(path.clone(), cf_print_workbook()).expect("写夹具失败");
+        let back = read_xlsx_sync(path.clone()).expect("读夹具失败");
+        std::fs::write(
+            format!("{dir}/fixture-cf-print.json"),
+            serde_json::to_string_pretty(&back).expect("序列化失败"),
+        )
+        .ok();
+        println!("fixture written: {path}，写侧账目 {notes:?}");
+    }
+
     fn rc(start_row: u32, start_column: u32, end_row: u32, end_column: u32) -> RangeRect {
         RangeRect {
             start_row,

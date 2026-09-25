@@ -14,6 +14,7 @@ import { renderChartPng } from '../lib/chart'
 import { registerSaver } from '../lib/registry'
 import { exportPdfWithOverlay } from '../lib/pdfprint'
 import { sheetsToPrintHtml } from '../lib/sheet-print'
+import { evalSheetCondFormats } from '../lib/sheet-cf-print'
 import { sheetTemplate } from '../lib/templates'
 
 type FWorkbook = NonNullable<ReturnType<FUniver['getActiveWorkbook']>>
@@ -346,48 +347,53 @@ function SheetEditor({ tab }: Props) {
     flash(updated > 0 ? `已刷新 ${updated} 个图表` : '无需刷新或图表已被删除')
   }
 
+  // 图表侧通道：Univer 只把图表当一张浮动图片，载荷里的图表靠这份账本附着。
+  // 保存与导出 PDF 吃的是同一份产物，否则"文件里有图、打印里没图"又会各说一次话
+  const payloadWithCharts = (wb: FWorkbook, snapshot: IWorkbookData): WorkbookPayload => {
+    const payload = workbookToPayload(snapshot)
+    // 调和删除 → 同步锚点 → 取最新数值 → 按工作表附着
+    for (const [id, item] of [...chartsRef.current]) {
+      const ws = wb.getSheetByName(item.sheetName)
+      if (!ws || !ws.getImages().some((im) => im.getId() === id)) {
+        chartsRef.current.delete(id)
+      }
+    }
+    const anchors = drawingAnchors(snapshot)
+    const bySheet = new Map<string, ChartPayload[]>()
+    for (const [id, item] of chartsRef.current) {
+      let p = refreshPayloadValues(wb, item)
+      const a = anchors.get(id)
+      if (a) {
+        p = {
+          ...p,
+          anchorRow: a.row,
+          anchorCol: a.col,
+          width: a.width || p.width,
+          height: a.height || p.height,
+        }
+      }
+      item.payload = p
+      const list = bySheet.get(item.sheetName) ?? []
+      list.push(p)
+      bySheet.set(item.sheetName, list)
+    }
+    for (const sheet of payload.sheets) {
+      const list = bySheet.get(sheet.name)
+      if (list?.length) {
+        sheet.charts = list.sort((a, b) => a.anchorRow - b.anchorRow || a.anchorCol - b.anchorCol)
+      }
+    }
+    setChartCount(chartsRef.current.size)
+    return payload
+  }
+
   const save = async (asNew: boolean) => {
     const api = apiRef.current
     const wb = api?.getActiveWorkbook()
     if (!api || !wb) return
     try {
       const snapshot = wb.save() as IWorkbookData
-      const payload = workbookToPayload(snapshot)
-      // 图表侧通道：调和删除 → 同步锚点 → 取最新数值 → 按工作表附着
-      for (const [id, item] of [...chartsRef.current]) {
-        const ws = wb.getSheetByName(item.sheetName)
-        if (!ws || !ws.getImages().some((im) => im.getId() === id)) {
-          chartsRef.current.delete(id)
-        }
-      }
-      const anchors = drawingAnchors(snapshot)
-      const bySheet = new Map<string, ChartPayload[]>()
-      for (const [id, item] of chartsRef.current) {
-        let p = refreshPayloadValues(wb, item)
-        const a = anchors.get(id)
-        if (a) {
-          p = {
-            ...p,
-            anchorRow: a.row,
-            anchorCol: a.col,
-            width: a.width || p.width,
-            height: a.height || p.height,
-          }
-        }
-        item.payload = p
-        const list = bySheet.get(item.sheetName) ?? []
-        list.push(p)
-        bySheet.set(item.sheetName, list)
-      }
-      for (const sheet of payload.sheets) {
-        const list = bySheet.get(sheet.name)
-        if (list?.length) {
-          sheet.charts = list.sort(
-            (a, b) => a.anchorRow - b.anchorRow || a.anchorCol - b.anchorCol,
-          )
-        }
-      }
-      setChartCount(chartsRef.current.size)
+      const payload = payloadWithCharts(wb, snapshot)
       let path = asNew ? undefined : tab.path
       if (!path) {
         path =
@@ -440,17 +446,35 @@ function SheetEditor({ tab }: Props) {
   const exportPdfTo = async (path: string) => {
     const wb = apiRef.current?.getActiveWorkbook()
     if (!wb) throw new Error('表格尚未就绪')
-    const payload = workbookToPayload(wb.save() as IWorkbookData)
+    const payload = payloadWithCharts(wb, wb.save() as IWorkbookData)
+    // 图表住在浮动图片里，画布上的东西 PrintToPdf 抓不到：按 VChart 现渲染的位图贴回网格
+    const chartImages: (string | undefined)[][] = []
+    for (const s of payload.sheets) {
+      const list: (string | undefined)[] = []
+      for (const c of s.charts ?? []) {
+        try {
+          list.push(await renderChartPng(c))
+        } catch {
+          list.push(undefined)
+        }
+      }
+      chartImages.push(list)
+    }
+    const { html, notes } = sheetsToPrintHtml(payload, chartImages)
     const box = document.createElement('div')
-    box.innerHTML = sheetsToPrintHtml(payload)
+    box.innerHTML = html
     try {
       await exportPdfWithOverlay(path, box, {
         // A4 横向（11.69×8.27 英寸），边距用 Rust 默认
         pageSizeInches: [11.69, 8.27],
       })
       markRecent(path, 'pdf')
-      setStatus('已导出 PDF')
-      setTimeout(() => setStatus(''), 1500)
+      setStatus(
+        notes.length
+          ? `已导出 PDF（${notes[0]}${notes.length > 1 ? `，另有 ${notes.length - 1} 条说明` : ''}）`
+          : '已导出 PDF',
+      )
+      setTimeout(() => setStatus(''), notes.length ? 5000 : 1500)
     } finally {
       box.innerHTML = ''
     }
@@ -479,11 +503,28 @@ function SheetEditor({ tab }: Props) {
     // 按标签取实例：多标签时全局别名会被最后一次渲染改走（v0.41 冒烟踩过）
     const byTab = (w.__oofSheetByTab ??= {}) as Record<
       string,
-      { save: (asNew: boolean) => Promise<void>; exportPdfTo: (p: string) => Promise<void> }
+      {
+        save: (asNew: boolean) => Promise<void>
+        exportPdfTo: (p: string) => Promise<void>
+        printPlan: () => unknown
+      }
     >
     byTab[tab.id] = {
       save: (asNew: boolean) => saveRef.current(asNew),
       exportPdfTo: (p: string) => exportPdfToRef.current(p),
+      // 冒烟用：打印这一页"打算怎么画、哪些没画"的账面，不经渲染就能核对
+      printPlan: () => {
+        const wb = apiRef.current?.getActiveWorkbook()
+        if (!wb) return null
+        const payload = payloadWithCharts(wb, wb.save() as IWorkbookData)
+        return {
+          rules: payload.sheets.map((s) => s.condFormats?.length ?? 0),
+          cfNotes: payload.sheets.flatMap((s) => evalSheetCondFormats(s).notes),
+          charts: payload.sheets.map((s) =>
+            (s.charts ?? []).map((c) => ({ w: c.width, h: c.height, ar: c.anchorRow, ac: c.anchorCol })),
+          ),
+        }
+      },
     }
   }
 
