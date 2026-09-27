@@ -7,6 +7,7 @@ use std::path::Path;
 
 use crate::xlsx_cell_side;
 use crate::xlsx_chart;
+use crate::xlsx_print;
 use crate::xlsx_style;
 
 fn is_false(v: &bool) -> bool {
@@ -409,6 +410,164 @@ pub struct SheetPayload {
     pub notes: Vec<CellNotePayload>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub links: Vec<CellLinkPayload>,
+    /// 打印设置：页面/纸张/页眉页脚/分页符/打印区域/重复标题行。Univer 模型装不下，两头纯换算
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub print: Option<SheetPrintPayload>,
+}
+
+/// 页眉/页脚的一条：OOXML 就存一条串，里头用 `&L`/`&C`/`&R` 分左中右三段，
+/// `&A` 表名、`&P`/`&N` 页码/总页、`&D` 日期、`&F` 文件名。crate 只有 odd 通道，
+/// even/first 与两个开关（differentOddEven/differentFirst）交给存盘时的定点重打包补
+#[derive(Serialize, Deserialize, Clone, Debug, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct PrintHfPayload {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub odd: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub even: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub first: Option<String>,
+}
+
+/// 页面边距（英寸浮点，与 OOXML `<pageMargins>` 同单位；Excel 写出的值常带 0.449999… 这种噪点，原样收）
+#[derive(Serialize, Deserialize, Clone, Debug, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct PrintMarginsPayload {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub top: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub right: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bottom: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub left: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub header: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub footer: Option<f64>,
+}
+
+/// 一张表的打印设置：页面/纸张/边距/页眉页脚/手动分页符/打印区域/重复标题行。
+/// 全字段都来自 OOXML 字面（枚举收字面、边距收英寸、区域收 0 基含端点、分页符原样收 `<brk id>`）。
+#[derive(Serialize, Deserialize, Clone, Debug, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct SheetPrintPayload {
+    /// landscape / portrait
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub orientation: Option<String>,
+    /// OOXML paperSize 数字（9 = A4）
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub paper_size: Option<u32>,
+    /// 缩放百分比（10~400），与 fit_to_page 二选一
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scale: Option<u32>,
+    /// sheetPr/pageSetUpPr@fitToPage：勾了「fit 到 N×M 页」
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub fit_to_page: bool,
+    /// 0 在 OOXML 里是「无限」，原样收（不换算）
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fit_to_width: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fit_to_height: Option<u32>,
+    /// downThenOver / overThenDown
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub page_order: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub margins: Option<PrintMarginsPayload>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub h_centered: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub v_centered: Option<bool>,
+    /// 打印网格线（printOptions@gridLines）
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub grid_lines: Option<bool>,
+    /// 打印行列标题（printOptions@headings）——这一版写不回去，只记账
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub headings: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub first_page_number: Option<u32>,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub odd_even: bool,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub first_differs: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub header: Option<PrintHfPayload>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub footer: Option<PrintHfPayload>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub print_area: Option<RangeRect>,
+    /// 重复标题行 [起, 止]（0 基含端点）
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub title_rows: Option<[u32; 2]>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub title_cols: Option<[u32; 2]>,
+    /// 手动行分页符：原样收 `<brk id>`——这些行**自己**开始新的一页（0 基）。
+    /// 实测两头都对上：Excel 在 A11 之前插断点写出 id=10；我们写 id=3 时 Excel 报 Location.Row=4（1 基）
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub row_breaks: Vec<u32>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub col_breaks: Vec<u32>,
+}
+
+impl SheetPrintPayload {
+    /// 一个字段都没落上（空表不占载荷，也不进 by_sheet）
+    pub fn is_empty(&self) -> bool {
+        self.orientation.is_none()
+            && self.paper_size.is_none()
+            && self.scale.is_none()
+            && !self.fit_to_page
+            && self.fit_to_width.is_none()
+            && self.fit_to_height.is_none()
+            && self.page_order.is_none()
+            && self.margins.is_none()
+            && self.h_centered.is_none()
+            && self.v_centered.is_none()
+            && self.grid_lines.is_none()
+            && self.headings.is_none()
+            && self.first_page_number.is_none()
+            && !self.odd_even
+            && !self.first_differs
+            && self.header.is_none()
+            && self.footer.is_none()
+            && self.print_area.is_none()
+            && self.title_rows.is_none()
+            && self.title_cols.is_none()
+            && self.row_breaks.is_empty()
+            && self.col_breaks.is_empty()
+    }
+}
+
+/// OOXML paperSize 编号 → 纸名。只收常见档；认不出返回 None（如实记账，打印按默认纸）
+pub fn paper_name(code: u32) -> Option<&'static str> {
+    Some(match code {
+        1 => "Letter",
+        2 => "Letter Small",
+        3 => "Tabloid",
+        4 => "Ledger",
+        5 => "Legal",
+        6 => "Statement",
+        7 => "Executive",
+        8 => "A3",
+        9 => "A4",
+        10 => "A4 Small",
+        11 => "A5",
+        12 => "B4",
+        13 => "B5",
+        14 => "Folio",
+        15 => "Quarto",
+        16 => "10x14",
+        17 => "11x17",
+        18 => "Paper C",
+        19 => "Paper D",
+        20 => "Paper E",
+        21 => "Fan-fold",
+        24 => "A4 (rotated)",
+        25 => "A4 Small (rotated)",
+        26 => "A5 (rotated)",
+        27 => "B4 (rotated)",
+        28 => "B5 (rotated)",
+        _ => return None,
+    })
 }
 
 #[derive(Serialize, Deserialize, Default)]
@@ -515,6 +674,13 @@ pub fn read_xlsx_sync(path: String) -> Result<WorkbookPayload, Error> {
         Default::default()
     };
     rule_notes.append(&mut sides.accounts);
+    // 打印设置散在 worksheet 末尾七处 + 两条 definedName，也只在 xlsx 这条路上读
+    let mut prints = if path.to_ascii_lowercase().ends_with(".xlsx") {
+        xlsx_print::read_print_setups(&path)
+    } else {
+        Default::default()
+    };
+    rule_notes.append(&mut prints.accounts);
     // 一格值同时进 cells 和"图表取数"用的网格；后者只在簿子真含图表时才需要（多数没有）
     let keep_grid = xlsx_chart::has_charts(&path);
     let mut grids: std::collections::HashMap<String, xlsx_chart::Grid> =
@@ -584,6 +750,7 @@ pub fn read_xlsx_sync(path: String) -> Result<WorkbookPayload, Error> {
         }
         // 批注与链接：按表名对回独立部件的读数（remove 而不是 get——一张表的读数只该用一次）
         let side = sides.by_sheet.remove(&name);
+        let print = prints.by_sheet.remove(&name);
         sheets.push(SheetPayload {
             name,
             cells,
@@ -603,6 +770,7 @@ pub fn read_xlsx_sync(path: String) -> Result<WorkbookPayload, Error> {
                 .unwrap_or_default(),
             notes: side.as_ref().map(|s| s.notes.clone()).unwrap_or_default(),
             links: side.as_ref().map(|s| s.links.clone()).unwrap_or_default(),
+            print,
             ..Default::default()
         });
     }
@@ -749,7 +917,9 @@ pub fn write_xlsx_sync(path: String, workbook: WorkbookPayload) -> Result<Vec<St
     let mut notes = Vec::new();
     // 每张表交回来的作者表（下标即 authorId），存盘时拿它核对产物里的 <authors>
     let mut tables: Vec<Option<xlsx_cell_side::AuthorTable>> = Vec::new();
-    for sheet in &workbook.sheets {
+    // crate 写不了的那半边打印设置，按 worksheet 部件名点名（部件序号＝建表顺序，1 基）
+    let mut print_patches: Vec<(String, xlsx_print::PrintPatch)> = Vec::new();
+    for (i, sheet) in workbook.sheets.iter().enumerate() {
         let ws = wb.add_worksheet();
         ws.set_name(&sheet.name)
             .map_err(|e| Error(format!("工作表命名失败: {e}")))?;
@@ -875,11 +1045,28 @@ pub fn write_xlsx_sync(path: String, workbook: WorkbookPayload) -> Result<Vec<St
         }
         // 三类规则（筛选 / 数据验证 / 条件格式）：写不进去的东西带回来记账，不在存盘时静默少给
         notes.extend(write_sheet_rules(ws, sheet));
+        // 打印设置：odd 页眉页脚与其余各项走 crate，even/first 与起始页码带回存盘那一趟重打包
+        let pw = xlsx_print::write_sheet_print(ws, sheet);
+        notes.extend(pw.notes);
+        let patch = xlsx_print::PrintPatch {
+            sheet_name: sheet.name.clone(),
+            hf: pw.hf,
+            first_page_number: pw.page_number_patch,
+        };
+        if !patch.noop() {
+            // crate 按建表顺序把表写成 xl/worksheets/sheet{1,2,…}.xml
+            print_patches.push((format!("xl/worksheets/sheet{}.xml", i + 1), patch));
+        }
     }
     // 批注的作者表可能要和产物对一次账（crate 把那张表按名字排序写了，编号却是格子序），
-    // 所以对不上时不只是记账——先重排，重排不了的才记账
-    notes.extend(xlsx_cell_side::save_workbook(path.as_str(), &mut wb, tables.as_slice())
-        .map_err(Error)?);
+    // 所以对不上时不只是记账——先重排，重排不了的才记账；同一趟里补上打印设置的半边
+    notes.extend(xlsx_cell_side::save_workbook(
+        path.as_str(),
+        &mut wb,
+        tables.as_slice(),
+        print_patches.as_slice(),
+    )
+    .map_err(Error)?);
     Ok(notes)
 }
 

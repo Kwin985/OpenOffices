@@ -2058,7 +2058,6 @@ button {
 }
 
 .sheet-print-table td {
-  border: 1px solid #c9ced6;
   padding: 2px 6px;
   font-size: 11px;
   line-height: 1.45;
@@ -2066,6 +2065,31 @@ button {
   overflow: hidden;
   white-space: pre-wrap;
   word-break: break-all;
+}
+
+/* 网格线是打印设置里的一勾，不再是无条件画：Excel 默认不印网格线，勾了才印。
+   没声明过页面设置的表（我们在 Univer 里新建的就是这种）沿用历史上带细网格的观感，
+   判定在 sheet-print-setup.ts 的 gridLines 里说 */
+.sheet-print-table.sheet-print-grid td {
+  border: 1px solid #c9ced6;
+}
+
+/* 行列标题（headings）：纸上是灰底小号的行号与列字母，跟界面上那两行/列同一个观感 */
+.sheet-print-heading,
+.sheet-print-corner {
+  border: 1px solid #c9ced6;
+  background: #f3f4f6;
+  color: #555;
+  font-size: 10px;
+  font-weight: 400;
+  text-align: center;
+  padding: 1px 3px;
+}
+
+/* 一个列带一张表：带内允许被分页切开，带与带之间由 sheet-print-break 隔开 */
+.sheet-print-band {
+  page-break-inside: auto;
+  break-inside: auto;
 }
 
 .sheet-print-break {

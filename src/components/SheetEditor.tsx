@@ -11,7 +11,13 @@ import type { SheetRules } from '../lib/sheet-rules'
 import { restampCellSide } from '../lib/sheet-cell-side'
 import type { CellSide } from '../lib/sheet-cell-side'
 import { baseName, pickSaveFile, readXlsx, writeCsv, writeOds, writeXlsx } from '../lib/fs'
-import type { ChartPayload, ChartRangeRef, ChartSeriesPayload, WorkbookPayload } from '../lib/fs'
+import type {
+  ChartPayload,
+  ChartRangeRef,
+  ChartSeriesPayload,
+  SheetPrintPayload,
+  WorkbookPayload,
+} from '../lib/fs'
 import { renderChartPng } from '../lib/chart'
 import { registerSaver } from '../lib/registry'
 import { exportPdfWithOverlay } from '../lib/pdfprint'
@@ -175,6 +181,9 @@ function SheetEditor({ tab }: Props) {
   // 打开时读到的批注作者与链接提示：Univer 的模型装不下它们（外来 resource 也活不过
   // createWorkbook，实测），所以自己按表名留一份，存盘前按格子回贴
   const cellSideRef = useRef(new Map<string, CellSide>())
+  // 打印设置（纸张/边距/页眉页脚/分页符/打印区域/重复标题行列）也是 Univer 装不下的东西：
+  // 界面上一版没有页面设置面板，读回来的那份就按表名留着，存盘与导出 PDF 都照它说话
+  const printRef = useRef(new Map<string, SheetPrintPayload>())
   const [status, setStatus] = useState<string>(tab.path ? '正在加载…' : '')
   const [chartCount, setChartCount] = useState(0)
   const [dialogOpen, setDialogOpen] = useState(false)
@@ -218,6 +227,7 @@ function SheetEditor({ tab }: Props) {
     let api: FUniver | null = null
     chartsRef.current = new Map()
     cellSideRef.current = new Map()
+    printRef.current = new Map()
     setChartCount(0)
     const worker = new Worker(new URL('../univer-worker.ts', import.meta.url), {
       type: 'module',
@@ -245,6 +255,11 @@ function SheetEditor({ tab }: Props) {
           dump.sheets
             .filter((s) => s.notes?.length || s.links?.length)
             .map((s) => [s.name, { notes: s.notes, links: s.links } as CellSide]),
+        )
+        printRef.current = new Map(
+          dump.sheets
+            .filter((s) => s.print)
+            .map((s) => [s.name, s.print as SheetPrintPayload]),
         )
         // 还原已存图表：PNG 渲染并行（VChart 是纯计算），落格串行（同一 sheet 的命令队列）
         const items = dump.sheets.flatMap((s) =>
@@ -369,6 +384,11 @@ function SheetEditor({ tab }: Props) {
     for (const sheet of payload.sheets) {
       restampCellSide(sheet, cellSideRef.current.get(sheet.name))
     }
+    // 打印设置同理：界面上这一版还没有页面设置面板，读回来的那份不回帖就是"存一次盘，纸面设置没了"
+    for (const sheet of payload.sheets) {
+      const p = printRef.current.get(sheet.name)
+      if (p && !sheet.print) sheet.print = p
+    }
     // 调和删除 → 同步锚点 → 取最新数值 → 按工作表附着
     for (const [id, item] of [...chartsRef.current]) {
       const ws = wb.getSheetByName(item.sheetName)
@@ -438,16 +458,19 @@ function SheetEditor({ tab }: Props) {
       const hasRules = payload.sheets.some(
         (s) => s.filter || s.dataValidations?.length || s.condFormats?.length,
       )
+      // 页面设置是"这份纸该怎么摆"的那份设置：ODS/CSV 这一版都写不出，说清楚比静默丢强
+      const hasPrint = payload.sheets.some((s) => s.print)
       // 格式本身装不下的东西先说，接着一句接写侧带回来的账（有条规则摆不进 OOXML 这类）
       const lost: string[] = []
       if (isCsv)
         lost.push(
-          'CSV 只含首个工作表，公式、样式、合并、图表、批注/链接与筛选/数据验证/条件格式都不保留',
+          'CSV 只含首个工作表，公式、样式、合并、图表、批注/链接、筛选/数据验证/条件格式与页面设置都不保留',
         )
       if (isOds) {
         if (hasCharts) lost.push('ODS 暂不含图表')
         if (hasSide) lost.push('ODS 暂不含批注与超链接')
         if (hasRules) lost.push('ODS 暂不含筛选、数据验证与条件格式')
+        if (hasPrint) lost.push('ODS 暂不含页面设置（纸张/边距/页眉页脚/分页符），导出的 PDF 仍照它排')
       }
       const notes = [...lost, ...writeNotes]
       setStatus(
@@ -483,13 +506,18 @@ function SheetEditor({ tab }: Props) {
       }
       chartImages.push(list)
     }
-    const { html, notes } = sheetsToPrintHtml(payload, chartImages)
+    const { html, notes, job } = sheetsToPrintHtml(payload, chartImages, {
+      dateText: new Date().toLocaleDateString(),
+      fileName: tab.path ? baseName(tab.path) : undefined,
+    })
     const box = document.createElement('div')
     box.innerHTML = html
     try {
       await exportPdfWithOverlay(path, box, {
-        // A4 横向（11.69×8.27 英寸），边距用 Rust 默认
-        pageSizeInches: [11.69, 8.27],
+        // 纸面、四边距、页眉页脚都由打印计划说话（文件里声明过就照它，没声明沿用表格历史的 A4 横向）
+        pageSizeInches: job.pageSizeInches,
+        marginsSides: job.margins,
+        pageStyle: job.pageStyle,
       })
       markRecent(path, 'pdf')
       setStatus(
@@ -540,12 +568,53 @@ function SheetEditor({ tab }: Props) {
         const wb = apiRef.current?.getActiveWorkbook()
         if (!wb) return null
         const payload = payloadWithCharts(wb, wb.save() as IWorkbookData)
+        const { html, notes, plans, job } = sheetsToPrintHtml(payload, undefined, {
+          dateText: '2026-01-01',
+          fileName: tab.path ? baseName(tab.path) : undefined,
+        })
+        const count = (re: RegExp) => (html.match(re) ?? []).length
         return {
           rules: payload.sheets.map((s) => s.condFormats?.length ?? 0),
           cfNotes: payload.sheets.flatMap((s) => evalSheetCondFormats(s).notes),
           charts: payload.sheets.map((s) =>
             (s.charts ?? []).map((c) => ({ w: c.width, h: c.height, ar: c.anchorRow, ac: c.anchorCol })),
           ),
+          // 这一趟的纸面：PrintToPdf 真正吃的那三个数，与页眉页脚那份 @page
+          job: {
+            page: job.pageSizeInches,
+            margins: job.margins,
+            capacityPx: job.capacityPx,
+            hf: job.pageStyle,
+          },
+          // 每张表自己想要的纸（各表不一致时账在 job 的 notes 里）
+          plans: plans.map((p, i) => ({
+            name: payload.sheets[i]?.name ?? '',
+            page: p.pageSizeInches,
+            margins: p.margins,
+            zoom: p.zoom,
+            gridLines: p.gridLines,
+            headings: p.headings,
+            hCentered: p.hCentered,
+            fitToWidthPages: p.fitToWidthPages,
+            printArea: p.printArea,
+            titleRows: p.titleRows,
+            titleCols: p.titleCols,
+            pageBreakRows: p.pageBreakRows,
+            colBreaks: p.colBreaks,
+            notes: p.notes,
+          })),
+          // 结构计数：打印将要吃的 HTML 里各类节点各几枚，纸上有没有真东西就看这些
+          tables: count(/<table /g),
+          bands: count(/class="sheet-print-band/g),
+          bandBreaks: count(/class="sheet-print-band sheet-print-break"/g),
+          thead: count(/<thead>/g),
+          rowBreaks: count(/<tr class="sheet-print-break"/g),
+          headingCells: count(/<th class="sheet-print-heading"/g),
+          gridClass: count(/class="sheet-print-table sheet-print-grid"/g),
+          zoomAttr: count(/style="zoom:/g),
+          centered: count(/margin-left:auto/g),
+          onPaperNotes: count(/class="sheet-print-note"/g),
+          notes,
         }
       },
     }
@@ -557,7 +626,7 @@ function SheetEditor({ tab }: Props) {
         <button className="tool-btn" onClick={() => save(false)}>保存</button>
         <button className="tool-btn" onClick={() => save(true)}>另存为…</button>
         <button className="tool-btn" onClick={() => setDialogOpen((v) => !v)}>插入图表</button>
-        <button className="tool-btn" onClick={() => void exportPdf()} title="A4 横向自绘网格">导出 PDF</button>
+        <button className="tool-btn" onClick={() => void exportPdf()} title="自绘网格，纸面照文件的页面设置">导出 PDF</button>
         {chartCount > 0 && (
           <button className="tool-btn" onClick={refreshCharts}>刷新图表 ({chartCount})</button>
         )}

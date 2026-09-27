@@ -199,6 +199,64 @@ export interface CellLinkPayload {
   tip?: string
 }
 
+/** 页眉/页脚的一条：OOXML 就存一条串，里头用 &L/&C/&R 分左中右三段，
+ *  &A 表名、&P/&N 页码/总页、&D 日期、&F 文件名。字段名与 OOXML 的 odd/even/first 三档同向 */
+export interface PrintHfPayload {
+  odd?: string | null
+  even?: string | null
+  first?: string | null
+}
+
+/** 页面边距（英寸浮点，与 OOXML <pageMargins> 同单位；Excel 写出的值常带 0.449999… 这种噪点，原样收） */
+export interface PrintMarginsPayload {
+  top?: number | null
+  right?: number | null
+  bottom?: number | null
+  left?: number | null
+  /** 页眉自身基线到纸边的距离（英寸）。CSS 的 @page 边距里没有这一档，只用于边距够不够放页眉 */
+  header?: number | null
+  footer?: number | null
+}
+
+/** 一张表的打印设置：页面/纸张/边距/页眉页脚/手动分页符/打印区域/重复标题行。
+ *  全字段来自 OOXML 字面（枚举收字面、边距收英寸、区域收 0 基含端点、分页符收「这一行/列自己开始新的一页」的下标），
+ *  Univer 的模型里根本没有这一层，所以它只活在我们自己的侧通道里（见 sheet-print-setup.ts） */
+export interface SheetPrintPayload {
+  /** landscape / portrait */
+  orientation?: string | null
+  /** OOXML paperSize 数字（9 = A4） */
+  paperSize?: number | null
+  /** 缩放百分比（10~400），与 fitToPage 二选一 */
+  scale?: number | null
+  /** sheetPr/pageSetUpPr@fitToPage：勾了「缩放到 N×M 页」 */
+  fitToPage?: boolean
+  /** 0 在 OOXML 里是「无限」，原样收（不换算） */
+  fitToWidth?: number | null
+  fitToHeight?: number | null
+  /** downThenOver / overThenDown */
+  pageOrder?: string | null
+  margins?: PrintMarginsPayload | null
+  hCentered?: boolean | null
+  vCentered?: boolean | null
+  /** 打印网格线（printOptions@gridLines） */
+  gridLines?: boolean | null
+  /** 打印行列标题（printOptions@headings）：纸上是我们的网格自己画行列号，文件里这一枚管别人打开时 Excel 印不印 */
+  headings?: boolean | null
+  firstPageNumber?: number | null
+  oddEven?: boolean
+  firstDiffers?: boolean
+  header?: PrintHfPayload | null
+  footer?: PrintHfPayload | null
+  printArea?: RangeRect | null
+  /** 重复标题行 [起, 止]（0 基含端点） */
+  titleRows?: [number, number] | null
+  titleCols?: [number, number] | null
+  /** 手动分页符：直接收 <brk id> 的值——这些行/列**自己**开始新的一页（0 基）。
+   *  实测两处对上：Excel 在 A11 之前插断点写出 id=10；我们写 id=3 时 Excel 报 Location.Row=4（1 基） */
+  rowBreaks?: number[]
+  colBreaks?: number[]
+}
+
 export interface SheetPayload {
   name: string
   cells: CellPayload[]
@@ -220,6 +278,8 @@ export interface SheetPayload {
   condFormats?: CondFormatPayload[]
   notes?: CellNotePayload[]
   links?: CellLinkPayload[]
+  /** 打印设置：纸张/边距/页眉页脚/分页符/打印区域/重复标题行。Univer 装不下，读回来由侧通道留住 */
+  print?: SheetPrintPayload | null
 }
 
 export interface WorkbookPayload {

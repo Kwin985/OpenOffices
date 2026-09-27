@@ -804,42 +804,50 @@ fn rc_to_a1(r: u32, c: u32) -> String {
     format!("{letters}{}", r + 1)
 }
 
-/// 存盘：`wb` 先落到内存，若某张表的作者表顺序与编号对不上就重排那一张再写文件。
+/// 存盘：`wb` 先落到内存，需要改字节的部件（批注作者表 / 打印设置的半边）在一次重打包里一起换掉。
 ///
 /// 为什么需要这一趟：rust_xlsxwriter 0.99.1 把 `<authors>` 按名字排序写出，而 `<comment authorId>`
 /// 用的是"按格子序首次出现"的编号（packager 只把 BTreeMap 的键抄出来，编号却是登记序）。
 /// 于是 A1=李四、A2=张三 的件在 Excel 里会把 A1 显示成张三——署名串到了别人头上。
 /// 载荷里那张表我们自己数得出来，就按编号重排回去；数不上（产物与预期对不齐）宁可不动也不猜。
+/// 同一趟里还要补 worksheet 上的打印设置（crate 只写 odd 页眉页脚，起始页码又落错了属性）。
 pub fn save_workbook(
     path: &str,
     wb: &mut Workbook,
     tables: &[Option<AuthorTable>],
+    print: &[(String, crate::xlsx_print::PrintPatch)],
 ) -> Result<Vec<String>, String> {
     let bytes = wb.save_to_buffer().map_err(|e| format!("保存失败: {e}"))?;
     // `xl/comments1.xml`、`comments2.xml`… 按"有批注的表"的先后编号（crate 的 write_comment_files），
     // 所以第 i 份归第 i 张有批注的表
-    let mut want: Vec<(String, &AuthorTable)> = Vec::new();
+    let mut want: Vec<(String, Fix<'_>)> = Vec::new();
     let mut idx = 1usize;
     for t in tables.iter().filter_map(|x| x.as_ref()) {
         if t.needs_rewrite() {
-            want.push((format!("xl/comments{idx}.xml"), t));
+            want.push((format!("xl/comments{idx}.xml"), Fix::Authors(t)));
         }
         idx += 1;
+    }
+    for (part, p) in print {
+        want.push((part.clone(), Fix::Print(p)));
     }
     if want.is_empty() {
         std::fs::write(path, bytes).map_err(|e| format!("保存失败: {e}"))?;
         return Ok(Vec::new());
     }
-    let (out, accounts) = rezip_authors(&bytes, want.as_slice())?;
+    let (out, accounts) = rezip_parts(&bytes, want.as_slice())?;
     std::fs::write(path, out).map_err(|e| format!("保存失败: {e}"))?;
     Ok(accounts)
 }
 
-/// 整包重打包，只换掉点名的那几个 comments 部件的 `<authors>` 表（其余条目原样搬过去、压缩方式照旧）
-fn rezip_authors(
-    bytes: &[u8],
-    want: &[(String, &AuthorTable)],
-) -> Result<(Vec<u8>, Vec<String>), String> {
+/// 重打包要动的两类部件（都是"只换点名的那一个，其余原样搬"）
+enum Fix<'a> {
+    Authors(&'a AuthorTable),
+    Print(&'a crate::xlsx_print::PrintPatch),
+}
+
+/// 整包重打包，只换掉点名的那几个部件（其余条目原样搬过去、压缩方式照旧）
+fn rezip_parts(bytes: &[u8], want: &[(String, Fix<'_>)]) -> Result<(Vec<u8>, Vec<String>), String> {
     let mut src = zip::ZipArchive::new(Cursor::new(bytes)).map_err(|e| format!("保存失败: {e}"))?;
     let mut done = vec![false; want.len()];
     let mut accounts: Vec<String> = Vec::new();
@@ -858,28 +866,43 @@ fn rezip_authors(
         let mut text = String::new();
         f.read_to_string(&mut text)
             .map_err(|e| format!("保存失败: {e}"))?;
-        let body = match swap_authors(text.as_str(), want[k].1) {
-            Some(new) => {
-                done[k] = true;
-                new
-            }
-            // 数不上就不动：把署名的作者名硬搬到别人格子上，比留一条账恶劣得多
-            None => {
-                accounts.push(format!(
-                    "{} 的作者表与载荷对不上，那张表的批注署名可能对在别的作者名下",
-                    want[k].0
-                ));
-                text
+        let (body, fixed) = match want[k].1 {
+            Fix::Authors(table) => match swap_authors(text.as_str(), table) {
+                Some(new) => (new, true),
+                // 数不上就不动：把署名的作者名硬搬到别人格子上，比留一条账恶劣得多
+                None => {
+                    accounts.push(format!(
+                        "{} 的作者表与载荷对不上，那张表的批注署名可能对在别的作者名下",
+                        want[k].0
+                    ));
+                    (text, false)
+                }
+            },
+            Fix::Print(patch) => {
+                let (new, mut notes) = crate::xlsx_print::patch_part_xml(text.as_str(), patch);
+                accounts.append(&mut notes);
+                (new, true)
             }
         };
+        done[k] = done[k] || fixed;
         zw.start_file(name.as_str(), opt)
             .map_err(|e| format!("保存失败: {e}"))?;
         zw.write_all(body.as_bytes())
             .map_err(|e| format!("保存失败: {e}"))?;
     }
     for (k, got) in done.iter().enumerate() {
-        if !got {
-            accounts.push(format!("产物里没有 {}，那张表的批注没写出去", want[k].0));
+        if *got {
+            continue;
+        }
+        match want[k].1 {
+            Fix::Authors(_) => accounts.push(format!(
+                "产物里没有 {}，那张表的批注没写出去",
+                want[k].0
+            )),
+            Fix::Print(_) => accounts.push(format!(
+                "产物里没有 {}，那张表的页眉页脚或起始页码没写出去",
+                want[k].0
+            )),
         }
     }
     let out = zw.finish().map_err(|e| format!("保存失败: {e}"))?;
