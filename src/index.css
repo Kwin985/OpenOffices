@@ -4,6 +4,8 @@
   --border: #e3e7ee;
   --text: #1f2937;
   --text-2: #6b7280;
+  /* 界面自己的"这不对"色（面板校验、删除悬停）：屏幕上用，永不上纸 */
+  --danger: #b91c1c;
   --accent: #2c66d4;
   --doc: #2c66d4;
   --sheet: #21a366;
@@ -697,6 +699,213 @@ button {
   display: flex;
   justify-content: flex-end;
   gap: 8px;
+}
+
+/* 表格的页面设置面板：项多，沿用 chart-pop 的定位与控件外观，只把身子撑宽 */
+.print-pop {
+  position: absolute;
+  top: 40px;
+  left: 10px;
+  z-index: 31;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  width: min(880px, calc(100% - 20px));
+  max-height: calc(100% - 60px);
+  overflow: auto;
+  padding: 12px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  box-shadow: 0 6px 20px rgb(0 0 0 / 12%);
+}
+
+.print-pop select,
+.print-pop input {
+  padding: 3px 6px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg);
+  color: var(--text);
+}
+
+.print-pop-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.print-pop-sub {
+  margin-left: 8px;
+  font-weight: 400;
+  font-size: 12px;
+  color: var(--text-2);
+}
+
+.print-pop-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+  gap: 10px;
+  align-items: start;
+}
+
+.print-sec {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+
+.print-sec legend {
+  padding: 0 4px;
+  font-size: 12px;
+  color: var(--text-2);
+}
+
+.print-sec label {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 13px;
+  color: var(--text);
+}
+
+.print-sec-wide {
+  grid-column: 1 / -1;
+}
+
+.print-inline {
+  flex-wrap: wrap;
+  justify-content: flex-start;
+}
+
+.print-num {
+  width: 58px;
+}
+
+.print-short {
+  width: 92px;
+}
+
+.print-pop-hint {
+  font-size: 12px;
+  color: var(--text-2);
+}
+
+.print-margin-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 6px;
+}
+
+.print-margin {
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  font-size: 12px;
+}
+
+.print-margin input {
+  width: 100%;
+}
+
+.print-checks {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 4px 10px;
+}
+
+.print-checks label {
+  justify-content: flex-start;
+  gap: 6px;
+}
+
+.print-hf-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.print-hf-label {
+  width: 34px;
+  font-size: 12px;
+  color: var(--text-2);
+}
+
+.print-hf {
+  flex: 1 1 120px;
+  min-width: 0;
+}
+
+.print-hf-codes {
+  display: flex;
+  gap: 2px;
+  flex-wrap: wrap;
+}
+
+.print-hf-codes .tool-btn {
+  padding: 2px 6px;
+  font-size: 12px;
+}
+
+.print-chips {
+  display: flex;
+  gap: 4px;
+  flex-wrap: wrap;
+  min-height: 20px;
+}
+
+.print-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 1px 4px 1px 7px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  font-size: 12px;
+  color: var(--text);
+}
+
+.print-chip-x {
+  padding: 0 3px;
+  border: 0;
+  background: none;
+  color: var(--text-2);
+  font-size: 13px;
+  line-height: 1;
+}
+
+.print-chip-x:hover {
+  color: var(--danger);
+}
+
+.print-pop-errs {
+  margin: 0;
+  padding-left: 18px;
+  font-size: 12px;
+  color: var(--danger);
+}
+
+.print-pop-notes {
+  padding: 6px 8px;
+  border: 1px dashed var(--border);
+  border-radius: 6px;
+  font-size: 12px;
+  color: var(--text-2);
+}
+
+.print-pop-notes-title {
+  margin-bottom: 2px;
+}
+
+.print-pop-notes ul {
+  margin: 0;
+  padding-left: 16px;
 }
 
 .doc-toolbar {
@@ -2124,6 +2333,8 @@ button {
   --ppt: #f08a45;
   --code-bg: #262a31;
   --quote-bg: #262a31;
+  /* 报错文案在深底上要用亮一档的红，否则读不清 */
+  --danger: #f87171;
   color-scheme: dark;
 }
 
@@ -2169,6 +2380,8 @@ button {
     --accent: #2c66d4;
     --code-bg: #f5f6f7;
     --quote-bg: #f5f8fc;
+    /* 屏幕报错红固定成同一档：面板本身不上纸，但漏上来也不该是暗色那支浅红 */
+    --danger: #b91c1c;
   }
 
   /* 查找命中的黄色高亮是屏幕辅助，不该跟着正文上纸 */

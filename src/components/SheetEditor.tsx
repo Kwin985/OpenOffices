@@ -15,6 +15,8 @@ import type {
   ChartPayload,
   ChartRangeRef,
   ChartSeriesPayload,
+  PrintHfPayload,
+  PrintMarginsPayload,
   SheetPrintPayload,
   WorkbookPayload,
 } from '../lib/fs'
@@ -23,6 +25,27 @@ import { registerSaver } from '../lib/registry'
 import { exportPdfWithOverlay } from '../lib/pdfprint'
 import { sheetsToPrintHtml } from '../lib/sheet-print'
 import { evalSheetCondFormats } from '../lib/sheet-cf-print'
+import { columnLetter } from '../lib/sheet-print-setup'
+import {
+  EMPTY_HF,
+  HF_CODES,
+  PAPER_OPTIONS,
+  addBreak,
+  draftOf,
+  draftPaperNotes,
+  hfSlotsToText,
+  hfTextToSlots,
+  inchToMm,
+  mmToInch,
+  paperMm,
+  rectToSqref,
+  removeBreak,
+  spanToSqref,
+  sqrefToRect,
+  sqrefToSpan,
+  validateDraft,
+} from '../lib/sheet-print-ui'
+import type { HfSlots } from '../lib/sheet-print-ui'
 import { sheetTemplate } from '../lib/templates'
 
 type FWorkbook = NonNullable<ReturnType<FUniver['getActiveWorkbook']>>
@@ -36,6 +59,9 @@ interface ChartItem {
   sheetName: string
   payload: ChartPayload
 }
+
+const RENAME_CMD = 'sheet.command.set-worksheet-name'
+const RENAME_MUTATION = 'sheet.mutation.set-worksheet-name'
 
 const CHART_W = 480
 const CHART_H = 320
@@ -174,8 +200,44 @@ function payloadFromSelection(
   }
 }
 
-function SheetEditor({ tab }: Props) {
-  const containerRef = useRef<HTMLDivElement>(null)
+// —— 页面设置面板用的形状 ——
+type HfSec = 'header' | 'footer'
+type HfVariant = 'odd' | 'even' | 'first'
+type HfSlot = keyof typeof EMPTY_HF
+
+const MARGIN_FIELDS: Array<[keyof PrintMarginsPayload, string]> = [
+  ['top', '上'],
+  ['bottom', '下'],
+  ['left', '左'],
+  ['right', '右'],
+  ['header', '页眉区'],
+  ['footer', '页脚区'],
+]
+
+/** 按表名存东西的那几份侧通道（只声明用到的三个方法，Map<string, 各自的值> 都能递进来） */
+type NameKeyed = {
+  get(key: string): unknown
+  set(key: string, value: unknown): unknown
+  delete(key: string): boolean
+}
+
+/** 表名是三份侧通道（页面设置 / 批注作者与提示 / 图表）的钥匙：改名后旧钥匙再也开不出东西，
+ *  等价于"改个表名，纸面设置和图表全没了"，所以改名这件事必须搬钥匙而不是重新数一遍 */
+function migrateSheetName(maps: NameKeyed[], from: string, to: string) {
+  if (!from || from === to) return
+  for (const m of maps) {
+    const v = m.get(from)
+    if (v === undefined) continue
+    m.delete(from)
+    m.set(to, v)
+  }
+}
+
+function numVal(raw: string): number | null {
+  return raw === '' ? null : Number(raw)
+}
+
+function SheetEditor({ tab }: Props) {  const containerRef = useRef<HTMLDivElement>(null)
   const apiRef = useRef<FUniver | null>(null)
   const chartsRef = useRef(new Map<string, ChartItem>())
   // 打开时读到的批注作者与链接提示：Univer 的模型装不下它们（外来 resource 也活不过
@@ -190,6 +252,20 @@ function SheetEditor({ tab }: Props) {
   const [chartType, setChartType] = useState('column')
   const [grouping, setGrouping] = useState('standard')
   const [chartTitle, setChartTitle] = useState('')
+  // 页面设置面板：草稿活在 React 态里，「确定」才写侧通道——取消就是什么都没发生
+  const [printOpen, setPrintOpen] = useState(false)
+  const [draft, setDraft] = useState<SheetPrintPayload>(() => draftOf(null))
+  const [draftSheet, setDraftSheet] = useState('')
+  const [hadSetup, setHadSetup] = useState(false)
+  const [areaText, setAreaText] = useState('')
+  const [titleRowsText, setTitleRowsText] = useState('')
+  const [titleColsText, setTitleColsText] = useState('')
+  const [breakRow, setBreakRow] = useState('')
+  const [breakCol, setBreakCol] = useState('')
+  const [hfVariant, setHfVariant] = useState<HfVariant>('odd')
+  const [hfFocus, setHfFocus] = useState<HfSlot>('center')
+  // sheetId -> 表名，停在"上一次命令之前"的样子：改名那一条要靠它认出旧钥匙是谁
+  const sheetNamesRef = useRef(new Map<string, string>())
   const renameTab = useApp((s) => s.renameTab)
   const markDirty = useApp((s) => s.markDirty)
   const markRecent = useApp((s) => s.markRecent)
@@ -312,7 +388,27 @@ function SheetEditor({ tab }: Props) {
           setStatus(shown.length > 1 ? `${shown[0]}（另有 ${shown.length - 1} 条说明）` : shown[0])
           setTimeout(() => setStatus(''), 5000)
         } else setStatus('')
-        api.onCommandExecuted(() => {
+        // 表名是三份侧通道的钥匙，而 Univer 的改名只改它自己的模型：不搬钥匙就是
+        // "改个表名，纸面设置/批注署名/图表全没了"。
+        // 搬法是按 id 对表（前后两份 id→表名 快照一比就知道谁改了名），而不是读命令参数：
+        // 改名的命令与变异各来一趟，参数里带不带 subUnitId 两条路不一样，跟着模型对账最省事
+        const migrateByDiff = () => {
+          const prev = sheetNamesRef.current
+          const next = new Map<string, string>()
+          for (const s of wb?.getSheets() ?? []) next.set(s.getSheetId(), s.getSheetName())
+          for (const [id, was] of prev) {
+            const now = next.get(id)
+            if (!now || now === was) continue
+            migrateSheetName([printRef.current, cellSideRef.current], was, now)
+            for (const item of chartsRef.current.values()) {
+              if (item.sheetName === was) item.sheetName = now
+            }
+          }
+          sheetNamesRef.current = next
+        }
+        migrateByDiff()
+        api.onCommandExecuted((info) => {
+          if (info.id === RENAME_CMD || info.id === RENAME_MUTATION) migrateByDiff()
           if (ready) markDirty(tab.id, true)
         })
         setTimeout(() => {
@@ -376,6 +472,159 @@ function SheetEditor({ tab }: Props) {
     flash(updated > 0 ? `已刷新 ${updated} 个图表` : '无需刷新或图表已被删除')
   }
 
+  // —— 页面设置面板：只改草稿，「确定」才落到侧通道 printRef（保存与导出 PDF 共吃它） ——
+  const activeWs = (): FWorksheet | null =>
+    apiRef.current?.getActiveWorkbook()?.getActiveSheet() ?? null
+
+  const patchDraft = (p: Partial<SheetPrintPayload>) => setDraft((d) => ({ ...d, ...p }))
+
+  const openPrintPanel = () => {
+    if (printOpen) {
+      setPrintOpen(false)
+      return
+    }
+    const ws = activeWs()
+    if (!ws) {
+      flash('表格尚未就绪')
+      return
+    }
+    const name = ws.getSheetName()
+    const p = printRef.current.get(name)
+    setDraft(draftOf(p))
+    setDraftSheet(name)
+    setHadSetup(!!p)
+    setAreaText(rectToSqref(p?.printArea ?? null))
+    setTitleRowsText(spanToSqref('rows', p?.titleRows ?? null))
+    setTitleColsText(spanToSqref('cols', p?.titleCols ?? null))
+    setHfVariant('odd')
+    setHfFocus('center')
+    setPrintOpen(true)
+  }
+
+  const areaChanged = (raw: string) => {
+    setAreaText(raw)
+    patchDraft({ printArea: raw.trim() ? sqrefToRect(raw) : null })
+  }
+
+  const titleRowsChanged = (raw: string) => {
+    setTitleRowsText(raw)
+    patchDraft({ titleRows: raw.trim() ? sqrefToSpan(raw, 'rows') : null })
+  }
+
+  const titleColsChanged = (raw: string) => {
+    setTitleColsText(raw)
+    patchDraft({ titleCols: raw.trim() ? sqrefToSpan(raw, 'cols') : null })
+  }
+
+  /** 用当前选区填一处：打印区域吃整个选区，重复标题行/列只吃选区的首行/首列 */
+  const useSelection = (what: 'area' | 'titleRows' | 'titleCols') => {
+    const ws = activeWs()
+    const range = ws?.getSelection()?.getActiveRange()
+    if (!ws || !range) {
+      flash('先在表里选一块区域')
+      return
+    }
+    const r1 = range.getRow()
+    const c1 = range.getColumn()
+    const r2 = range.getLastRow()
+    const c2 = range.getLastColumn()
+    if (what === 'area') {
+      const text = rectToSqref({ startRow: r1, startColumn: c1, endRow: r2, endColumn: c2 })
+      setAreaText(text)
+      patchDraft({ printArea: sqrefToRect(text) })
+    } else if (what === 'titleRows') {
+      const text = spanToSqref('rows', [r1, r1])
+      setTitleRowsText(text)
+      patchDraft({ titleRows: [r1, r1] })
+    } else {
+      const text = spanToSqref('cols', [c1, c1])
+      setTitleColsText(text)
+      patchDraft({ titleCols: [c1, c1] })
+    }
+  }
+
+  const addBreakAt = (kind: 'rows' | 'cols') => {
+    const ws = activeWs()
+    if (!ws) return
+    const raw = kind === 'rows' ? breakRow : breakCol
+    const at = Number(raw) - 1
+    if (raw.trim() === '' || !Number.isInteger(at)) {
+      flash(kind === 'rows' ? '行号要填整数' : '列号要填整数（B 就是 2）')
+      return
+    }
+    const max = kind === 'rows' ? ws.getMaxRows() : ws.getMaxColumns()
+    const cur = kind === 'rows' ? draft.rowBreaks : draft.colBreaks
+    const res = addBreak(cur, at, max)
+    if (res.note) {
+      flash(res.note)
+      return
+    }
+    patchDraft(kind === 'rows' ? { rowBreaks: res.list } : { colBreaks: res.list })
+    if (kind === 'rows') setBreakRow('')
+    else setBreakCol('')
+  }
+
+  const patchHf = (sec: HfSec, slot: HfSlot, text: string) =>
+    setDraft((d) => {
+      const box: PrintHfPayload = { ...(d[sec] ?? {}) }
+      const slots = hfTextToSlots(box[hfVariant])
+      slots[slot] = text
+      box[hfVariant] = hfSlotsToText(slots)
+      return { ...d, [sec]: box }
+    })
+
+  // 插入要在新状态上算，不能拿渲染期那份 draft 闭包：连着按两枚格式码（同一批更新里）
+  // 若各自从旧 draft 起算，后一枚会把前一枚顶掉——冒烟阶段一次插两码就是测这个
+  const insertHfCode = (sec: HfSec, code: string) =>
+    setDraft((d) => {
+      const box: PrintHfPayload = { ...(d[sec] ?? {}) }
+      const slots = hfTextToSlots(box[hfVariant])
+      slots[hfFocus] = slots[hfFocus] + code
+      box[hfVariant] = hfSlotsToText(slots)
+      return { ...d, [sec]: box }
+    })
+
+  /** 边距两头各说各的话：界面是毫米，文件是英寸，来回只走这两枚函数 */
+  const mmVal = (inch: number | null | undefined) =>
+    inch == null || !Number.isFinite(inch) ? '' : String(inchToMm(inch))
+
+  const patchMargin = (key: keyof PrintMarginsPayload, raw: string) => {
+    const v = numVal(raw)
+    patchDraft({ margins: { ...(draft.margins ?? {}), [key]: v == null ? null : mmToInch(v) } })
+  }
+
+  const printErrors = (ctx: { maxRows: number; maxCols: number }) => {
+    const errs: string[] = []
+    if (areaText.trim() && !draft.printArea) errs.push('打印区域要写成 A1:E18 这样（$ 可省），留空＝不设打印区域')
+    if (titleRowsText.trim() && !draft.titleRows) errs.push('重复标题行要写成 1:2 这样（整行的区间，不是格子）')
+    if (titleColsText.trim() && !draft.titleCols) errs.push('重复标题列要写成 A:B 这样（整列的区间）')
+    return [...errs, ...validateDraft(draft, ctx)]
+  }
+
+  const confirmPrint = () => {
+    const ws = apiRef.current?.getActiveWorkbook()?.getSheetByName(draftSheet)
+    if (!ws) {
+      flash(`「${draftSheet}」这张表已经不在了，页面设置没有地方可写`)
+      return
+    }
+    const errs = printErrors({ maxRows: ws.getMaxRows(), maxCols: ws.getMaxColumns() })
+    if (errs.length) {
+      flash(errs[0])
+      return
+    }
+    printRef.current.set(draftSheet, draft)
+    markDirty(tab.id, true)
+    setPrintOpen(false)
+    flash(`页面设置已设到「${draftSheet}」，保存后随 xlsx 一起出去`)
+  }
+
+  const clearPrint = () => {
+    printRef.current.delete(draftSheet)
+    markDirty(tab.id, true)
+    setPrintOpen(false)
+    flash(`已清除「${draftSheet}」的页面设置（存盘后文件里不再声明纸面）`)
+  }
+
   // 图表侧通道：Univer 只把图表当一张浮动图片，载荷里的图表靠这份账本附着。
   // 保存与导出 PDF 吃的是同一份产物，否则"文件里有图、打印里没图"又会各说一次话
   const payloadWithCharts = (wb: FWorkbook, snapshot: IWorkbookData): WorkbookPayload => {
@@ -384,7 +633,8 @@ function SheetEditor({ tab }: Props) {
     for (const sheet of payload.sheets) {
       restampCellSide(sheet, cellSideRef.current.get(sheet.name))
     }
-    // 打印设置同理：界面上这一版还没有页面设置面板，读回来的那份不回帖就是"存一次盘，纸面设置没了"
+    // 打印设置同理：Univer 的快照根本没有这一层，界面改的与文件读来的都存在 printRef 里，
+    // 不回帖就是"存一次盘，纸面设置没了"
     for (const sheet of payload.sheets) {
       const p = printRef.current.get(sheet.name)
       if (p && !sheet.print) sheet.print = p
@@ -558,11 +808,22 @@ function SheetEditor({ tab }: Props) {
         save: (asNew: boolean) => Promise<void>
         exportPdfTo: (p: string) => Promise<void>
         printPlan: () => unknown
+        printSetup: () => Array<[string, SheetPrintPayload]>
+        selectRange: (r: number, c: number, rows: number, cols: number) => boolean
       }
     >
     byTab[tab.id] = {
       save: (asNew: boolean) => saveRef.current(asNew),
       exportPdfTo: (p: string) => exportPdfToRef.current(p),
+      // 侧通道现在是什么：面板改完没点确定应当与点了确定完全不同，冒烟靠这条分辨
+      printSetup: () => [...printRef.current].map(([n, p]) => [n, structuredClone(p)] as [string, SheetPrintPayload]),
+      // 冒烟用：门面现设选区，让「用当前选区」那几条按钮有确定的输入
+      selectRange: (r, c, rows, cols) => {
+        const ws = apiRef.current?.getActiveWorkbook()?.getActiveSheet()
+        if (!ws) return false
+        ws.getRange(r, c, rows, cols).activate()
+        return true
+      },
       // 冒烟用：打印这一页"打算怎么画、哪些没画"的账面，不经渲染就能核对
       printPlan: () => {
         const wb = apiRef.current?.getActiveWorkbook()
@@ -620,6 +881,71 @@ function SheetEditor({ tab }: Props) {
     }
   }
 
+  // 面板开着才算账：表可能已经不在（改名/删表），那时按"无从校验"说，而不是"哪都不对"
+  const panelWs = printOpen
+    ? (apiRef.current?.getActiveWorkbook()?.getSheetByName(draftSheet) ?? null)
+    : null
+  const draftErrs = printOpen
+    ? printErrors({
+        maxRows: panelWs?.getMaxRows() ?? Number.MAX_SAFE_INTEGER,
+        maxCols: panelWs?.getMaxColumns() ?? Number.MAX_SAFE_INTEGER,
+      })
+    : []
+  const paperNow = paperMm(draft.paperSize)
+  const paperNotes = printOpen ? draftPaperNotes(draft) : []
+  const hfSlots: Record<HfSec, HfSlots> = {
+    header: hfTextToSlots(draft.header?.[hfVariant]),
+    footer: hfTextToSlots(draft.footer?.[hfVariant]),
+  }
+
+  const hfRow = (sec: HfSec, label: string) => (
+    <div className="print-hf-row">
+      <span className="print-hf-label">{label}</span>
+      {(['left', 'center', 'right'] as HfSlot[]).map((slot) => (
+        <input
+          key={slot}
+          className={`print-hf print-hf-${slot}`}
+          placeholder={slot === 'left' ? '左' : slot === 'center' ? '中' : '右'}
+          value={hfSlots[sec][slot]}
+          onFocus={() => setHfFocus(slot)}
+          onChange={(e) => patchHf(sec, slot, e.target.value)}
+        />
+      ))}
+      <span className="print-hf-codes">
+        {HF_CODES.map((c) => (
+          <button
+            key={c.code}
+            className="tool-btn"
+            title={`往当前框里插入 ${c.code}（${c.label}）`}
+            onClick={() => insertHfCode(sec, c.code)}
+          >
+            {c.label}
+          </button>
+        ))}
+      </span>
+    </div>
+  )
+
+  const breakChips = (list: number[] | undefined, kind: 'rows' | 'cols') =>
+    (list ?? []).map((i) => (
+      <span key={`${kind}${i}`} className="print-chip">
+        {kind === 'rows' ? `第 ${i + 1} 行开始新页` : `${columnLetter(i)} 列开始新页`}
+        <button
+          className="print-chip-x"
+          title="删掉这个分页符"
+          onClick={() =>
+            patchDraft(
+              kind === 'rows'
+                ? { rowBreaks: removeBreak(list, i) }
+                : { colBreaks: removeBreak(list, i) },
+            )
+          }
+        >
+          ×
+        </button>
+      </span>
+    ))
+
   return (
     <div className="editor-pane">
       <div className="editor-toolbar">
@@ -627,6 +953,7 @@ function SheetEditor({ tab }: Props) {
         <button className="tool-btn" onClick={() => save(true)}>另存为…</button>
         <button className="tool-btn" onClick={() => setDialogOpen((v) => !v)}>插入图表</button>
         <button className="tool-btn" onClick={() => void exportPdf()} title="自绘网格，纸面照文件的页面设置">导出 PDF</button>
+        <button className="tool-btn" onClick={openPrintPanel} title="这一张表该怎么摆到纸上：纸张/边距/页眉页脚/分页">页面设置</button>
         {chartCount > 0 && (
           <button className="tool-btn" onClick={refreshCharts}>刷新图表 ({chartCount})</button>
         )}
@@ -662,6 +989,263 @@ function SheetEditor({ tab }: Props) {
               <button className="tool-btn tool-btn-primary" onClick={confirmInsert}>插入</button>
               <button className="tool-btn" onClick={() => setDialogOpen(false)}>取消</button>
             </div>
+          </div>
+        )}
+        {printOpen && (
+          <div className="print-pop">
+            <div className="print-pop-title">
+              页面设置 · {draftSheet}
+              <span className="print-pop-sub">
+                {hadSetup ? '文件里带着纸面设置' : '这张表还没声明纸面设置，下面是我们打印用的默认纸'}
+              </span>
+            </div>
+            <div className="print-pop-grid">
+              <fieldset className="print-sec">
+                <legend>纸张</legend>
+                <label>
+                  方向
+                  <select
+                    value={draft.orientation ?? 'portrait'}
+                    onChange={(e) => patchDraft({ orientation: e.target.value })}
+                  >
+                    <option value="portrait">竖版</option>
+                    <option value="landscape">横版</option>
+                  </select>
+                </label>
+                <label>
+                  纸张
+                  <select
+                    value={String(draft.paperSize ?? 9)}
+                    onChange={(e) => patchDraft({ paperSize: Number(e.target.value) })}
+                  >
+                    {PAPER_OPTIONS.map((o) => (
+                      <option key={o.code} value={String(o.code)}>{o.label}</option>
+                    ))}
+                  </select>
+                </label>
+                <div className="print-pop-hint">
+                  {paperNow
+                    ? `竖版 ${paperNow[0]} × ${paperNow[1]} mm · 纸号 ${draft.paperSize}`
+                    : `纸号 ${draft.paperSize} 我们量不出尺寸，纸上按默认纸排`}
+                </div>
+              </fieldset>
+              <fieldset className="print-sec">
+                <legend>缩放</legend>
+                <label className="print-inline">
+                  <input
+                    type="radio"
+                    name="print-scale-mode"
+                    checked={!draft.fitToPage}
+                    onChange={() => patchDraft({ fitToPage: false })}
+                  />
+                  调整为
+                  <input
+                    className="print-num"
+                    type="number"
+                    min={10}
+                    max={400}
+                    disabled={!!draft.fitToPage}
+                    value={draft.scale ?? ''}
+                    onChange={(e) => patchDraft({ scale: numVal(e.target.value) })}
+                  />
+                  %
+                </label>
+                <label className="print-inline">
+                  <input
+                    type="radio"
+                    name="print-scale-mode"
+                    checked={!!draft.fitToPage}
+                    onChange={() => patchDraft({ fitToPage: true })}
+                  />
+                  缩放到
+                  <input
+                    className="print-num"
+                    type="number"
+                    min={0}
+                    max={99}
+                    disabled={!draft.fitToPage}
+                    value={draft.fitToWidth ?? ''}
+                    onChange={(e) => patchDraft({ fitToWidth: numVal(e.target.value) })}
+                  />
+                  页宽 ×
+                  <input
+                    className="print-num"
+                    type="number"
+                    min={0}
+                    max={99}
+                    disabled={!draft.fitToPage}
+                    value={draft.fitToHeight ?? ''}
+                    onChange={(e) => patchDraft({ fitToHeight: numVal(e.target.value) })}
+                  />
+                  页高
+                </label>
+                <label>
+                  页面顺序
+                  <select
+                    value={draft.pageOrder ?? 'downThenOver'}
+                    onChange={(e) => patchDraft({ pageOrder: e.target.value })}
+                  >
+                    <option value="downThenOver">先向下再向右</option>
+                    <option value="overThenDown">先向右再向下</option>
+                  </select>
+                </label>
+              </fieldset>
+              <fieldset className="print-sec">
+                <legend>边距（毫米）</legend>
+                <div className="print-margin-grid">
+                  {MARGIN_FIELDS.map(([key, label]) => (
+                    <label key={key} className="print-margin">
+                      {label}
+                      <input
+                        type="number"
+                        step="0.1"
+                        value={mmVal(draft.margins?.[key])}
+                        onChange={(e) => patchMargin(key, e.target.value)}
+                      />
+                    </label>
+                  ))}
+                </div>
+              </fieldset>
+              <fieldset className="print-sec">
+                <legend>这张纸上还要什么</legend>
+                <div className="print-checks">
+                  <label>
+                    <input type="checkbox" checked={!!draft.gridLines} onChange={(e) => patchDraft({ gridLines: e.target.checked })} />
+                    打印网格线
+                  </label>
+                  <label>
+                    <input type="checkbox" checked={!!draft.headings} onChange={(e) => patchDraft({ headings: e.target.checked })} />
+                    打印行列标题
+                  </label>
+                  <label>
+                    <input type="checkbox" checked={!!draft.hCentered} onChange={(e) => patchDraft({ hCentered: e.target.checked })} />
+                    水平居中
+                  </label>
+                  <label>
+                    <input type="checkbox" checked={!!draft.vCentered} onChange={(e) => patchDraft({ vCentered: e.target.checked })} />
+                    垂直居中
+                  </label>
+                  <label>
+                    <input
+                      type="checkbox"
+                      checked={!!draft.oddEven}
+                      onChange={(e) => {
+                        patchDraft({ oddEven: e.target.checked })
+                        // 取消勾选后偶数页那版就没地方看了，把视线拉回奇数页，别让下拉停在一档灰上
+                        if (!e.target.checked) setHfVariant('odd')
+                      }}
+                    />
+                    奇偶页另版
+                  </label>
+                  <label>
+                    <input
+                      type="checkbox"
+                      checked={!!draft.firstDiffers}
+                      onChange={(e) => {
+                        patchDraft({ firstDiffers: e.target.checked })
+                        if (!e.target.checked) setHfVariant('odd')
+                      }}
+                    />
+                    首页另版
+                  </label>
+                </div>
+                <label className="print-inline">
+                  起始页码
+                  <input
+                    className="print-num"
+                    type="number"
+                    min={1}
+                    value={draft.firstPageNumber ?? ''}
+                    onChange={(e) => patchDraft({ firstPageNumber: numVal(e.target.value) })}
+                  />
+                  <span className="print-pop-hint">留空＝自动</span>
+                </label>
+              </fieldset>
+              <fieldset className="print-sec">
+                <legend>打印区域与重复标题</legend>
+                <label className="print-inline">
+                  打印区域
+                  <input value={areaText} placeholder="$A$1:$E$18（留空＝整张表）" onChange={(e) => areaChanged(e.target.value)} />
+                  <button className="tool-btn" onClick={() => useSelection('area')}>用当前选区</button>
+                </label>
+                <label className="print-inline">
+                  重复标题行
+                  <input className="print-short" value={titleRowsText} placeholder="1:2" onChange={(e) => titleRowsChanged(e.target.value)} />
+                  <button className="tool-btn" onClick={() => useSelection('titleRows')}>用选区首行</button>
+                </label>
+                <label className="print-inline">
+                  重复标题列
+                  <input className="print-short" value={titleColsText} placeholder="A:B" onChange={(e) => titleColsChanged(e.target.value)} />
+                  <button className="tool-btn" onClick={() => useSelection('titleCols')}>用选区首列</button>
+                </label>
+              </fieldset>
+              <fieldset className="print-sec">
+                <legend>手动分页符</legend>
+                <div className="print-chips">
+                  {breakChips(draft.rowBreaks, 'rows')}
+                  {breakChips(draft.colBreaks, 'cols')}
+                  {!(draft.rowBreaks?.length || draft.colBreaks?.length) && (
+                    <span className="print-pop-hint">还没有：这一张纸由分页自己定</span>
+                  )}
+                </div>
+                <label className="print-inline">
+                  在第 N 行上方
+                  <input className="print-num" type="number" min={2} value={breakRow} onChange={(e) => setBreakRow(e.target.value)} />
+                  <button className="tool-btn" onClick={() => addBreakAt('rows')}>分页</button>
+                </label>
+                <label className="print-inline">
+                  在第 N 列左侧
+                  <input className="print-num" type="number" min={2} value={breakCol} onChange={(e) => setBreakCol(e.target.value)} />
+                  <button className="tool-btn" onClick={() => addBreakAt('cols')}>分页</button>
+                </label>
+                <div className="print-pop-hint">N 是「这一行/列自己开始新的一页」，与 Excel 写在文件里的 brk@id 同一个说法</div>
+              </fieldset>
+            </div>
+            <fieldset className="print-sec print-sec-wide">
+              <legend>页眉页脚</legend>
+              <label className="print-inline">
+                看哪一版
+                <select value={hfVariant} onChange={(e) => setHfVariant(e.target.value as HfVariant)}>
+                  <option value="odd">奇数页</option>
+                  <option value="even" disabled={!draft.oddEven}>偶数页</option>
+                  <option value="first" disabled={!draft.firstDiffers}>首页</option>
+                </select>
+                <span className="print-pop-hint">先在框里点一下定位，再按格式码按钮往里插</span>
+              </label>
+              {hfRow('header', '页眉')}
+              {hfRow('footer', '页脚')}
+            </fieldset>
+            {draftErrs.length > 0 && (
+              <ul className="print-pop-errs">
+                {draftErrs.map((e) => (
+                  <li key={e}>{e}</li>
+                ))}
+              </ul>
+            )}
+            {paperNotes.length > 0 && (
+              <div className="print-pop-notes">
+                <div className="print-pop-notes-title">这几条会写进文件（别人在 Excel 里打印生效），但我们导出的 PDF 上兑现不了：</div>
+                <ul>
+                  {paperNotes.map((n) => (
+                    <li key={n}>{n}</li>
+                  ))}
+                </ul>
+              </div>
+            )}
+            <div className="chart-pop-actions">
+              <button
+                className="tool-btn tool-btn-primary"
+                disabled={draftErrs.length > 0 || !panelWs}
+                onClick={confirmPrint}
+              >
+                确定
+              </button>
+              {hadSetup && (
+                <button className="tool-btn" onClick={clearPrint}>清除这张表的设置</button>
+              )}
+              <button className="tool-btn" onClick={() => setPrintOpen(false)}>取消</button>
+            </div>
+            {!panelWs && <div className="print-pop-errs">「{draftSheet}」这张表已经不在了，先关掉这个面板</div>}
           </div>
         )}
         {status && <span className="editor-status">{status}</span>}

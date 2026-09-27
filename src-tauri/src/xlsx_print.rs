@@ -94,6 +94,8 @@ pub fn read_print_setups(path: &str) -> PrintRead {
             merge_defaults(&mut print, prev);
         }
         out.accounts.append(&mut notes);
+        // 只剩「默认那一档边距」的不算声明（写侧的 crate 每张表都替我们写下它）
+        print.clear_default_only_margins();
         if !print.is_empty() {
             out.by_sheet.insert(name, print);
         }
@@ -1022,6 +1024,65 @@ mod tests {
             }],
             ..Default::default()
         }
+    }
+
+    /// 一张从没设置过纸面的表：载荷里没有 print，但写侧的 crate 照样会替它落一档 `<pageMargins>`
+    fn book_without_setup() -> WorkbookPayload {
+        WorkbookPayload {
+            sheets: vec![SheetPayload {
+                name: "白纸".into(),
+                cells: vec![CellPayload {
+                    r: 0,
+                    c: 0,
+                    v: Some(Json::String("值".into())),
+                    ..Default::default()
+                }],
+                ..Default::default()
+            }],
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn default_page_margins_alone_are_not_a_declaration() {
+        // 「清除这张表的设置 → 存盘 → 重开」要真的回到没声明：默认边距冒充声明就是清除没生效
+        let path = tmp("no-decl");
+        write_xlsx_sync(path.clone(), book_without_setup()).expect("写出失败");
+        let ws = entry(&path, "xl/worksheets/sheet1.xml");
+        assert!(
+            ws.contains("<pageMargins"),
+            "写侧没落默认边距，这条测试的前提就变了：\n{ws}"
+        );
+        assert!(!ws.contains("<pageSetup"), "从没设置过纸面的表不该写出 pageSetup");
+        let back = read_xlsx_sync(path).expect("读回失败");
+        assert!(
+            back.sheets[0].print.is_none(),
+            "只有默认边距的表被当成了「声明过纸面」：{:?}",
+            back.sheets[0].print
+        );
+    }
+
+    #[test]
+    fn margins_outside_the_default_still_count_as_a_declaration() {
+        // 反方向：只设过边距（且不是那一档）的表仍是声明，不能被上一条规则顺手抹掉
+        let path = tmp("margins-only");
+        let mut only = SheetPrintPayload::default();
+        only.margins = Some(PrintMarginsPayload {
+            left: Some(1.2),
+            ..Default::default()
+        });
+        write_xlsx_sync(path.clone(), book(only)).expect("写出失败");
+        let back = read_xlsx_sync(path).expect("读回失败");
+        let p = back.sheets[0]
+            .print
+            .clone()
+            .unwrap_or_else(|| panic!("只设了左边距的表被判成没声明"));
+        assert!(
+            p.margins.as_ref().is_some_and(|m| !m.is_all_default()),
+            "读回来的边距又变回默认那一档：{:?}",
+            p.margins
+        );
+        assert_eq!(p.margins.as_ref().and_then(|m| m.left), Some(1.2));
     }
 
     #[test]

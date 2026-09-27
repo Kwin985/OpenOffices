@@ -1390,6 +1390,52 @@ CSV、txt…）。这一轮把这层套娃拆到能读到底为止——读不�
   每页各带一份自己那一带的表头、D/E 带不混进 A~C、区域外 F 列与第 19 行没上纸、三段页眉连页码与
   文件名日期都进了 margin box、居中按半列位移判定、打印宿主与注入样式用完清零）；tsc + build 绿
 
+## 一张纸在界面上也能摆：表格「页面设置」面板（v0.52）
+
+v0.51 让这一层存得下、开得回、真上纸，但界面上改不动它——纸张、边距、打印区域这些只能等着别人
+的文件带进来。本轮补的就是那只手：**面板写进 `printRef` 侧通道，保存与导出 PDF 共吃同一份计划**，
+顺带把"这一版纸上做不到"的账在 UI 上当面说清，而不是等 PDF 印出来才发现。
+
+- **钥匙还是表名，面板只是它的影子**：打开时 `dump.sheets.filter(s => s.print)` 把文件里的纸面灌进
+  侧通道，「确定」= `printRef.set(表名, 草稿)`、「清除这张表的设置」= `delete(表名)`；Univer 里改了表名，
+  钥匙跟着搬（冒烟按这一步量：改名→存盘→重开，设置仍挂在新名字上）。副标题说实话——
+  「文件里带着纸面设置」与「这张表还没声明纸面设置，下面是我们打印用的默认纸」是两句话
+- **新建 `src/lib/sheet-print-ui.ts`（347 行，纯函数、零 DOM、Node 直测）**：面板要的一切都不在组件里现算——
+  毫米↔英寸（面板按毫米说话、载荷按英寸存，换算只有这一处）、`PAPER_OPTIONS`/`paperMm`（八档纸型带毫米提示，
+  英制那几档没有"毫米名"就照实换算）、三槽↔OOXML 那条串、`$C$2:$F$5`↔0 基含端点矩形、行列整跨度
+  `$1:$2`/`$A:$B` 的分段、`addBreak`/`removeBreak`、`validateDraft`、`draftPaperNotes`
+- **只填中档时不带 `&C`**：页眉三框合成 OOXML 串，只有左或右在场才按段写标记——读侧那条"没标记的整串落在
+  CenterHeader"的实测正是这里写出去的形状（与 Excel 字节同一档）。分段标记的查找一路走到底按 `&&` 跳转义，
+  否则「A&&Link」里第二个 `&` 会被当成 `&L` 把串拆错
+- **不声明 ≠ 报错，两条说法分开**：`F5:C2` 这类反向引用 `sqrefToRect` 判"不解析"，而**不解析就是不声明**，
+  面板不拦；只有解析得动却**超出这张表**的（`A1:ZZZ1000000`）才点名「打印区域超出这张表的范围」并把「确定」
+  灰掉。网格上限不靠猜——问 Univer 的 `getMaxRows()`/`getMaxColumns()`
+- **三条只有真机才说得出来的账**：
+  (a) **默认边距不算声明**：写侧的 crate 没人吩咐也给每张表落 `<pageMargins>` 那一档默认值，于是"从没设过"
+      与"设成默认"字节相同——按了「清除这张表的设置」、存盘、重开，设置自己又长了回来。读侧
+      `clear_default_only_margins()` 把"只剩默认边距"的载荷归一回不声明（与 v0.48"默认气泡尺寸不声明"同一规矩）；
+  (b) **React 的渲染期闭包会吃掉一次点击**：格式码按钮原先从渲染期那份 `draft` 求"当前框里有什么"，
+      同一批更新里连按两枚，后一枚把前一枚顶掉（实测右槽只剩 `&P`）——改成在函数式 updater 里算，
+      并把"一次插两枚码"留在冒烟里当回归；
+  (c) **CDP 信封只剥一层**：`send()` 已经解出 CDP 的 `result`，取值是 `r.result.value`；写成
+      `r.result.result.value` 恒 `undefined`，于是页面上每个谓词都长得像"还没就绪"，本轮第三次把
+      等待超时误判成导航问题（`exceptionDetails` 反倒与 `result` 同级，所以抛错看得见、值看不见）
+- **对照组的价值：量具读不到 ≠ 文件里没有**：这台 Excel 的 COM 面对 `PageOrder`/`FitToPage`/
+  `OddAndEvenPages`/`EvenHeader`/`FirstHeader` **一律返回 null**，而手搭的 fixture（我们自己的读侧认得）
+  同样是 null——所以这不是写侧漏了东西，而是这台机器的 COM 面不暴露；这五条改从**文件字面**核对
+  （PowerShell 只读解 zip，不碰任何人的原件）。另两条同样靠对照才不认错：`PrintArea` 回来是**字符串**
+  `$C$2:$F$5`（带着 `$`，`-like '*C2*'` 永不匹配），清空起始页码读回的是 `-4105`（xlPageNumberAutomatic）
+  而不是 "Automatic"。顺带修掉判据自己的一处坑：`$lines[0..(Count-2)]` 在只剩一条时把 `0..-1` 数成两个同一元素，
+  那条 SELFTEST 假 FAIL 被印了两遍（人扫输出会以为真失败），改用 `Select-Object -SkipLast 1`
+- **验证（四腿）**：前端结构测试 **147 断言 / 0 失败**（假例必须打 FAIL；毫米英寸往返 + 八档纸型 +
+  三槽合成与拆分 + `&&` 不拆错 + 区域与整跨度的双向 + 断点去重 + 校验里"不声明"与"出界"两种说法分开 +
+  做不到那四条账随草稿变）；`cargo test --lib` **68 通过 / 5 ignored**（新增两例：只有默认边距的件不算声明、
+  边距只要有一档不是默认就算声明）；**CDP 真机冒烟 136 断言全绿、页面异常 0 条**（文件里的纸面→面板显示→
+  改→打印计划→PDF 的 `MediaBox` 与文本层→存盘重开，一环一个见证；含改名搬钥匙、清除不留幽灵、
+  文档在前表格在后的污染序）；**Excel 16.0 只读腿 57 断言 / 0 失败**（三份件：fixture 对照、面板写出的、
+  清除后的；纸张方向纸型缩放六条边距按磅、打印区域与标题行列、两个断点的位置、格式码未展开、
+  COM 读不到那五项按文件字面核）；tsc + build 绿
+
 ## 性能（v0.3）
 
 
@@ -1440,12 +1486,12 @@ CSV、txt…）。这一轮把这层套娃拆到能读到底为止——读不�
 
 ```
 src-tauri/            Rust 后端
-  src/xlsx.rs         read_xlsx (calamine) / write_xlsx (rust_xlsxwriter) 命令，含样式、合并区、尺寸/字族、隐藏/冻结、公式（含缓存值）、图表与**三类规则（筛选/数据验证/条件格式，v0.46 的载荷类型 RangeRect/SheetFilterPayload/DataValidationPayload/CondFormatPayload 也在这里）**、**批注与超链接（v0.48 的载荷类型 CellNotePayload/CellLinkPayload）**、**打印设置（v0.51 的载荷类型 SheetPrintPayload/PrintMarginsPayload/PrintHfPayload，枚举收 OOXML 字面、边距收英寸、区域收 0 基含端点）**往返；write_xlsx 返回 `Vec<String>` 边界账；命令为 async + spawn_blocking（同步跑主线程会让窗口冻结），`.csv` 读侧分流到 csv.rs，图表网格按 has_charts 惰性构建，`.xlsx` 才另开一趟 zip 读独立部件的批注、链接与打印设置；测试里带一份**条件格式打印夹具**（v0.47：八列各一种判定型，写出真 xlsx 供 Excel 逐格对色）与一份**打印设置夹具**（v0.51：横向 A4 + 85% + 六条边距 + 三槽页眉页脚 + 打印区域/标题行列 + 两个手动断点，`#[ignore]` 生成器与冒烟腿共用同一份产物）
+  src/xlsx.rs         read_xlsx (calamine) / write_xlsx (rust_xlsxwriter) 命令，含样式、合并区、尺寸/字族、隐藏/冻结、公式（含缓存值）、图表与**三类规则（筛选/数据验证/条件格式，v0.46 的载荷类型 RangeRect/SheetFilterPayload/DataValidationPayload/CondFormatPayload 也在这里）**、**批注与超链接（v0.48 的载荷类型 CellNotePayload/CellLinkPayload）**、**打印设置（v0.51 的载荷类型 SheetPrintPayload/PrintMarginsPayload/PrintHfPayload，枚举收 OOXML 字面、边距收英寸、区域收 0 基含端点）**，v0.52 再加 `DEFAULT_PRINT_MARGINS` 与 `is_all_default()`/`clear_default_only_margins()`——rust_xlsxwriter 给每张表都写一份默认 `<pageMargins>`，而"没人设过边距"与"边距正好等于默认"在字节上是同一件事，所以只装着默认六数的载荷视作没声明（与 v0.48 那条「默认气泡尺寸归一回不声明」是同一条规矩），读写两头都算在这一套往返里；write_xlsx 返回 `Vec<String>` 边界账；命令为 async + spawn_blocking（同步跑主线程会让窗口冻结），`.csv` 读侧分流到 csv.rs，图表网格按 has_charts 惰性构建，`.xlsx` 才另开一趟 zip 读独立部件的批注、链接与打印设置；测试里带一份**条件格式打印夹具**（v0.47：八列各一种判定型，写出真 xlsx 供 Excel 逐格对色）与一份**打印设置夹具**（v0.51：横向 A4 + 85% + 六条边距 + 三槽页眉页脚 + 打印区域/标题行列 + 两个手动断点，`#[ignore]` 生成器与冒烟腿共用同一份产物）
   src/csv.rs          CSV 往返：RFC4180 逐字符状态机（引号/转义/字段内换行）+ 分隔符嗅探（, ; 制表符）+ UTF-8 失败退 GBK 解码 + 写侧 BOM/CRLF，read_payload 供 read_xlsx 分流、write_csv 为独立命令
   src/xlsx_style.rs   zip + quick-xml 直读 xlsx 的 styles.xml（StyleBook：fonts/fills/borders/cellXfs/numFmts，**外加 `<dxfs>` 条件格式样式表 `parse_dxfs`**——dxf 不走 fontId/fillId 索引、实心底纹在 bgColor 而非 fgColor，故单独一趟）/ mergeCells / col·row 尺寸（字符宽·pt→px）/ 隐藏行列 / 冻结 pane / 公式 `<f>`（GeneralRef 实体重建 + unescape，calamine 无样式/公式 API）
   src/xlsx_rules.rs   三类规则的双向（v0.46）：写侧 `write_sheet_rules`（autoFilter + filterColumn 的 list/custom 两种形状、dataValidation 六类型与日期序列号换算、条件格式四大类 cellIs/containsText/timePeriod/top10/aboveAverage/duplicate/unique/expression + colorScale/dataBar/iconSet，含 dxf 与 x14 的 gradient/negativeBarColorSameAsPositive）、读侧 `read_sheet_rules`（quick-xml 事件流 + `cfRule` 的 begin/end 临时态、`dxfId` 查表、colId 换回绝对列、`showDropDown` 反义、整列引用等读不懂的片段原样交回由调用方记账），摆不进 / 读不出的**一律返回账目不静默少给**
   src/xlsx_cell_side.rs 单元格两位邻居的双向（v0.48）：读侧 `read_cell_side` 另开一趟 zip 按表名对回**独立部件**——legacy `commentsN.xml`（`<authors>` 表 + `authorId` 下标、正文里那行「作者:」前缀只在认得出作者时剥）、threaded `threadedComments/*.xml`（作者查 `persons/person.xml`，两种键名都收，回复并进正文并记账）、两者的归一、气泡尺寸与常开来自 `vmlDrawing`（pt→px，默认那档 128×74 **归一回不声明**）、超链接的 `ref` 在 worksheet 而外部地址在其 rels（`TargetMode="External"`）、表内跳转才是 `location` 字面；写侧 `write_sheet_side`（链接先落文本再补普通格，无 scheme 的目标按 `file:` 补试；`Note` 带作者/尺寸/常开，作者超 52 字只丢作者；`set_default_note_author("")` 让"没人署过"真是空串）+ `save_workbook`（**rust_xlsxwriter 的 `<authors>` 按名字排序而 `authorId` 按格子序登记**，两序不一致时按载荷数出来的那张表重排 `<authors>`，多重集或 `<comment ref>` 文档序对不上就宁可不改并记账）；认不出的形状一律记账
-  src/xlsx_print.rs   一张纸怎么摆的双向（v0.51）：读侧 `read_print_setups` 另开一趟 zip 收 worksheet 末尾七处（`sheetPr/pageSetUpPr@fitToPage`·`printOptions`·`pageMargins`·`pageSetup`·`headerFooter` 的 odd/even/first 三槽·`rowBreaks`·`colBreaks`）**加 workbook 级两条 definedName**（`_xlnm.Print_Area`/`_xlnm.Print_Titles` 靠 `localSheetId` 分表，`$1:$2`/`$A:$B`/区域三种片段各归各的字段），`<brk id>` **原样收**（0 基，指"这一行/列自己开始新的一页"——两头实测过）；写侧 `write_sheet_print`（odd 与其余各项交 crate）+ `PrintPatch`/`patch_part_xml`（crate 只有 odd 通道、`differentOddEven`/`differentFirst` 一个字不写、又把起始页码落在布尔属性 `useFirstPageNumber` 上，故 even/first 两条串与真号码在字节上补一次：只动点名的那张 worksheet 部件，兄弟元素次序按 schema 排，页眉页脚里 `&` 是格式码故只认三条标准转义）；认不出的纸型编号与片段一律记账不硬凑
+  src/xlsx_print.rs   一张纸怎么摆的双向（v0.51）：读侧 `read_print_setups` 另开一趟 zip 收 worksheet 末尾七处（`sheetPr/pageSetUpPr@fitToPage`·`printOptions`·`pageMargins`·`pageSetup`·`headerFooter` 的 odd/even/first 三槽·`rowBreaks`·`colBreaks`）**加 workbook 级两条 definedName**（`_xlnm.Print_Area`/`_xlnm.Print_Titles` 靠 `localSheetId` 分表，`$1:$2`/`$A:$B`/区域三种片段各归各的字段），`<brk id>` **原样收**（0 基，指"这一行/列自己开始新的一页"——两头实测过）；写侧 `write_sheet_print`（odd 与其余各项交 crate）+ `PrintPatch`/`patch_part_xml`（crate 只有 odd 通道、`differentOddEven`/`differentFirst` 一个字不写、又把起始页码落在布尔属性 `useFirstPageNumber` 上，故 even/first 两条串与真号码在字节上补一次：只动点名的那张 worksheet 部件，兄弟元素次序按 schema 排，页眉页脚里 `&` 是格式码故只认三条标准转义）；认不出的纸型编号与片段一律记账不硬凑；**v0.52 只补一条读侧归一**：接进 `print.clear_default_only_margins()` 之后才判 `is_empty()`，于是"文件里只有 crate 那份默认 `<pageMargins>`"的表不再被当成带着纸面设置（面板副标题、账目与 `printRef` 三处都因此说实话），测试另加两例——只含默认六边的那一份不算声明、超出默认的那一条仍算
   src/xlsx_chart.rs   zip + quick-xml 直读 chartN.xml + drawing 锚点，系列值按实时网格解析；has_charts 只做 zip 文件名嗅探
   src/ods.rs          ODS 双向：write_ods（async 外壳 + write_ods_sync，共用 xlsx 载荷 → ODF zip，样式/尺寸去重与合并、冻结 settings.xml、公式 of:= 换算）+ read_ods_styles（直解边框/对齐/换行/列宽行高/字族/隐藏 collapse/重复单元格/合并跨度/公式 + settings.xml 冻结）+ **ODF 规则只记账不硬读**（content.xml 里有 `table:database-range`/`table:content-validations`/`table:conditional-format` 就说得出"暂未读入"，v0.48 起再加两枚 needle：格子的孩子 `office:annotation`（批注，作者的 `dc:creator` 也在里面）与行内 `text:a`（链接），自产物不许凭空记出一条账）
   src/pdf.rs          export_pdf 命令：with_webview → WebView2 PrintToPdf（四边距英寸四元组 + 纸张宽高/朝向，cfg windows）；**纸张换算是唯一的**：`page_box(w,h)` 把"想要的纸面尺寸"折成 PrintSettings 的"竖版边长 + Orientation"（v0.50，宽>高才转横向，等边不算横向），背景/页眉页脚/四边距/纸宽纸高/方向五步设置失败**一律原样报出**（静默退默认＝"导出成功但纸不对"）；file_len + read_range（raw IPC 返回 Vec<u8>，async + spawn_blocking，供大 PDF 分段读）
@@ -1454,7 +1500,7 @@ src-tauri/            Rust 后端
 src/                  React 前端
   store.ts            标签页 / 最近文件 / 主题（zustand）
   App.tsx             全局快捷键、拖拽打开、文件关联打开（启动 argv + 单实例转发）、关闭确认、懒加载路由
-  index.css           外壳样式、两套主题，以及**纸面与屏幕主题的断钩处**（v0.49）：屏幕上的颜色一律先落进 CSS 变量（`--bg/--panel/--text/--text-2/--border/--accent/--code-bg/--quote-bg`），`@media print` 里一段同时命中 `:root` 与 `:root[data-theme='dark']` 的规则把 `color-scheme` 压回 `light` 并重声明整套纸面调色板（**段必须排在暗色段之后**，同特异度靠源序说话），顺手清掉屏幕辅助（`.fr-hit`/`.fr-active` 的查找命中高亮）；内容自己声明的字面色（段落底纹、单元格底色、幻灯片背景）不经过这条规则，所以照旧上纸；v0.50 又在这里补了 `.doc-content{min-height:0 !important}`——屏幕上那 900px 是打字辅助，矮纸（横向/A5）的可印高度不足它，正文尾巴会被顶成凭空多出的空白一页；**表格的网格线从无条件改为 `.sheet-print-grid` 一类**（v0.51：`printOptions@gridLines` 是打印设置里的一勾，而 Excel 的默认是"没勾就不印"），并新增 `.sheet-print-heading`/`.sheet-print-corner`（行列标题）与 `.sheet-print-band{break-inside:auto}`（一个列带一张表，带内可被分页切开，带与带之间由 `.sheet-print-break` 隔开）
+  index.css           外壳样式、两套主题，以及**纸面与屏幕主题的断钩处**（v0.49）：屏幕上的颜色一律先落进 CSS 变量（`--bg/--panel/--text/--text-2/--border/--accent/--code-bg/--quote-bg`），`@media print` 里一段同时命中 `:root` 与 `:root[data-theme='dark']` 的规则把 `color-scheme` 压回 `light` 并重声明整套纸面调色板（**段必须排在暗色段之后**，同特异度靠源序说话），顺手清掉屏幕辅助（`.fr-hit`/`.fr-active` 的查找命中高亮）；内容自己声明的字面色（段落底纹、单元格底色、幻灯片背景）不经过这条规则，所以照旧上纸；v0.50 又在这里补了 `.doc-content{min-height:0 !important}`——屏幕上那 900px 是打字辅助，矮纸（横向/A5）的可印高度不足它，正文尾巴会被顶成凭空多出的空白一页；**表格的网格线从无条件改为 `.sheet-print-grid` 一类**（v0.51：`printOptions@gridLines` 是打印设置里的一勾，而 Excel 的默认是"没勾就不印"），并新增 `.sheet-print-heading`/`.sheet-print-corner`（行列标题）与 `.sheet-print-band{break-inside:auto}`（一个列带一张表，带内可被分页切开，带与带之间由 `.sheet-print-break` 隔开）；v0.52 再添「页面设置」面板那一份（`.print-pop` 的分组 fieldset、毫米边距格、开关格、分页符 chip，以及 `.print-pop-errs` 与 `.print-pop-notes` 两本账的分色，`--danger` 同时进暗色 token 与 `@media print` 的纸面调色板——面板自己也可能被印出来，规矩照 v0.49 那条「屏幕上的颜色必须先穿过一枚 CSS 变量」）
   lib/univer.ts       Univer 实例工厂（公式 worker + 八个社区预设：核心/筛选/排序/条件格式/数据验证/查找替换/绘图 + **批注与超链接**（v0.48，超链接的 `urlHandler` 把外链交给系统默认浏览器——桌面上 `window.open` 会开出一个新 WebView 窗口））
   lib/univer-io.ts    xlsx 数据+样式（粗斜/颜色/字族/边框/对齐/换行/数字格式）/合并/图表/列宽行高/隐藏行列/冻结窗格 ↔ Univer 快照 转换（样式去重注册）；**规则走侧通道**——取完单元格再按 sheetId 把 `extractRules(resources)` 的结果对回每张表，`warnings` 由 `aggregateNotes` 聚合；**批注与链接同一条侧通道**（v0.48）：取侧交给 `extractCellSide`，放侧把 `resources` 写成 `[noteResourceOf(...)]`（实测裸写就能被门面读回）、链接写成带 `customRanges` 的富文本格（**公式格上那枚先记账不硬放**，只有链接没内容的格子也要占一格）；`payloadToWorkbook` 因此多收一个 `accounts` 出参
   lib/sheet-rules.ts  三类规则的前端桥（v0.46）：`extractRules` 从工作簿快照的 `resources` 里按表取规则（Univer 三个插件各写各的 JSON，条件格式按快照原序交回=高优先级在前），`applySheetRules` 经门面放回界面（**条件格式倒着插**，因为这一版门面按插入顺序的倒序吐规则；builder 无 `setRanges`，作用区在 `build()` 之后挂产物），`buildDataValidation` 只建门面表达得出的四类 + custom；归一化（`normColor` 收 rgb/#、`normDateValue` 收 ISO、`listOf` 拆 JSON 数组串与区域引用、`neg === pos` 的负色丢掉）与 `aggregateNotes`（同类收成"文案×N"）都在这，`textLength`/`time`/`any` 这类摆不进模型的退成边界账而不是硬建一条
@@ -1480,6 +1526,7 @@ src/                  React 前端
   lib/ppt.ts          .opd 幻灯片数据模型（版式/主题/序列化）
   lib/pdfprint.ts     打印覆盖层：挂 DOM → 注入打印样式 → export_pdf → 清理；`@media print` 里给 `html,body` 兜白底黑字（v0.47：外壳的 `body{background:var(--bg)}` 曾把整页铺成屏幕的浅灰蓝，三种导出都中招；元素自己声明的颜色不受影响）；**每条作业把自己那份 `@page` 说全**（v0.50：`ownPageRule()` 输出 `size` + 四边 `margin` + 十六个 margin box 复位，`printMarginsInches()` 让 CSS 与 PrintSettings 吃同一组数）——PrintToPdf 会认 CSS `@page size`，而文档标签的 `#oo-page-rule` 常驻 `head`，不禁掉别人的说法就会被"上一次打印"污染（实测：导完文档再导演示得到竖版纸 540×960、幻灯片只占 0.34）
   lib/sheet-cf-print.ts  条件格式的**打印侧求值**（v0.47，纯函数零 DOM）：`evalSheetCondFormats(sheet)` 按载荷数组序（=优先级）吃规则，产出 `Map<'行,列', CfPatch>` 与账目——`cell`（number/text/duplicate/unique/rank/average，含"前 N 项算并列""空串条件=格为空""数字与文本归一比较"）、`colorScale`（分位数线性插值 + 越界截最近档）、`dataBar`（0 轴起点、负色、渐变/实色、`showValue=false` 收成 `hideValue`）；`iconSet`/公式判定/日期区间/缺样式的一律**只记账不落笔**；`PRINT_MAX_ROWS`/`PRINT_MAX_COLS` 用来裁 `A:A` 这类整列引用，否则一条规则循环百万格
+  lib/sheet-print-ui.ts  「页面设置」面板要的一切（v0.52，347 行纯函数、零 DOM、Node 直测，不进组件也不碰门面）：`mmToInch`/`inchToMm`（**面板按毫米说话、载荷按英寸存**，换算只这一处）、`PAPER_OPTIONS`/`paperMm`（纸号→毫米，英制档没有"毫米名"就照实换算）、`hfSlotsToText`/`hfTextToSlots`（三框 ↔ OOXML 那条串：只填中档时**不带** `&C`，与 Excel 写出去的形状同一档；找分段标记时按 `&&` 跳转义，否则「A&&Link」里第二个 `&` 会被当成 `&L` 拆错）、`hfStrayAmpersands`（`&` 后面不是已知格式码时 Excel 会自己吞一个字符，界面先说出口）、`sqrefToRect`/`rectToSqref`/`spanToSqref`/`sqrefToSpan`（`$C$2:$F$5` ↔ 0 基含端点、`$1:$2`/`$A:$B` ↔ 行列跨度）、`addBreak`/`removeBreak`（重复断点只记账不重排）、`draftOf`（缺省项**留白**而不是替用户声明一档默认值）、`validateDraft`（区分"不解析＝不声明"与"解析得动但超出这张表＝点名并把确定灰掉"，网格上限由调用方从门面取）、`draftPaperNotes`（起始页码/偶数页另版/缩放到 N 页高/垂直居中这四条"这一版纸上做不到"随草稿实时说给面板）
   lib/sheet-print-setup.ts 一张表的打印设置 → 打印计划（v0.51，纯函数零 DOM 零时钟）：`planSheetPrint(sheet, ctx)` 产出 `SheetPrintPlan`（纸面 `pageSizeInches`（`PAPER_INCHES` 编号→短边×长边再按 `orientation` 换边，认不出记账后走 `SHEET_DEFAULT_PAGE`）、`margins`（缺省与 `pdfprint` 同一组数，英寸）、`printableWidthPx`、`zoom`、`gridLines`/`headings`/`hCentered`、`printArea`（`clampArea` 把越界端点**夹回来而不是整条作废**）、`titleRows`/`titleCols`（`titleRowSpan` 与打印区域求交——区域外的行根本不印，标题也就无从重复）、`pageBreakRows`/`colBreaks` **照 `<brk id>` 原样收**、`headerStyle`）；`planColumnBands` 按可印宽度切列带（标题列每带各带一份但不重复计列、手动列断点在**那一列之前**收带、首列上的断点是空的不凭空造带、勾了"缩放到 N 页宽"反求 zoom）；`headerFooterCss` 把 `&L/&C/&R` 三段码翻成 `@page` 的 margin box（`&A/&P/&N/&D/&F` 有对应通道，**没有的整码丢掉并记一笔**，不把 `&X` 当字面文字印出去；奇偶页没有 CSS 通道故偶数页跟着奇数版印，首页那一版有 `@page:first`）；`jobPrintPlan` 定这一趟的纸（多张表各说各话时第一张说话、其余记进 `job.notes`）；做不到的（起始页码、`fitToHeight`、垂直居中、"首页不同"却没写首页内容）**只进 `notes` 不落笔**
   lib/sheet-print.ts  WorkbookPayload → 打印 HTML 网格（值/边框/对齐/换行/数字格式/字族/合并/列宽行高/跳过隐藏行列/**跳过被筛掉的行（`filter.filteredOut` 与 hiddenRows 并列）**/**条件格式算出的底色·字色·粗斜·下划线·删除线·数据条（v0.47）**/**图表位图按锚点格绝对覆盖、锚点撑开网格边界（v0.47）**/**纸张·边距·缩放·打印区域·重复标题行列·手动分页符·列带·水平居中·网格线与行列标题（v0.51，一切先过 `planSheetPrint`）**/分页/截断）；一个列带一张 `<table>`、每带各一份 `<thead>`（实测 Blink 会自己重复表头，我们不再手工插第二份）；返回 `{html, notes, plans, job}`——页面上只印"这份打印件缺了什么"，其余账目交回调用方进状态栏，`job` 那三个数直接喂 `pdfprint`
   lib/pptx-export.ts  Deck → pptx（pptxgenjs）
@@ -1493,7 +1540,7 @@ src/                  React 前端
   lib/open.ts         路径→标签 打开 / 带确认关闭
   lib/sync.ts         最近文件端到端加密同步（WebCrypto PBKDF2-SHA256 → AES-256-GCM，.oosync 信封）
   lib/update.ts       自动更新的**检测层**（v0.45）：`checkForUpdate()` 动态导入 updater 插件走一次 `check`，任何失败都收敛成 `{state:'failed'}` 不往外抛（抛出去的表现就是"点了没反应"）；`describeError` 按插件 error.rs 的真实字面把"源上没清单/没配端点/非 https/缺本平台条目/签名/base64/日期/连不上"归成中文，认不出的一律原样带出不编原因；`infoOf` 从 `rawJson` 里取自定义字段 `download_page`，只认 http(s) 才给按钮
-  components/         Home（最近文件 + 从模板新建画廊 + 版本号与"检查更新"） / Workspace / SheetEditor（保存按 .xlsx/.ods/.csv 三分流，打开时把读到的规则经门面放回界面并把两侧账目显示在状态栏） / DocEditor（页面设置含分栏/页码格式、分页参考线、分页符、表格与图片上下文工具条、粘贴成图、查找替换面板、字体族·字号、缩进工具条与 Ctrl+]/[、上下标 X²/X₂、表格上下文条的底纹色与竖排对齐（上/中/下）、脚注/尾注（工具栏插入 + 文末分区编辑与定位/删除，打印时文本框换静态块）、版本历史·自动保存、模板 seed、状态栏字数节流；打开 .docx 保真导入优先、mammoth 兜底，保存按 .odoc/.odt/.docx 各自格式原地落盘） / PptEditor / PdfViewer（pdfjs-dist 懒加载，连续多页视口虚拟渲染+Ctrl 缩放+TextLayer 文字选择+全文搜索+缩略图/大纲/标注侧栏+高亮便签与矩形·椭圆·直线·手绘形状（绘制/导入/写回 pdf-lib）+标注编辑（点选/拖移/改色/删除）+「页面」工作区旋转/删除/提取/合并/拆分；≥4MB 走分段读（lib/pdf-range.ts），卸载时 destroy openTask 并 abort transport））
+  components/         Home（最近文件 + 从模板新建画廊 + 版本号与"检查更新"） / Workspace / SheetEditor（保存按 .xlsx/.ods/.csv 三分流，打开时把读到的规则经门面放回界面并把两侧账目显示在状态栏；**「页面设置」面板（v0.52）**——纸张/方向、六条边距（毫米）、缩放与"缩放到 N 页宽"、六个开关、打印区域与重复标题行列（可「用当前选区」「用选区首行/首列」按门面选区给）、手动分页符（按 Excel 的 `brk@id` 说法：这一行/列自己起新页）、页眉页脚三框 + 六枚格式码 + 奇/偶/首页三版；「确定」写进 `printRef` 侧通道、「清除这张表的设置」把它整个删掉、面板里的错把确定灰掉，做不到的四条以账目形式随草稿说在面板上） / DocEditor（页面设置含分栏/页码格式、分页参考线、分页符、表格与图片上下文工具条、粘贴成图、查找替换面板、字体族·字号、缩进工具条与 Ctrl+]/[、上下标 X²/X₂、表格上下文条的底纹色与竖排对齐（上/中/下）、脚注/尾注（工具栏插入 + 文末分区编辑与定位/删除，打印时文本框换静态块）、版本历史·自动保存、模板 seed、状态栏字数节流；打开 .docx 保真导入优先、mammoth 兜底，保存按 .odoc/.odt/.docx 各自格式原地落盘） / PptEditor / PdfViewer（pdfjs-dist 懒加载，连续多页视口虚拟渲染+Ctrl 缩放+TextLayer 文字选择+全文搜索+缩略图/大纲/标注侧栏+高亮便签与矩形·椭圆·直线·手绘形状（绘制/导入/写回 pdf-lib）+标注编辑（点选/拖移/改色/删除）+「页面」工作区旋转/删除/提取/合并/拆分；≥4MB 走分段读（lib/pdf-range.ts），卸载时 destroy openTask 并 abort transport））
 scripts/              copy-pdfjs-assets.mjs（dev/build 前复制 cmaps/标准字体到 public/pdfjs） /
                       updater-release.mjs（发版：开 createUpdaterArtifacts 本机建签名包 → 读回真 .sig 与产物 →
                       出带三平台键的 latest.json → 打印要上传的清单；私钥只走子进程环境变量，`pnpm release:updater`）
@@ -1595,10 +1642,14 @@ cargo check        # Rust 后端检查（在 src-tauri 下）
       `540×960`、幻灯片只剩 `0.34` 的一条带，治法是每条覆盖层作业把自己那份 `@page`（纸面 + 四边距 + 十六个
       margin box 复位）说全，而不是禁用别人的样式表；矮纸的 `min-height:900px` 打字区不再把正文顶成凭空一页）
 - [x] 表格保真八期：**页面设置 xlsx 全链路往返 + 打印链路真的照着排**（纸张/方向/边距/缩放/网格线与行列标题/奇偶页与首页/页眉页脚三槽/打印区域与重复标题行列（workbook 级 definedName）/手动分页符，读侧七处 + 两条 definedName、写侧 odd 交 crate 其余搭同一趟定点重打包补；Univer 装不下这一层，按表名走侧通道且**保存与导出 PDF 共吃同一份计划**；列带按可印宽度切、一个带一张表、断点语义按实测取"这一行/列自己开始新页"；页眉页脚翻成 `@page` margin box 且 `&A/&P/&N/&D/&F` 真展开；Excel 16.0 只读腿对写侧夹具与应用重存的第三方件各跑一遍，CDP 真机按四页纸的 `MediaBox`/表头重复/半列居中位移逐项核对；ODS/CSV 只记边界账不谎称读回）
-- [ ] 表格**页面设置的编辑 UI**：v0.51 让这一层存得下、开得回、真上纸，但界面上还改不动它（纸张/方向/边距/
-      缩放/页眉页脚/打印区域/重复标题行列/手动分页符都得先由别人文件里带进来）——补一个面板写进
-      `sheet.print` 并让 `printRef` 侧通道认账，顺带把"这一版纸上做不到"的四条账（起始页码、偶数页另版、
-      缩放到 N 页高、垂直居中）在 UI 上说清楚
+- [x] 表格**页面设置的编辑 UI**（v0.52：`src/lib/sheet-print-ui.ts` 供纯函数（毫米↔英寸、八档纸型、
+      页眉页脚三槽↔OOXML 串、区域/整跨度↔0 基矩形、断点表、校验与"做不到"的账），`SheetEditor` 的面板
+      写进 `printRef` 侧通道并被保存与导出 PDF 共吃；打印区域/重复标题行列「用当前选区」按门面选区给，
+      「这一版纸上做不到」的四条账（起始页码、偶数页另版、缩放到 N 页高、垂直居中）在面板上当面说清且随草稿变；
+      读侧不再把写侧工具替每张表落下的默认 `<pageMargins>` 当成声明）
+- [ ] 表格页面设置的打印二期：面板设的**起始页码 / 缩放到 N 页高 / 垂直居中**存得进文件、Excel 认得，
+      但我们自己的 PDF 还没照着做（`@page` 通道里没有对应物——页码只有一个 counter，居中与"印成 N 页高"
+      得自绘分页）；要么接线要么把这三条从"能设"降级成"只记账"
 - [ ] 自动更新：应用内**下载并安装**（要先决策：真实更新源托管在哪、`updater:allow-download`+`allow-install` 权限、
       以及"装完自动重启"的取舍——见 v0.45 一节末尾的接线清单）
 - [ ] macOS 打包（需签名/公证凭据）

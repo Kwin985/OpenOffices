@@ -447,6 +447,23 @@ pub struct PrintMarginsPayload {
     pub footer: Option<f64>,
 }
 
+/// OOXML 的那一档默认边距（Excel 新建表就是这六个数，rust_xlsxwriter 没人吩咐时也写这一档）
+pub const DEFAULT_PRINT_MARGINS: (f64, f64, f64, f64, f64, f64) = (0.7, 0.7, 0.75, 0.75, 0.3, 0.3);
+
+impl PrintMarginsPayload {
+    /// 六档全都停在默认值上（或干脆没写）——这种边距不携带任何信息
+    pub fn is_all_default(&self) -> bool {
+        let (l, r, t, b, h, f) = DEFAULT_PRINT_MARGINS;
+        let same = |v: Option<f64>, d: f64| v.is_none_or(|x| (x - d).abs() < 1e-9);
+        same(self.left, l)
+            && same(self.right, r)
+            && same(self.top, t)
+            && same(self.bottom, b)
+            && same(self.header, h)
+            && same(self.footer, f)
+    }
+}
+
 /// 一张表的打印设置：页面/纸张/边距/页眉页脚/手动分页符/打印区域/重复标题行。
 /// 全字段都来自 OOXML 字面（枚举收字面、边距收英寸、区域收 0 基含端点、分页符原样收 `<brk id>`）。
 #[derive(Serialize, Deserialize, Clone, Debug, Default)]
@@ -534,6 +551,17 @@ impl SheetPrintPayload {
             && self.title_cols.is_none()
             && self.row_breaks.is_empty()
             && self.col_breaks.is_empty()
+    }
+
+    /// 除了「停在默认值上的那档边距」什么都没声明时，把边距也抹掉——那一档是写侧工具替每张表
+    /// 落下的（rust_xlsxwriter 没人吩咐也写 `<pageMargins>`），留着它等于凭空多出一份纸面声明：
+    /// 界面上按了「清除这张表的设置」，存盘重开设置又自己长了回来。
+    pub fn clear_default_only_margins(&mut self) {
+        let mut probe = self.clone();
+        probe.margins = None;
+        if probe.is_empty() && self.margins.as_ref().is_some_and(|m| m.is_all_default()) {
+            self.margins = None;
+        }
     }
 }
 
