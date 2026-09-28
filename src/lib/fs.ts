@@ -287,10 +287,22 @@ export interface SheetPayload {
   print?: SheetPrintPayload | null
 }
 
+/** 工作簿默认字体：`xl/styles.xml` 里 `cellXfs[0]@fontId` 指到的那一条 `fonts[n]`。
+ *  OOXML 没有"默认字体"这个元素，它就是 Normal 样式那条字体——未设样式的格子与 Excel 的页眉字号都吃它。
+ *  Univer 侧没有能接的槽（`IWorkbookData.defaultStyle` 是死槽，core 里零读取；画布对无样式格
+ *  回落 engine-render 硬编码的 Arial 11），所以它由侧通道留住，只喂打印那一层 */
+export interface DefaultFont {
+  /** 字体族名，照文件原样收（这一层不归一化：把"等线"归掉，写侧就会按 crate 的 Calibri 落笔） */
+  ff?: string | null
+  /** 字号（pt） */
+  fs?: number | null
+}
+
 export interface WorkbookPayload {
   sheets: SheetPayload[]
   /** 读侧的边界账：格式里认出来但界面/模型装不下的东西，打开时要说得出 */
   warnings?: string[]
+  defaultFont?: DefaultFont | null
 }
 
 const SHEET_EXTS = ['xlsx', 'xls', 'ods', 'csv']

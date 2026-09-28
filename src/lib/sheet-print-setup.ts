@@ -130,7 +130,7 @@ function marginsOf(p: SheetPrintPayload): [number, number, number, number] {
 export function planSheetPrint(
   sheet: SheetPayload,
   ctx: PrintContext,
-  opts?: { hfZoom?: number | null },
+  opts?: { hfZoom?: number | null; hfBasePt?: number | null },
 ): SheetPrintPlan {
   const notes: string[] = []
   const p: SheetPrintPayload = sheet.print ?? {}
@@ -177,6 +177,7 @@ export function planSheetPrint(
   const hf = headerFooterCss(p.header, p.footer, p, ctx, {
     zoom: opts?.hfZoom ?? zoom,
     margins,
+    basePt: opts?.hfBasePt ?? null,
   })
   notes.push(...hf.notes)
   if (hf.css && (margins[0] < 0.35 || margins[2] < 0.35)) {
@@ -625,6 +626,8 @@ interface HfRender {
   scale: number
   /** 按纸张边缘对齐时，每一格往外推的英寸数（按边距对齐时为 null） */
   shift: { left: number; right: number } | null
+  /** 倍数所乘的那一档底数（pt）：文件说了就由文件说 */
+  basePt: number
 }
 
 /** 纸上 1pt = 96/72px（CSS 的定义）。页眉页脚只有 px 说得动字号，这条换算只写在这里 */
@@ -642,11 +645,10 @@ function segStyle(seg: HfSegment, r: HfRender): string {
   return parts.length ? `;${parts.join(';')}` : ''
 }
 
-/** 页眉页脚在纸上的基准字号（pt）。Excel 的页眉默认就是工作簿默认字号那一档，
- *  真机对照量出来的正是它（v0.56：Excel 16.0 自己导出的三份 PDF，页眉与正文同为 11.04pt）；
- *  我们从前这一条不写，margin box 继承页面那 16px（=12pt），比 Excel 整整高一档。
- *  写死它不算"替用户声明他没设过的东西"——文件里那一层根本没有字号，纸上的字号只能由我们给，
- *  给的目标就是与 Excel 同一档 */
+/** 页眉页脚在纸上的**兜底**字号（pt）：Excel 的页眉底数就是工作簿默认字号（v0.56 实测：把 Normal
+ *  从 11pt 改成 14pt，Excel 自己导出的 PDF 页眉从 11.04pt 跟着变 14.04pt），所以文件说了话就用
+ *  它说的那一档（见 HfPaperOpts.basePt）；载荷没说才落回这一枚常量——它量的正是 Excel 的默认那一档。
+ *  写死它不算"替用户声明他没设过的东西"：margin box 不写就等于让页面上那一档去继承，纸上就高了整整一号 */
 const HF_BASE_FONT_PT = 11
 
 /** 「随文档缩放」：margin box 是页级的，不在挂着 CSS zoom 的那棵 <table> 树里（实测内容 zoom 0.5 时
@@ -654,7 +656,7 @@ const HF_BASE_FONT_PT = 11
  *  段自己带了字号（`&"字号"` 那一类码）就交给 segStyle 乘，这里不重复出手 */
 function segFontCss(seg: HfSegment, r: HfRender): string {
   if (seg.pt) return ''
-  return `;font-size:${ptToPx(HF_BASE_FONT_PT * r.scale)}px`
+  return `;font-size:${ptToPx(r.basePt * r.scale)}px`
 }
 
 /** 取消「与页边距对齐」：margin box 的 width:100% 不吃（实测），认的是 margin/padding——
@@ -765,6 +767,9 @@ export interface HfPaperOpts {
   zoom: number
   /** 本张表的四边距（英寸，top/right/bottom/left）：负 margin 要按左右那两条往外推 */
   margins: [number, number, number, number]
+  /** 页眉字号的底数（pt）：工作簿默认字体说了话就用它；null（或荒谬值）才退回 HF_BASE_FONT_PT。
+   *  荒谬值也归到兜底：0 与负数在这里不是"字号是 0"而是"那一层没说话"，照收就是纸上页眉整个不见 */
+  basePt?: number | null
 }
 
 /** 页眉页脚 → @page margin box 规则。三版各落一处，其中一条是本轮重量出来的：
@@ -795,6 +800,7 @@ export function headerFooterCss(
   const r: HfRender = {
     scale: print.scaleWithDoc === false ? 1 : paper.zoom,
     shift: print.alignWithMargins === false ? { left: paper.margins[3], right: paper.margins[1] } : null,
+    basePt: paper.basePt && paper.basePt > 0 ? paper.basePt : HF_BASE_FONT_PT,
   }
   const oddBoxes =
     boxesFor(parseHf(header?.odd ?? '', ctx, notes), 'header', notes, r) +

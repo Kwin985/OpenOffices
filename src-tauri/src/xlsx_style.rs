@@ -8,7 +8,7 @@ use std::io::Read;
 use quick_xml::events::Event;
 use quick_xml::Reader;
 
-use crate::xlsx::{BorderSide, CellBorder, CellStyle, CondFormatStyle, MergeRange};
+use crate::xlsx::{BorderSide, CellBorder, CellStyle, CondFormatStyle, DefaultFont, MergeRange};
 
 #[derive(Default, Debug)]
 pub struct SheetFmt {
@@ -563,14 +563,16 @@ fn has_rules(xml: &str) -> bool {
 }
 
 /// 任何失败都退化为空表（非 xlsx 格式：xls/csv 无样式可读；ods 走 ods.rs 自己的读侧）
-pub fn read_xlsx_styles(path: &str) -> HashMap<String, SheetFmt> {
+/// 回来的第二项是工作簿默认字体（整个文件只有一份，不在 per-sheet 那张表里）
+pub fn read_xlsx_styles(path: &str) -> (HashMap<String, SheetFmt>, Option<DefaultFont>) {
     let mut out = HashMap::new();
-    let Ok(file) = File::open(path) else { return out };
-    let Ok(mut zip) = zip::ZipArchive::new(file) else { return out };
+    let Ok(file) = File::open(path) else { return (out, None) };
+    let Ok(mut zip) = zip::ZipArchive::new(file) else { return (out, None) };
     let Some(styles_xml) = read_entry(&mut zip, "xl/styles.xml") else {
-        return out;
+        return (out, None);
     };
     let book = parse_styles(&styles_xml);
+    let default_font = default_font_of(&book);
     let dxfs = parse_dxfs(&styles_xml);
     for (name, p) in sheet_paths(&mut zip) {
         if let Some(xml) = read_entry(&mut zip, &p) {
@@ -583,7 +585,19 @@ pub fn read_xlsx_styles(path: &str) -> HashMap<String, SheetFmt> {
             out.insert(name, fmt);
         }
     }
-    out
+    (out, default_font)
+}
+
+/// 工作簿默认字体 = `cellXfs[0]@fontId` 指到的那一条 font。没有 cellXfs 就没有这一层，不凭空造
+fn default_font_of(book: &StyleBook) -> Option<DefaultFont> {
+    let font = book.fonts.get(book.xfs.first()?.font as usize)?;
+    if font.ff.is_none() && font.fs.is_none() {
+        return None;
+    }
+    Some(DefaultFont {
+        ff: font.ff.clone(),
+        fs: font.fs,
+    })
 }
 
 #[cfg(test)]
@@ -661,6 +675,75 @@ mod tests {
         assert_eq!(bd.r.as_ref().and_then(|x| x.s.as_deref()), Some("dashed"));
         assert!(bd.t.as_ref().expect("top").c.is_none(), "未写 color 则无颜色");
         assert!(style_for(0, &book).is_none());
+    }
+
+    /// 工作簿默认字体那一层：认的是 `cellXfs[0]@fontId` 指到的那一条，不是"排在 fonts 第一条"。
+    /// 判别件是 `fontId="1"` 那一份——只看位置就会读成等线 11，而文件说的明明是宋体 14
+    #[test]
+    fn workbook_default_font_follows_cell_xfs() {
+        let book = |xml: &str| parse_styles(&format!(r#"<?xml version="1.0"?><styleSheet xmlns="x">{xml}</styleSheet>"#, xml = xml));
+        let deng = r#"<fonts count="2"><font><sz val="11"/><color theme="1"/><name val="等线"/><family val="2"/><charset val="134"/><scheme val="minor"/></font><font><sz val="14"/><name val="宋体"/></font></fonts>"#;
+
+        let got = default_font_of(&book(&format!(
+            r#"{deng}<cellXfs count="2"><xf fontId="0" fillId="0"/><xf fontId="1"/></cellXfs>"#
+        )));
+        assert_eq!(
+            got,
+            Some(DefaultFont {
+                ff: Some("等线".into()),
+                fs: Some(11.0)
+            }),
+            "中文 Excel 的默认那一条：等线 11（族名照文件原样收，不归一）"
+        );
+
+        let got = default_font_of(&book(&format!(
+            r#"{deng}<cellXfs count="2"><xf fontId="1" fillId="0"/><xf fontId="0"/></cellXfs>"#
+        )));
+        assert_eq!(
+            got,
+            Some(DefaultFont {
+                ff: Some("宋体".into()),
+                fs: Some(14.0)
+            }),
+            "默认样式指着第二条 font ⇒ 读的是那一条（按位置读就错）"
+        );
+
+        assert_eq!(
+            default_font_of(&book(r#"<cellXfs count="1"><xf fontId="0"/></cellXfs>"#)),
+            None,
+            "没有 fonts 就没有这一层"
+        );
+        assert_eq!(
+            default_font_of(&book(&format!(
+                r#"{deng}<cellXfs count="1"><xf fontId="7"/></cellXfs>"#
+            ))),
+            None,
+            "fontId 指到表外 ⇒ 不凭空造一条出来"
+        );
+        assert_eq!(
+            default_font_of(&book(&format!(
+                r#"{deng}<cellXfs count="0"/>"#
+            ))),
+            None,
+            "没有 cellXfs（或 count=0）就没有 Normal 这一档，不拿 fonts[0] 顶替"
+        );
+        assert_eq!(
+            default_font_of(&book(
+                r#"<fonts count="1"><font><b/></font></fonts><cellXfs count="1"><xf fontId="0"/></cellXfs>"#
+            )),
+            None,
+            "那条 font 既没说族名也没说字号 ⇒ 载荷里不写这一层"
+        );
+        assert_eq!(
+            default_font_of(&book(
+                r#"<fonts count="1"><font><sz val="12"/></font></fonts><cellXfs count="1"><xf fontId="0"/></cellXfs>"#
+            )),
+            Some(DefaultFont {
+                ff: None,
+                fs: Some(12.0)
+            }),
+            "只说字号没说族名：字号仍要回来，缺的那半留给用侧兜底"
+        );
     }
 
     #[test]

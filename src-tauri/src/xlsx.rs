@@ -605,12 +605,31 @@ pub fn paper_name(code: u32) -> Option<&'static str> {
     })
 }
 
+/// 工作簿默认字体：`xl/styles.xml` 里 `cellXfs[0]@fontId` 指到的那一条 `fonts[n]`。
+/// OOXML 里没有"默认字体"这个元素，它就是 Normal 样式那条字体，未设样式的格子（`<c>` 不带 `s=`）
+/// 全走这一层，Excel 的页眉字号也吃它（v0.57 实测：把 Normal 改成宋体 14，页眉从 11.04pt 变 14.04pt）。
+/// 这一层不做归一化：`ff` 照文件原样收——把"等线"归一成"不声明"，写侧就会按 crate 的 Calibri 落笔，
+/// 存一次盘字体族自己换了家，正是我们在 cell 层归一化躲不掉的那类分叉
+#[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct DefaultFont {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ff: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fs: Option<f64>,
+}
+
 #[derive(Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
 pub struct WorkbookPayload {
     pub sheets: Vec<SheetPayload>,
     /// 读侧的边界账：格式里认出来但界面/模型装不下的东西，打开时要说得出
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub warnings: Vec<String>,
+    /// 工作簿默认字体。Univer 的 `IWorkbookData.defaultStyle` 是个死槽（core 里零读取），
+    /// 所以它由侧通道留住，供打印那一层当底数用
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub default_font: Option<DefaultFont>,
 }
 
 #[derive(Debug)]
@@ -694,8 +713,9 @@ pub fn read_xlsx_sync(path: String) -> Result<WorkbookPayload, Error> {
     let mut workbook =
         open_workbook_auto(&path).map_err(|e| Error(format!("无法打开文件: {e}")))?;
     // 样式/合并读侧按格式分流：xlsx 直解 zip；ods 走 content.xml 直解；xls/csv 无样式通道
-    let fmts = if path.to_ascii_lowercase().ends_with(".ods") {
-        crate::ods::read_ods_styles(&path)
+    // 工作簿默认字体只有 xlsx 这条路读得到（ODS 的"默认"住在 styles.xml 的 default-style 那一层，本轮未接）
+    let (fmts, default_font) = if path.to_ascii_lowercase().ends_with(".ods") {
+        (crate::ods::read_ods_styles(&path), None)
     } else {
         xlsx_style::read_xlsx_styles(&path)
     };
@@ -823,6 +843,7 @@ pub fn read_xlsx_sync(path: String) -> Result<WorkbookPayload, Error> {
     Ok(WorkbookPayload {
         sheets,
         warnings: rule_notes,
+        default_font,
         ..Default::default()
     })
 }
@@ -950,6 +971,25 @@ fn px_to_cm(px: u32) -> u32 {
 pub fn write_xlsx_sync(path: String, workbook: WorkbookPayload) -> Result<Vec<String>, Error> {
     let mut wb = Workbook::new();
     let mut notes = Vec::new();
+    // 工作簿默认字体落在 fonts[0]（就是 Normal 那条），crate 只认 add_worksheet 之前的这一笔；
+    // 行高/列宽照交回它自己的默认（20 与 64），于是字节上只动字体那一层。
+    // 载荷没说话时一个字都不写——今天的输出形状一位不变
+    if let Some(df) = workbook.default_font.as_ref() {
+        let ff = df.ff.as_deref().map(str::trim).filter(|s| !s.is_empty());
+        let fs = df.fs.filter(|v| *v > 0.0);
+        if ff.is_some() || fs.is_some() {
+            let mut fmt = Format::new();
+            if let Some(name) = ff {
+                fmt = fmt.set_font_name(name);
+            }
+            if let Some(size) = fs {
+                fmt = fmt.set_font_size(size);
+            }
+            if let Err(e) = wb.set_default_format(&fmt, 20, 64) {
+                notes.push(format!("工作簿默认字体没写进去: {e}"));
+            }
+        }
+    }
     // 每张表交回来的作者表（下标即 authorId），存盘时拿它核对产物里的 <authors>
     let mut tables: Vec<Option<xlsx_cell_side::AuthorTable>> = Vec::new();
     // crate 写不了的那半边打印设置，按 worksheet 部件名点名（部件序号＝建表顺序，1 基）
@@ -2380,6 +2420,121 @@ mod tests {
         assert!(
             notes.iter().any(|x| x.contains("色阶")),
             "档数不对的色阶要记进账：{notes:?}"
+        );
+    }
+
+    /// `xl/styles.xml` 里第一条 `<font>`（就是 Normal 那条）。`<fonts count=…>` 不会误匹配：找的是带 `>` 的那一枚
+    fn first_font(styles_xml: &str) -> String {
+        let from = styles_xml.find("<font>").expect("产物里没有 <font>");
+        let rest = &styles_xml[from..];
+        rest[..rest.find("</font>").expect("<font> 没关")].to_string()
+    }
+
+    /// 载荷说了工作簿默认字体 ⇒ 它落在 `fonts[0]`，而且读得回来。
+    /// 反面是同一条链路的另一半：`sheetFormatPr` 不许被带动（行高/列宽是交回 crate 自己的默认）
+    #[test]
+    fn default_font_declared_lands_in_fonts_zero() {
+        let path = tmp_path("df-on");
+        let wb = WorkbookPayload {
+            sheets: vec![SheetPayload {
+                name: "默认字体".into(),
+                cells: vec![cell(0, 0, json!("一格"))],
+                ..Default::default()
+            }],
+            default_font: Some(DefaultFont {
+                ff: Some("宋体".into()),
+                fs: Some(14.0),
+            }),
+            ..Default::default()
+        };
+        let notes = write_xlsx_sync(path.clone(), wb).expect("写失败");
+        assert!(notes.iter().all(|x| !x.contains("默认字体没写进去")), "{notes:?}");
+        let styles = entry(&path, "xl/styles.xml");
+        let font = first_font(&styles);
+        assert!(font.contains(r#"<sz val="14"/>"#), "字号那一条要上纸：{font}");
+        assert!(
+            font.contains(r#"<name val="宋体"/>"#),
+            "族名照文件原样落笔、不归一成 Calibri：{font}"
+        );
+        // 实测的形状：crate 写默认那条时带 sz/color/name/family 而没有 scheme——
+        // 而 Excel 在 Normal 被改过之后也正是这样丢掉 scheme 的（v0.57 前置实测那条），两家同档
+        assert!(
+            !font.contains("scheme"),
+            "改过默认族名就不该再声明主题字族：{font}"
+        );
+        assert!(
+            entry(&path, "xl/worksheets/sheet1.xml").contains(r#"<sheetFormatPr defaultRowHeight="15"/>"#),
+            "行高仍交回 crate 那一档（只动字体那一层）"
+        );
+        let back = read_xlsx_sync(path.clone()).expect("读回失败");
+        std::fs::remove_file(&path).ok();
+        assert_eq!(
+            back.default_font,
+            Some(DefaultFont {
+                ff: Some("宋体".into()),
+                fs: Some(14.0)
+            }),
+            "往返：读侧认的是 cellXfs[0]@fontId 指到的那一条"
+        );
+    }
+
+    /// 载荷没说 ⇒ 输出形状与这一轮之前一字不差（crate 自己的 Calibri 11 那一条）。
+    /// 注意读回来仍是 `Some(Calibri, 11)`：这一层在文件里永远存在，OOXML 没有"不声明默认字体"这个形状
+    #[test]
+    fn default_font_absent_keeps_crate_shape() {
+        let path = tmp_path("df-off");
+        let wb = WorkbookPayload {
+            sheets: vec![SheetPayload {
+                name: "没声明".into(),
+                cells: vec![cell(0, 0, json!("一格"))],
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        write_xlsx_sync(path.clone(), wb).expect("写失败");
+        let styles = entry(&path, "xl/styles.xml");
+        let font = first_font(&styles);
+        assert!(
+            font.contains(r#"<name val="Calibri"/>"#) && font.contains(r#"<sz val="11"/>"#),
+            "没声明就不许多写字幕：{font}"
+        );
+        std::fs::remove_file(&path).ok();
+    }
+
+    /// 存两次盘这一层不许自己漂走（第二次写吃的已经是第一次写出来的那份字节）
+    #[test]
+    fn default_font_survives_second_save() {
+        let path = tmp_path("df-twice");
+        let wb = || WorkbookPayload {
+            sheets: vec![SheetPayload {
+                name: "两趟".into(),
+                cells: vec![cell(0, 0, json!("一格"))],
+                ..Default::default()
+            }],
+            default_font: Some(DefaultFont {
+                ff: Some("等线".into()),
+                fs: Some(12.0),
+            }),
+            ..Default::default()
+        };
+        write_xlsx_sync(path.clone(), wb()).expect("第一趟写失败");
+        let first = read_xlsx_sync(path.clone()).expect("第一趟读回失败");
+        write_xlsx_sync(path.clone(), first).expect("第二趟写失败");
+        let styles = entry(&path, "xl/styles.xml");
+        let second = read_xlsx_sync(path.clone()).expect("第二趟读回失败");
+        std::fs::remove_file(&path).ok();
+        assert_eq!(
+            second.default_font,
+            Some(DefaultFont {
+                ff: Some("等线".into()),
+                fs: Some(12.0)
+            }),
+            "两趟之后仍是同一档"
+        );
+        assert!(
+            first_font(&styles).contains(r#"<name val="等线"/>"#),
+            "第二趟的字节里仍是那一族：{}",
+            first_font(&styles)
         );
     }
 }

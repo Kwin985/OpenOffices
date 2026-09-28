@@ -466,8 +466,15 @@ export function sheetsToPrintHtml(
   const notes: string[] = []
   const dateText = ctx?.dateText ?? new Date().toLocaleDateString()
   const ctxOf = (name: string) => ({ sheetName: name, dateText, fileName: ctx?.fileName })
+  // 页眉字号的底数由工作簿默认字体说话（真机对照：Excel 的页眉吃的就是 styles.xml 的 fonts[0]，
+  // 把 Normal 从 11pt 改成 14pt，它导出的 PDF 页眉跟着从 11.04pt 变 14.04pt）；
+  // 载荷没说才退回 HF_BASE_FONT_PT 那一档常量
+  const hfBasePt = payload.defaultFont?.fs ?? null
   const plans = payload.sheets.map((s, i) =>
-    planSheetPrint(s, ctxOf(s.name), { hfZoom: opts?.zooms?.[i] ?? null }),
+    planSheetPrint(s, ctxOf(s.name), {
+      hfZoom: opts?.zooms?.[i] ?? null,
+      hfBasePt,
+    }),
   )
   // 纸的几何先定下来：分带要按这一趟作业真正用的那张纸算（此时页眉那一版还是按计划缩放写的）
   const paper = jobPrintPlan(plans)
@@ -483,6 +490,7 @@ export function sheetsToPrintHtml(
       plans[i].pageStyle = headerFooterCss(s.print?.header, s.print?.footer, s.print ?? {}, ctxOf(s.name), {
         zoom: r.zoom,
         margins: plans[i].margins,
+        basePt: hfBasePt,
       }).css
     }
     return r.html

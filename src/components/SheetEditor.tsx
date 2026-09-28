@@ -15,6 +15,7 @@ import type {
   ChartPayload,
   ChartRangeRef,
   ChartSeriesPayload,
+  DefaultFont,
   PrintHfPayload,
   PrintMarginsPayload,
   SheetPrintPayload,
@@ -248,6 +249,10 @@ function SheetEditor({ tab }: Props) {  const containerRef = useRef<HTMLDivEleme
   // 打印设置（纸张/边距/页眉页脚/分页符/打印区域/重复标题行列）也是 Univer 装不下的东西：
   // 界面上一版没有页面设置面板，读回来的那份就按表名留着，存盘与导出 PDF 都照它说话
   const printRef = useRef(new Map<string, SheetPrintPayload>())
+  // 工作簿默认字体是**簿级**的一档（Univer 的 IWorkbookData.defaultStyle 是死槽，core 里零读取，
+  // 画布对无样式格回落 engine-render 硬编码的 Arial 11），所以这里自己留一份：
+  // 存盘回贴保住字节，导出时给页眉当底数
+  const defaultFontRef = useRef<DefaultFont | null>(null)
   const [status, setStatus] = useState<string>(tab.path ? '正在加载…' : '')
   const [chartCount, setChartCount] = useState(0)
   const [dialogOpen, setDialogOpen] = useState(false)
@@ -306,6 +311,7 @@ function SheetEditor({ tab }: Props) {  const containerRef = useRef<HTMLDivEleme
     chartsRef.current = new Map()
     cellSideRef.current = new Map()
     printRef.current = new Map()
+    defaultFontRef.current = null
     setChartCount(0)
     const worker = new Worker(new URL('../univer-worker.ts', import.meta.url), {
       type: 'module',
@@ -339,6 +345,8 @@ function SheetEditor({ tab }: Props) {  const containerRef = useRef<HTMLDivEleme
             .filter((s) => s.print)
             .map((s) => [s.name, s.print as SheetPrintPayload]),
         )
+        // 工作簿默认字体是簿级的一档，Univer 的 defaultStyle 是死槽装不下 ⇒ 原样留一份
+        defaultFontRef.current = dump.defaultFont ?? null
         // 还原已存图表：PNG 渲染并行（VChart 是纯计算），落格串行（同一 sheet 的命令队列）
         const items = dump.sheets.flatMap((s) =>
           (s.charts ?? []).map((chart) => ({ sheetName: s.name, chart })),
@@ -641,6 +649,9 @@ function SheetEditor({ tab }: Props) {  const containerRef = useRef<HTMLDivEleme
       const p = printRef.current.get(sheet.name)
       if (p && !sheet.print) sheet.print = p
     }
+    // 工作簿默认字体也是 Univer 快照装不下的东西（它的 defaultStyle 是死槽），从侧通道回贴；
+    // 快照里读不出这一层，所以这一笔就是存盘与导出共吃的唯一来源
+    payload.defaultFont = defaultFontRef.current
     // 调和删除 → 同步锚点 → 取最新数值 → 按工作表附着
     for (const [id, item] of [...chartsRef.current]) {
       const ws = wb.getSheetByName(item.sheetName)
