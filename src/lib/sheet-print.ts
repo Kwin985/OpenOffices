@@ -12,6 +12,7 @@ import {
   planColumnBands,
   planSheetPrint,
   printableWidthPx,
+  ptToPx,
   titleColSpan,
   titleRowSpan,
 } from './sheet-print-setup'
@@ -81,7 +82,7 @@ function styleParts(s: CellStyle | null | undefined, cf?: CfPatch): string[] {
   const fill = cf?.bg ?? s?.bg
   if (cf?.bl || s?.bl) parts.push('font-weight:bold')
   if (cf?.it || s?.it) parts.push('font-style:italic')
-  if (s?.fs) parts.push(`font-size:${Math.round(s.fs * 1.333)}px`) // pt→px
+  if (s?.fs) parts.push(`font-size:${ptToPx(s.fs)}px`)
   if (s?.ff) {
     const fam = s.ff.replace(/["'();<>\\]/g, '')
     if (fam) parts.push(`font-family:"${fam}"`)
@@ -246,6 +247,8 @@ function sheetHtml(
   const notes: string[] = []
   const head = `<h3 class="sheet-print-title">${esc(sheet.name)}</h3>`
   const cls = first ? '' : ' class="sheet-print-break"'
+  // 正文底数落在 section 上，三张表各带一份（同一份作业里所有表吃的是同一个文件默认字体）
+  const bstyle = ` style="--oof-print-base-size:${plan.defaultFontPx}px"`
   const grid = new Map<string, CellPayload>()
   let dataRow = -1
   let dataCol = -1
@@ -268,7 +271,7 @@ function sheetHtml(
   if (dataRow < 0 || dataCol < 0) {
     if (plan.printArea) notes.push('打印区域指到的那一片一个格子都没有，纸上这一张表是空的')
     // 标题行始终给：没标题就没人知道这一页是哪个表打印出来的
-    return { html: `<section${cls}>${head}<p>（空表）</p></section>`, notes, zoom: plan.zoom }
+    return { html: `<section${cls}${bstyle}>${head}<p>（空表）</p></section>`, notes, zoom: plan.zoom }
   }
   const truncated = dataRow >= PRINT_MAX_ROWS || dataCol >= PRINT_MAX_COLS
   const maxRow = Math.min(dataRow, PRINT_MAX_ROWS - 1)
@@ -330,7 +333,7 @@ function sheetHtml(
   for (let c = colLo; c <= colHi; c++) if (!hidC.has(c)) cols.push({ col: c, px: colAt(c) })
   if (!allRows.length || !cols.length) {
     notes.push('这一张表的可见行或可见列都在打印区域之外，纸上没有它的网格')
-    return { html: `<section${cls}>${head}<p>（打印区域里没有可打印的格子）</p></section>`, notes, zoom: plan.zoom }
+    return { html: `<section${cls}${bstyle}>${head}<p>（打印区域里没有可打印的格子）</p></section>`, notes, zoom: plan.zoom }
   }
   const inTitle = (r: number) => !!titleR && r >= titleR[0] && r <= titleR[1]
   const titleRows = allRows.filter(inTitle)
@@ -438,7 +441,7 @@ function sheetHtml(
     ? `<p class="sheet-print-note">（内容超出打印上限 ${PRINT_MAX_ROWS} 行 × ${PRINT_MAX_COLS} 列，已截断）</p>`
     : ''
   return {
-    html: `<section${cls}>${head}${tables.join('')}${note}</section>`,
+    html: `<section${cls}${bstyle}>${head}${tables.join('')}${note}</section>`,
     notes: printNotes,
     // 这一张表真正落到纸上的那一档缩放（分带与页高档都算在里面）：页眉的字号要按它乘
     zoom,
@@ -466,14 +469,14 @@ export function sheetsToPrintHtml(
   const notes: string[] = []
   const dateText = ctx?.dateText ?? new Date().toLocaleDateString()
   const ctxOf = (name: string) => ({ sheetName: name, dateText, fileName: ctx?.fileName })
-  // 页眉字号的底数由工作簿默认字体说话（真机对照：Excel 的页眉吃的就是 styles.xml 的 fonts[0]，
-  // 把 Normal 从 11pt 改成 14pt，它导出的 PDF 页眉跟着从 11.04pt 变 14.04pt）；
-  // 载荷没说才退回 HF_BASE_FONT_PT 那一档常量
-  const hfBasePt = payload.defaultFont?.fs ?? null
+  // 工作簿默认字体那一层（styles.xml 的 cellXfs[0]→fonts）一次读出、两处共吃：页眉的底数由 baseFontPt
+  // 乘上最终缩放，正文由 <section> 上的 --oof-print-base-size 接到 td 的 font-size（真机对照：Excel 的
+  // 页眉与正文吃同一层同一档）；载荷没说才退回 baseFontPt 里那一档常量
+  const defaultFont = payload.defaultFont ?? null
   const plans = payload.sheets.map((s, i) =>
     planSheetPrint(s, ctxOf(s.name), {
       hfZoom: opts?.zooms?.[i] ?? null,
-      hfBasePt,
+      defaultFont,
     }),
   )
   // 纸的几何先定下来：分带要按这一趟作业真正用的那张纸算（此时页眉那一版还是按计划缩放写的）
@@ -490,7 +493,7 @@ export function sheetsToPrintHtml(
       plans[i].pageStyle = headerFooterCss(s.print?.header, s.print?.footer, s.print ?? {}, ctxOf(s.name), {
         zoom: r.zoom,
         margins: plans[i].margins,
-        basePt: hfBasePt,
+        defaultFont,
       }).css
     }
     return r.html

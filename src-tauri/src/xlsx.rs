@@ -2836,4 +2836,77 @@ mod tests {
         }
         println!("夹具目录: {dir}\n{}", all.join("\n"));
     }
+
+    /// v0.59 量正文底数用的成对夹具：内容一字不差，只有工作簿默认字体那一层不同
+    /// （`bb-11` = Calibri/11、`bb-14` = 宋体/14），于是"同一张表在两种底数下纸上会怎么排"是可比的两份。
+    /// 40 行是给分页留的余地（底数一档、一页少几行就可能多出一页），第 3 列那条长串是给换行留的余地
+    /// （列宽按 MDW=7 换算、不跟字体走，底数一大同一格就要多折一行），第 4 行另给了显式行高
+    #[test]
+    #[ignore]
+    fn gen_bodybase_fixture() {
+        let dir = std::env::var("OO_FIXTURE_DIR")
+            .unwrap_or_else(|_| concat!(env!("CARGO_MANIFEST_DIR"), "/../tmp/x59").to_string());
+        std::fs::create_dir_all(&dir).expect("夹具目录建不出来");
+        let rows = 40u32;
+        let cases: Vec<(&str, DefaultFont)> = vec![
+            ("11", DefaultFont { ff: Some("Calibri".into()), fs: Some(11.0) }),
+            ("14", DefaultFont { ff: Some("宋体".into()), fs: Some(14.0) }),
+        ];
+        let mut all: Vec<String> = Vec::new();
+        for (tag, def) in cases {
+            let path = format!("{dir}/bb-{tag}.xlsx");
+            // 第 2 列首行放那条长串（同一格不重复登记）：底数从 8.25pt 抬到 11pt 时
+            // 它在同一列宽里就要多折一行——列宽是按 MDW=7 换算的、不跟字体走，这正是耦合点
+            let mut cells: Vec<CellPayload> = (0..rows)
+                .flat_map(|r| {
+                    (0..4u32).map(move |c| CellPayload {
+                        r,
+                        c,
+                        v: Some(json!(
+                            if r == 0 && c == 2 {
+                                "ABCDEFGHIJKLMNOPQRSTUVWXYZ012345".to_string()
+                            } else {
+                                format!("R{}C{}", r + 1, c + 1)
+                            }
+                        )),
+                        ..Default::default()
+                    })
+                })
+                .collect();
+            // 加粗那一格只说"加粗"、不说字号：这一格的底数正该由文件那一层给
+            let mut bold = cell(1, 4, json!("BOLD"));
+            bold.s = Some(CellStyle {
+                bl: true,
+                ..Default::default()
+            });
+            cells.push(bold);
+            let book = WorkbookPayload {
+                sheets: vec![SheetPayload {
+                    name: "底数".into(),
+                    cells,
+                    col_widths: [(0u32, 96.0), (1, 96.0), (2, 96.0), (3, 150.0), (4, 96.0)]
+                        .into_iter()
+                        .collect(),
+                    row_heights: [(4u32, 30.0)].into_iter().collect(),
+                    print: Some(SheetPrintPayload {
+                        orientation: Some("portrait".into()),
+                        paper_size: Some(9),
+                        scale: Some(100),
+                        header: Some(PrintHfPayload {
+                            odd: Some(format!("&Lbb-{tag}左&Cbb-{tag}中&Rbb-{tag}右")),
+                            ..Default::default()
+                        }),
+                        ..Default::default()
+                    }),
+                    ..Default::default()
+                }],
+                default_font: Some(def),
+                ..Default::default()
+            };
+            let mut notes = write_xlsx_sync(path.clone(), book).expect("夹具写出失败");
+            notes.insert(0, format!("bb-{tag} 写出"));
+            all.push(notes.join(" | "));
+        }
+        println!("夹具目录: {dir}\n{}", all.join("\n"));
+    }
 }

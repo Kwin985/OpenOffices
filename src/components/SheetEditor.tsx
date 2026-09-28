@@ -918,6 +918,8 @@ function SheetEditor({ tab }: Props) {  const containerRef = useRef<HTMLDivEleme
         })
         const count = (re: RegExp) => (html.match(re) ?? []).length
         return {
+          // 侧通道里那一层（工作簿默认字体）：正文与页眉的底数都从它起，冒烟据此分辨"文件说的"与"我们兜的"
+          defaultFont: payload.defaultFont ?? null,
           rules: payload.sheets.map((s) => s.condFormats?.length ?? 0),
           cfNotes: payload.sheets.flatMap((s) => evalSheetCondFormats(s).notes),
           charts: payload.sheets.map((s) =>
@@ -936,6 +938,7 @@ function SheetEditor({ tab }: Props) {  const containerRef = useRef<HTMLDivEleme
             name: payload.sheets[i]?.name ?? '',
             page: p.pageSizeInches,
             margins: p.margins,
+            basePx: p.defaultFontPx,
             zoom: p.zoom,
             gridLines: p.gridLines,
             headings: p.headings,
@@ -953,6 +956,8 @@ function SheetEditor({ tab }: Props) {  const containerRef = useRef<HTMLDivEleme
           })),
           // 结构计数：打印将要吃的 HTML 里各类节点各几枚，纸上有没有真东西就看这些
           tables: count(/<table /g),
+          // 正文底数落在 <section> 上的那几枚自定义属性（含值），冒烟按张核
+          baseVars: html.match(/--oof-print-base-size:[0-9.]+px/g) ?? [],
           bands: count(/class="sheet-print-band/g),
           bandBreaks: count(/class="sheet-print-band sheet-print-break"/g),
           thead: count(/<thead>/g),

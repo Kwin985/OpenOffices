@@ -3,7 +3,7 @@
 // ② 这一张表的网格该怎么裁：打印区域、重复标题行列、手动分页符、列带。
 // 分工照 v0.47 条件格式那句话：算得出的绝不抄缓存，算不出的绝不假装——
 // 到今天只剩一条没有对应通道（页码从 7 开始印，见 hfAndPageNumberNotes），其余都落了笔。
-import type { PrintHfPayload, RangeRect, SheetPayload, SheetPrintPayload } from './fs'
+import type { DefaultFont, PrintHfPayload, RangeRect, SheetPayload, SheetPrintPayload } from './fs'
 
 /** 英寸 → CSS px（PrintToPdf 与屏幕同为 96dpi） */
 export const PX_PER_INCH = 96
@@ -64,6 +64,9 @@ export interface SheetPrintPlan {
   capacityHeightPx: number
   /** 页眉页脚的 @page margin box 规则（奇数版 / 偶数版 / 首页版各一处；承重的是首页那几格的复位，不是源序） */
   pageStyle: string
+  /** 正文底数（px）：同一层（工作簿默认字体）换算到 CSS，由 `<section>` 的自定义属性承接；
+   *  页眉吃的是同一层同一个数，两处共用 baseFontPt，解析只此一处 */
+  defaultFontPx: number
   /** 打印区域（0 基含端点）；null = 整表 */
   printArea: RangeRect | null
   titleRows: [number, number] | null
@@ -130,7 +133,7 @@ function marginsOf(p: SheetPrintPayload): [number, number, number, number] {
 export function planSheetPrint(
   sheet: SheetPayload,
   ctx: PrintContext,
-  opts?: { hfZoom?: number | null; hfBasePt?: number | null },
+  opts?: { hfZoom?: number | null; defaultFont?: DefaultFont | null },
 ): SheetPrintPlan {
   const notes: string[] = []
   const p: SheetPrintPayload = sheet.print ?? {}
@@ -177,7 +180,7 @@ export function planSheetPrint(
   const hf = headerFooterCss(p.header, p.footer, p, ctx, {
     zoom: opts?.hfZoom ?? zoom,
     margins,
-    basePt: opts?.hfBasePt ?? null,
+    defaultFont: opts?.defaultFont ?? null,
   })
   notes.push(...hf.notes)
   if (hf.css && (margins[0] < 0.35 || margins[2] < 0.35)) {
@@ -194,6 +197,7 @@ export function planSheetPrint(
     capacityPx,
     capacityHeightPx,
     pageStyle: hf.css,
+    defaultFontPx: baseFontPx(opts?.defaultFont),
     printArea: p.printArea ?? null,
     titleRows: p.titleRows ?? null,
     titleCols: p.titleCols ?? null,
@@ -342,12 +346,17 @@ function scaleMeasure(m: SheetMeasure, f: number): SheetMeasure {
   }
 }
 
-/** 纸比屏幕高出来的那一截（px/行）。屏幕上的行矩形是在离屏容器的**屏幕媒体**下量的，
- *  同一张表上纸后每一行的推进都更大：实测 zoom 1 下 rect 20.615px 而纸上 21.0px
- *  （15.75pt ÷ 0.75），29% 下 rect 6.427px 而纸上平均 6.77px——两档的差都是 ~0.4px，
- *  与缩放无关 ⇒ 折完缩放再逐行加上。不加这一截，"刚好装得下"的那一档在纸上必然多一页
- *  （100 行按 29% 估是 1 页高、真排 98 + 2 两页就是这么来的） */
-export const PRINT_ROW_BIAS_PX = 0.4
+/** 纸比屏幕高出来的那一截（px/行）。这一枚数**跟着正文的行盒走**，行盒一改就得重量：
+ *  · v0.53 那档（`padding:2px 6px; font-size:11px; line-height:1.45; height:18px`）——屏幕上的行矩形
+ *    比纸上的推进短 0.4px（实测 zoom 1 下 rect 20.615px 而纸上 21.0px，29% 下 rect 6.427px 而纸上
+ *    平均 6.77px，两档差都是 ~0.4px、与缩放无关），那一截由这里逐行补上；
+ *  · v0.59 起行盒换成底数说话的一档（`padding:0 6px; font-size:var(--oof-print-base-size);
+ *    line-height:1.25`，`height` 不再写）——同一张表在 11pt 与 14pt 两件上重新量，纸上普通行的推进
+ *    与屏幕行矩形**同高**（18.31 vs 18.333、23.283 vs 23.333，逐行 −0.05~+0.02px 属测量噪声：
+ *    纸上的基线被吸到整磅，单行读数会 ±0.5px 抖，只有拿一段行的总跨度平均才作数），
+ *    于是 0.4 这一档不再存在 ⇒ 归零。留着旧的 0.4 不是保守而是**凭空多压一档缩放**。
+ *  再动行盒（line-height、padding、或把 height 写回来）必须重跑这段实测 */
+export const PRINT_ROW_BIAS_PX = 0
 
 /** 折算到目标缩放档、再加上纸上的逐行偏置：交给贪心分页的那一份才是"纸上会怎么排" */
 function paperAt(m: SheetMeasure, f: number): SheetMeasure {
@@ -630,8 +639,9 @@ interface HfRender {
   basePt: number
 }
 
-/** 纸上 1pt = 96/72px（CSS 的定义）。页眉页脚只有 px 说得动字号，这条换算只写在这里 */
-const ptToPx = (pt: number) => Math.round(pt * (96 / 72) * 100) / 100
+/** 纸上 1pt = 96/72px（CSS 的定义）。纸面只有 px 说得动字号，这条换算整仓只写在这一处
+ *  （格子自带的字号、页眉页脚、正文底数都从这一枚助手过） */
+export const ptToPx = (pt: number) => Math.round(pt * (96 / 72) * 100) / 100
 
 function segStyle(seg: HfSegment, r: HfRender): string {
   const deco = [seg.underline && 'underline', seg.strike && 'line-through'].filter(Boolean).join(' ')
@@ -647,9 +657,21 @@ function segStyle(seg: HfSegment, r: HfRender): string {
 
 /** 页眉页脚在纸上的**兜底**字号（pt）：Excel 的页眉底数就是工作簿默认字号（v0.56 实测：把 Normal
  *  从 11pt 改成 14pt，Excel 自己导出的 PDF 页眉从 11.04pt 跟着变 14.04pt），所以文件说了话就用
- *  它说的那一档（见 HfPaperOpts.basePt）；载荷没说才落回这一枚常量——它量的正是 Excel 的默认那一档。
+ *  它说的那一档（见 baseFontPt）；载荷没说才落回这一枚常量——它量的正是 Excel 的默认那一档。
  *  写死它不算"替用户声明他没设过的东西"：margin box 不写就等于让页面上那一档去继承，纸上就高了整整一号 */
-const HF_BASE_FONT_PT = 11
+const BASE_FONT_PT = 11
+
+/** 那一层（styles.xml 的 cellXfs[0] → fonts）说的那一档底数（pt）：没说话、或说了个 0/负数这种
+ *  荒谬值，都算"这一层没交代"、落回常量——荒谬值照收就是纸上正文与页眉整个不见 */
+export function baseFontPt(df: DefaultFont | null | undefined): number {
+  return df?.fs && df.fs > 0 ? df.fs : BASE_FONT_PT
+}
+
+/** 同一层换算到 px：底数在纸上要说一次话——正文那一档写在 `<section>` 的自定义属性上（见 baseFontPx），
+ *  页眉那一档由 segFontCss 乘出去，两处的底数都从这一枚助手起 */
+export function baseFontPx(df: DefaultFont | null | undefined): number {
+  return ptToPx(baseFontPt(df))
+}
 
 /** 「随文档缩放」：margin box 是页级的，不在挂着 CSS zoom 的那棵 <table> 树里（实测内容 zoom 0.5 时
  *  页眉字高一字没变），所以这一档只能由这里自己把字号乘出去；margin box 的 font-size 是认的（实测 40px 生效）。
@@ -767,9 +789,8 @@ export interface HfPaperOpts {
   zoom: number
   /** 本张表的四边距（英寸，top/right/bottom/left）：负 margin 要按左右那两条往外推 */
   margins: [number, number, number, number]
-  /** 页眉字号的底数（pt）：工作簿默认字体说了话就用它；null（或荒谬值）才退回 HF_BASE_FONT_PT。
-   *  荒谬值也归到兜底：0 与负数在这里不是"字号是 0"而是"那一层没说话"，照收就是纸上页眉整个不见 */
-  basePt?: number | null
+  /** 工作簿默认字体那一层（整份文件一份，页眉与正文共吃）：底数由 baseFontPt 从它读出来 */
+  defaultFont?: DefaultFont | null
 }
 
 /** 页眉页脚 → @page margin box 规则。三版各落一处，其中一条是本轮重量出来的：
@@ -800,7 +821,7 @@ export function headerFooterCss(
   const r: HfRender = {
     scale: print.scaleWithDoc === false ? 1 : paper.zoom,
     shift: print.alignWithMargins === false ? { left: paper.margins[3], right: paper.margins[1] } : null,
-    basePt: paper.basePt && paper.basePt > 0 ? paper.basePt : HF_BASE_FONT_PT,
+    basePt: baseFontPt(paper.defaultFont),
   }
   const oddBoxes =
     boxesFor(parseHf(header?.odd ?? '', ctx, notes), 'header', notes, r) +

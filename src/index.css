@@ -2266,11 +2266,16 @@ button {
   margin-bottom: 16px;
 }
 
+/* 正文底数（工作簿默认字体那一层）由 <section> 上的 --oof-print-base-size 说话，这里的默认值
+   只是"那一层没交代"时的兜底（11pt = 14.67px，与 sheet-print-setup.ts 的 baseFontPt 同一档）。
+   行盒（padding 上下归零 / line-height 1.25 / 不写 height）是在 Excel 16.0 的对照件上量出来的：
+   这一档下 11pt 与 14pt 两份件的字形高与行距都比 Excel 自己导出的 PDF 对得上，
+   而且分页与 v0.53 的实测行高都跟着走（旧的 line-height:1.45 + height:18px 在字号变大后会把
+   一张本来一页的表挤成两页）。1em 的方框装不住下行墨，所以留的是 1.25 而不是 1.0 */
 .sheet-print-table td {
-  padding: 2px 6px;
-  font-size: 11px;
-  line-height: 1.45;
-  height: 18px;
+  padding: 0 6px;
+  font-size: var(--oof-print-base-size, 14.67px);
+  line-height: 1.25;
   overflow: hidden;
   white-space: pre-wrap;
   word-break: break-all;
