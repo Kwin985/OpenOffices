@@ -2,7 +2,7 @@
  *  「哪一条在我们导出的 PDF 上真的说话、哪一条只是写给别人的」也在这里说清，UI 只负责摆出来。
  *  零 DOM、Node 里直测——面板本身要真机才测得动，但换算与判定不能只有真机一条腿。 */
 import type { RangeRect, SheetPrintPayload } from './fs'
-import { PAPER_INCHES, columnLetter } from './sheet-print-setup'
+import { PAPER_INCHES, columnLetter, hfAndPageNumberNotes } from './sheet-print-setup'
 
 /** 界面上用毫米（中文用户熟这个），文件里是英寸——两头各说各的，换算只走这两枚函数 */
 export const MM_PER_INCH = 25.4
@@ -329,18 +329,13 @@ export function validateDraft(d: SheetPrintPayload, ctx: { maxRows: number; maxC
   return errs
 }
 
-/** 面板上那句"这一版纸上到底是什么脾气"：整码做不到的一类（起始页码、奇偶两版），
+/** 面板上那句"这一版纸上到底是什么脾气"：做不到的一类（起始页码），
  *  有条件才落笔的一类（上下居中只在装得下的那一页居中），以及越界到排不出的页数。
  *  写进文件的那些照旧写（别人在 Excel 里打印生效），这里只说我们自己的 PDF 兑现成什么样。
- *  文案与 sheet-print-setup 的 planSheetPrint 逐字对齐——同一笔账在面板上与在导出时说的是同一句话 */
+ *  页码与页眉页脚三版那几条不在这里写——它们与导出时说的是同一句话，
+ *  所以由 sheet-print-setup 的 hfAndPageNumberNotes 一处说话（v0.52 的教训：六个数不许两头各猜一份） */
 export function draftPaperNotes(d: SheetPrintPayload): string[] {
-  const notes: string[] = []
-  if (d.firstPageNumber != null && d.firstPageNumber !== 1)
-    notes.push(
-      `起始页码设的是 ${d.firstPageNumber}，纸上仍从 1 开始数（@page 的页码 counter 没有「从 ${d.firstPageNumber} 接着数」的通道）`,
-    )
-  if (d.oddEven && (d.header?.even || d.footer?.even))
-    notes.push('页眉页脚分了奇偶两版，纸上没有按奇偶换内容的通道，偶数页印的是奇数那一版')
+  const notes: string[] = [...hfAndPageNumberNotes(d)]
   const w = d.fitToWidth ?? 0
   const h = d.fitToHeight ?? 0
   if (d.fitToPage && w >= 100) notes.push(`「缩放到 ${w} 页宽」超出能排的页数，纸上按整幅分带`)

@@ -1497,6 +1497,51 @@ v0.52 的面板能设这三样，文件也存得下、Excel 也认得，唯独�
   起始页码那本账 → 存盘重开纸面仍是横向）；**Excel 16.0 只读腿 30 断言 / 0 失败**（两份件、五个段落：
   两枚 `pageSetup` 的对照、应用真机存盘那份的三条字面、`_xlnm.Print_Area`、格值没被碰坏、COM 回读）；tsc + build 绿
 
+## 三版页眉页脚各就各位：偶数页与首页真的上纸（v0.54）
+
+路线图那条未勾项挂着两半：**偶数页另版**（`@page:left`/`:right` 与 `differentOddEven` 的对应关系没人量过）和
+**起始页码的纸面通道**。量完的结果是一半接上了、另一半**说死了**——偶数版与首页版现在各落一处真的印在纸上，
+起始页码则被穷举证伪（五种写法一种都没量得通），它照 v0.53 的语气留在"只记账"。
+
+- **认得动的是 `:left`/`:right`，不是 `:odd`/`:even`**：这台 WebView2 上后两者发出去**两页整框空白**（页眉页脚
+  一个字都没有），前两者各页都印且第 1 页吃 `:right`（与 CSS 分页的"第 1 页是右页"同一档）；于是
+  `headerFooterCss` 里奇数版落 `@page:right{…}`、偶数版落 `@page:left{…}`，而**没勾 `differentOddEven` 时
+  仍旧只写基 `@page`**（历史形状一个字都不许漂，结构腿专门钉这一条）
+- **本轮最值钱的一条是真缺陷，而且是量出来的不是推出来的**：`@page:first` **只覆盖它自己声明的那几格**，
+  没声明的框会**穿透**到同一条样式表里的 `@page:right` 或基 `@page`。首页三框只填了中框的那份夹具，
+  纸上读回来的是 `L-奇 C-首 R-奇`——左右两格漏进了奇数版。治法是在 `:first` 里把六格中**没被那一版写到的**
+  几格显式复位成 `content:normal`（`resetRest`），对照组 `content:"normal2"` 证伪了"normal 只是不被打印"
+  这一可能：它确实把框清空了
+- **由此推翻一条我们自己记下的旧账**：v0.51 写的是"`@page:first` **必须排在基 `@page` 之前**，否则第 2 页起
+  同一框整个没了"。本轮把同一形状的两个源序各导一遍（u7/u8）——**四页两框都不缺，源序不承重**，
+  承重的只有上面那枚复位。当时的读数是把整页文字并成一串来读的，与 `:odd`/`:even` 那次误判同一个来源
+  （串读会跨行串位）；现在页面上认归属一律按基线 `transform[5]` 分组。产品仍旧发 `:first → :right → :left`，
+  但注释与断言的语气改成"这一序只为好读"，不再假装它是物理约束
+- **一条语气跟着反转**：勾了「首页不同」而首页那一版是空的 ⇒ 六格全被复位 ⇒ 首页**什么都不印**，
+  这才是 Excel 的同义。所以 v0.52 起那句"纸上首页与其余页一样"不是措辞问题而是**说反了**，直接删掉而不是改写
+- **奇偶是按物理页分的，这一条必须连带说出口**：起始页码既然没有纸面通道，纸上的页码就永远从 1 数，
+  于是"第 1 页算奇数页"；而 Excel 按**页码**分奇偶——起始页码是偶数时两边会整个反过来。这句写在
+  `hfAndPageNumberNotes` 里，与起始页码那条账同源，面板（`draftPaperNotes`）与导出（`planSheetPrint.notes`）
+  吃的是**同一份文案**（v0.52 立的规矩在这里再收一次：整仓里"起始页码设的是"只出现一次，结构腿数着）
+- **起点那半怎么算说死**：`counter-reset:page`、`@page:first` 上的 counter、`counter-increment` 改写、
+  margin box 里做加法、以及干脆不带 counter 的手写串——五种写法各导一遍，逐页读回的都是 1..N，
+  没有一种量得通；这不是"我们还没找到"而是这台机器的 PrintToPdf 只有一个从 1 开始的页码 counter
+- **验证（四腿）**：前端结构测试 **59 断言 / 0 失败**（假例必须打 FAIL；三版各落一处 + **复位承重**那一组
+  专挑 `:first` 里六格是否都有交代、`leak` 专用载荷、`:right` 不许被复位顺带改写 + 两枚开关 gating
+  （含"空首页＝六格全复位且不再有那条错账"）+ 起始页码与奇偶连带 + 文案只此一处（面板源文里不许再有第二份）+
+  三版共吃同一条 `parseHf`）；`cargo test --lib` **71 通过 / 7 ignored**（Rust 这轮只多一枚 `#[ignore]` 的
+  **三版成版夹具** `gen_parity_fixture`：一张表、140 行、横向 A4、`oddEven` 与 `firstDiffers` 同时勾上、
+  三版页眉页脚各不同、`firstPageNumber=7`——夹件自带对照（纸上若印出 7 就是起点漏进了我们自己的通道））；
+  **CDP 真机冒烟 53 断言全绿、页面异常 0 条**（载荷在侧通道 → `job.hf` 三处顺序且绝不发 `:odd/:even` →
+  反向对照（关掉两枚开关只剩基 `@page`，账换成"没勾"那两句，再恢复）→ 逐物理页核：p1 **只有** `C-首`
+  （这条就是上面那个漏版的回归断言）、p2 偶 / p3 奇 / p4 偶、页码 1..N 反证起点不上纸、`MediaBox` 横向 →
+  污染序（文档导出夹在两次表格导出之间）→ 存盘重开三版与两枚开关与 `plan.hf` **逐字**一致）；
+  **Excel 16.0 只读腿 54 断言 / 0 失败**（夹具与应用重存的那份各一遍：`headerFooter` 六子元素的 schema 序、
+  三版串里的格式码**逐字未展开**、两枚开关的字面、`pageSetup`/`pageMargins` 按磅、格值 420 个一格没动；
+  COM 只报它稳得住的那几样，`FirstPageNumber` 回读 7，而 `OddAndEvenPages`/`FirstPageHeaderFooter`/
+  `OddHeader`/`EvenHeader`/`FirstHeader` 在这台机上仍一律 `$null`——照旧抄证不改断言，
+  并且这一轮的中文抄证要 `[Console]::OutputEncoding = UTF8` 才留得下来）；tsc + build 绿
+
 ## 性能（v0.3）
 
 
@@ -1552,7 +1597,7 @@ src-tauri/            Rust 后端
   src/xlsx_style.rs   zip + quick-xml 直读 xlsx 的 styles.xml（StyleBook：fonts/fills/borders/cellXfs/numFmts，**外加 `<dxfs>` 条件格式样式表 `parse_dxfs`**——dxf 不走 fontId/fillId 索引、实心底纹在 bgColor 而非 fgColor，故单独一趟）/ mergeCells / col·row 尺寸（字符宽·pt→px）/ 隐藏行列 / 冻结 pane / 公式 `<f>`（GeneralRef 实体重建 + unescape，calamine 无样式/公式 API）
   src/xlsx_rules.rs   三类规则的双向（v0.46）：写侧 `write_sheet_rules`（autoFilter + filterColumn 的 list/custom 两种形状、dataValidation 六类型与日期序列号换算、条件格式四大类 cellIs/containsText/timePeriod/top10/aboveAverage/duplicate/unique/expression + colorScale/dataBar/iconSet，含 dxf 与 x14 的 gradient/negativeBarColorSameAsPositive）、读侧 `read_sheet_rules`（quick-xml 事件流 + `cfRule` 的 begin/end 临时态、`dxfId` 查表、colId 换回绝对列、`showDropDown` 反义、整列引用等读不懂的片段原样交回由调用方记账），摆不进 / 读不出的**一律返回账目不静默少给**
   src/xlsx_cell_side.rs 单元格两位邻居的双向（v0.48）：读侧 `read_cell_side` 另开一趟 zip 按表名对回**独立部件**——legacy `commentsN.xml`（`<authors>` 表 + `authorId` 下标、正文里那行「作者:」前缀只在认得出作者时剥）、threaded `threadedComments/*.xml`（作者查 `persons/person.xml`，两种键名都收，回复并进正文并记账）、两者的归一、气泡尺寸与常开来自 `vmlDrawing`（pt→px，默认那档 128×74 **归一回不声明**）、超链接的 `ref` 在 worksheet 而外部地址在其 rels（`TargetMode="External"`）、表内跳转才是 `location` 字面；写侧 `write_sheet_side`（链接先落文本再补普通格，无 scheme 的目标按 `file:` 补试；`Note` 带作者/尺寸/常开，作者超 52 字只丢作者；`set_default_note_author("")` 让"没人署过"真是空串）+ `save_workbook`（**rust_xlsxwriter 的 `<authors>` 按名字排序而 `authorId` 按格子序登记**，两序不一致时按载荷数出来的那张表重排 `<authors>`，多重集或 `<comment ref>` 文档序对不上就宁可不改并记账）；认不出的形状一律记账
-  src/xlsx_print.rs   一张纸怎么摆的双向（v0.51）：读侧 `read_print_setups` 另开一趟 zip 收 worksheet 末尾七处（`sheetPr/pageSetUpPr@fitToPage`·`printOptions`·`pageMargins`·`pageSetup`·`headerFooter` 的 odd/even/first 三槽·`rowBreaks`·`colBreaks`）**加 workbook 级两条 definedName**（`_xlnm.Print_Area`/`_xlnm.Print_Titles` 靠 `localSheetId` 分表，`$1:$2`/`$A:$B`/区域三种片段各归各的字段），`<brk id>` **原样收**（0 基，指"这一行/列自己开始新的一页"——两头实测过）；写侧 `write_sheet_print`（odd 与其余各项交 crate）+ `PrintPatch`/`patch_part_xml`（crate 只有 odd 通道、`differentOddEven`/`differentFirst` 一个字不写、又把起始页码落在布尔属性 `useFirstPageNumber` 上，故 even/first 两条串与真号码在字节上补一次：只动点名的那张 worksheet 部件，兄弟元素次序按 schema 排，页眉页脚里 `&` 是格式码故只认三条标准转义）；认不出的纸型编号与片段一律记账不硬凑；**v0.52 只补一条读侧归一**：接进 `print.clear_default_only_margins()` 之后才判 `is_empty()`，于是"文件里只有 crate 那份默认 `<pageMargins>`"的表不再被当成带着纸面设置（面板副标题、账目与 `printRef` 三处都因此说实话），测试另加两例——只含默认六边的那一份不算声明、超出默认的那一条仍算；**v0.53 补的是"没声明过的那一枚不该被替我们声明"**：`write_sheet_print` 只在真走通 setter 时才算声明过方向并回传 `drop_orientation`，`patch_part_xml` 那趟据此把 crate 逢 `<pageSetup>` 必写的 `orientation` **整枚擦掉**（`patch_orientation` 只动这一枚，其余属性与内部正文原样搬，声明过 landscape/portrait 的一张字都不改），读侧同一条分寸用在页高档上——`<pageSetup>` 里 `fitToWidth`/`fitToHeight` 被 crate 在等于 1 时省掉，而 OOXML 缺省正是 1，故开了 `fitToPage` 却没写的那两枚归一回 `Some(1)`（没开 `fitToPage` 的不许归一，那是替用户凭空声明一档缩放）；测试再加三例（没声明的方向不回来、走完整存盘链路后仍不声明且不连累 paperSize/scale、擦方向不许把页高归一也带走）与一份**成对夹具** `gen_orient_fixture`（同一趟存盘里"说了 landscape"与"从没说"两张表，第三方腿据此分辨"被擦了"与"本来就没写"）
+  src/xlsx_print.rs   一张纸怎么摆的双向（v0.51）：读侧 `read_print_setups` 另开一趟 zip 收 worksheet 末尾七处（`sheetPr/pageSetUpPr@fitToPage`·`printOptions`·`pageMargins`·`pageSetup`·`headerFooter` 的 odd/even/first 三槽·`rowBreaks`·`colBreaks`）**加 workbook 级两条 definedName**（`_xlnm.Print_Area`/`_xlnm.Print_Titles` 靠 `localSheetId` 分表，`$1:$2`/`$A:$B`/区域三种片段各归各的字段），`<brk id>` **原样收**（0 基，指"这一行/列自己开始新的一页"——两头实测过）；写侧 `write_sheet_print`（odd 与其余各项交 crate）+ `PrintPatch`/`patch_part_xml`（crate 只有 odd 通道、`differentOddEven`/`differentFirst` 一个字不写、又把起始页码落在布尔属性 `useFirstPageNumber` 上，故 even/first 两条串与真号码在字节上补一次：只动点名的那张 worksheet 部件，兄弟元素次序按 schema 排，页眉页脚里 `&` 是格式码故只认三条标准转义）；认不出的纸型编号与片段一律记账不硬凑；**v0.52 只补一条读侧归一**：接进 `print.clear_default_only_margins()` 之后才判 `is_empty()`，于是"文件里只有 crate 那份默认 `<pageMargins>`"的表不再被当成带着纸面设置（面板副标题、账目与 `printRef` 三处都因此说实话），测试另加两例——只含默认六边的那一份不算声明、超出默认的那一条仍算；**v0.53 补的是"没声明过的那一枚不该被替我们声明"**：`write_sheet_print` 只在真走通 setter 时才算声明过方向并回传 `drop_orientation`，`patch_part_xml` 那趟据此把 crate 逢 `<pageSetup>` 必写的 `orientation` **整枚擦掉**（`patch_orientation` 只动这一枚，其余属性与内部正文原样搬，声明过 landscape/portrait 的一张字都不改），读侧同一条分寸用在页高档上——`<pageSetup>` 里 `fitToWidth`/`fitToHeight` 被 crate 在等于 1 时省掉，而 OOXML 缺省正是 1，故开了 `fitToPage` 却没写的那两枚归一回 `Some(1)`（没开 `fitToPage` 的不许归一，那是替用户凭空声明一档缩放）；测试再加三例（没声明的方向不回来、走完整存盘链路后仍不声明且不连累 paperSize/scale、擦方向不许把页高归一也带走）与一份**成对夹具** `gen_orient_fixture`（同一趟存盘里"说了 landscape"与"从没说"两张表，第三方腿据此分辨"被擦了"与"本来就没写"）；**v0.54 只多一份夹具** `gen_parity_fixture`（一张表 140 行、横向 A4、`differentOddEven` 与 `differentFirst` **同时为真**、odd/even/first 三版页眉页脚各写不同内容、`firstPageNumber=7`——那枚 7 是装在同一份件里的对照：纸上印出 7 就说明起点漏进了我们自己的通道，而它始终印的是 1..N；只读腿与 CDP 冒烟吃的是同一份字节）
   src/xlsx_chart.rs   zip + quick-xml 直读 chartN.xml + drawing 锚点，系列值按实时网格解析；has_charts 只做 zip 文件名嗅探
   src/ods.rs          ODS 双向：write_ods（async 外壳 + write_ods_sync，共用 xlsx 载荷 → ODF zip，样式/尺寸去重与合并、冻结 settings.xml、公式 of:= 换算）+ read_ods_styles（直解边框/对齐/换行/列宽行高/字族/隐藏 collapse/重复单元格/合并跨度/公式 + settings.xml 冻结）+ **ODF 规则只记账不硬读**（content.xml 里有 `table:database-range`/`table:content-validations`/`table:conditional-format` 就说得出"暂未读入"，v0.48 起再加两枚 needle：格子的孩子 `office:annotation`（批注，作者的 `dc:creator` 也在里面）与行内 `text:a`（链接），自产物不许凭空记出一条账）
   src/pdf.rs          export_pdf 命令：with_webview → WebView2 PrintToPdf（四边距英寸四元组 + 纸张宽高/朝向，cfg windows）；**纸张换算是唯一的**：`page_box(w,h)` 把"想要的纸面尺寸"折成 PrintSettings 的"竖版边长 + Orientation"（v0.50，宽>高才转横向，等边不算横向），背景/页眉页脚/四边距/纸宽纸高/方向五步设置失败**一律原样报出**（静默退默认＝"导出成功但纸不对"）；file_len + read_range（raw IPC 返回 Vec<u8>，async + spawn_blocking，供大 PDF 分段读）
@@ -1587,9 +1632,9 @@ src/                  React 前端
   lib/ppt.ts          .opd 幻灯片数据模型（版式/主题/序列化）
   lib/pdfprint.ts     打印覆盖层：挂 DOM → 注入打印样式 → export_pdf → 清理；`@media print` 里给 `html,body` 兜白底黑字（v0.47：外壳的 `body{background:var(--bg)}` 曾把整页铺成屏幕的浅灰蓝，三种导出都中招；元素自己声明的颜色不受影响）；**每条作业把自己那份 `@page` 说全**（v0.50：`ownPageRule()` 输出 `size` + 四边 `margin` + 十六个 margin box 复位，`printMarginsInches()` 让 CSS 与 PrintSettings 吃同一组数）——PrintToPdf 会认 CSS `@page size`，而文档标签的 `#oo-page-rule` 常驻 `head`，不禁掉别人的说法就会被"上一次打印"污染（实测：导完文档再导演示得到竖版纸 540×960、幻灯片只占 0.34）；**v0.53 加 `measurePrintLayout(overlay, read)`**——覆盖层在屏幕上被 `#oof-print-host{display:none}` 藏着、量出来全是 0，于是另开一个离屏量尺容器（同一套正文样式，只是不带 `@media print`/`@page`，那组规则改的是可见性、分页与纸面而不改任何一行的高），量完即摘，被量的那份 DOM 仍旧原封不动交给导出那条腿
   lib/sheet-cf-print.ts  条件格式的**打印侧求值**（v0.47，纯函数零 DOM）：`evalSheetCondFormats(sheet)` 按载荷数组序（=优先级）吃规则，产出 `Map<'行,列', CfPatch>` 与账目——`cell`（number/text/duplicate/unique/rank/average，含"前 N 项算并列""空串条件=格为空""数字与文本归一比较"）、`colorScale`（分位数线性插值 + 越界截最近档）、`dataBar`（0 轴起点、负色、渐变/实色、`showValue=false` 收成 `hideValue`）；`iconSet`/公式判定/日期区间/缺样式的一律**只记账不落笔**；`PRINT_MAX_ROWS`/`PRINT_MAX_COLS` 用来裁 `A:A` 这类整列引用，否则一条规则循环百万格
-  lib/sheet-print-ui.ts  「页面设置」面板要的一切（v0.52，347 行纯函数、零 DOM、Node 直测，不进组件也不碰门面）：`mmToInch`/`inchToMm`（**面板按毫米说话、载荷按英寸存**，换算只这一处）、`PAPER_OPTIONS`/`paperMm`（纸号→毫米，英制档没有"毫米名"就照实换算）、`hfSlotsToText`/`hfTextToSlots`（三框 ↔ OOXML 那条串：只填中档时**不带** `&C`，与 Excel 写出去的形状同一档；找分段标记时按 `&&` 跳转义，否则「A&&Link」里第二个 `&` 会被当成 `&L` 拆错）、`hfStrayAmpersands`（`&` 后面不是已知格式码时 Excel 会自己吞一个字符，界面先说出口）、`sqrefToRect`/`rectToSqref`/`spanToSqref`/`sqrefToSpan`（`$C$2:$F$5` ↔ 0 基含端点、`$1:$2`/`$A:$B` ↔ 行列跨度）、`addBreak`/`removeBreak`（重复断点只记账不重排）、`draftOf`（缺省项**留白**而不是替用户声明一档默认值）、`validateDraft`（区分"不解析＝不声明"与"解析得动但超出这张表＝点名并把确定灰掉"，网格上限由调用方从门面取）、`draftPaperNotes`（随草稿实时说给面板的那几本账，v0.53 改了内容：整码做不到的两类（起始页码——`@page` 的页码 counter 没有"从 N 接着数"的通道、偶数页另版），有条件才落笔的一类（上下居中只在那一页装得下才居中，否则按顶端排并记账），越界的一类（`fitToWidth`/`fitToHeight` ≥100 排不出那么多页，纸上按整幅分带/自然分页）——文案与 `planSheetPrint`/`planSheetFit` 逐字对齐，同一笔账在面板上与在导出时说的是同一句话）
+  lib/sheet-print-ui.ts  「页面设置」面板要的一切（v0.52，347 行纯函数、零 DOM、Node 直测，不进组件也不碰门面）：`mmToInch`/`inchToMm`（**面板按毫米说话、载荷按英寸存**，换算只这一处）、`PAPER_OPTIONS`/`paperMm`（纸号→毫米，英制档没有"毫米名"就照实换算）、`hfSlotsToText`/`hfTextToSlots`（三框 ↔ OOXML 那条串：只填中档时**不带** `&C`，与 Excel 写出去的形状同一档；找分段标记时按 `&&` 跳转义，否则「A&&Link」里第二个 `&` 会被当成 `&L` 拆错）、`hfStrayAmpersands`（`&` 后面不是已知格式码时 Excel 会自己吞一个字符，界面先说出口）、`sqrefToRect`/`rectToSqref`/`spanToSqref`/`sqrefToSpan`（`$C$2:$F$5` ↔ 0 基含端点、`$1:$2`/`$A:$B` ↔ 行列跨度）、`addBreak`/`removeBreak`（重复断点只记账不重排）、`draftOf`（缺省项**留白**而不是替用户声明一档默认值）、`validateDraft`（区分"不解析＝不声明"与"解析得动但超出这张表＝点名并把确定灰掉"，网格上限由调用方从门面取）、`draftPaperNotes`（随草稿实时说给面板的那几本账，v0.53 改了内容：整码做不到的两类（起始页码——`@page` 的页码 counter 没有"从 N 接着数"的通道、偶数页另版），有条件才落笔的一类（上下居中只在那一页装得下才居中，否则按顶端排并记账），越界的一类（`fitToWidth`/`fitToHeight` ≥100 排不出那么多页，纸上按整幅分带/自然分页）——文案与 `planSheetPrint`/`planSheetFit` 逐字对齐，同一笔账在面板上与在导出时说的是同一句话；**v0.54 把它收成"转述"**：页码与奇偶页那几本账一律取自 `hfAndPageNumberNotes`（面板源文里不再出现"起始页码设的是""奇偶页不同"这类自家抄的文案，结构腿数着整仓只此一处），而"偶数页另版"从账上消失了——它已经不是做不到的事）
   lib/sheet-print-measure.ts 打印排版的**实测层**（v0.53，59 行，这一层唯一碰 DOM 的地方）：`measureSheetPrint(root)` 按 `<section>` 表序量回 `SheetMeasure`（每一带的重复表头高、逐行高、整表高，加表格上面那一行表名的高——用「第一带的 `top` 减 `section` 的 `top`」量，不逐个选择器猜 margin 折叠；**没有网格的那几张占一格 null**，否则 `plans[i]` 会配到别人家的实测上）；`applyVerticalPads(root, fits)` 把居中留白写回**量它的那一份 DOM**（第一页给 `section`，其后逐带给自己的带）。为什么要这一层：新建的表一条 `rowHeights` 都没有（默认行高由字体现算）、声明过的行高只是**下限**（写 20px 实测 21px）、长文字那行自己撑到几百像素，而 `zoom` 之后的行高**不等于线性折算** ⇒ 只能在最终缩放下量，换算则全交给 `sheet-print-setup` 的纯函数
-  lib/sheet-print-setup.ts 一张表的打印设置 → 打印计划（v0.51，纯函数零 DOM 零时钟）：`planSheetPrint(sheet, ctx)` 产出 `SheetPrintPlan`（纸面 `pageSizeInches`（`PAPER_INCHES` 编号→短边×长边再按 `orientation` 换边，认不出记账后走 `SHEET_DEFAULT_PAGE`）、`margins`（缺省与 `pdfprint` 同一组数，英寸）、`printableWidthPx` 与 `printableHeightPx`（**可印高这里不取整**——一页放几行要拿小数行高去比，v0.53）、`zoom`、`gridLines`/`headings`/`hCentered`/`vCentered`、`printArea`（`clampArea` 把越界端点**夹回来而不是整条作废**）、`titleRows`/`titleCols`（`titleRowSpan` 与打印区域求交——区域外的行根本不印，标题也就无从重复）、`pageBreakRows`/`colBreaks` **照 `<brk id>` 原样收**、`fitToWidthPages`/`fitToHeightPages`/`firstPageNumber`、`headerStyle`）；`planColumnBands` 按可印宽度切列带（标题列每带各带一份但不重复计列、手动列断点在**那一列之前**收带、首列上的断点是空的不凭空造带、勾了"缩放到 N 页宽"反求 zoom）；`headerFooterCss` 把 `&L/&C/&R` 三段码翻成 `@page` 的 margin box（`&A/&P/&N/&D/&F` 有对应通道，**没有的整码丢掉并记一笔**，不把 `&X` 当字面文字印出去；奇偶页没有 CSS 通道故偶数页跟着奇数版印，首页那一版有 `@page:first`）；`jobPrintPlan` 定这一趟的纸（多张表各说各话时第一张说话、其余记进 `job.notes`）；**v0.53 把"按实测说话"那一半接上**：`printPagesPerBand`/`simulatePrintPages` 按实测行高逐带贪心分页（行不拆开，一页装不下整行挪下一页）、`fitToPagesTallZoom` 找能压进 N 页高的最大一档缩放（1% 一档、下限 10%、`FIT_TALL_GUARD` 一档余量，页高看的是**最高的那一带**而不是总页数）、`verticalCenterPadPx`（装得下才给留白，装不下 0——居中的反面是"假居中"）、`planSheetFit` 把实测落成最终缩放 + 各处上留白 + 该说的账，`PRINT_ROW_BIAS_PX = 0.4` 是"屏幕媒体下量的行矩形比纸上短多少"的实测常数（与缩放档无关），`scaleMeasure`/`paperAt` 把两者分开：表名那一行**不随 zoom 折算**；仍然做不到的只剩起始页码（`@page` 只有一个页码 counter）**只进 `notes` 不落笔**
+  lib/sheet-print-setup.ts 一张表的打印设置 → 打印计划（v0.51，纯函数零 DOM 零时钟）：`planSheetPrint(sheet, ctx)` 产出 `SheetPrintPlan`（纸面 `pageSizeInches`（`PAPER_INCHES` 编号→短边×长边再按 `orientation` 换边，认不出记账后走 `SHEET_DEFAULT_PAGE`）、`margins`（缺省与 `pdfprint` 同一组数，英寸）、`printableWidthPx` 与 `printableHeightPx`（**可印高这里不取整**——一页放几行要拿小数行高去比，v0.53）、`zoom`、`gridLines`/`headings`/`hCentered`/`vCentered`、`printArea`（`clampArea` 把越界端点**夹回来而不是整条作废**）、`titleRows`/`titleCols`（`titleRowSpan` 与打印区域求交——区域外的行根本不印，标题也就无从重复）、`pageBreakRows`/`colBreaks` **照 `<brk id>` 原样收**、`fitToWidthPages`/`fitToHeightPages`/`firstPageNumber`、`headerStyle`）；`planColumnBands` 按可印宽度切列带（标题列每带各带一份但不重复计列、手动列断点在**那一列之前**收带、首列上的断点是空的不凭空造带、勾了"缩放到 N 页宽"反求 zoom）；`headerFooterCss` 把 `&L/&C/&R` 三段码翻成 `@page` 的 margin box（`&A/&P/&N/&D/&F` 有对应通道，**没有的整码丢掉并记一笔**，不把 `&X` 当字面文字印出去；**v0.54 之后三版各落一处**：奇数版在勾了「奇偶页不同」时落 `@page:right`（实测 `:odd`/`:even` 这台不认，发出去两页整框空白）、偶数版落 `@page:left`、首页版落 `@page:first`，两枚开关各自 gating——没勾的那一版不上纸、勾了而那一版是空的也不发空框；关键是 `resetRest`：`@page:first` **只覆盖它自己声明的那几格**，未声明的框会穿透到 `:right`/基 `@page`（实测首页页眉长出 `L-奇 C-首 R-奇`），故六格中没写到的要显式 `content:normal` 复位，勾了「首页不同」而首页那一版整个是空的就等于六格全复位＝首页什么都不印（Excel 同义）。**v0.51 记的「`:first` 必须排在基 `@page` 之前」本轮重量后不成立**，源序只为好读、承重的是复位）；`hfAndPageNumberNotes` 是**纸上那几本账的唯一文案处**（起始页码设的是 N 而纸上仍从 1 数、起始页码不算⇒奇偶按物理页分且从偶数起时会与 Excel 反过来、带着偶数版/首页版却没勾、勾了开关而那版是空的），导出与面板都吃它这一份；`jobPrintPlan` 定这一趟的纸（多张表各说各话时第一张说话、其余记进 `job.notes`）；**v0.53 把"按实测说话"那一半接上**：`printPagesPerBand`/`simulatePrintPages` 按实测行高逐带贪心分页（行不拆开，一页装不下整行挪下一页）、`fitToPagesTallZoom` 找能压进 N 页高的最大一档缩放（1% 一档、下限 10%、`FIT_TALL_GUARD` 一档余量，页高看的是**最高的那一带**而不是总页数）、`verticalCenterPadPx`（装得下才给留白，装不下 0——居中的反面是"假居中"）、`planSheetFit` 把实测落成最终缩放 + 各处上留白 + 该说的账，`PRINT_ROW_BIAS_PX = 0.4` 是"屏幕媒体下量的行矩形比纸上短多少"的实测常数（与缩放档无关），`scaleMeasure`/`paperAt` 把两者分开：表名那一行**不随 zoom 折算**；仍然做不到的只剩起始页码（`@page` 只有一个页码 counter）**只进 `notes` 不落笔**
   lib/sheet-print.ts  WorkbookPayload → 打印 HTML 网格（值/边框/对齐/换行/数字格式/字族/合并/列宽行高/跳过隐藏行列/**跳过被筛掉的行（`filter.filteredOut` 与 hiddenRows 并列）**/**条件格式算出的底色·字色·粗斜·下划线·删除线·数据条（v0.47）**/**图表位图按锚点格绝对覆盖、锚点撑开网格边界（v0.47）**/**纸张·边距·缩放·打印区域·重复标题行列·手动分页符·列带·水平居中·网格线与行列标题（v0.51，一切先过 `planSheetPrint`）**/分页/截断）；一个列带一张 `<table>`、每带各一份 `<thead>`（实测 Blink 会自己重复表头，我们不再手工插第二份）；返回 `{html, notes, plans, job}`——页面上只印"这份打印件缺了什么"，其余账目交回调用方进状态栏，`job` 那三个数直接喂 `pdfprint`；**v0.53 多收一枚 `opts.zooms`（按表序，null＝这张不动）**：那是上一趟实测定下的最终缩放，说话权在它而不在计划的 `zoom`，于是"按 N 页高压一档"能真的把这份 HTML 重建成那一档
   lib/pptx-export.ts  Deck → pptx（pptxgenjs）
   lib/pptx-import.ts  pptx → Deck（JSZip 解包 + OOXML 解析 + 媒体还原）
@@ -1602,7 +1647,7 @@ src/                  React 前端
   lib/open.ts         路径→标签 打开 / 带确认关闭
   lib/sync.ts         最近文件端到端加密同步（WebCrypto PBKDF2-SHA256 → AES-256-GCM，.oosync 信封）
   lib/update.ts       自动更新的**检测层**（v0.45）：`checkForUpdate()` 动态导入 updater 插件走一次 `check`，任何失败都收敛成 `{state:'failed'}` 不往外抛（抛出去的表现就是"点了没反应"）；`describeError` 按插件 error.rs 的真实字面把"源上没清单/没配端点/非 https/缺本平台条目/签名/base64/日期/连不上"归成中文，认不出的一律原样带出不编原因；`infoOf` 从 `rawJson` 里取自定义字段 `download_page`，只认 http(s) 才给按钮
-  components/         Home（最近文件 + 从模板新建画廊 + 版本号与"检查更新"） / Workspace / SheetEditor（保存按 .xlsx/.ods/.csv 三分流，打开时把读到的规则经门面放回界面并把两侧账目显示在状态栏；**「页面设置」面板（v0.52）**——纸张/方向、六条边距（毫米）、缩放与"缩放到 N 页宽"、六个开关、打印区域与重复标题行列（可「用当前选区」「用选区首行/首列」按门面选区给）、手动分页符（按 Excel 的 `brk@id` 说法：这一行/列自己起新页）、页眉页脚三框 + 六枚格式码 + 奇/偶/首页三版；「确定」写进 `printRef` 侧通道、「清除这张表的设置」把它整个删掉、面板里的错把确定灰掉，做不到的那几条以账目形式随草稿说在面板上（v0.53 改了语气：页高档与居中已经接线，只剩起始页码真做不到）；**导出这一侧多了一段实测循环（v0.53）**——计划里勾了「缩放到 N 页高」或「上下居中」的表才走：建一次 → `measurePrintLayout` 离屏量 → `planSheetFit` 压档/算留白 → 带 `zooms` 重建，最多五趟，定档后把居中留白写回**同一份 DOM** 再交导出；账目分两头记（"压到 27%"那句要说在压它的那一趟、每张表占一格由后趟覆盖前趟，居中的账反过来只在最终缩放那份实测上算数）；DEV 门面钩子随这轮加 `printSet(表名, 载荷|null)`（落笔处＝面板「确定」那一行）与 `printHtml(zooms)`（把**将要上纸的那份 HTML**交出去，让脚本自己挂起来量真实布局） / DocEditor（页面设置含分栏/页码格式、分页参考线、分页符、表格与图片上下文工具条、粘贴成图、查找替换面板、字体族·字号、缩进工具条与 Ctrl+]/[、上下标 X²/X₂、表格上下文条的底纹色与竖排对齐（上/中/下）、脚注/尾注（工具栏插入 + 文末分区编辑与定位/删除，打印时文本框换静态块）、版本历史·自动保存、模板 seed、状态栏字数节流；打开 .docx 保真导入优先、mammoth 兜底，保存按 .odoc/.odt/.docx 各自格式原地落盘） / PptEditor / PdfViewer（pdfjs-dist 懒加载，连续多页视口虚拟渲染+Ctrl 缩放+TextLayer 文字选择+全文搜索+缩略图/大纲/标注侧栏+高亮便签与矩形·椭圆·直线·手绘形状（绘制/导入/写回 pdf-lib）+标注编辑（点选/拖移/改色/删除）+「页面」工作区旋转/删除/提取/合并/拆分；≥4MB 走分段读（lib/pdf-range.ts），卸载时 destroy openTask 并 abort transport））
+  components/         Home（最近文件 + 从模板新建画廊 + 版本号与"检查更新"） / Workspace / SheetEditor（保存按 .xlsx/.ods/.csv 三分流，打开时把读到的规则经门面放回界面并把两侧账目显示在状态栏；**「页面设置」面板（v0.52）**——纸张/方向、六条边距（毫米）、缩放与"缩放到 N 页宽"、六个开关、打印区域与重复标题行列（可「用当前选区」「用选区首行/首列」按门面选区给）、手动分页符（按 Excel 的 `brk@id` 说法：这一行/列自己起新页）、页眉页脚三框 + 六枚格式码 + 奇/偶/首页三版；「确定」写进 `printRef` 侧通道、「清除这张表的设置」把它整个删掉、面板里的错把确定灰掉，做不到的那几条以账目形式随草稿说在面板上（v0.53 改了语气：页高档与居中已经接线，只剩起始页码真做不到；v0.54 之后偶数页那一版也不再是账——它真的印在偶数页上，面板这几句全部转述 `hfAndPageNumberNotes` 那一份文案）；**导出这一侧多了一段实测循环（v0.53）**——计划里勾了「缩放到 N 页高」或「上下居中」的表才走：建一次 → `measurePrintLayout` 离屏量 → `planSheetFit` 压档/算留白 → 带 `zooms` 重建，最多五趟，定档后把居中留白写回**同一份 DOM** 再交导出；账目分两头记（"压到 27%"那句要说在压它的那一趟、每张表占一格由后趟覆盖前趟，居中的账反过来只在最终缩放那份实测上算数）；DEV 门面钩子随这轮加 `printSet(表名, 载荷|null)`（落笔处＝面板「确定」那一行）与 `printHtml(zooms)`（把**将要上纸的那份 HTML**交出去，让脚本自己挂起来量真实布局） / DocEditor（页面设置含分栏/页码格式、分页参考线、分页符、表格与图片上下文工具条、粘贴成图、查找替换面板、字体族·字号、缩进工具条与 Ctrl+]/[、上下标 X²/X₂、表格上下文条的底纹色与竖排对齐（上/中/下）、脚注/尾注（工具栏插入 + 文末分区编辑与定位/删除，打印时文本框换静态块）、版本历史·自动保存、模板 seed、状态栏字数节流；打开 .docx 保真导入优先、mammoth 兜底，保存按 .odoc/.odt/.docx 各自格式原地落盘） / PptEditor / PdfViewer（pdfjs-dist 懒加载，连续多页视口虚拟渲染+Ctrl 缩放+TextLayer 文字选择+全文搜索+缩略图/大纲/标注侧栏+高亮便签与矩形·椭圆·直线·手绘形状（绘制/导入/写回 pdf-lib）+标注编辑（点选/拖移/改色/删除）+「页面」工作区旋转/删除/提取/合并/拆分；≥4MB 走分段读（lib/pdf-range.ts），卸载时 destroy openTask 并 abort transport））
 scripts/              copy-pdfjs-assets.mjs（dev/build 前复制 cmaps/标准字体到 public/pdfjs） /
                       updater-release.mjs（发版：开 createUpdaterArtifacts 本机建签名包 → 读回真 .sig 与产物 →
                       出带三平台键的 latest.json → 打印要上传的清单；私钥只走子进程环境变量，`pnpm release:updater`）
@@ -1716,9 +1761,23 @@ cargo check        # Rust 后端检查（在 src-tauri 下）
       **起始页码**照做不到办——从「能设」降级为「只记账」，面板与状态栏当面说清（`@page` 通道只有一个 counter，
       没有「从 N 接着数」的对应物）；顺带修掉一条写侧缺陷：rust_xlsxwriter 逢 `pageSetup` 必补
       `orientation="portrait"`，面板没碰过方向的表存盘重开后纸面会自己翻了个面，现在按「声明与否」定点擦掉
-- [ ] 起始页码的纸面通道：实测 Blink 认不认 `@page:first{counter-reset:page N-1}` 这类写法，认得动就把这条账从
-      「只记账」升回「真上纸」，认不动就照做不到办并把话说死；同一条路上还挂着**偶数页另版**
-      （`@page:left` / `@page:right` 与 `differentOddEven` 的对应关系没人量过）
+- [x] 页眉页脚的**偶数页另版**与**首页另版**真上纸（v0.54：`differentOddEven` → `@page:right`/`@page:left`
+      （实测这台 WebView2 **不认** `:odd`/`:even`，发出去两页整框空白），`differentFirst` → `@page:first`；
+      两条只有真机能教的账——① `@page:first` **只覆盖它自己声明的那几格**，未声明的框会穿透到
+      `:right`/基 `@page`（实测首页页眉长出 `L-奇 C-首 R-奇`），故六格里没写到的必须显式 `content:normal` 复位；
+      ② v0.51 记的「`:first` 必须排在基 `@page` 之前否则第 2 页起整框消失」**重量后不成立**，两个源序各导一遍
+      四页都不缺框，承重的是那枚复位而不是源序（当时的读数把整页文字并成一串读，同 `:odd/:even` 那次误判一个来源）；
+      顺带删掉一句说反了的旧账：勾了「首页不同」而首页那一版是空的＝六格全复位＝首页什么都不印（Excel 同义），
+      而不是"首页与其余页一样"）
+- [x] **起始页码的纸面通道：已说死为"没有"**（v0.54 穷举五种写法——`@page:first{counter-reset:page N-1}`、
+      counter 落在基 `@page`、`counter-increment` 改写、margin box 里做加法、不带 counter 的手写串——
+      各导一份 PDF 逐页读回，全部仍是 1..N；这台机器的 PrintToPdf 只有一个从 1 开始的页码 counter。
+      于是它永久留在"只记账"那一档，且连带一句要说出口：奇偶按**物理页**分，起始页码为偶数时会与 Excel 反过来）
+- [ ] `headerFooter` 上还有两枚开关整枚不见：`@alignWithMargins`（页眉页脚按页边距还是按纸张宽度排）与
+      `@scaleWithDoc`（页眉字号随不随文档缩放）——读侧不认、载荷里没有字段、写侧不补，于是别人文件里关掉的这两枚
+      **存一次盘就丢**（save 是整包重写，原件那个元素不在了）。按 v0.51 立下的那条分寸办：收进载荷、写回原位置，
+      而我们自己的 PDF 只挑得出 `alignWithMargins` 那一条（margin box 的宽度就是可印宽度，`="0"` 时该按纸张说话）；
+      `scaleWithDoc` 落不进就照实降级为"只记账"
 - [ ] 打印排版的实测常数需要标定：`PRINT_ROW_BIAS_PX = 0.4`（屏底量到的行高比纸上短的那个数）是按当前这份夹具与
       默认字族字号标出来的，换字族/字号/行高很可能不是这个数——要么随字体度量标定，要么至少让「偏置是个魔法数」
       这件事在结构测试里能被点名

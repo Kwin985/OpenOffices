@@ -2,7 +2,7 @@
 // ① 这一趟打印作业怎么摆纸：纸张/方向/边距/缩放/页眉页脚的 @page margin box；
 // ② 这一张表的网格该怎么裁：打印区域、重复标题行列、手动分页符、列带。
 // 分工照 v0.47 条件格式那句话：算得出的绝不抄缓存，算不出的绝不假装——
-// 没有对应通道的东西（页码从 7 开始印、偶数页另有一版、缩放到 N 页高）一律只记账不落笔。
+// 到今天只剩一条没有对应通道（页码从 7 开始印，见 hfAndPageNumberNotes），其余都落了笔。
 import type { PrintHfPayload, RangeRect, SheetPayload, SheetPrintPayload } from './fs'
 
 /** 英寸 → CSS px（PrintToPdf 与屏幕同为 96dpi） */
@@ -62,7 +62,7 @@ export interface SheetPrintPlan {
   capacityPx: number
   /** 一页纸面上可放内容的高度（px；同一页的第一行从这里起算，v0.53 的页数模拟吃这个） */
   capacityHeightPx: number
-  /** 页眉页脚的 @page margin box 规则（含 :first 那一份） */
+  /** 页眉页脚的 @page margin box 规则（奇数版 / 偶数版 / 首页版各一处；承重的是首页那几格的复位，不是源序） */
   pageStyle: string
   /** 打印区域（0 基含端点）；null = 整表 */
   printArea: RangeRect | null
@@ -167,16 +167,9 @@ export function planSheetPrint(sheet: SheetPayload, ctx: PrintContext): SheetPri
   if (p.pageOrder === 'overThenDown') {
     notes.push('页面顺序是「先横后竖」，但行带落在哪一页由分页决定，纸上按「先竖后横」排')
   }
-  // 起始页码是这一轮量出来"确实做不到"的那一条：@page 里的 counter 复位对每一页都生效
-  // （实测六页全印同一个数），:first 只改首页而后各页照旧从 1 数，margin box 又读不到
-  // 文档树里的自定义 counter——存进文件与 Excel 那头都认，我们的纸上只能从 1 数。
-  // 而「设成 1」与「没设」在纸上同一句话：别把用户没写错的东西报成缺陷
   const firstPageNumber = p.firstPageNumber ?? null
-  if (firstPageNumber && firstPageNumber !== 1) {
-    notes.push(
-      `起始页码设的是 ${firstPageNumber}，纸上仍从 1 开始数（@page 的页码 counter 没有「从 ${firstPageNumber} 接着数」的通道）`,
-    )
-  }
+  // 起始页码与页眉页脚三版在纸上的脾气：账目文案只此一处，面板与导出共吃（见 hfAndPageNumberNotes）
+  notes.push(...hfAndPageNumberNotes(p))
   const hf = headerFooterCss(p.header, p.footer, p, ctx)
   notes.push(...hf.notes)
   if (hf.css && (margins[0] < 0.35 || margins[2] < 0.35)) {
@@ -633,6 +626,18 @@ function segStyle(seg: HfSegment): string {
 
 const BOX_EDGE = { header: 'top', footer: 'bottom' } as const
 
+/** 一页上页眉页脚能落笔的全部六格（两边的 @left/@right 竖格我们的三槽里没有对应，不在这份账里） */
+const HF_BOXES = ['@top-left', '@top-center', '@top-right', '@bottom-left', '@bottom-center', '@bottom-right']
+
+/** 首页那一版没写到的那几格复位成 normal：`:first` 的排名高于基 `@page` 与 `:right`/`:left`，
+ *  但它只对**自己声明过的框**说话，没声明的框就顺着让下面那一版接着印——于是第 1 页会漏进奇数版的左右两格。
+ *  复位写 `content:normal` 而不是省略：写成别的字面（实测用 "normal2" 当对照）就把那格占了 */
+function resetRest(declared: string): string {
+  return HF_BOXES.filter((b) => !declared.includes(`${b}{`))
+    .map((b) => `${b}{content:normal;}`)
+    .join('')
+}
+
 /** 一档（odd/first）落成三条 margin box 规则。
  *  CSS 的一个 margin box 只能整段一种样式，同一段落重复出现也只印第一段——两样都记账 */
 function boxesFor(segs: HfSegment[], edge: 'header' | 'footer', notes: string[]): string {
@@ -651,9 +656,65 @@ function boxesFor(segs: HfSegment[], edge: 'header' | 'footer', notes: string[])
   return out
 }
 
-/** 页眉页脚 → @page margin box 规则。奇偶两版没有对应通道（偶数页只能跟着奇数版印），首页那一版有。
+/** 起始页码与页眉页脚三版（奇/偶/首）在纸上的全部账目。
+ *  planSheetPrint 与面板的 draftPaperNotes 共吃这一份——同一笔账在面板上与在导出时说的是同一句话，
+ *  所以文案只许写在这里。判据用的是载荷里有没有那一段字，不是"最后解析出几个框"：
+ *  面板上按草稿说话，导出时按同一句草稿话说话，两边才不会各讲一套。
+ *
+ *  这一轮把「起始页码能不能上纸」重量了一遍（WebView2 150 / PrintToPdf，四页合成文档，五种写法）：
+ *  ① `@page:first{counter-reset:page N}` 只改第 1 页显示 N，第 2 页起照旧从 1 数（N=7 → 7,1,2,3）；
+ *  ② 复位写在基 `@page` 上 ⇒ 每一页都印同一个 N（没有"往后接着数"）；
+ *  ③ `counter-increment:page N` 写在基上 ⇒ N,2N,3N（步长就是增量本身，凑不出"起点 N、步长 1"）；
+ *  ④ 复位挂在正文块上（首页首块 / 首页末块两种）⇒ 对页码 counter 完全没有影响；
+ *  ⑤ 宿主容器上复位、`@page:nth(1)` ⇒ 都没有效果。
+ *  存进文件与 Excel 那头都认（v0.51/v0.52 的只读腿核过），我们的纸上只能从 1 数。
+ *  而「设成 1」与「没设」在纸上同一句话：别把用户没写错的东西报成缺陷。 */
+export function hfAndPageNumberNotes(print: SheetPrintPayload): string[] {
+  const notes: string[] = []
+  const start = print.firstPageNumber ?? null
+  const filled = (s: string | null | undefined) => !!s && s.trim() !== ''
+  const odd = filled(print.header?.odd) || filled(print.footer?.odd)
+  const even = filled(print.header?.even) || filled(print.footer?.even)
+  const first = filled(print.header?.first) || filled(print.footer?.first)
+  if (start != null && start !== 1) {
+    notes.push(
+      `起始页码设的是 ${start}，纸上仍从 1 开始数（@page 的页码 counter 没有「从 ${start} 接着数」的通道）`,
+    )
+  }
+  // 起始页码在纸上不算，所以奇偶页只能按物理页码分：Excel 里若从 7 起，第 1 页会算奇数页——这一点恰好一致；
+  // 但从 2 起时 Excel 的第 1 页是偶数版，我们的是奇数版。这一条要说出口，否则偶数页那一版印在哪一页就成了猜
+  if (print.oddEven && start != null && start !== 1) {
+    notes.push('起始页码纸上不算，所以「奇偶页不同」是按物理页码分的：第 1 页算奇数页（Excel 按页码分，从偶数起时两边会反过来）')
+  }
+  if (!print.oddEven && even) {
+    notes.push('文件里带着偶数页那一版，但没勾「奇偶页不同」，纸上按奇数那一版印（Excel 也是这样）')
+  }
+  if (!print.firstDiffers && first) {
+    notes.push('文件里带着首页那一版，但没勾「首页不同」，纸上首页跟着奇数版走（Excel 也是这样）')
+  }
+  if (print.oddEven && odd && !even) {
+    notes.push('勾了「奇偶页不同」而偶数页那一版是空的：纸上偶数页不印页眉页脚（Excel 也是这样）')
+  }
+  return notes
+}
+
+/** 页眉页脚 → @page margin box 规则。三版各落一处，其中一条是本轮重量出来的：
+ *  ① `@page:odd` / `@page:even` 这一台**不认**（导出来那两页整框空白），认的是 `@page:left` / `@page:right`——
+ *     单面打印下第 1 页算 `:right`、往后左右相间，于是 odd↔:right、even↔:left 一一对上；
+ *  ② 首页那一版**没写过的框要显式复位成 normal**：不补复位时第 1 页会把奇数版的那几格漏进首页
+ *     （实测同一份草稿，只多写三条 `{content:normal}` —— 漏版的那页是「L-奇 C-首 R-奇」，补了才只剩「C-首」）。
+ *     页眉三格 + 页脚三格就是这一处能落笔的全部，所以复位按那六格算；
+ *     勾了「首页不同」而首页那一版是空的 ⇒ 六格全复位 ⇒ 首页不印页眉页脚（Excel 同义）；
+ *  ③ 勾了「奇偶页不同」时奇数版要落在 `@page:right` 而不是基 `@page`：那样偶数页才只吃 even 那一版
+ *     （even 空着就是空着，与 Excel 同义）；写在基上会把奇数版漏给偶数页。
+ *  顺带把 v0.51 记的「`:first` 必须排在基 `@page` 之前」重量了一遍：**不成立**——同一形状调换源序，
+ *  第 2 页起都没有丢框（当时的读数是把整页文字并成一串读的，同 :odd/:even 那次误判一个来源）。
+ *  `:first` 的排名确实在 `:left`/`:right` 与基之上（按框逐条比），这一点实测坐实；源序仍按
+ *  `:first → :right → :left` 发，为的是让"首页那份先说话"这件事在读代码时一眼可见。
+ *  两枚开关决定那两版上不上纸：没勾「奇偶页不同」就不读 even 那一版、没勾「首页不同」就不读 first
+ *  （与 Excel 同义——那一段字只是存着），账由 hfAndPageNumberNotes 说。
  *  margin box 只能写在 `@page{}` 里面（实测：裸的 `@top-left{}` 整条不被认），
- *  所以这里成对包好；顺序上排在 pdfprint 那份"十六个位复位成 normal"之后，后写的说话 */
+ *  所以这里成对包好；整体排在 pdfprint 那份"十六个位复位成 normal"之后，后写的说话 */
 export function headerFooterCss(
   header: PrintHfPayload | null | undefined,
   footer: PrintHfPayload | null | undefined,
@@ -664,16 +725,20 @@ export function headerFooterCss(
   const oddBoxes =
     boxesFor(parseHf(header?.odd ?? '', ctx, notes), 'header', notes) +
     boxesFor(parseHf(footer?.odd ?? '', ctx, notes), 'footer', notes)
-  const firstBoxes =
-    boxesFor(parseHf(header?.first ?? '', ctx, notes), 'header', notes) +
-    boxesFor(parseHf(footer?.first ?? '', ctx, notes), 'footer', notes)
-  let css = oddBoxes ? `@page{${oddBoxes}}` : ''
-  if (firstBoxes) css += `@page :first{${firstBoxes}}`
-  if (print.oddEven && (header?.even || footer?.even)) {
-    notes.push('页眉页脚分了奇偶两版，纸上没有按奇偶换内容的通道，偶数页印的是奇数那一版')
-  }
-  if (print.firstDiffers && !firstBoxes) {
-    notes.push('页眉页脚勾了「首页不同」却没写首页的内容，纸上首页与其余页一样')
+  const evenBoxes = print.oddEven
+    ? boxesFor(parseHf(header?.even ?? '', ctx, notes), 'header', notes) +
+      boxesFor(parseHf(footer?.even ?? '', ctx, notes), 'footer', notes)
+    : ''
+  const firstBoxes = print.firstDiffers
+    ? boxesFor(parseHf(header?.first ?? '', ctx, notes), 'header', notes) +
+      boxesFor(parseHf(footer?.first ?? '', ctx, notes), 'footer', notes)
+    : ''
+  let css = print.firstDiffers ? `@page:first{${firstBoxes}${resetRest(firstBoxes)}}` : ''
+  if (print.oddEven) {
+    if (oddBoxes) css += `@page:right{${oddBoxes}}`
+    if (evenBoxes) css += `@page:left{${evenBoxes}}`
+  } else if (oddBoxes) {
+    css += `@page{${oddBoxes}}`
   }
   return { css, notes }
 }

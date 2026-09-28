@@ -1576,4 +1576,68 @@ mod tests {
         let notes = write_xlsx_sync(path.clone(), book).expect("夹具写出失败");
         println!("夹具: {path}\n方向的账（应为空）: {notes:?}");
     }
+
+    /// 页眉页脚三版（奇/偶/首）的实机腿夹具：一张足够高、真能分出四五页的表，
+    /// 三版各写满自己的框，另把起始页码设成 7——纸上该还是从 1 数（那一条是"做不到"的对照）。
+    ///
+    /// 只放一张表是故意的：一趟作业只认一份 @page（多张时由第一张说话），
+    /// 而 `:left`/`:right` 吃的是**整份文档的物理页序**，第二张表一进来，
+    /// 它的"第一页"落在第几页就成了另一件事，判据就不干净了。
+    /// cargo test gen_parity_fixture -- --ignored
+    #[test]
+    #[ignore]
+    fn gen_parity_fixture() {
+        let path = std::env::var("OO_FIXTURE_PATH")
+            .unwrap_or_else(|_| concat!(env!("CARGO_MANIFEST_DIR"), "/../tmp/x54/x54-parity.xlsx").to_string());
+        if let Some(dir) = std::path::Path::new(&path).parent() {
+            let _ = std::fs::create_dir_all(dir);
+        }
+        let print = SheetPrintPayload {
+            orientation: Some("landscape".into()),
+            paper_size: Some(9),
+            margins: Some(PrintMarginsPayload {
+                top: Some(0.4),
+                right: Some(0.5),
+                bottom: Some(0.5),
+                left: Some(0.5),
+                header: Some(0.2),
+                footer: Some(0.2),
+            }),
+            odd_even: true,
+            first_differs: true,
+            first_page_number: Some(7),
+            header: Some(PrintHfPayload {
+                odd: Some("&LL-奇&CC-奇&RR-奇".into()),
+                even: Some("&LL-偶&CC-偶".into()),
+                first: Some("&CC-首".into()),
+            }),
+            footer: Some(PrintHfPayload {
+                odd: Some("&C脚-奇&P".into()),
+                even: Some("&C脚-偶&P".into()),
+                first: Some("&C脚-首&P".into()),
+            }),
+            ..Default::default()
+        };
+        let sheet = SheetPayload {
+            name: "奇偶".into(),
+            cells: (0..140u32)
+                .flat_map(|r| {
+                    (0..3u32).map(move |c| CellPayload {
+                        r,
+                        c,
+                        v: Some(Json::String(format!("R{}C{}", r + 1, c + 1))),
+                        ..Default::default()
+                    })
+                })
+                .collect(),
+            print: Some(print),
+            ..Default::default()
+        };
+        let book = WorkbookPayload {
+            sheets: vec![sheet],
+            ..Default::default()
+        };
+        let notes = write_xlsx_sync(path.clone(), book).expect("夹具写出失败");
+        println!("夹具: {path}\n三版页眉页脚的账（应只剩起始页码那一条）: {notes:?}");
+    }
 }
