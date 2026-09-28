@@ -285,6 +285,18 @@ export interface SheetPayload {
   links?: CellLinkPayload[]
   /** 打印设置：纸张/边距/页眉页脚/分页符/打印区域/重复标题行。Univer 装不下，读回来由侧通道留住 */
   print?: SheetPrintPayload | null
+  /** 工作表格式那一层（`sheetFormatPr`）：实测 Excel 不用它排版、但自己存盘会重写，
+   *  所以它只走保真往返，不喂界面也不上纸（喂了就是让界面听一个纸面不认的数） */
+  sheetFormat?: SheetFormat | null
+}
+
+/** `xl/worksheets/sheetN.xml` 的 `<sheetFormatPr @defaultRowHeight @customHeight>`，磅照文件原样收。
+ *  与 `DefaultFont` 同一族：Univer 那一枚 `IWorksheetData.defaultRowHeight` 是**活口**（喂进去界面真按它排），
+ *  而实测 Excel 16.0 对它只做排版回退（五种变体含 `customHeight="1"` 都报同一个由字体现算的行高），
+ *  于是这一层只按侧通道原样存回去，既不进界面也不进纸 */
+export interface SheetFormat {
+  defaultRowHeight: number
+  customHeight?: boolean
 }
 
 /** 工作簿默认字体：`xl/styles.xml` 里 `cellXfs[0]@fontId` 指到的那一条 `fonts[n]`。

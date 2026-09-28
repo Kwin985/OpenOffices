@@ -18,6 +18,7 @@ import type {
   DefaultFont,
   PrintHfPayload,
   PrintMarginsPayload,
+  SheetFormat,
   SheetPrintPayload,
   WorkbookPayload,
 } from '../lib/fs'
@@ -224,8 +225,8 @@ type NameKeyed = {
   delete(key: string): boolean
 }
 
-/** 表名是三份侧通道（页面设置 / 批注作者与提示 / 图表）的钥匙：改名后旧钥匙再也开不出东西，
- *  等价于"改个表名，纸面设置和图表全没了"，所以改名这件事必须搬钥匙而不是重新数一遍 */
+/** 表名是四份侧通道（页面设置 / 批注作者与提示 / 图表 / 工作表缺省行高）的钥匙：改名后旧钥匙再也开不出东西，
+ *  等价于"改个表名，纸面设置、图表和这一层文件字节全没了"，所以改名这件事必须搬钥匙而不是重新数一遍 */
 function migrateSheetName(maps: NameKeyed[], from: string, to: string) {
   if (!from || from === to) return
   for (const m of maps) {
@@ -253,6 +254,10 @@ function SheetEditor({ tab }: Props) {  const containerRef = useRef<HTMLDivEleme
   // 画布对无样式格回落 engine-render 硬编码的 Arial 11），所以这里自己留一份：
   // 存盘回贴保住字节，导出时给页眉当底数
   const defaultFontRef = useRef<DefaultFont | null>(null)
+  // `sheetFormatPr` 那一层（工作表缺省行高）同样装不下，但方向相反：Univer 的
+  // IWorksheetData.defaultRowHeight 是**活口**（喂进去界面就真按它排），而实测 Excel 自己并不用它排版。
+  // 所以这一层只留一份原样字节给存盘回贴，不喂界面——喂了就是让界面去听一个文件里说了但纸面不认的数
+  const sheetFormatRef = useRef(new Map<string, SheetFormat>())
   const [status, setStatus] = useState<string>(tab.path ? '正在加载…' : '')
   const [chartCount, setChartCount] = useState(0)
   const [dialogOpen, setDialogOpen] = useState(false)
@@ -312,6 +317,7 @@ function SheetEditor({ tab }: Props) {  const containerRef = useRef<HTMLDivEleme
     cellSideRef.current = new Map()
     printRef.current = new Map()
     defaultFontRef.current = null
+    sheetFormatRef.current = new Map()
     setChartCount(0)
     const worker = new Worker(new URL('../univer-worker.ts', import.meta.url), {
       type: 'module',
@@ -347,6 +353,12 @@ function SheetEditor({ tab }: Props) {  const containerRef = useRef<HTMLDivEleme
         )
         // 工作簿默认字体是簿级的一档，Univer 的 defaultStyle 是死槽装不下 ⇒ 原样留一份
         defaultFontRef.current = dump.defaultFont ?? null
+        // 缺省行高是**表级**的一档，同上原样留一份：这一层不喂界面（Univer 那边是活口，喂了界面就听一个纸面不认的数）
+        sheetFormatRef.current = new Map(
+          dump.sheets
+            .filter((s) => s.sheetFormat)
+            .map((s) => [s.name, s.sheetFormat as SheetFormat]),
+        )
         // 还原已存图表：PNG 渲染并行（VChart 是纯计算），落格串行（同一 sheet 的命令队列）
         const items = dump.sheets.flatMap((s) =>
           (s.charts ?? []).map((chart) => ({ sheetName: s.name, chart })),
@@ -398,8 +410,8 @@ function SheetEditor({ tab }: Props) {  const containerRef = useRef<HTMLDivEleme
           setStatus(shown.length > 1 ? `${shown[0]}（另有 ${shown.length - 1} 条说明）` : shown[0])
           setTimeout(() => setStatus(''), 5000)
         } else setStatus('')
-        // 表名是三份侧通道的钥匙，而 Univer 的改名只改它自己的模型：不搬钥匙就是
-        // "改个表名，纸面设置/批注署名/图表全没了"。
+        // 表名是四份侧通道的钥匙，而 Univer 的改名只改它自己的模型：不搬钥匙就是
+        // "改个表名，纸面设置/批注署名/图表/缺省行高全没了"。
         // 搬法是按 id 对表（前后两份 id→表名 快照一比就知道谁改了名），而不是读命令参数：
         // 改名的命令与变异各来一趟，参数里带不带 subUnitId 两条路不一样，跟着模型对账最省事
         const migrateByDiff = () => {
@@ -409,7 +421,7 @@ function SheetEditor({ tab }: Props) {  const containerRef = useRef<HTMLDivEleme
           for (const [id, was] of prev) {
             const now = next.get(id)
             if (!now || now === was) continue
-            migrateSheetName([printRef.current, cellSideRef.current], was, now)
+            migrateSheetName([printRef.current, cellSideRef.current, sheetFormatRef.current], was, now)
             for (const item of chartsRef.current.values()) {
               if (item.sheetName === was) item.sheetName = now
             }
@@ -652,6 +664,11 @@ function SheetEditor({ tab }: Props) {  const containerRef = useRef<HTMLDivEleme
     // 工作簿默认字体也是 Univer 快照装不下的东西（它的 defaultStyle 是死槽），从侧通道回贴；
     // 快照里读不出这一层，所以这一笔就是存盘与导出共吃的唯一来源
     payload.defaultFont = defaultFontRef.current
+    // 缺省行高同理按表名回贴：快照里那一层是 Univer 自己的排版数值，不是文件那一层的字节
+    for (const sheet of payload.sheets) {
+      const f = sheetFormatRef.current.get(sheet.name)
+      if (f && !sheet.sheetFormat) sheet.sheetFormat = f
+    }
     // 调和删除 → 同步锚点 → 取最新数值 → 按工作表附着
     for (const [id, item] of [...chartsRef.current]) {
       const ws = wb.getSheetByName(item.sheetName)
@@ -920,6 +937,8 @@ function SheetEditor({ tab }: Props) {  const containerRef = useRef<HTMLDivEleme
         return {
           // 侧通道里那一层（工作簿默认字体）：正文与页眉的底数都从它起，冒烟据此分辨"文件说的"与"我们兜的"
           defaultFont: payload.defaultFont ?? null,
+          // 按表回贴的那一层缺省行高：这一枚只走保真往返（不上纸），冒烟核的是"侧通道 → 载荷"这一段通没通
+          sheetFormats: payload.sheets.map((s) => s.sheetFormat ?? null),
           rules: payload.sheets.map((s) => s.condFormats?.length ?? 0),
           cfNotes: payload.sheets.flatMap((s) => evalSheetCondFormats(s).notes),
           charts: payload.sheets.map((s) =>

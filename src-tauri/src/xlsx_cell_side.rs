@@ -900,7 +900,7 @@ fn rezip_parts(bytes: &[u8], want: &[(String, Fix<'_>)]) -> Result<(Vec<u8>, Vec
                 want[k].0
             )),
             Fix::Print(_) => accounts.push(format!(
-                "产物里没有 {}，那张表的页眉页脚或起始页码没写出去",
+                "产物里没有 {}，那张表的页眉页脚、起始页码或缺省行高没写出去",
                 want[k].0
             )),
         }

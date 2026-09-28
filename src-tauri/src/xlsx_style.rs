@@ -8,7 +8,9 @@ use std::io::Read;
 use quick_xml::events::Event;
 use quick_xml::Reader;
 
-use crate::xlsx::{BorderSide, CellBorder, CellStyle, CondFormatStyle, DefaultFont, MergeRange};
+use crate::xlsx::{
+    BorderSide, CellBorder, CellStyle, CondFormatStyle, DefaultFont, MergeRange, SheetFormat,
+};
 
 #[derive(Default, Debug)]
 pub struct SheetFmt {
@@ -22,11 +24,18 @@ pub struct SheetFmt {
     pub hidden_cols: Vec<u32>,
     /// 冻结窗格 (rows, cols)
     pub freeze: Option<(u32, u32)>,
+    /// `<sheetFormatPr>`：没明说行高的那些行的底数（磅字面）。Excel 16.0 实测**不用它排版**，
+    /// 但它自己存盘会重写 ⇒ 收进载荷只为存盘时原样落回，界面与纸面都不吃它
+    pub sheet_format: Option<SheetFormat>,
     /// (行,列) → 公式文本（OOXML 原生不带 '=' 前缀；shared 从格无文本不落表）
     pub formulas: HashMap<(u32, u32), String>,
     /// 筛选 / 数据验证 / 条件格式，外加"文件里有、模型装不下"的边界账
     pub rules: crate::xlsx_rules::SheetRulesRead,
 }
+
+/// crate 与 OOXML 规范共用的那一档缺省行高（磅）。`<sheetFormatPr @defaultRowHeight>` 写的正好是它
+/// 时按"没说话"处理：省掉这枚声明与把它写进字节里，对读的人来说同一档
+pub(crate) const DEFAULT_SHEET_ROW_HEIGHT_PT: f64 = 15.0;
 
 /// xlsx 列宽（字符数，MDW=7 + 5px padding）→ 像素
 pub(crate) fn chars_to_px(chars: f64) -> f64 {
@@ -360,6 +369,23 @@ fn parse_sheet(xml: &str, book: &StyleBook) -> SheetFmt {
                 if matches!(ev, Event::Start(_)) {
                     f_buf = Some(String::new());
                 }
+            } else if nm == "sheetFormatPr" {
+                // 缺省行高那一层按**磅字面**收，不换算成像素（换算一趟就在字节上漂一档）。
+                // 归一化只有一条：正好 15 且没带 customHeight 视作没说话——crate 落笔就是 15，
+                // 省掉这枚声明与把它写进字节里同一档（与 v0.52 那档"只剩默认边距的件视作没声明"同理）
+                let pt = attr_str(e, "defaultRowHeight")
+                    .as_deref()
+                    .and_then(|v| v.parse::<f64>().ok());
+                // 0 与负数在这一层就是"没说话"（与 v0.57 那枚 `fs` 同一分寸）
+                if let Some(pt) = pt.filter(|v| v.is_finite() && *v > 0.0) {
+                    let custom = matches!(attr_str(e, "customHeight").as_deref(), Some("1") | Some("true"));
+                    if pt != DEFAULT_SHEET_ROW_HEIGHT_PT || custom {
+                        out.sheet_format = Some(SheetFormat {
+                            default_row_height: pt,
+                            custom_height: custom,
+                        });
+                    }
+                }
             } else if nm == "mergeCell" {
                 if let Some(range) = attr_str(e, "ref").as_deref().and_then(parse_range) {
                     out.merges.push(range);
@@ -631,6 +657,52 @@ mod tests {
             (0, 0, 2, 1)
         );
         assert!(parse_range("A1").is_none());
+    }
+
+    /// `<sheetFormatPr>` 那一层收的是**磅字面**：17.5 不许在载荷里变成 17.25 或 23px；
+    /// 归一化只有"正好 15 且没带 customHeight"这一条（crate 落笔就是 15，省掉它与写进字节同一档）
+    #[test]
+    fn sheet_format_reads_the_row_height_literal() {
+        let read = |attrs: &str| {
+            let xml = format!(
+                r#"<?xml version="1.0"?><worksheet xmlns="x"><sheetFormatPr {attrs}/><sheetData/></worksheet>"#
+            );
+            parse_sheet(xml.as_str(), &StyleBook::default()).sheet_format
+        };
+        assert_eq!(
+            read(r#"defaultRowHeight="17.5" x14ac:dyDescent="0.3""#),
+            Some(SheetFormat {
+                default_row_height: 17.5,
+                custom_height: false
+            }),
+            "Excel 自己重写的那一枚要按字面回来"
+        );
+        assert_eq!(
+            read(r#"defaultRowHeight="30" customHeight="1""#),
+            Some(SheetFormat {
+                default_row_height: 30.0,
+                custom_height: true
+            })
+        );
+        assert_eq!(
+            read(r#"defaultRowHeight="15" customHeight="0""#),
+            None,
+            "写 15 与不写在字节上是同一件事，customHeight=0 也是没声明"
+        );
+        assert_eq!(read("defaultRowHeight=\"15\""), None, "规范缺省值归一回不声明");
+        assert_eq!(
+            read(r#"defaultRowHeight="15" customHeight="1""#).map(|f| f.custom_height),
+            Some(true),
+            "真把缺省行高设成 15 的那一格不许被归一化抹掉"
+        );
+        assert_eq!(read(""), None, "整枚缺省就是没说话");
+        assert_eq!(read(r#"defaultRowHeight="0""#), None, "0 在这一层是没说话");
+        assert_eq!(read(r#"defaultRowHeight="-3""#), None, "负数也是");
+        assert_eq!(
+            read(r#"defaultRowHeight="22.5" baseColWidth="10""#).map(|f| f.default_row_height),
+            Some(22.5),
+            "旁邻属性不许干扰这一枚的读数"
+        );
     }
 
     #[test]

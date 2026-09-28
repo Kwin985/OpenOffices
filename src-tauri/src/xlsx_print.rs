@@ -17,8 +17,8 @@ use quick_xml::events::{BytesStart, Event};
 use quick_xml::Reader;
 use rust_xlsxwriter::Worksheet;
 
-use crate::xlsx::{paper_name, PrintHfPayload, PrintMarginsPayload, RangeRect, SheetPayload,
-    SheetPrintPayload};
+use crate::xlsx::{paper_name, PrintHfPayload, PrintMarginsPayload, RangeRect, SheetFormat,
+    SheetPayload, SheetPrintPayload};
 use crate::xlsx_style::{attr_str, read_entry, sheet_paths};
 
 /// 打印设置在读侧的产物：按表名分家 + 整包级的账
@@ -779,6 +779,9 @@ pub struct PrintPatch {
     /// 载荷没声明方向：crate 只要写出 `<pageSetup>` 就一定带一枚 `orientation="portrait"`
     /// （`is_portrait` 的默认值就是 true），这一枚要擦掉，否则"没设过"在重开之后变成了"设成纵向"
     pub drop_orientation: bool,
+    /// `<sheetFormatPr>` 那一层：crate 只会落它那枚常量 15，文件说的是别的数就得把字节改回来。
+    /// 与上面几项同一趟（同一个部件、同一处定点重打包），所以搭在同一枚补丁上
+    pub sheet_format: Option<SheetFormat>,
 }
 
 impl PrintPatch {
@@ -786,6 +789,7 @@ impl PrintPatch {
         self.hf.is_none()
             && self.first_page_number.filter(|v| *v > 0).is_none()
             && !self.drop_orientation
+            && self.sheet_format.is_none()
     }
 }
 
@@ -801,6 +805,9 @@ pub fn patch_part_xml(xml: &str, p: &PrintPatch) -> (String, Vec<String>) {
     }
     if p.drop_orientation {
         out = patch_orientation(out);
+    }
+    if let Some(f) = &p.sheet_format {
+        out = patch_sheet_format(out, f);
     }
     (out, accounts)
 }
@@ -832,6 +839,45 @@ fn patch_orientation(xml: String) -> String {
         format!("<pageSetup{attrs}>{}</pageSetup>", el.inner)
     };
     format!("{}{element}{}", &xml[..el.start], &xml[el.end..])
+}
+
+/// 把 `<sheetFormatPr>` 那一层原样落回字节：只换 `defaultRowHeight` 与 `customHeight` 两枚，
+/// 其余属性（`baseColWidth`、`x14ac:dyDescent` 这一类）照搬。
+/// 为什么不走 crate：它的 `set_default_row_height` 会把这枚缺省盖成**每一行的显式 `ht`**，
+/// 而且内部按整数像素存（17.5pt 存成 17.25）——判别见 `xlsx::tests::crate_default_row_height_setter_stamps_every_row`
+fn patch_sheet_format(xml: String, f: &SheetFormat) -> String {
+    // 荒谬值在唯一的消费点兜住：0 与负数在这一层就是"没说话"，不许把 `defaultRowHeight="0"` 落到件里
+    if !f.default_row_height.is_finite() || f.default_row_height <= 0.0 {
+        return xml;
+    }
+    // 磅字面按 `{}` 出手：17.5 还是 17.5、30.0 写作 30，这一枚不过像素换算，漂不了
+    let mut mine = format!(r#"defaultRowHeight="{}""#, f.default_row_height);
+    if f.custom_height {
+        mine.push_str(r#" customHeight="1""#);
+    }
+    match find_element(xml.as_str(), "sheetFormatPr") {
+        Some(el) => {
+            let once = drop_attr(el.attrs, "defaultRowHeight");
+            let rest = drop_attr(once.as_str(), "customHeight");
+            let keep = if rest.is_empty() {
+                String::new()
+            } else {
+                format!(" {rest}")
+            };
+            let element = if el.inner.is_empty() {
+                format!("<sheetFormatPr {mine}{keep}/>")
+            } else {
+                format!("<sheetFormatPr {mine}{keep}>{}</sheetFormatPr>", el.inner)
+            };
+            format!("{}{element}{}", &xml[..el.start], &xml[el.end..])
+        }
+        // crate 逢表必写这一枚，走到这条支路说明产物形状变了：按 schema 的位置补一枚，别把声明丢了
+        None => {
+            let at = insert_before(xml.as_str(), &["<cols", "<sheetData"]);
+            let (head, tail) = xml.split_at(at);
+            format!("{head}<sheetFormatPr {mine}/>{tail}")
+        }
+    }
 }
 
 /// `<headerFooter>` 整块重写：两个开关落属性，even/first 四条串落子元素，
@@ -1463,6 +1509,7 @@ mod tests {
             hf: None,
             first_page_number: Some(7),
             drop_orientation: false,
+            sheet_format: None,
         };
         let xml = "<worksheet><pageSetup orientation=\"portrait\"/></worksheet>";
         let (out, accounts) = patch_part_xml(xml, &p);
@@ -1475,7 +1522,8 @@ mod tests {
             sheet_name: "纸样".into(),
             hf: None,
             first_page_number: Some(0),
-            drop_orientation: false
+            drop_orientation: false,
+            sheet_format: None
         }
         .noop());
     }
@@ -1489,6 +1537,7 @@ mod tests {
             hf: None,
             first_page_number: None,
             drop_orientation: true,
+            sheet_format: None,
         };
         assert!(!p.noop(), "只欠一次擦除也要走重打包那一趟");
         let xml = "<worksheet><pageSetup paperSize=\"9\" orientation=\"portrait\" scale=\"85\"/></worksheet>";
@@ -1545,6 +1594,171 @@ mod tests {
         assert_eq!(got.orientation, None, "没声明过的方向读回来有了值");
         assert_eq!(got.paper_size, Some(9), "擦方向不许连别的属性一起带走");
         assert_eq!(got.scale, Some(85));
+    }
+
+    #[test]
+    fn default_row_height_lands_in_the_literal_and_leaves_rows_bare() {
+        // 判别：这一层走定点重打包，不吃 crate 的 set_default_row_height——
+        // 那枚 setter 会把这一层缺省盖成**每一行的显式 ht**，还把 17.5 磅按整数像素存成 17.25
+        // （见 `xlsx::tests::crate_default_row_height_setter_stamps_every_row`）
+        let mut wb = book(setup());
+        wb.sheets[0].sheet_format = Some(SheetFormat {
+            default_row_height: 17.5,
+            custom_height: false,
+        });
+        let path = tmp("drh");
+        write_xlsx_sync(path.clone(), wb).expect("写出失败");
+        let ws = entry(&path, "xl/worksheets/sheet1.xml");
+        let el = find_element(ws.as_str(), "sheetFormatPr").expect("缺省行高那一层整个不见了");
+        assert!(
+            el.attrs.contains(r#"defaultRowHeight="17.5""#),
+            "磅字面被换算漂了：{}",
+            el.attrs
+        );
+        assert!(!ws.contains("17.25"), "又走了 crate 的像素换算：{ws}");
+        assert!(
+            !el.attrs.contains("customHeight"),
+            "载荷没声明 customHeight 却落了一枚：{}",
+            el.attrs
+        );
+        let rows = ws.matches("<row ").count();
+        assert_eq!(rows, 6, "夹具的六行没了，下面那条「行没被盖章」就是空断言：{ws}");
+        let stamped = ws
+            .split("<row")
+            .skip(1)
+            .filter(|r| r.starts_with(' ') && r.contains(" ht="))
+            .count();
+        assert_eq!(stamped, 0, "缺省行高被盖成了每一行的显式行高：{ws}");
+        let back = read_xlsx_sync(path).expect("读回失败");
+        assert_eq!(
+            back.sheets[0].sheet_format,
+            Some(SheetFormat {
+                default_row_height: 17.5,
+                custom_height: false
+            }),
+            "写了却读不回来＝这一趟重打包没生效"
+        );
+        // 存盘是整包重写：第二次存还得带着这一枚（读得回来只证明了一半）
+        let again = SheetFormat {
+            default_row_height: 17.5,
+            custom_height: false,
+        };
+        let path3 = tmp("drh2");
+        write_xlsx_sync(path3.clone(), back).expect("二次写出失败");
+        let ws3 = entry(&path3, "xl/worksheets/sheet1.xml");
+        assert!(
+            ws3.contains(r#"defaultRowHeight="17.5""#) && !ws3.contains("17.25"),
+            "第二次存盘把这一枚丢了或漂了：{ws3}"
+        );
+        assert_eq!(
+            read_xlsx_sync(path3).expect("读回失败").sheets[0].sheet_format,
+            Some(again),
+            "二次存盘后读不回来"
+        );
+
+        // customHeight 只有载荷明说才落，磅字面按 `{}` 出手（30.0 写作 30，不掺换算）
+        let mut wb2 = book(setup());
+        wb2.sheets[0].sheet_format = Some(SheetFormat {
+            default_row_height: 30.0,
+            custom_height: true,
+        });
+        let path2 = tmp("drh30");
+        write_xlsx_sync(path2.clone(), wb2).expect("写出失败");
+        let ws2 = entry(&path2, "xl/worksheets/sheet1.xml");
+        let el2 = find_element(ws2.as_str(), "sheetFormatPr").expect("缺省行高那一层整个不见了");
+        assert!(
+            el2.attrs.contains(r#"defaultRowHeight="30""#) && el2.attrs.contains(r#"customHeight="1""#),
+            "关着的那一枚没跟着落：{}",
+            el2.attrs
+        );
+    }
+
+    #[test]
+    fn undeclared_default_row_height_leaves_the_crate_fifteen_alone() {
+        // 载荷没说 ⇒ 这一趟不 patch 这一枚，crate 自己那枚 15 原地留着（省声明与写声明是同一份语义：
+        // ECMA 的 `@defaultRowHeight` 缺省正是 15，与 v0.52 那枚默认 `<pageMargins>` 同一条归一）
+        let path = tmp("drh-silent");
+        write_xlsx_sync(path.clone(), book(setup())).expect("写出失败");
+        let ws = entry(&path, "xl/worksheets/sheet1.xml");
+        let el = find_element(ws.as_str(), "sheetFormatPr").expect("crate 那枚缺省该还在");
+        assert!(
+            el.attrs.contains(r#"defaultRowHeight="15""#) && !el.attrs.contains("customHeight"),
+            "没说却动了字节：{}",
+            el.attrs
+        );
+        assert_eq!(
+            read_xlsx_sync(path).expect("读回失败").sheets[0].sheet_format,
+            None,
+            "15 不带 customHeight 在这一层就是没说话"
+        );
+        // 反例：只欠这一层的补丁不许算 noop，否则整趟重打包被跳过、这一枚就丢了
+        assert!(
+            !PrintPatch {
+                sheet_name: "纸样".into(),
+                hf: None,
+                first_page_number: None,
+                drop_orientation: false,
+                sheet_format: Some(SheetFormat {
+                    default_row_height: 17.5,
+                    custom_height: false
+                })
+            }
+            .noop(),
+            "只带缺省行高的补丁被当成 noop 了"
+        );
+    }
+
+    #[test]
+    fn sheet_format_patch_rewrites_only_its_two_attributes() {
+        let p = |h: f64, c: bool| PrintPatch {
+            sheet_name: "纸样".into(),
+            hf: None,
+            first_page_number: None,
+            drop_orientation: false,
+            sheet_format: Some(SheetFormat {
+                default_row_height: h,
+                custom_height: c,
+            }),
+        };
+        // 其余属性照搬（`baseColWidth` 这一类是别人文件里带来的），而旧的那枚 customHeight 我们没说时得擦
+        let xml = r#"<worksheet><sheetFormatPr defaultRowHeight="15" customHeight="1" baseColWidth="8"/><sheetData/></worksheet>"#;
+        let (out, ac) = patch_part_xml(xml, &p(17.5, false));
+        assert!(ac.is_empty(), "这是自家的落笔，不是「做不到」：{ac:?}");
+        let el = find_element(out.as_str(), "sheetFormatPr").expect("改没了");
+        assert!(
+            el.attrs.contains(r#"defaultRowHeight="17.5""#) && el.attrs.contains(r#"baseColWidth="8""#),
+            "该留的没留或该换的没换：{}",
+            el.attrs
+        );
+        assert!(
+            !el.attrs.contains("customHeight"),
+            "载荷没说的开关却留着别人那枚 1：{}",
+            el.attrs
+        );
+        let (out2, _) = patch_part_xml(
+            r#"<worksheet><sheetFormatPr defaultRowHeight="15"/></worksheet>"#,
+            &p(20.0, true),
+        );
+        assert!(
+            out2.contains(r#"<sheetFormatPr defaultRowHeight="20" customHeight="1"/>"#),
+            "{out2}"
+        );
+        // 产物里压根没有这一枚（别人的件）：按 schema 的位置补一枚，别把声明丢了
+        let (out3, _) = patch_part_xml(
+            r#"<worksheet><sheetData><row r="1"/></sheetData></worksheet>"#,
+            &p(22.5, false),
+        );
+        assert!(
+            out3.starts_with(r#"<worksheet><sheetFormatPr defaultRowHeight="22.5"/>"#),
+            "补的位置不对：{out3}"
+        );
+        // 荒谬值在唯一的消费点兜住：0/负数/NaN 都不许落到件里（与 v0.57 那枚 fs 同一分寸）
+        for bad in [0.0, -3.0, f64::NAN] {
+            let bare = r#"<worksheet><sheetFormatPr defaultRowHeight="15"/></worksheet>"#;
+            let (out4, ac4) = patch_part_xml(bare, &p(bad, false));
+            assert_eq!(out4, bare, "{bad} 不该动字节");
+            assert!(ac4.is_empty(), "不动字节也不报错账：{ac4:?}");
+        }
     }
 
     #[test]

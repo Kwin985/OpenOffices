@@ -413,6 +413,10 @@ pub struct SheetPayload {
     /// 打印设置：页面/纸张/页眉页脚/分页符/打印区域/重复标题行。Univer 模型装不下，两头纯换算
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub print: Option<SheetPrintPayload>,
+    /// 工作表格式那一层（`sheetFormatPr`）：Univer 里那一枚 `defaultRowHeight` 是**活口**（喂进去屏幕就按
+    /// 一个 Excel 忽略的数排版），所以它照 `print` 走侧通道，只在存盘那趟原样落回字节
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sheet_format: Option<SheetFormat>,
 }
 
 /// 页眉/页脚的一条：OOXML 就存一条串，里头用 `&L`/`&C`/`&R` 分左中右三段，
@@ -619,6 +623,23 @@ pub struct DefaultFont {
     pub fs: Option<f64>,
 }
 
+/// 工作表格式那一层：`xl/worksheets/sheetN.xml` 的 `<sheetFormatPr>`，管的是"这张表里没明说
+/// 行高的那些行"的底数。两条实测把它和"排版指令"分开：Excel 16.0 **不用它排版**（声明 30pt、
+/// 声明 30pt 带 `customHeight="1"`、以及整枚缺省的五件变体，行高一律报 17.5 = 从工作簿默认字体
+/// 算出来的那一档），但它**自己存盘会重写这一枚**（Calibri/11 → 14，宋体/14 → 17.5）
+/// ⇒ 载荷按磅字面收着、存盘原样落回，界面与纸面都不吃它。
+/// 不吃 crate 的 `set_default_row_height`：那枚 setter 会把缺省行高盖成**每一行的显式 `ht`**
+/// （判别见 `crate_default_row_height_setter_stamps_every_row`），而且内部按整数像素存 ⇒ 17.5 存成 17.25
+#[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct SheetFormat {
+    /// `@defaultRowHeight`（磅，照文件原样收）
+    pub default_row_height: f64,
+    /// `@customHeight`：只有文件明写 1 才是 true（缺省与写 0 都归一回不声明）
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub custom_height: bool,
+}
+
 #[derive(Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct WorkbookPayload {
@@ -816,6 +837,7 @@ pub fn read_xlsx_sync(path: String) -> Result<WorkbookPayload, Error> {
             hidden_rows: fmt.map(|f| f.hidden_rows.clone()).unwrap_or_default(),
             hidden_cols: fmt.map(|f| f.hidden_cols.clone()).unwrap_or_default(),
             freeze: fmt.and_then(|f| f.freeze).map(|(rows, cols)| Freeze { rows, cols }),
+            sheet_format: fmt.and_then(|f| f.sheet_format.clone()),
             filter: fmt.and_then(|f| f.rules.filter.clone()),
             data_validations: fmt
                 .map(|f| f.rules.data_validations.clone())
@@ -1119,7 +1141,9 @@ pub fn write_xlsx_sync(path: String, workbook: WorkbookPayload) -> Result<Vec<St
             }
         }
         // 列宽/行高：载荷即像素。crate 序列化按 chars=px/7 不扣 5px 填充，
-        // 与读侧 round(chars*7+5) 互为逆运算须先减填充；行高 px↔pt 3/4 对 4/3 无损
+        // 与读侧 round(chars*7+5) 互为逆运算须先减填充。行高这一路**不是无损的**：
+        // `set_row_height_pixels` 只收整数像素，载荷里非整的那一档在 `as u32` 上被截掉
+        // （最多 1px＝0.75pt 的字节漂移，路线图里挂着）；缺省行高那一层也因此不走它，见 `SheetFormat`
         for (c, px) in &sheet.col_widths {
             let Ok(col) = u16::try_from(*c) else { continue };
             let _ = ws.set_column_width_pixels(col, (*px - 5.0).round().max(1.0) as u32);
@@ -1182,6 +1206,8 @@ pub fn write_xlsx_sync(path: String, workbook: WorkbookPayload) -> Result<Vec<St
             hf: pw.hf,
             first_page_number: pw.page_number_patch,
             drop_orientation: pw.drop_orientation,
+            // 缺省行高那一层不吃 crate 的 setter（会把缺省盖成每一行的显式 ht），跟这一趟重打包落字节
+            sheet_format: sheet.sheet_format.clone(),
         };
         if !patch.noop() {
             // crate 按建表顺序把表写成 xl/worksheets/sheet{1,2,…}.xml
@@ -2908,5 +2934,64 @@ mod tests {
             all.push(notes.join(" | "));
         }
         println!("夹具目录: {dir}\n{}", all.join("\n"));
+    }
+
+    /// 判别（v0.60 裁决的依据）：crate 的 `set_default_row_height` 用在这一层上会多干两件事。
+    /// 行是**存盘那一刻**才落进 XML 的，所以先设后设一个样——每一行没带过行高的行都被盖上
+    /// `ht` + `customHeight="1"`（v0.58 立的"没声明过的东西不盖章"在这一维上被它破了）；
+    /// 又因为它内部按整数像素存，17.5pt 落纸是 17.25（磅字面在字节上漂了 0.25，与逐行那条
+    /// `set_row_height_pixels` 的截断同一家）。所以这一层不吃这枚 setter，走存盘后的定点重打包。
+    #[test]
+    fn crate_default_row_height_setter_stamps_every_row() {
+        use rust_xlsxwriter::Workbook as RawWorkbook;
+
+        let shape = |set_it: bool| -> (String, Vec<String>) {
+            let path = tmp_path(if set_it { "drh-set" } else { "drh-raw" });
+            let mut wb = RawWorkbook::new();
+            let ws = wb.add_worksheet();
+            ws.write(0, 0, "A1").unwrap();
+            ws.write(1, 0, "A2").unwrap();
+            ws.write_string(3, 0, "A4").unwrap();
+            if set_it {
+                ws.set_default_row_height(17.5);
+            }
+            let _ = ws.set_row_height(2, 30.0);
+            std::fs::write(&path, wb.save_to_buffer().unwrap()).expect("写出失败");
+            let xml = entry(&path, "xl/worksheets/sheet1.xml");
+            std::fs::remove_file(&path).ok();
+            let fmt = xml
+                .split("<sheetFormatPr")
+                .nth(1)
+                .map(|s| format!("<sheetFormatPr{}", &s[..s.find('>').unwrap() + 1]))
+                .unwrap_or_default();
+            let rows = xml
+                .split("<row ")
+                .skip(1)
+                .map(|s| format!("<row {}", &s[..s.find('>').unwrap() + 1]))
+                .collect();
+            (fmt, rows)
+        };
+
+        let (fmt, rows) = shape(false);
+        assert_eq!(fmt, r#"<sheetFormatPr defaultRowHeight="15"/>"#, "不设时 crate 落它那枚常量");
+        assert_eq!(rows.iter().filter(|r| r.contains(" ht=")).count(), 1, "只有明说过的那行带 ht：{rows:?}");
+        assert!(rows[0].contains(r#"r="1""#) && !rows[0].contains("ht="), "第一行本来是不盖章的：{}", rows[0]);
+
+        let (fmt, rows) = shape(true);
+        assert!(
+            fmt.contains(r#"defaultRowHeight="17.25""#) && fmt.contains(r#"customHeight="1""#),
+            "setter 落的字面（17.5 在这里已经变成 17.25）：{fmt}"
+        );
+        assert!(!fmt.contains("17.5"), "17.5pt 在这一枚 setter 手里存不住：{fmt}");
+        assert_eq!(rows.len(), 4);
+        for (i, r) in rows.iter().enumerate() {
+            if i == 2 {
+                continue; // 那一行是明说的 30pt
+            }
+            assert!(
+                r.contains(r#"ht="17.25""#) && r.contains(r#"customHeight="1""#),
+                "缺省行高被盖成了每一行的显式行高：{r}"
+            );
+        }
     }
 }
