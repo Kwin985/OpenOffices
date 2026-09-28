@@ -734,9 +734,10 @@ pub fn read_xlsx_sync(path: String) -> Result<WorkbookPayload, Error> {
     let mut workbook =
         open_workbook_auto(&path).map_err(|e| Error(format!("无法打开文件: {e}")))?;
     // 样式/合并读侧按格式分流：xlsx 直解 zip；ods 走 content.xml 直解；xls/csv 无样式通道
-    // 工作簿默认字体只有 xlsx 这条路读得到（ODS 的"默认"住在 styles.xml 的 default-style 那一层，本轮未接）
+    // 工作簿默认字体两条路都读得到，只是住处不同：xlsx 在 styles.xml 的 cellXfs[0]，ODS 在同一件
+    // styles.xml 的 <style:default-style style:family="table-cell">（v0.61 接上，此前 .ods 硬交回 None）
     let (fmts, default_font) = if path.to_ascii_lowercase().ends_with(".ods") {
-        (crate::ods::read_ods_styles(&path), None)
+        crate::ods::read_ods_styles(&path)
     } else {
         xlsx_style::read_xlsx_styles(&path)
     };

@@ -14,7 +14,8 @@ use zip::write::SimpleFileOptions;
 use zip::{CompressionMethod, ZipWriter};
 
 use crate::xlsx::{
-    BorderSide, CellBorder, CellPayload, CellStyle, Error, MergeRange, SheetPayload, WorkbookPayload,
+    BorderSide, CellBorder, CellPayload, CellStyle, DefaultFont, Error, MergeRange, SheetPayload,
+    WorkbookPayload,
 };
 use crate::xlsx_style::{attr_str, read_entry, SheetFmt};
 
@@ -361,12 +362,66 @@ fn odf_len_to_px(v: &str) -> Option<f64> {
     Some(px.round())
 }
 
-/// 任何失败退化为空表；键为 sheet 名（与 calamine 的 table:name 一致）
-pub fn read_ods_styles(path: &str) -> HashMap<String, SheetFmt> {
+/// ODF 的工作簿默认字体 = `styles.xml` 里 `<style:default-style style:family="table-cell">`
+/// 那条的 `<style:text-properties>`。这一层与 xlsx 的 `cellXfs[0]` 同一档意思，但形状不同：
+/// ODF 靠**样式继承链**表达（我们写出的格级样式都以 `Default` 为父，父层说的字族字号不必再种一遍），
+/// 而 OOXML 得在写侧手工 seed。只认 `table-cell` 这一支——同文件里 `table-row`/`table-column` 的
+/// default-style 管的是缺省行高与列宽，那是另一层（路线图挂着）。
+/// 两头都没说就交回 `None`；0 与负数在这一处不拦，由唯一的消费点兜（与 `default_font_of` 同一分寸）
+fn ods_default_font_of(styles_xml: &str) -> Option<DefaultFont> {
+    let mut reader = Reader::from_str(styles_xml);
+    let mut in_cell_default = false;
+    let mut ff: Option<String> = None;
+    let mut fs: Option<f64> = None;
+    while let Ok(ev) = reader.read_event() {
+        match &ev {
+            Event::Start(e) if e.local_name().as_ref() == "default-style" => {
+                in_cell_default = attr_str(e, "family").as_deref() == Some("table-cell");
+            }
+            Event::End(e) if e.local_name().as_ref() == "default-style" => {
+                in_cell_default = false;
+            }
+            Event::Start(e) | Event::Empty(e)
+                if in_cell_default && e.local_name().as_ref() == "text-properties" =>
+            {
+                // 两条字族属性取一，与格级同一顺序；**这里不归一化**：格级那条"Calibri/等线 不算说话"
+                // 管的是别把通用档当真名，而这一层抹掉就等于换字族（v0.57 立的规矩）
+                ff = attr_str(e, "font-name")
+                    .or_else(|| attr_str(e, "font-family"))
+                    .map(|v| v.trim().to_string())
+                    .filter(|v| !v.is_empty());
+                fs = attr_str(e, "font-size").as_deref().and_then(odf_font_pt);
+            }
+            Event::Eof => break,
+            _ => {}
+        }
+    }
+    if ff.is_none() && fs.is_none() {
+        return None;
+    }
+    Some(DefaultFont { ff, fs })
+}
+
+/// 字长在 ODF 里是长度值，但应用都写磅 ⇒ **磅字面直接取**（过了换算就要在字节上漂一档，
+/// 与 v0.60 那条"这一层按字面收着"同一分寸）；只有真不是 pt 的那一档才走长度换算，
+/// 那一趟带 `odf_len_to_px` 的取整（±0.5px ≈ 0.375pt）
+fn odf_font_pt(v: &str) -> Option<f64> {
+    let v = v.trim();
+    if let Some(num) = v.strip_suffix("pt") {
+        return num.trim().parse::<f64>().ok();
+    }
+    odf_len_to_px(v).map(|px| px * 72.0 / 96.0)
+}
+
+/// 任何失败退化为空表；键为 sheet 名（与 calamine 的 table:name 一致）。
+/// 交回的第二个值与工作簿默认字体同源，形状与 `read_xlsx_styles` 一致（一趟开包读两件部件）
+pub fn read_ods_styles(path: &str) -> (HashMap<String, SheetFmt>, Option<DefaultFont>) {
     let mut out: HashMap<String, SheetFmt> = HashMap::new();
-    let Ok(file) = std::fs::File::open(path) else { return out };
-    let Ok(mut zip) = zip::ZipArchive::new(file) else { return out };
-    let Some(xml) = read_entry(&mut zip, "content.xml") else { return out };
+    let Ok(file) = std::fs::File::open(path) else { return (out, None) };
+    let Ok(mut zip) = zip::ZipArchive::new(file) else { return (out, None) };
+    let Some(xml) = read_entry(&mut zip, "content.xml") else {
+        return (out, None);
+    };
 
     let mut styles: HashMap<String, CellStyle> = HashMap::new();
     let mut col_styles: HashMap<String, f64> = HashMap::new();
@@ -564,8 +619,10 @@ pub fn read_ods_styles(path: &str) -> HashMap<String, SheetFmt> {
             f.rules.notes.append(&mut missed);
         }
     }
-    // 冻结窗格在 styles.xml 的 ViewSettings/Tables，map-entry 与 content 表序一一对应
+    // styles.xml 一处部件供两件事：冻结窗格在 ViewSettings/Tables，工作簿默认字体在 default-style
+    let mut default_font = None;
     if let Some(sx) = read_entry(&mut zip, "styles.xml") {
+        default_font = ods_default_font_of(&sx);
         for (i, (rows, cols)) in parse_ods_freezes(&sx).into_iter().enumerate() {
             if rows + cols == 0 {
                 continue;
@@ -575,7 +632,7 @@ pub fn read_ods_styles(path: &str) -> HashMap<String, SheetFmt> {
             }
         }
     }
-    out
+    (out, default_font)
 }
 
 /// styles.xml 的 config-item-map-indexed "Tables" → 每表 (rows, cols)，未冻结为 (0,0)
@@ -1100,12 +1157,39 @@ pub fn ods_xml(workbook: &WorkbookPayload) -> (String, String) {
          xmlns:style=\"urn:oasis:names:tc:opendocument:xmlns:style:1.0\" \
          xmlns:fo=\"urn:oasis:names:tc:opendocument:xmlns:xsl-fo-compatible:1.0\" \
          office:version=\"1.2\">{}\
-         <office:styles>\
+         <office:styles>{}\
          <style:style style:name=\"Default\" style:family=\"table-cell\"/>\
          </office:styles></office:document-styles>",
-        settings_xml(&workbook.sheets).unwrap_or_default()
+        settings_xml(&workbook.sheets).unwrap_or_default(),
+        default_style_xml(workbook.default_font.as_ref())
     );
     (content, styles)
+}
+
+/// 工作簿默认字体落回 `<style:default-style style:family="table-cell">`（读侧 ods_default_font_of 的镜像）。
+/// 载荷没说话就不写这一层——ODF 里没有"我们兜底的那一档"这回事，凭空落笔就是替文件声明了它没说过的字族字号；
+/// 而文件说了的（哪怕正好像 Calibri/11）就照写，这里不做 xlsx 那种"与隐式底数同档就省掉"的归一，
+/// 因为 ODS 这一路没有 crate 的隐式底数，这一层就是我们唯一的底。
+/// 位置有讲究：ODF 的 `office:styles` 里 default-style 排在具名 style 之前
+fn default_style_xml(df: Option<&DefaultFont>) -> String {
+    let Some(df) = df else { return String::new() };
+    let mut props = String::new();
+    if let Some(ff) = df.ff.as_deref().map(str::trim).filter(|v| !v.is_empty()) {
+        // 双属性照格级同一写法：style:font-name 是 ODF 自家的，fo:font-family 是 XSL-FO 兼容道
+        props.push_str(&format!(
+            " style:font-name=\"{ff}\" fo:font-family=\"{ff}\"",
+            ff = esc_attr(ff)
+        ));
+    }
+    if let Some(fs) = df.fs {
+        props.push_str(&format!(" fo:font-size=\"{fs}pt\""));
+    }
+    if props.is_empty() {
+        return String::new();
+    }
+    format!(
+        "<style:default-style style:family=\"table-cell\"><style:text-properties{props}/></style:default-style>"
+    )
 }
 
 fn manifest_xml() -> String {
@@ -1566,6 +1650,199 @@ mod tests {
             .and_then(|x| x.s.as_ref())
             .and_then(|s| s.ff.clone());
         assert_eq!(ff.as_deref(), Some("宋体"), "字体族经 style:font-name 读回");
+    }
+
+    /// 从内存里的 ODS 字节取出 styles.xml 的字面（写侧判别用的是字节，不是"读得回来"）
+    fn styles_of(bytes: &[u8]) -> String {
+        use std::io::Read;
+        let mut z = zip::ZipArchive::new(Cursor::new(bytes.to_vec())).expect("zip 可解");
+        let mut s = String::new();
+        z.by_name("styles.xml")
+            .expect("styles.xml")
+            .read_to_string(&mut s)
+            .expect("读成串");
+        s
+    }
+
+    /// 把一枚 `<style:default-style>` 摆进真的 styles.xml 骨架里再读（部件级判别，不是属性级）
+    fn default_of(family: &str, body: &str) -> Option<DefaultFont> {
+        let xml = format!(
+            "<office:document-styles><office:styles><style:default-style style:family=\"{family}\">{body}</style:default-style></office:styles></office:document-styles>"
+        );
+        ods_default_font_of(&xml)
+    }
+
+    /// 读侧的判别全部按"形状"来出，而不是按字符串包含：
+    /// 只认 table-cell 那一支、字族**不归一化**（格级那把尺子会丢掉 Calibri/等线，这一层丢掉就是换字族）、
+    /// 磅字面不漂、非磅的那一档才经长度换算
+    #[test]
+    fn ods_default_style_reads_only_the_table_cell_branch() {
+        assert_eq!(
+            default_of(
+                "table-cell",
+                r#"<style:text-properties style:font-name="宋体" fo:font-family="宋体" fo:font-size="14pt"/>"#
+            ),
+            Some(DefaultFont { ff: Some("宋体".into()), fs: Some(14.0) }),
+            "两条字族属性取一，磅字面直读"
+        );
+        assert_eq!(
+            default_of(
+                "text",
+                r#"<style:text-properties fo:font-size="14pt"/>"#
+            ),
+            None,
+            "段落那一支的字号不是表格的默认字体"
+        );
+        assert_eq!(
+            default_of("table-cell", ""),
+            None,
+            "那一支在但什么都没说 = 没说话"
+        );
+        assert_eq!(
+            default_of("table-cell", r#"<style:text-properties fo:font-family="Liberation Sans"/>"#).map(|d| d.ff),
+            Some(Some("Liberation Sans".into())),
+            "只走 XSL-FO 兼容道也认"
+        );
+        assert_eq!(
+            default_of("table-cell", r#"<style:text-properties fo:font-size="12pt"/>"#).map(|d| d.ff),
+            Some(None),
+            "只说字号时不许凭空造一层字族"
+        );
+        for name in ["等线", "Calibri"] {
+            assert_eq!(
+                default_of(
+                    "table-cell",
+                    &format!(r#"<style:text-properties style:font-name="{name}" fo:font-size="11pt"/>"#)
+                )
+                .map(|d| d.ff),
+                Some(Some(name.into())),
+                "这一层不归一化：格级丢掉这两档是为了别把通用档当真名，这里抹掉就是换字族"
+            );
+        }
+        assert_eq!(
+            default_of(
+                "table-cell",
+                r#"<style:table-cell-properties fo:font-size="20pt" style:font-name="黑体"/>"#
+            ),
+            None,
+            "字号只从 text-properties 取，兄弟元素上的不算"
+        );
+        assert_eq!(
+            ods_default_font_of(
+                r#"<office:styles><style:style style:name="Default" style:family="table-cell"><style:text-properties fo:font-size="20pt"/></style:style></office:styles>"#
+            ),
+            None,
+            "具名样式那一层不是工作簿默认（default-style 才算）"
+        );
+        assert_eq!(
+            ods_default_font_of(
+                r#"<office:styles><style:default-style style:family="table-cell"/><style:default-style style:family="text"><style:text-properties fo:font-size="20pt"/></style:default-style></office:styles>"#
+            ),
+            None,
+            "自闭合的那一支没有孩子，不许把后面那一支的字号算到它头上"
+        );
+        assert_eq!(
+            default_of("table-cell", r#"<style:text-properties fo:font-size="17.5pt"/>"#).map(|d| d.fs),
+            Some(Some(17.5)),
+            "磅字面过了换算就要在字节上漂一档，故不换算"
+        );
+        assert_eq!(
+            default_of("table-cell", r#"<style:text-properties fo:font-size="0.42cm"/>"#).map(|d| d.fs),
+            Some(Some(12.0)),
+            "真不是磅的那一档才走长度换算（0.42cm→16px→12pt）"
+        );
+        assert_eq!(
+            default_of("table-cell", r#"<style:text-properties fo:font-size="0pt"/>"#).map(|d| d.fs),
+            Some(Some(0.0)),
+            "荒谬值在这一处不拦，由唯一的消费点兜（与 xlsx 那一路同一分寸）"
+        );
+        assert_eq!(
+            ods_default_font_of(
+                r#"<office:styles>\
+                   <style:default-style style:family="table-row"><style:table-row-properties style:row-height="0.45cm" style:use-optimal-row-height="true"/></style:default-style>\
+                   <style:default-style style:family="table-cell"><style:text-properties fo:font-size="14pt"/></style:default-style>\
+                 </office:styles>"#
+            )
+            .map(|d| d.fs),
+            Some(Some(14.0)),
+            "行高那一支先出现也不许抢这一层（且 row-height 不是字号）"
+        );
+    }
+
+    /// 写侧落回同一层：载荷说话才写、位置在具名样式之前、存两趟不许丢
+    #[test]
+    fn ods_default_font_lands_in_styles_and_reads_back() {
+        let wb = WorkbookPayload {
+            sheets: vec![SheetPayload {
+                name: "默认".into(),
+                cells: vec![cell(0, 0, json!("正文"))],
+                ..Default::default()
+            }],
+            default_font: Some(DefaultFont {
+                ff: Some("宋体".into()),
+                fs: Some(14.0),
+            }),
+            ..Default::default()
+        };
+        let bytes = ods_bytes(&wb).expect("ods bytes");
+        let sx = styles_of(&bytes);
+        assert!(
+            sx.contains(r#"<style:default-style style:family="table-cell">"#),
+            "这一层要落进 styles.xml: {sx}"
+        );
+        assert!(sx.contains(r#"fo:font-size="14pt""#), "磅字面落纸: {sx}");
+        assert!(
+            sx.find("style:default-style")
+                .zip(sx.find(r#"style:name="Default""#))
+                .map(|(d, n)| d < n)
+                == Some(true),
+            "ODF 的 office:styles 里 default-style 排在具名样式之前"
+        );
+
+        let path = std::env::temp_dir()
+            .join(format!("openoffices-odsdef-{}.ods", std::process::id()))
+            .to_string_lossy()
+            .to_string();
+        std::fs::write(&path, &bytes).expect("write");
+        let back = crate::xlsx::read_xlsx_sync(path.clone()).expect("读回失败");
+        assert_eq!(
+            back.default_font,
+            Some(DefaultFont { ff: Some("宋体".into()), fs: Some(14.0) }),
+            "读回来还是文件那一层说的"
+        );
+        // 第二趟：读回再写，这一层不许在往返里掉
+        let again = ods_bytes(&back).expect("第二次写");
+        assert!(
+            styles_of(&again).contains(r#"fo:font-size="14pt""#),
+            "存两趟之后磅字面还在"
+        );
+        std::fs::remove_file(&path).ok();
+    }
+
+    /// 反面守卫：载荷没说就不能造这一层——凭空落笔就是替文件声明了它没说过的字族字号
+    #[test]
+    fn ods_without_default_font_declares_nothing() {
+        let wb = WorkbookPayload {
+            sheets: vec![SheetPayload {
+                name: "没说话".into(),
+                cells: vec![cell(0, 0, json!("值"))],
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        let bytes = ods_bytes(&wb).expect("ods bytes");
+        assert!(
+            !styles_of(&bytes).contains("default-style"),
+            "载荷没给这一层就不许写它"
+        );
+        let path = std::env::temp_dir()
+            .join(format!("openoffices-odsdef-none-{}.ods", std::process::id()))
+            .to_string_lossy()
+            .to_string();
+        std::fs::write(&path, bytes).expect("write");
+        let back = crate::xlsx::read_xlsx_sync(path.clone()).expect("读回失败");
+        std::fs::remove_file(&path).ok();
+        assert_eq!(back.default_font, None, "自产物不该读出一层文件里没有的默认");
     }
 
     /// 只换 content.xml 的测试件：把 ODF 规则的形状摆进本应用写出的那一份里
