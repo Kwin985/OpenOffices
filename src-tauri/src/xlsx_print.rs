@@ -128,6 +128,8 @@ fn merge_defaults(a: &mut SheetPrintPayload, b: &SheetPrintPayload) {
         first_page_number,
         odd_even,
         first_differs,
+        scale_with_doc,
+        align_with_margins,
         header,
         footer,
         print_area,
@@ -153,6 +155,9 @@ fn merge_defaults(a: &mut SheetPrintPayload, b: &SheetPrintPayload) {
     fill_opt(grid_lines, b.grid_lines.as_ref());
     fill_opt(headings, b.headings.as_ref());
     fill_opt(first_page_number, b.first_page_number.as_ref());
+    // 这两枚的"没值"说的是"开着"而不是"没读到"：任何一份说了关就是关，所以照 fill_opt 的方向填（Some(false) 赢）
+    fill_opt(scale_with_doc, b.scale_with_doc.as_ref());
+    fill_opt(align_with_margins, b.align_with_margins.as_ref());
     if !*odd_even {
         *odd_even = b.odd_even;
     }
@@ -332,6 +337,15 @@ fn btrue(e: &BytesStart<'_>, key: &str, def: bool) -> bool {
     battr(e, key).unwrap_or(def)
 }
 
+/// 「缺省开着」的那类布尔属性：只有明确写 0 才收下来，缺省或写 1 都算没声明
+/// （写 1 与不写在这两枚上语义相同，归一回不声明免得存盘时替用户多落一笔字节）
+fn off_attr(e: &BytesStart<'_>, key: &str) -> Option<bool> {
+    match battr(e, key) {
+        Some(false) => Some(false),
+        _ => None,
+    }
+}
+
 fn u32_attr(e: &BytesStart<'_>, key: &str) -> Option<u32> {
     attr_str(e, key).and_then(|v| v.trim().parse::<u32>().ok())
 }
@@ -459,6 +473,10 @@ fn read_sheet_print(xml: &str) -> (SheetPrintPayload, Vec<String>) {
                     "headerFooter" => {
                         p.odd_even = btrue(e, "differentOddEven", false);
                         p.first_differs = btrue(e, "differentFirst", false);
+                        // 这两枚的缺省是**开着**（Excel 的勾默认打上），所以只有明确写 0 才算声明过；
+                        // 显式写 1 与不写字节不同、语义相同，按 v0.52 那条「默认值不算声明」归一回不声明
+                        p.scale_with_doc = off_attr(e, "scaleWithDoc");
+                        p.align_with_margins = off_attr(e, "alignWithMargins");
                     }
                     "oddHeader" | "evenHeader" | "firstHeader" | "oddFooter" | "evenFooter"
                     | "firstFooter" => {
@@ -717,6 +735,14 @@ pub fn write_sheet_print(ws: &mut Worksheet, sheet: &SheetPayload) -> PrintWrite
     }
     if !odd_footer.is_empty() {
         ws.set_footer(odd_footer.as_str());
+    }
+    // 这两枚 crate 只在"关掉"时落笔（开着就是缺省、什么字节都不写），所以只有 Some(false) 才走 setter；
+    // 走通 setter 顺带把 head_footer_changed 置上，于是"只有开关、一条页眉页脚都没有"的件也长得出元素
+    if p.scale_with_doc == Some(false) {
+        ws.set_header_footer_scale_with_doc(false);
+    }
+    if p.align_with_margins == Some(false) {
+        ws.set_header_footer_align_with_page(false);
     }
     let patch = HfPatch {
         different_odd_even: p.odd_even,
@@ -1337,6 +1363,75 @@ mod tests {
     }
 
     #[test]
+    fn hf_switch_off_is_written_and_on_is_undeclared() {
+        let path = tmp("hf-switch");
+        let mut p = setup();
+        p.scale_with_doc = Some(false);
+        // 开着（Excel 的默认勾）不该往文件里多写一笔：写了就等于替用户声明了他没设过的东西
+        p.align_with_margins = Some(true);
+        write_xlsx_sync(path.clone(), book(p)).expect("写出失败");
+        let ws = entry(&path, "xl/worksheets/sheet1.xml");
+        assert!(
+            ws.contains("scaleWithDoc=\"0\""),
+            "关着的那枚没落进 XML：\n{ws}"
+        );
+        assert!(
+            !ws.contains("alignWithMargins"),
+            "开着的一枚被写成了声明：\n{ws}"
+        );
+        let q = read_xlsx_sync(path)
+            .expect("读回失败")
+            .sheets[0]
+            .print
+            .clone()
+            .expect("读回时整块纸面设置没了");
+        assert_eq!(q.scale_with_doc, Some(false));
+        assert_eq!(
+            q.align_with_margins, None,
+            "Some(true) 存出去就是不声明，读回来不许凭空长出 true"
+        );
+    }
+
+    #[test]
+    fn hf_switches_survive_a_second_save() {
+        // 打开 → 原样存一次：补写页眉页脚的那趟只擦自家那两枚开关，crate 写的这两枚得活着
+        let path = tmp("hf-switch-again");
+        let mut p = setup();
+        p.scale_with_doc = Some(false);
+        p.align_with_margins = Some(false);
+        write_xlsx_sync(path.clone(), book(p.clone())).expect("第一次写出失败");
+        let again = read_xlsx_sync(path.clone()).expect("读回失败");
+        write_xlsx_sync(path.clone(), again).expect("第二次写出失败");
+        let ws = entry(&path, "xl/worksheets/sheet1.xml");
+        for want in ["scaleWithDoc=\"0\"", "alignWithMargins=\"0\""] {
+            assert!(ws.contains(want), "存了两次以后 {want} 不见了：\n{ws}");
+        }
+        let q = read_xlsx_sync(path)
+            .expect("再读失败")
+            .sheets[0]
+            .print
+            .clone()
+            .expect("第二次读回整块没了");
+        assert_eq!(q.scale_with_doc, Some(false));
+        assert_eq!(q.align_with_margins, Some(false));
+    }
+
+    #[test]
+    fn hf_switch_written_as_one_is_the_same_as_not_written() {
+        // 别的工具写出的件里可能出现显式的 "1"：与不写字节不同、语义相同，归一回不声明
+        let (off, _) = read_sheet_print(
+            "<worksheet><headerFooter scaleWithDoc=\"0\" alignWithMargins=\"1\"><oddHeader>&amp;A</oddHeader></headerFooter></worksheet>",
+        );
+        assert_eq!(off.scale_with_doc, Some(false));
+        assert_eq!(off.align_with_margins, None);
+        let (plain, _) = read_sheet_print(
+            "<worksheet><headerFooter><oddHeader>&amp;A</oddHeader></headerFooter></worksheet>",
+        );
+        assert_eq!(plain.scale_with_doc, None);
+        assert_eq!(plain.align_with_margins, None);
+    }
+
+    #[test]
     fn print_area_shapes_that_dont_fit_are_accounted_not_guessed() {
         // 整行/整列式的打印区域装不进矩形载荷：parse_area 给不出 rect，调用方记一条而不是当没设
         let rows = parse_area("纸样!$1:$2").expect("整行形状本该认得");
@@ -1639,5 +1734,98 @@ mod tests {
         };
         let notes = write_xlsx_sync(path.clone(), book).expect("夹具写出失败");
         println!("夹具: {path}\n三版页眉页脚的账（应只剩起始页码那一条）: {notes:?}");
+    }
+
+    /// `headerFooter/@scaleWithDoc` 与 `@alignWithMargins` 的**语义对照**夹具：三份件各只动一枚开关，
+    /// 让 Excel 自己把它们导出成 PDF，我们从产物上量"页眉的字到底跟不跟着缩放""页眉贴的是边距还是纸边"。
+    /// 之所以要对照：这两枚的缺省是开着，我们的读侧写侧从前根本不认它们，
+    /// 于是"接线"还是"只记账"不能靠猜——得先知道 Excel 那句"随文档缩放"在纸上是什么形状。
+    ///
+    /// cargo test gen_switch_fixture -- --ignored
+    #[test]
+    #[ignore]
+    fn gen_switch_fixture() {
+        let dir = std::env::var("OO_FIXTURE_DIR")
+            .unwrap_or_else(|_| concat!(env!("CARGO_MANIFEST_DIR"), "/../tmp/x55").to_string());
+        std::fs::create_dir_all(&dir).expect("夹具目录建不出来");
+        let rows = |n: u32| -> Vec<CellPayload> {
+            (0..n)
+                .flat_map(|r| {
+                    (0..3u32).map(move |c| CellPayload {
+                        r,
+                        c,
+                        v: Some(Json::String(format!("R{}C{}", r + 1, c + 1))),
+                        ..Default::default()
+                    })
+                })
+                .collect()
+        };
+        let book_of = |name: &str, print: SheetPrintPayload, cells: Vec<CellPayload>| WorkbookPayload {
+            sheets: vec![SheetPayload {
+                name: name.into(),
+                cells,
+                print: Some(print),
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        let base = SheetPrintPayload {
+            orientation: Some("landscape".into()),
+            paper_size: Some(9),
+            header: Some(PrintHfPayload {
+                odd: Some("&L{TAG}左&C{TAG}中&R{TAG}右".into()),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        // ①两枚都按缺省（开着）+ 缩放 50%：这是"我们的 PDF 现在长什么样"的对照，也是 scaleWithDoc 的开档
+        let on = SheetPrintPayload {
+            scale: Some(50),
+            header: base.header.clone(),
+            ..base.clone()
+        };
+        // ②只关 scaleWithDoc：Excel 若真"随文档缩放"，这一份的页眉就该比①大一倍
+        let scale_off = SheetPrintPayload {
+            scale_with_doc: Some(false),
+            ..on.clone()
+        };
+        // ③只关 alignWithMargins：左右边距故意不等（1in / 2in），
+        //   于是"按边距"的中段中心在 333.6pt、"按纸边"的中段中心在 421.6pt，两种说法分得开
+        let align_off = SheetPrintPayload {
+            scale: Some(100),
+            align_with_margins: Some(false),
+            margins: Some(PrintMarginsPayload {
+                top: Some(0.4),
+                right: Some(2.0),
+                bottom: Some(0.5),
+                left: Some(1.0),
+                header: Some(0.2),
+                footer: Some(0.2),
+            }),
+            ..base.clone()
+        };
+        // ④两枚都按缺省但边距同上（③的对照：同左右边距下"按边距"该落在 144 / 648 一带）
+        let align_on = SheetPrintPayload {
+            align_with_margins: None,
+            ..align_off.clone()
+        };
+        let cases = [
+            ("s-on", on, 60u32),
+            ("s-scaleoff", scale_off, 60),
+            ("s-alignoff", align_off, 40),
+            ("s-alignon", align_on, 40),
+        ];
+        let mut all: Vec<String> = Vec::new();
+        for (tag, mut print, n) in cases {
+            // 页眉三段的字面带上件名，PDF 上每段是谁说的就不必猜
+            if let Some(h) = print.header.as_mut() {
+                h.odd = h.odd.take().map(|v| v.replace("{TAG}", tag));
+            }
+            let path = format!("{dir}/{tag}.xlsx");
+            let mut notes = write_xlsx_sync(path.clone(), book_of("纸面开关", print, rows(n))).expect("夹具写出失败");
+            notes.insert(0, format!("{tag} 写出"));
+            all.push(notes.join(" | "));
+        }
+        println!("夹具目录: {dir}\n{}", all.join("\n"));
     }
 }

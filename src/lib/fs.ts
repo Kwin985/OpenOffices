@@ -245,6 +245,11 @@ export interface SheetPrintPayload {
   firstPageNumber?: number | null
   oddEven?: boolean
   firstDiffers?: boolean
+  /** headerFooter/@scaleWithDoc：页眉页脚字号随不随文档缩放。**缺省就是开着**（Excel 的默认勾），
+   *  所以这里只在"文件里明确关了"时才是 false，其余一律不声明 */
+  scaleWithDoc?: boolean | null
+  /** headerFooter/@alignWithMargins：页眉页脚按页边距还是按纸张边缘对齐。同样缺省开着 */
+  alignWithMargins?: boolean | null
   header?: PrintHfPayload | null
   footer?: PrintHfPayload | null
   printArea?: RangeRect | null

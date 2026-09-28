@@ -459,8 +459,10 @@ export function sheetsToPrintHtml(
 ): SheetsPrintResult {
   const notes: string[] = []
   const dateText = ctx?.dateText ?? new Date().toLocaleDateString()
-  const plans = payload.sheets.map((s) =>
-    planSheetPrint(s, { sheetName: s.name, dateText, fileName: ctx?.fileName }),
+  const plans = payload.sheets.map((s, i) =>
+    planSheetPrint(s, { sheetName: s.name, dateText, fileName: ctx?.fileName }, {
+      hfZoom: opts?.zooms?.[i] ?? null,
+    }),
   )
   const job = jobPrintPlan(plans)
   const html = payload.sheets

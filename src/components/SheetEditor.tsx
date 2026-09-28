@@ -1290,6 +1290,28 @@ function SheetEditor({ tab }: Props) {  const containerRef = useRef<HTMLDivEleme
               </label>
               {hfRow('header', '页眉')}
               {hfRow('footer', '页脚')}
+              <div className="print-checks">
+                <label>
+                  <input
+                    type="checkbox"
+                    checked={draft.scaleWithDoc !== false}
+                    onChange={(e) => patchDraft({ scaleWithDoc: e.target.checked ? null : false })}
+                  />
+                  页眉页脚随文档缩放
+                </label>
+                <label>
+                  <input
+                    type="checkbox"
+                    checked={draft.alignWithMargins !== false}
+                    onChange={(e) => patchDraft({ alignWithMargins: e.target.checked ? null : false })}
+                  />
+                  与页边距对齐
+                </label>
+              </div>
+              <div className="print-pop-hint">
+                两枚都是 Excel 的默认勾：勾着＝不往文件里写。缩放那一档我们照 Excel 把页眉字号一起乘；
+                取消「与页边距对齐」后我们铺到纸张边缘，Excel 铺到的是打印机的可打印区（窄一圈）
+              </div>
             </fieldset>
             {draftErrs.length > 0 && (
               <ul className="print-pop-errs">

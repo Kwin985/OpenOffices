@@ -260,6 +260,9 @@ export function draftOf(p: SheetPrintPayload | null | undefined): SheetPrintPayl
     firstPageNumber: p?.firstPageNumber ?? null,
     oddEven: p?.oddEven ?? false,
     firstDiffers: p?.firstDiffers ?? false,
+    // 这两枚在 OOXML 里缺省就是开着：文件没写 = 开着，面板上勾着；只有明确写 0 才是不勾
+    scaleWithDoc: p?.scaleWithDoc !== false,
+    alignWithMargins: p?.alignWithMargins !== false,
     header: p?.header ?? null,
     footer: p?.footer ?? null,
     printArea: p?.printArea ?? null,

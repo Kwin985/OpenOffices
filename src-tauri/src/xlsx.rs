@@ -507,6 +507,13 @@ pub struct SheetPrintPayload {
     pub odd_even: bool,
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub first_differs: bool,
+    /// `headerFooter/@scaleWithDoc`：页眉页脚字号随不随文档缩放。
+    /// **缺省是开着**，所以读侧只把 `0` 收进来（显式写 `1` 与不写语义相同，归一回不声明）
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scale_with_doc: Option<bool>,
+    /// `headerFooter/@alignWithMargins`：页眉页脚按页边距还是按纸张边缘对齐。同样缺省开着
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub align_with_margins: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub header: Option<PrintHfPayload>,
     #[serde(default, skip_serializing_if = "Option::is_none")]

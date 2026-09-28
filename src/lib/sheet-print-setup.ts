@@ -127,7 +127,11 @@ function marginsOf(p: SheetPrintPayload): [number, number, number, number] {
 }
 
 /** 把一张表的打印设置翻成打印计划。ctx 供页眉页脚展开，notes 是"这一版纸上做不到"的账 */
-export function planSheetPrint(sheet: SheetPayload, ctx: PrintContext): SheetPrintPlan {
+export function planSheetPrint(
+  sheet: SheetPayload,
+  ctx: PrintContext,
+  opts?: { hfZoom?: number | null },
+): SheetPrintPlan {
   const notes: string[] = []
   const p: SheetPrintPayload = sheet.print ?? {}
   const orientation = p.orientation === 'landscape' ? 'landscape' : 'portrait'
@@ -170,7 +174,10 @@ export function planSheetPrint(sheet: SheetPayload, ctx: PrintContext): SheetPri
   const firstPageNumber = p.firstPageNumber ?? null
   // 起始页码与页眉页脚三版在纸上的脾气：账目文案只此一处，面板与导出共吃（见 hfAndPageNumberNotes）
   notes.push(...hfAndPageNumberNotes(p))
-  const hf = headerFooterCss(p.header, p.footer, p, ctx)
+  const hf = headerFooterCss(p.header, p.footer, p, ctx, {
+    zoom: opts?.hfZoom ?? zoom,
+    margins,
+  })
   notes.push(...hf.notes)
   if (hf.css && (margins[0] < 0.35 || margins[2] < 0.35)) {
     const side = margins[0] < 0.35 ? `上边距只有 ${margins[0]} 英寸` : `下边距只有 ${margins[2]} 英寸`
@@ -612,20 +619,53 @@ function parseHf(text: string, ctx: PrintContext, notes: string[]): HfSegment[] 
   return segs
 }
 
-function segStyle(seg: HfSegment): string {
+/** 一档（odd/first）落成三条 margin box 规则时，两枚开关换算出来的落笔 */
+interface HfRender {
+  /** 页眉字号要乘的那一档倍数（不随文档缩放时恒 1） */
+  scale: number
+  /** 按纸张边缘对齐时，每一格往外推的英寸数（按边距对齐时为 null） */
+  shift: { left: number; right: number } | null
+}
+
+function segStyle(seg: HfSegment, r: HfRender): string {
   const deco = [seg.underline && 'underline', seg.strike && 'line-through'].filter(Boolean).join(' ')
+  const px = (pt: number) => Math.round(pt * 1.333 * r.scale * 100) / 100
   const parts = [
     seg.bold && 'font-weight:bold',
     seg.italic && 'font-style:italic',
     deco && `text-decoration:${deco}`,
-    seg.pt && `font-size:${Math.round(seg.pt * 1.333)}px`,
+    seg.pt && `font-size:${px(seg.pt)}px`,
     seg.font && `font-family:"${seg.font}"`,
   ].filter(Boolean)
   return parts.length ? `;${parts.join(';')}` : ''
 }
 
-const BOX_EDGE = { header: 'top', footer: 'bottom' } as const
+/** 我们纸面页眉的基准字号（px）：内容没写 &"字号" 那一档时继承的就是它（实测 16px 上纸字形高 12pt）。
+ *  Excel 的页眉默认是 11pt——两边差的那一档与本轮无关，记在路线图里 */
+const HF_BASE_FONT_PX = 16
 
+/** 「随文档缩放」：margin box 是页级的，不在挂着 CSS zoom 的那棵 <table> 树里（实测内容 zoom 0.5 时
+ *  页眉字高一字没变），所以这一档只能由这里自己把字号乘出去；margin box 的 font-size 是认的（实测 40px 生效）。
+ *  倍数正是 1 时一个字都不写——"没设过就跟默认"不该变成"每次都写死一个数"；
+ *  段自己带了字号（那类码）就交给 segStyle 乘，这里不重复出手 */
+function segScaleCss(seg: HfSegment, r: HfRender): string {
+  if (r.scale === 1 || seg.pt) return ''
+  return `;font-size:${Math.round(HF_BASE_FONT_PX * r.scale * 100) / 100}px`
+}
+
+/** 取消「与页边距对齐」：margin box 的 width:100% 不吃（实测），认的是 margin/padding——
+ *  往外推的量**正好等于**那一条边距，文字就落在纸张边缘（实测 2in 边距配 -2in 时左端 x=0、右端贴到纸宽减字宽）。
+ *  推过头会被整个丢掉（-3in 配 2in 边距 ⇒ 那一格空白，连账都不留），所以一丝都不许多给；
+ *  边距本来就是 0 时无从可推，也不写。中格两边都推：不对称边距下它的中心会从可印区中心挪到纸中心 */
+function shiftCss(box: HfSegment['box'], r: HfRender): string {
+  if (!r.shift) return ''
+  const push: string[] = []
+  if (box !== 'right' && r.shift.left > 0) push.push(`margin-left:-${r.shift.left}in`)
+  if (box !== 'left' && r.shift.right > 0) push.push(`margin-right:-${r.shift.right}in`)
+  return push.length ? `;${push.join(';')}` : ''
+}
+
+const BOX_EDGE = { header: 'top', footer: 'bottom' } as const
 /** 一页上页眉页脚能落笔的全部六格（两边的 @left/@right 竖格我们的三槽里没有对应，不在这份账里） */
 const HF_BOXES = ['@top-left', '@top-center', '@top-right', '@bottom-left', '@bottom-center', '@bottom-right']
 
@@ -640,7 +680,7 @@ function resetRest(declared: string): string {
 
 /** 一档（odd/first）落成三条 margin box 规则。
  *  CSS 的一个 margin box 只能整段一种样式，同一段落重复出现也只印第一段——两样都记账 */
-function boxesFor(segs: HfSegment[], edge: 'header' | 'footer', notes: string[]): string {
+function boxesFor(segs: HfSegment[], edge: 'header' | 'footer', notes: string[], r: HfRender): string {
   let out = ''
   const seen = new Set<HfSegment['box']>()
   const side = edge === 'header' ? '页眉' : '页脚'
@@ -651,7 +691,7 @@ function boxesFor(segs: HfSegment[], edge: 'header' | 'footer', notes: string[])
       continue
     }
     seen.add(s.box)
-    out += `@${BOX_EDGE[edge]}-${s.box}{content:${s.parts.join(' ')}${segStyle(s)};}`
+    out += `@${BOX_EDGE[edge]}-${s.box}{content:${s.parts.join(' ')}${shiftCss(s.box, r)}${segScaleCss(s, r)}${segStyle(s, r)};}`
   }
   return out
 }
@@ -695,7 +735,28 @@ export function hfAndPageNumberNotes(print: SheetPrintPayload): string[] {
   if (print.oddEven && odd && !even) {
     notes.push('勾了「奇偶页不同」而偶数页那一版是空的：纸上偶数页不印页眉页脚（Excel 也是这样）')
   }
+  // 这一条不是"做不到"而是"做到了但差一圈"：照实说，否则用户会以为两边一模一样
+  if (print.alignWithMargins === false && (odd || even || first)) {
+    notes.push(
+      '「与页边距对齐」是关着的：纸上页眉页脚铺到纸张边缘，Excel 铺到的是打印机的可打印区（比纸边还窄一圈），两边差的就是那一圈',
+    )
+  }
   return notes
+}
+
+/** 页眉页脚在纸上的两处换算，都只有真量才知道数（v0.55 前置实测）：
+ *  ① `scaleWithDoc`（缺省开着）——Excel 的那一档**真的**跟着文档缩放：同一份 50% 的件，
+ *     开着时页眉字高 5.5pt、关掉时 11pt（对照件 s-on / s-scaleoff）。而我们的缩放是挂在
+ *     `<table>` 上的 CSS `zoom`，margin box 是页级的、不在那棵树里（实测内容 zoom 0.5 时
+ *     页眉字高一字没变），所以这一档只能自己把字号乘上去；margin box 的 `font-size` 认（实测 40px 生效）。
+ *  ② `alignWithMargins`（缺省开着＝按页边距，正好是我们现在的形状）——关掉时 Excel 把页眉条带
+ *     铺到**打印机的可打印区**（实测左右对称各留 55pt，随打印机变），我们没有打印机概念，
+ *     按纸张边缘铺（实测负 margin 正好等于左右边距时文字落在 x=0 与纸宽减字宽）。 */
+export interface HfPaperOpts {
+  /** 这一趟真正落到纸上的缩放（面板/文件声明的缩放比例，或被"缩放到 N 页高"压出来的那一档） */
+  zoom: number
+  /** 本张表的四边距（英寸，top/right/bottom/left）：负 margin 要按左右那两条往外推 */
+  margins: [number, number, number, number]
 }
 
 /** 页眉页脚 → @page margin box 规则。三版各落一处，其中一条是本轮重量出来的：
@@ -720,18 +781,23 @@ export function headerFooterCss(
   footer: PrintHfPayload | null | undefined,
   print: SheetPrintPayload,
   ctx: PrintContext,
+  paper: HfPaperOpts,
 ): { css: string; notes: string[] } {
   const notes: string[] = []
+  const r: HfRender = {
+    scale: print.scaleWithDoc === false ? 1 : paper.zoom,
+    shift: print.alignWithMargins === false ? { left: paper.margins[3], right: paper.margins[1] } : null,
+  }
   const oddBoxes =
-    boxesFor(parseHf(header?.odd ?? '', ctx, notes), 'header', notes) +
-    boxesFor(parseHf(footer?.odd ?? '', ctx, notes), 'footer', notes)
+    boxesFor(parseHf(header?.odd ?? '', ctx, notes), 'header', notes, r) +
+    boxesFor(parseHf(footer?.odd ?? '', ctx, notes), 'footer', notes, r)
   const evenBoxes = print.oddEven
-    ? boxesFor(parseHf(header?.even ?? '', ctx, notes), 'header', notes) +
-      boxesFor(parseHf(footer?.even ?? '', ctx, notes), 'footer', notes)
+    ? boxesFor(parseHf(header?.even ?? '', ctx, notes), 'header', notes, r) +
+      boxesFor(parseHf(footer?.even ?? '', ctx, notes), 'footer', notes, r)
     : ''
   const firstBoxes = print.firstDiffers
-    ? boxesFor(parseHf(header?.first ?? '', ctx, notes), 'header', notes) +
-      boxesFor(parseHf(footer?.first ?? '', ctx, notes), 'footer', notes)
+    ? boxesFor(parseHf(header?.first ?? '', ctx, notes), 'header', notes, r) +
+      boxesFor(parseHf(footer?.first ?? '', ctx, notes), 'footer', notes, r)
     : ''
   let css = print.firstDiffers ? `@page:first{${firstBoxes}${resetRest(firstBoxes)}}` : ''
   if (print.oddEven) {
