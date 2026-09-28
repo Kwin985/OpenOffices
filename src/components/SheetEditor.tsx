@@ -22,10 +22,12 @@ import type {
 } from '../lib/fs'
 import { renderChartPng } from '../lib/chart'
 import { registerSaver } from '../lib/registry'
-import { exportPdfWithOverlay } from '../lib/pdfprint'
+import { exportPdfWithOverlay, measurePrintLayout } from '../lib/pdfprint'
 import { sheetsToPrintHtml } from '../lib/sheet-print'
+import { applyVerticalPads, measureSheetPrint } from '../lib/sheet-print-measure'
 import { evalSheetCondFormats } from '../lib/sheet-cf-print'
-import { columnLetter } from '../lib/sheet-print-setup'
+import { columnLetter, planSheetFit } from '../lib/sheet-print-setup'
+import type { SheetFit } from '../lib/sheet-print-setup'
 import {
   EMPTY_HF,
   HF_CODES,
@@ -756,12 +758,60 @@ function SheetEditor({ tab }: Props) {  const containerRef = useRef<HTMLDivEleme
       }
       chartImages.push(list)
     }
-    const { html, notes, job } = sheetsToPrintHtml(payload, chartImages, {
+    const printCtx = {
       dateText: new Date().toLocaleDateString(),
       fileName: tab.path ? baseName(tab.path) : undefined,
-    })
-    const box = document.createElement('div')
-    box.innerHTML = html
+    }
+    let res = sheetsToPrintHtml(payload, chartImages, printCtx)
+    let box = document.createElement('div')
+    box.innerHTML = res.html
+    // 「缩放到 N 页高」与「上下居中」要按**实测的行高**说话，而实测只能在挂起来之后拿到，
+    // 于是来回几趟：按计划缩放建一次 → 量 → 压出页高档重建 → 量稳了才把居中留白写回同一份 DOM。
+    // 每一趟都**重新量**才落笔（留白只认最终缩放那一份实测），所以压完还得再量一趟；
+    // 不需要这一层的表（没勾这两样）一趟就过，导出仍旧一次建、一次量都没有
+    let fitNotes: string[] = []
+    if (res.plans.some((p) => p.fitToHeightPages || p.vCentered)) {
+      const zooms: (number | null)[] = res.plans.map(() => null)
+      // 页高档那句要说在**压它的那一趟**：压完再量的那一趟只会说"这档已经够了"，账就丢了。
+      // 每张表占一格、后面的趟覆盖前面的（同一张只会缩到更低一档，留最后一档才是实话）；
+      // 居中的账反过来，只在最终缩放定下之后量出来的那一份才算数
+      const squeezeNotes: (string[] | null)[] = res.plans.map(() => null)
+      let centerNotes: string[] = []
+      let settled = false
+      for (let pass = 0; pass < 5 && !settled; pass++) {
+        const measures = await measurePrintLayout(box, measureSheetPrint)
+        const fits: (SheetFit | null)[] = measures.map((m, i) => {
+          const plan = res.plans[i]
+          if (!m || !plan) return null
+          return planSheetFit(m, plan, {
+            capacityHeightPx: res.job.capacityHeightPx,
+            measuredZoom: zooms[i] ?? plan.zoom,
+          })
+        })
+        fits.forEach((f, i) => {
+          const tall = (f?.notes ?? []).filter((n) => n.includes('页高'))
+          if (tall.length) squeezeNotes[i] = tall
+        })
+        centerNotes = fits.flatMap((f) => (f?.notes ?? []).filter((n) => !n.includes('页高')))
+        if (!fits.some((f) => f?.zoom != null)) {
+          applyVerticalPads(box, fits)
+          settled = true
+          break
+        }
+        fits.forEach((f, i) => {
+          if (f?.zoom != null) zooms[i] = f.zoom
+        })
+        res = sheetsToPrintHtml(payload, chartImages, printCtx, { zooms })
+        box = document.createElement('div')
+        box.innerHTML = res.html
+      }
+      if (!settled) {
+        squeezeNotes.push(['压了五趟还没把行数压进目标页数，纸上按最后一趟的缩放排、不按上下居中排'])
+      }
+      fitNotes = [...squeezeNotes.flatMap((n) => n ?? []), ...centerNotes]
+    }
+    const notes = [...res.notes, ...fitNotes]
+    const job = res.job
     try {
       await exportPdfWithOverlay(path, box, {
         // 纸面、四边距、页眉页脚都由打印计划说话（文件里声明过就照它，没声明沿用表格历史的 A4 横向）
@@ -808,7 +858,9 @@ function SheetEditor({ tab }: Props) {  const containerRef = useRef<HTMLDivEleme
         save: (asNew: boolean) => Promise<void>
         exportPdfTo: (p: string) => Promise<void>
         printPlan: () => unknown
+        printHtml: (zooms?: (number | null)[]) => string
         printSetup: () => Array<[string, SheetPrintPayload]>
+        printSet: (name: string, p: SheetPrintPayload | null) => boolean
         selectRange: (r: number, c: number, rows: number, cols: number) => boolean
       }
     >
@@ -817,12 +869,32 @@ function SheetEditor({ tab }: Props) {  const containerRef = useRef<HTMLDivEleme
       exportPdfTo: (p: string) => exportPdfToRef.current(p),
       // 侧通道现在是什么：面板改完没点确定应当与点了确定完全不同，冒烟靠这条分辨
       printSetup: () => [...printRef.current].map(([n, p]) => [n, structuredClone(p)] as [string, SheetPrintPayload]),
+      // 冒烟用：把页面设置直接写进侧通道——落笔处与面板「确定」是同一行，省掉一串点击后
+      // 仍能核对打印几何（面板本身的接线是 v0.52 冒烟量的）；传 null 走「清除这张表的设置」那一路
+      printSet: (name, p) => {
+        if (p) printRef.current.set(name, structuredClone(p))
+        else printRef.current.delete(name)
+        markDirty(tab.id, true)
+        return printRef.current.has(name)
+      },
       // 冒烟用：门面现设选区，让「用当前选区」那几条按钮有确定的输入
       selectRange: (r, c, rows, cols) => {
         const ws = apiRef.current?.getActiveWorkbook()?.getActiveSheet()
         if (!ws) return false
         ws.getRange(r, c, rows, cols).activate()
         return true
+      },
+      // 探针用：把**将要上纸的那一份 HTML**交出去，让脚本自己挂起来量。
+      // 为什么要这一枚：分页的账是模拟算的，纸上真落几行是浏览器排的，两者对不上时
+      // 只靠自家函数永远自证清白——量真实布局的推进量得从同一份 DOM 起
+      printHtml: (zooms?: (number | null)[]) => {
+        const wb = apiRef.current?.getActiveWorkbook()
+        if (!wb) return ''
+        const payload = payloadWithCharts(wb, wb.save() as IWorkbookData)
+        return sheetsToPrintHtml(payload, undefined, {
+          dateText: '2026-01-01',
+          fileName: tab.path ? baseName(tab.path) : undefined,
+        }, { zooms }).html
       },
       // 冒烟用：打印这一页"打算怎么画、哪些没画"的账面，不经渲染就能核对
       printPlan: () => {
@@ -845,6 +917,7 @@ function SheetEditor({ tab }: Props) {  const containerRef = useRef<HTMLDivEleme
             page: job.pageSizeInches,
             margins: job.margins,
             capacityPx: job.capacityPx,
+            capacityHeightPx: job.capacityHeightPx,
             hf: job.pageStyle,
           },
           // 每张表自己想要的纸（各表不一致时账在 job 的 notes 里）
@@ -856,7 +929,10 @@ function SheetEditor({ tab }: Props) {  const containerRef = useRef<HTMLDivEleme
             gridLines: p.gridLines,
             headings: p.headings,
             hCentered: p.hCentered,
+            vCentered: p.vCentered,
             fitToWidthPages: p.fitToWidthPages,
+            fitToHeightPages: p.fitToHeightPages,
+            firstPageNumber: p.firstPageNumber,
             printArea: p.printArea,
             titleRows: p.titleRows,
             titleCols: p.titleCols,
@@ -1224,7 +1300,7 @@ function SheetEditor({ tab }: Props) {  const containerRef = useRef<HTMLDivEleme
             )}
             {paperNotes.length > 0 && (
               <div className="print-pop-notes">
-                <div className="print-pop-notes-title">这几条会写进文件（别人在 Excel 里打印生效），但我们导出的 PDF 上兑现不了：</div>
+                <div className="print-pop-notes-title">这几条会写进文件（别人在 Excel 里打印生效），我们的 PDF 上照下面说的兑现：</div>
                 <ul>
                   {paperNotes.map((n) => (
                     <li key={n}>{n}</li>

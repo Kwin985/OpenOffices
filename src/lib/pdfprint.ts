@@ -73,6 +73,27 @@ async function waitImages(root: HTMLElement): Promise<void> {
   )
 }
 
+/** 量高度要的是真排版，而覆盖层在屏幕上被 `#oof-print-host{display:none}` 藏着（只有打印态才显示），
+ *  量出来全是 0。这里另开一个屏幕外的量尺容器：同一套正文样式（表格、zoom、换行后的行高都算数），
+ *  只是不带 @media print 与 @page 那组规则——它们改的是可见性、分页与纸面，不改任何一行的高。
+ *  量完即摘；被量的那份 DOM 还是原封不动交给导出那条腿 */
+export async function measurePrintLayout<T>(
+  overlay: HTMLElement,
+  read: (root: HTMLElement) => T,
+): Promise<T> {
+  const host = document.createElement('div')
+  host.id = 'oof-print-measure'
+  host.style.cssText = 'position:fixed;left:-100000px;top:0;width:2000px;background:#fff;'
+  host.appendChild(overlay)
+  document.body.appendChild(host)
+  try {
+    await twoFrames()
+    return read(overlay)
+  } finally {
+    host.remove()
+  }
+}
+
 export async function exportPdfWithOverlay(
   filePath: string,
   overlay: HTMLElement,

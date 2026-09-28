@@ -60,6 +60,8 @@ export interface SheetPrintPlan {
   zoom: number
   /** 一页纸面上可放内容的宽度（px；内容坐标系里还要除以 zoom） */
   capacityPx: number
+  /** 一页纸面上可放内容的高度（px；同一页的第一行从这里起算，v0.53 的页数模拟吃这个） */
+  capacityHeightPx: number
   /** 页眉页脚的 @page margin box 规则（含 :first 那一份） */
   pageStyle: string
   /** 打印区域（0 基含端点）；null = 整表 */
@@ -73,8 +75,14 @@ export interface SheetPrintPlan {
   gridLines: boolean
   headings: boolean
   hCentered: boolean
+  /** 勾了「上下居中打印」：一页装得下才落得了笔，装不下由排版的实测层记账 */
+  vCentered: boolean
   /** 勾了「缩放到 N 页宽」：列宽都在载荷里，这一半我们量得出来 */
   fitToWidthPages: number | null
+  /** 勾了「缩放到 N 页高」：行高不在载荷里（没声明的行由字体与换行现算），要靠实测 */
+  fitToHeightPages: number | null
+  /** 起始页码：文件里存得进、Excel 认得，我们的纸上做不到（见 planSheetPrint 里那条账） */
+  firstPageNumber: number | null
   notes: string[]
 }
 
@@ -96,6 +104,15 @@ export function printableWidthPx(
   margins: [number, number, number, number],
 ): number {
   return Math.max(48, Math.round((pageSizeInches[0] - margins[1] - margins[3]) * PX_PER_INCH))
+}
+
+/** 纸面减去上下边距后的可印高（px）。这里**不取整**：一页能放几行是拿实测行高（小数）
+ *  来比这个数的，取整就是每页都可能少放一行（实测 697.92px 那一档正好卡在 33 行与 32 行之间） */
+export function printableHeightPx(
+  pageSizeInches: [number, number],
+  margins: [number, number, number, number],
+): number {
+  return Math.max(48, (pageSizeInches[1] - margins[0] - margins[2]) * PX_PER_INCH)
 }
 
 /** 边距：载荷说了几条算几条，没说的沿用 pdfprint 那组缺省数 */
@@ -128,16 +145,21 @@ export function planSheetPrint(sheet: SheetPayload, ctx: PrintContext): SheetPri
     paper ?? (p.orientation ? (orientation === 'landscape' ? ([A4[1], A4[0]] as [number, number]) : A4) : SHEET_DEFAULT_PAGE)
   const margins = marginsOf(p)
   const capacityPx = printableWidthPx(pageSize, margins)
+  const capacityHeightPx = printableHeightPx(pageSize, margins)
   let zoom = 1
   let fitToWidthPages: number | null = null
+  let fitToHeightPages: number | null = null
   if (p.fitToPage) {
     const w = p.fitToWidth ?? 0
     const h = p.fitToHeight ?? 0
     fitToWidthPages = w >= 1 && w < 100 ? w : null
+    fitToHeightPages = h >= 1 && h < 100 ? h : null
     if (w > 0 && fitToWidthPages === null) {
       notes.push(`「缩放到 ${w} 页宽」超出能排的页数，纸上按整幅分带`)
     }
-    if (h > 0) notes.push(`「缩放到 ${h} 页高」要预先行高总量，纸上的行数由分页自己定，这条没落`)
+    if (h > 0 && fitToHeightPages === null) {
+      notes.push(`「缩放到 ${h} 页高」超出能排的页数，纸上按自然分页`)
+    }
   } else if (p.scale != null) {
     if (p.scale >= 10 && p.scale <= 400) zoom = p.scale / 100
     else notes.push(`缩放比例 ${p.scale}% 不在 10~400 之间，纸上按 100% 排`)
@@ -145,8 +167,16 @@ export function planSheetPrint(sheet: SheetPayload, ctx: PrintContext): SheetPri
   if (p.pageOrder === 'overThenDown') {
     notes.push('页面顺序是「先横后竖」，但行带落在哪一页由分页决定，纸上按「先竖后横」排')
   }
-  if (p.firstPageNumber) notes.push(`起始页码设的是 ${p.firstPageNumber}，纸上的页码从 1 开始数`)
-  if (p.vCentered) notes.push('「上下居中打印」没有对应通道，纸上按顶端排')
+  // 起始页码是这一轮量出来"确实做不到"的那一条：@page 里的 counter 复位对每一页都生效
+  // （实测六页全印同一个数），:first 只改首页而后各页照旧从 1 数，margin box 又读不到
+  // 文档树里的自定义 counter——存进文件与 Excel 那头都认，我们的纸上只能从 1 数。
+  // 而「设成 1」与「没设」在纸上同一句话：别把用户没写错的东西报成缺陷
+  const firstPageNumber = p.firstPageNumber ?? null
+  if (firstPageNumber && firstPageNumber !== 1) {
+    notes.push(
+      `起始页码设的是 ${firstPageNumber}，纸上仍从 1 开始数（@page 的页码 counter 没有「从 ${firstPageNumber} 接着数」的通道）`,
+    )
+  }
   const hf = headerFooterCss(p.header, p.footer, p, ctx)
   notes.push(...hf.notes)
   if (hf.css && (margins[0] < 0.35 || margins[2] < 0.35)) {
@@ -161,6 +191,7 @@ export function planSheetPrint(sheet: SheetPayload, ctx: PrintContext): SheetPri
     margins,
     zoom,
     capacityPx,
+    capacityHeightPx,
     pageStyle: hf.css,
     printArea: p.printArea ?? null,
     titleRows: p.titleRows ?? null,
@@ -170,7 +201,10 @@ export function planSheetPrint(sheet: SheetPayload, ctx: PrintContext): SheetPri
     gridLines: sheet.print ? p.gridLines === true : true,
     headings: p.headings === true,
     hCentered: p.hCentered === true,
+    vCentered: p.vCentered === true,
     fitToWidthPages,
+    fitToHeightPages,
+    firstPageNumber,
     notes,
   }
 }
@@ -195,6 +229,9 @@ export function planColumnBands(
     titleCols?: [number, number] | null
     forcedBreaks?: number[]
     fitToWidthPages?: number | null
+    /** 排版实测后定下的最终缩放（「缩放到 N 页高」压出来的那一档）：说话权在它，
+     *  宽度档与页高档取较小者由调用方算好，这里只照它分带 */
+    forceZoom?: number | null
   },
 ): BandPlan {
   const notes: string[] = []
@@ -205,6 +242,7 @@ export function planColumnBands(
     // 压到刚好能分进 N 带：缩放只往下调，且不超过 OOXML 能写的 10% 下限
     zoom = Math.min(1, Math.max(0.1, (opts.capacityPx * opts.fitToWidthPages) / total))
   }
+  if (opts.forceZoom != null) zoom = Math.min(zoom, opts.forceZoom)
   const room = opts.capacityPx / zoom
   const titleCols = opts.titleCols ?? null
   const isTitle = (c: number) => !!titleCols && c >= titleCols[0] && c <= titleCols[1]
@@ -240,6 +278,191 @@ export function planColumnBands(
     notes.push(`有一列宽 ${Math.round(widest)}px 超过一页可印的 ${Math.round(room)}px，纸上那一列会被裁掉`)
   }
   return { bands, zoom, notes }
+}
+
+/** 一张表在**最终缩放**下量出来的高度（px）：排版层从 DOM 读回来交给这里的纯函数。
+ *  为什么必须实测而不是按行高算：实测发现我们新建的表一条 rowHeights 都没有（界面上默认行高
+ *  由 Univer 现算），声明过的行高也只是**下限**（设 20px 实测 21px），长文字那一行会自己长到 244px。 */
+export interface BandMeasure {
+  /** 这一带的重复表头总高（每占一页就要付一次） */
+  theadPx: number
+  /** 表体每一行的高（升序，与纸上出现的顺序一致） */
+  rowsPx: number[]
+  /** 整张表的高 */
+  tablePx: number
+}
+
+export interface SheetMeasure {
+  /** 表格上面那一行表名（以及写在它后面的账目行）占的高，只算在第一页 */
+  sectionHeadPx: number
+  bands: BandMeasure[]
+}
+
+/** 按实测行高做贪心分页，**逐个列带**数它各自要占几页。行不拆开，一页装不下就整行挪到下一页；
+ *  每一带自己起一页，第一页另付表名那一行。
+ *  真机对照（A4 竖版 60 行）：模拟第一页放 50 行、断在 50，导出的 PDF 就是断在 50。
+ *  分开数而不是只数总页数是因为「缩放到 N 页高」说的是竖着几页：三个列带各 2 页高，
+ *  总共 6 页，而 Excel 那格里要压的是每一带的 2 */
+export function printPagesPerBand(m: SheetMeasure, capacityPx: number): number[] {
+  return m.bands.map((b, i) => {
+    let pages = 1
+    let used = b.theadPx + (i === 0 ? m.sectionHeadPx : 0)
+    for (const h of b.rowsPx) {
+      if (used + h > capacityPx) {
+        pages += 1
+        used = b.theadPx + h
+      } else {
+        used += h
+      }
+    }
+    return pages
+  })
+}
+
+/** 这一张表在纸上要占几页（各列带之和；每一带自己起一页） */
+export function simulatePrintPages(m: SheetMeasure, capacityPx: number): number {
+  return printPagesPerBand(m, capacityPx).reduce((a, x) => a + x, 0)
+}
+
+/** 把实测高按 f 倍折算（估算下一档缩放用）。CSS zoom 缩放后的行高**不等于**这里折出来的数：
+ *  实测 zoom .6 下 20.61px 那行是 11.97px（比折算值矮），33% 下一页真装 95 行而折算估的是 97 行
+ *  （比折算值高）——两头都会偏，所以这一档只用来**选**缩放，选完必须按新缩放重排再量一次。
+ *  表名那一行**不折算**：zoom 落在 <table> 上，它外面的那一行一直是要高的那份（实测 29% 下
+ *  行高从 20.615 掉到 6.427，而它仍是 26.667）——跟着折就等于替第一页凭空省出一截 */
+function scaleMeasure(m: SheetMeasure, f: number): SheetMeasure {
+  const r = (v: number) => v * f
+  return {
+    sectionHeadPx: m.sectionHeadPx,
+    bands: m.bands.map((b) => ({
+      theadPx: r(b.theadPx),
+      rowsPx: b.rowsPx.map(r),
+      tablePx: r(b.tablePx),
+    })),
+  }
+}
+
+/** 纸比屏幕高出来的那一截（px/行）。屏幕上的行矩形是在离屏容器的**屏幕媒体**下量的，
+ *  同一张表上纸后每一行的推进都更大：实测 zoom 1 下 rect 20.615px 而纸上 21.0px
+ *  （15.75pt ÷ 0.75），29% 下 rect 6.427px 而纸上平均 6.77px——两档的差都是 ~0.4px，
+ *  与缩放无关 ⇒ 折完缩放再逐行加上。不加这一截，"刚好装得下"的那一档在纸上必然多一页
+ *  （100 行按 29% 估是 1 页高、真排 98 + 2 两页就是这么来的） */
+export const PRINT_ROW_BIAS_PX = 0.4
+
+/** 折算到目标缩放档、再加上纸上的逐行偏置：交给贪心分页的那一份才是"纸上会怎么排" */
+function paperAt(m: SheetMeasure, f: number): SheetMeasure {
+  const scaled = scaleMeasure(m, f)
+  const b = (h: number) => (h > 0 ? h + PRINT_ROW_BIAS_PX : h)
+  return {
+    sectionHeadPx: scaled.sectionHeadPx,
+    bands: scaled.bands.map((x) => ({
+      theadPx: b(x.theadPx),
+      rowsPx: x.rowsPx.map(b),
+      tablePx: x.tablePx + PRINT_ROW_BIAS_PX * x.rowsPx.length,
+    })),
+  }
+}
+
+/** 选档时的余量（一档 = 1%）。折算值只用来**选**缩放，不能当账：同一份表在 33% 下真排出来
+ *  一页只有 95 行，而线性折算估的是 97 行——几个百分点的差在"刚好装得下"的那一档上就是多一页。
+ *  所以找到第一档估得出 N 页高之后还要往下多退一档；已经够 N 页高的那一档不退，
+ *  否则等于替用户白压一次缩放 */
+const FIT_TALL_GUARD = 0.01
+
+/** 找"能把每一带都压进 N 页高"的最大一档缩放（1% 一档，下限 10%——OOXML 只能写到 10%）。
+ *  measuredZoom 是这份实测**当时所在的缩放**：搜索从它起往下走，返回它自己就等于"这档已经够了"。
+ *  tallPages 是压完那一档下最高的那一带有几页高（估算值）：settled=false 表示压到下限还压不进 N 页 */
+export function fitToPagesTallZoom(opts: {
+  measure: SheetMeasure
+  capacityPx: number
+  pages: number
+  measuredZoom: number
+}): { zoom: number; tallPages: number; settled: boolean } {
+  const from = Math.min(1, Math.max(0.1, opts.measuredZoom))
+  const tallest = (f: number) => {
+    const per = printPagesPerBand(paperAt(opts.measure, f), opts.capacityPx)
+    return per.length ? Math.max(...per) : 0
+  }
+  const step = (z: number) => Math.round(z * 100) / 100
+  for (let z = from; z >= 0.1 - 1e-9; z -= 0.01) {
+    const found = step(z)
+    const tallPages = tallest(found / from)
+    if (tallPages <= opts.pages) {
+      if (found >= from - 1e-9) return { zoom: found, tallPages, settled: true }
+      const guarded = Math.max(0.1, step(found - FIT_TALL_GUARD))
+      return { zoom: guarded, tallPages: tallest(guarded / from), settled: true }
+    }
+  }
+  return { zoom: 0.1, tallPages: tallest(0.1 / from), settled: false }
+}
+
+/** 上下居中的上留白（px）：这一页装得下才给，装不下就是 0——居中的反面是"假居中"，
+ *  宁可按顶端排并记账，也不许把第一页挤成两页去换"看起来居中" */
+export function verticalCenterPadPx(capacityPx: number, usedPx: number): number {
+  if (!(capacityPx > 0) || !(usedPx > 0) || usedPx > capacityPx) return 0
+  return Math.round(((capacityPx - usedPx) / 2) * 100) / 100
+}
+
+/** 一张表实测完之后要落地的两件事：最终缩放（页高档）与各处上留白（垂直居中） */
+export interface SheetFit {
+  /** 最终缩放：与页面设置/页宽档取较小者；null = 这一张不动 */
+  zoom: number | null
+  /** 整张表的上留白（写在 section 上，只影响第一页：表名 + 第一带一起居中） */
+  sectionPadPx: number
+  /** 其余各带自己的上留白（每一带起新一页，逐带居中） */
+  bandPadPx: number[]
+  notes: string[]
+}
+
+/** 把实测结果落成这一张的排版决定。capacityHeightPx 是**页**的可印高（纸由这一趟作业定），
+ *  measuredZoom 是这份实测所在的缩放——行数与留白都是在它之下量出来的，别拿计划里的档位当尺子 */
+export function planSheetFit(
+  measure: SheetMeasure,
+  plan: SheetPrintPlan,
+  opts: { capacityHeightPx: number; measuredZoom: number },
+): SheetFit {
+  const notes: string[] = []
+  let zoom: number | null = null
+  if (plan.fitToHeightPages) {
+    const fit = fitToPagesTallZoom({
+      measure,
+      capacityPx: opts.capacityHeightPx,
+      pages: plan.fitToHeightPages,
+      measuredZoom: opts.measuredZoom,
+    })
+    if (fit.zoom < opts.measuredZoom) zoom = fit.zoom
+    if (zoom !== null) {
+      notes.push(
+        `「缩放到 ${plan.fitToHeightPages} 页高」是按实测行高压出来的：纸上这一张缩到 ${Math.round(zoom * 100)}%`,
+      )
+    }
+    if (!fit.settled) {
+      notes.push(
+        `「缩放到 ${plan.fitToHeightPages} 页高」压到 10% 仍要 ${fit.tallPages} 页高，纸上按 10% 排`,
+      )
+    }
+  }
+  if (!plan.vCentered || measure.bands.length === 0) {
+    return { zoom, sectionPadPx: 0, bandPadPx: [], notes }
+  }
+  // 留白写在**没被 zoom 的那一层**（section 与带 div 都在表格的 zoom 之外），而实测的 tablePx
+  // 已经是这一档缩放之后的高 ⇒ 两个数可直接比。比之前先把纸比屏幕高的那一截逐行补上：
+  // 按屏幕高判"装得下"会在离满页只差十几 px 时给出一档真排不下第一页的留白，那就是假居中
+  const paper = paperAt(measure, 1)
+  const firstUsed = paper.sectionHeadPx + paper.bands[0].tablePx
+  const sectionPadPx = verticalCenterPadPx(opts.capacityHeightPx, firstUsed)
+  const bandPadPx = paper.bands.map((b) => verticalCenterPadPx(opts.capacityHeightPx, b.tablePx))
+  // 第一带的留白由 section 承担：表名与第一带一起居中才叫"这张表上下居中"
+  bandPadPx[0] = 0
+  if (sectionPadPx === 0) {
+    notes.push(
+      `「上下居中打印」要第一页装得下：表名加第一带是 ${Math.round(firstUsed)}px，一页可印 ${Math.round(opts.capacityHeightPx)}px，纸上按顶端排`,
+    )
+  }
+  const skipped = paper.bands
+    .slice(1)
+    .filter((b, i) => bandPadPx[i + 1] === 0 && b.tablePx > opts.capacityHeightPx).length
+  if (skipped) notes.push(`另有 ${skipped} 带一页装不下，那几带按顶端排`)
+  return { zoom, sectionPadPx, bandPadPx, notes }
 }
 
 /** 一段页眉/页脚解析出的 margin box 内容 */
@@ -464,6 +687,8 @@ export interface JobPrintPlan {
   /** 这一趟真正落到纸上的可印宽度（px）：纸由第一张定，分带就得按它算，
    *  否则后几张表会按自己那张（更宽的）纸排带，印出来却挤在同一张纸上被压扁 */
   capacityPx: number
+  /** 同上，可印**高**：页数模拟与垂直居中比的是这一趟那张纸的高 */
+  capacityHeightPx: number
   notes: string[]
 }
 
@@ -475,6 +700,7 @@ export function jobPrintPlan(plans: SheetPrintPlan[]): JobPrintPlan {
       margins: DEFAULT_MARGINS,
       pageStyle: '',
       capacityPx: printableWidthPx(SHEET_DEFAULT_PAGE, DEFAULT_MARGINS),
+      capacityHeightPx: printableHeightPx(SHEET_DEFAULT_PAGE, DEFAULT_MARGINS),
       notes: [],
     }
   }
@@ -502,6 +728,7 @@ export function jobPrintPlan(plans: SheetPrintPlan[]): JobPrintPlan {
     margins: first.margins,
     pageStyle: first.pageStyle,
     capacityPx: first.capacityPx,
+    capacityHeightPx: printableHeightPx(first.pageSizeInches, first.margins),
     notes,
   }
 }

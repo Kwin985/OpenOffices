@@ -239,6 +239,8 @@ function sheetHtml(
   chartImages: (string | undefined)[] | undefined,
   plan: SheetPrintPlan,
   job: JobPrintPlan,
+  /** 上一趟实测定下的最终缩放（「缩放到 N 页高」压出来的那一档）；null = 照计划的缩放排 */
+  forceZoom?: number | null,
 ): { html: string; notes: string[] } {
   const notes: string[] = []
   const head = `<h3 class="sheet-print-title">${esc(sheet.name)}</h3>`
@@ -344,6 +346,7 @@ function sheetHtml(
     titleCols: titleC,
     forcedBreaks: plan.colBreaks,
     fitToWidthPages: plan.fitToWidthPages,
+    forceZoom,
   })
   notes.push(...bp.notes)
   const zoom = Math.round(bp.zoom * 1000) / 1000
@@ -445,11 +448,14 @@ export interface SheetsPrintResult {
   job: JobPrintPlan
 }
 
-/** ctx 的 dateText/fileName 供页眉页脚的 &D 与 &F 展开——换算层不读时钟，读时钟的是这一层 */
+/** ctx 的 dateText/fileName 供页眉页脚的 &D 与 &F 展开——换算层不读时钟，读时钟的是这一层。
+ *  opts.zooms 是上一趟实测压出来的最终缩放（按表序，null = 这张不动）：
+ *  「缩放到 N 页高」要靠真排版量行数，而量之前必须先有这一档缩放，于是分两趟建 */
 export function sheetsToPrintHtml(
   payload: WorkbookPayload,
   chartImages?: (string | undefined)[][],
   ctx?: { dateText?: string; fileName?: string },
+  opts?: { zooms?: (number | null)[] },
 ): SheetsPrintResult {
   const notes: string[] = []
   const dateText = ctx?.dateText ?? new Date().toLocaleDateString()
@@ -461,7 +467,7 @@ export function sheetsToPrintHtml(
     .map((s, i) => {
       // 先是"这一张表想要什么纸"的账，再是网格排不下去的账
       notes.push(...plans[i].notes)
-      const r = sheetHtml(s, i === 0, chartImages?.[i], plans[i], job)
+      const r = sheetHtml(s, i === 0, chartImages?.[i], plans[i], job, opts?.zooms?.[i] ?? null)
       notes.push(...r.notes)
       return r.html
     })

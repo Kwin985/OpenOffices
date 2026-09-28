@@ -532,6 +532,17 @@ fn read_sheet_print(xml: &str) -> (SheetPrintPayload, Vec<String>) {
     }
     p.row_breaks.sort_unstable();
     p.col_breaks.sort_unstable();
+    // fitToPage 勾了却没写 fitToWidth/fitToHeight 是**合法**的：OOXML 里那一档缺省就是 1
+    // （rust_xlsxwriter 也正是这么写的——它等于 1 时不落属性，Excel 读回来仍是"1×1 页"）。
+    // 不归这一档就会"存一次盘，页高那一条自己没了"：写侧按 (1,1) 落盘、读侧当没声明
+    if p.fit_to_page {
+        if p.fit_to_width.is_none() {
+            p.fit_to_width = Some(1);
+        }
+        if p.fit_to_height.is_none() {
+            p.fit_to_height = Some(1);
+        }
+    }
     (p, notes)
 }
 
@@ -565,6 +576,9 @@ pub struct PrintWrite {
     pub hf: Option<HfPatch>,
     /// 真的走通了 setter 的起始页码（crate 把它落在了布尔属性上，见 [`PrintPatch`]）
     pub page_number_patch: Option<u32>,
+    /// 载荷**没**声明方向：crate 的 `write_page_setup` 只要这张表有 `<pageSetup>` 就一定写
+    /// `orientation="portrait"`（默认纵向），所以那一枚属性得在重打包时擦掉，见 [`PrintPatch`]
+    pub drop_orientation: bool,
 }
 
 /// 把打印设置落回 xlsx。返回写不下的账（与 v0.46/48 同一套：一项摆不进就记一条，不硬凑）
@@ -577,14 +591,19 @@ pub fn write_sheet_print(ws: &mut Worksheet, sheet: &SheetPayload) -> PrintWrite
             notes,
             hf,
             page_number_patch,
+            drop_orientation: false,
         };
     };
+    // 「没设过」与「设成纵向」在界面上是两句话：这一枚只有走通了 setter 才算声明过
+    let mut drop_orientation = true;
     match p.orientation.as_deref() {
         Some("landscape") => {
             ws.set_landscape();
+            drop_orientation = false;
         }
         Some("portrait") => {
             ws.set_portrait();
+            drop_orientation = false;
         }
         Some(other) if !other.is_empty() => {
             notes.push(format!("打印设置·方向「{other}」不是 landscape/portrait，没写"))
@@ -714,6 +733,7 @@ pub fn write_sheet_print(ws: &mut Worksheet, sheet: &SheetPayload) -> PrintWrite
         notes,
         hf,
         page_number_patch,
+        drop_orientation,
     }
 }
 
@@ -730,11 +750,16 @@ pub struct PrintPatch {
     pub hf: Option<HfPatch>,
     /// >0 才要补；crate 把号码落在了布尔属性上
     pub first_page_number: Option<u32>,
+    /// 载荷没声明方向：crate 只要写出 `<pageSetup>` 就一定带一枚 `orientation="portrait"`
+    /// （`is_portrait` 的默认值就是 true），这一枚要擦掉，否则"没设过"在重开之后变成了"设成纵向"
+    pub drop_orientation: bool,
 }
 
 impl PrintPatch {
     pub fn noop(&self) -> bool {
-        self.hf.is_none() && self.first_page_number.filter(|v| *v > 0).is_none()
+        self.hf.is_none()
+            && self.first_page_number.filter(|v| *v > 0).is_none()
+            && !self.drop_orientation
     }
 }
 
@@ -748,7 +773,39 @@ pub fn patch_part_xml(xml: &str, p: &PrintPatch) -> (String, Vec<String>) {
     if let Some(n) = p.first_page_number.filter(|v| *v > 0) {
         out = patch_first_page_number(out, n, p.sheet_name.as_str(), &mut accounts);
     }
+    if p.drop_orientation {
+        out = patch_orientation(out);
+    }
     (out, accounts)
+}
+
+/// 擦掉 `<pageSetup>` 上那枚我们没声明过的方向（与 v0.52「只剩默认边距的件归一回不声明」同一条规矩，
+/// 所以这里**不记账**）：表格的默认纸是 A4 **横向**，而 crate 写死纵向 ⇒ 留着它，
+/// 存一次盘重开就把这张表的纸翻了个面（冒烟里那条 MediaBox 从 [841.9,595] 变成 [595,841.9] 就是这么来的）
+fn patch_orientation(xml: String) -> String {
+    let Some(el) = find_element(xml.as_str(), "pageSetup") else {
+        // 这张表根本没写出 pageSetup（没有方向就没有别的属性要落），自然也没有多出来的属性要擦
+        return xml;
+    };
+    if !el
+        .attrs
+        .split_whitespace()
+        .any(|t| t.starts_with("orientation="))
+    {
+        return xml;
+    }
+    let rest = drop_attr(el.attrs, "orientation");
+    let attrs = if rest.is_empty() {
+        String::new()
+    } else {
+        format!(" {rest}")
+    };
+    let element = if el.inner.is_empty() {
+        format!("<pageSetup{attrs}/>")
+    } else {
+        format!("<pageSetup{attrs}>{}</pageSetup>", el.inner)
+    };
+    format!("{}{element}{}", &xml[..el.start], &xml[el.end..])
 }
 
 /// `<headerFooter>` 整块重写：两个开关落属性，even/first 四条串落子元素，
@@ -1310,6 +1367,7 @@ mod tests {
             sheet_name: "纸样".into(),
             hf: None,
             first_page_number: Some(7),
+            drop_orientation: false,
         };
         let xml = "<worksheet><pageSetup orientation=\"portrait\"/></worksheet>";
         let (out, accounts) = patch_part_xml(xml, &p);
@@ -1321,13 +1379,143 @@ mod tests {
         assert!(PrintPatch {
             sheet_name: "纸样".into(),
             hf: None,
-            first_page_number: Some(0)
+            first_page_number: Some(0),
+            drop_orientation: false
         }
         .noop());
     }
 
-    // 打印设置的实机腿（Excel 只读 + CDP 冒烟）共用的夹具：
-    // cargo test gen_print_fixture -- --ignored
+    #[test]
+    fn undeclared_orientation_does_not_come_back_as_portrait() {
+        // crate 给每张有 pageSetup 的表都补一枚 orientation="portrait"：载荷没声明方向就得把它擦掉，
+        // 否则"从没设过"存一次盘就变成"设成纵向"，而我们表格的默认纸是 A4 横向
+        let p = PrintPatch {
+            sheet_name: "纸样".into(),
+            hf: None,
+            first_page_number: None,
+            drop_orientation: true,
+        };
+        assert!(!p.noop(), "只欠一次擦除也要走重打包那一趟");
+        let xml = "<worksheet><pageSetup paperSize=\"9\" orientation=\"portrait\" scale=\"85\"/></worksheet>";
+        let (out, accounts) = patch_part_xml(xml, &p);
+        assert!(!out.contains("orientation"), "擦完还留着方向：{out}");
+        assert!(
+            out.contains("<pageSetup paperSize=\"9\" scale=\"85\"/>"),
+            "其余属性得原样还在：{out}"
+        );
+        assert!(
+            accounts.is_empty(),
+            "这是一次归一（与默认边距同一条规矩），不是「做不到」：{accounts:?}"
+        );
+        // 方向是我们自己声明出去的：一个字都不许动
+        let bare = "<worksheet><pageSetup orientation=\"portrait\"/></worksheet>";
+        let (out, _) = patch_part_xml(bare, &p);
+        assert_eq!(out, "<worksheet><pageSetup/></worksheet>");
+        // 别人的文件里 pageSetup 压根没有方向（或整块不存在）：不动字节、不记账
+        let (out, accounts) = patch_part_xml("<worksheet><pageSetup scale=\"85\"/></worksheet>", &p);
+        assert_eq!(out, "<worksheet><pageSetup scale=\"85\"/></worksheet>");
+        assert!(accounts.is_empty(), "没擦东西却报了账：{accounts:?}");
+        let (out, _) = patch_part_xml("<worksheet><cols/></worksheet>", &p);
+        assert_eq!(out, "<worksheet><cols/></worksheet>", "没有 pageSetup 也不许报错");
+        let declared = PrintPatch {
+            drop_orientation: false,
+            ..p
+        };
+        let (out, _) = patch_part_xml(
+            "<worksheet><pageSetup orientation=\"landscape\"/></worksheet>",
+            &declared,
+        );
+        assert!(
+            out.contains("orientation=\"landscape\""),
+            "声明过的方向被擦了：{out}"
+        );
+    }
+
+    #[test]
+    fn undeclared_orientation_stays_undeclared_through_a_real_save() {
+        // 这一条走的是完整链路（crate + 重打包 + 读侧），量的是"面板没碰方向"那张表的纸：
+        // 擦除只发生在 patch_part_xml 里，而那一趟只有非 noop 的补丁才会跑
+        let mut p = setup();
+        p.orientation = None;
+        let path = tmp("noorient");
+        write_xlsx_sync(path.clone(), book(p)).expect("写出失败");
+        let ws = entry(&path, "xl/worksheets/sheet1.xml");
+        assert!(ws.contains("<pageSetup"), "这张表有纸张/缩放，pageSetup 该在：{ws}");
+        assert!(
+            !ws.contains("orientation="),
+            "crate 补写的那枚方向没被擦掉，重开就会把横向纸翻成纵向：{ws}"
+        );
+        let back = read_xlsx_sync(path).expect("读回失败");
+        let got = back.sheets[0].print.clone().expect("打印设置整个没读回来");
+        assert_eq!(got.orientation, None, "没声明过的方向读回来有了值");
+        assert_eq!(got.paper_size, Some(9), "擦方向不许连别的属性一起带走");
+        assert_eq!(got.scale, Some(85));
+    }
+
+    #[test]
+    fn fit_to_page_absent_width_and_height_are_one_not_undeclared() {
+        // crate 的 write_page_setup 在 fit_width/fit_height 等于 1 时**不写那一枚**（`!= 1` 才写），
+        // 而 OOXML 里缺省正是 1 ⇒ 不归一就是把"缩放到 1 页高"读成了"没缩放到页高"
+        let mut p = setup();
+        p.scale = None;
+        p.fit_to_page = true;
+        p.fit_to_width = None;
+        p.fit_to_height = Some(2);
+        let path = tmp("fit1");
+        write_xlsx_sync(path.clone(), book(p.clone())).expect("写出失败");
+        let ws = entry(&path, "xl/worksheets/sheet1.xml");
+        assert!(
+            ws.contains("fitToPage=\"1\"") && !ws.contains("fitToWidth="),
+            "页宽那一枚本该被 crate 省掉：{ws}"
+        );
+        let got = read_xlsx_sync(path.clone())
+            .expect("读回失败")
+            .sheets[0]
+            .print
+            .clone()
+            .expect("打印设置整个没读回来");
+        assert_eq!(got.fit_to_page, true);
+        assert_eq!(got.fit_to_width, Some(1), "省掉的页宽读回来该是 1 而不是没有");
+        assert_eq!(got.fit_to_height, Some(2));
+        // 两枚都省（缩放到 1×1 页）：归一后仍是"1 页宽 1 页高"，而不是"没开这一档"
+        let mut both = p.clone();
+        both.fit_to_height = None;
+        let wide = tmp("fit2");
+        write_xlsx_sync(wide.clone(), book(both.clone())).expect("写出失败");
+        let ws = entry(&wide, "xl/worksheets/sheet1.xml");
+        assert!(!ws.contains("fitToHeight="), "这一档两枚都该被省掉：{ws}");
+        let got = read_xlsx_sync(wide)
+            .expect("读回失败")
+            .sheets[0]
+            .print
+            .clone()
+            .expect("打印设置整个没读回来");
+        assert_eq!(
+            (got.fit_to_width, got.fit_to_height),
+            (Some(1), Some(1)),
+            "「缩放到 1 页」与「没开缩放」必须是两句话"
+        );
+        // 没开 fitToPage 的件不许被归一：那一档的 fitToWidth/Height 在 Excel 里根本不参与说话
+        let plain = tmp("fit3");
+        let mut off = p.clone();
+        off.fit_to_page = false;
+        off.fit_to_width = None;
+        off.fit_to_height = None;
+        write_xlsx_sync(plain.clone(), book(off)).expect("写出失败");
+        let got = read_xlsx_sync(plain)
+            .expect("读回失败")
+            .sheets[0]
+            .print
+            .clone()
+            .expect("打印设置整个没读回来");
+        assert_eq!(
+            (got.fit_to_page, got.fit_to_width, got.fit_to_height),
+            (false, None, None),
+            "没开页高档却归一出 1，就是替用户声明了一档缩放"
+        );
+    }
+
+    // 打印设置的实机腿（Excel 只读 + CDP 冒烟）共用的夹具：    // cargo test gen_print_fixture -- --ignored
     #[test]
     #[ignore]
     fn gen_print_fixture() {
@@ -1338,5 +1526,54 @@ mod tests {
         }
         let notes = write_xlsx_sync(path.clone(), book(setup())).expect("夹具写出失败");
         println!("夹具: {path}\n打印设置的账（应为空）: {notes:?}");
+    }
+
+    /// 同一趟存盘里的两张表：一张说了方向、一张从没说过。
+    ///
+    /// 本轮写侧那条修复的见证必须成对看——crate 逢 `<pageSetup>` 必落一枚 orientation，
+    /// 「没说」那张全靠存盘后的定点重打包擦干净。分开两份文件核对，第三方腿就会在
+    /// 「这份本来就没有 pageSetup」上因错的原因通过；放在一份里，两张部件同出一趟 zip，
+    /// 一枚在、一枚不在才说明是**擦的**而不是**没写**。
+    /// cargo test gen_orient_fixture -- --ignored
+    #[test]
+    #[ignore]
+    fn gen_orient_fixture() {
+        let path = std::env::var("OO_FIXTURE_PATH")
+            .unwrap_or_else(|_| concat!(env!("CARGO_MANIFEST_DIR"), "/../tmp/x53/x53-orient.xlsx").to_string());
+        if let Some(dir) = std::path::Path::new(&path).parent() {
+            let _ = std::fs::create_dir_all(dir);
+        }
+        // 两张都开「缩放到 1 页高」，于是两份都有 <pageSetup>；差别只在方向那一枚
+        let fit = SheetPrintPayload {
+            fit_to_page: true,
+            fit_to_height: Some(1),
+            v_centered: Some(true),
+            first_page_number: Some(7),
+            ..Default::default()
+        };
+        let said = SheetPrintPayload {
+            orientation: Some("landscape".into()),
+            ..fit.clone()
+        };
+        let quiet = fit;
+        let sheet = |name: &str, print: SheetPrintPayload| SheetPayload {
+            name: name.into(),
+            cells: (0..4)
+                .map(|r| CellPayload {
+                    r,
+                    c: 0,
+                    v: Some(Json::String(format!("{name}{r}"))),
+                    ..Default::default()
+                })
+                .collect(),
+            print: Some(print),
+            ..Default::default()
+        };
+        let book = WorkbookPayload {
+            sheets: vec![sheet("说了", said), sheet("没说", quiet)],
+            ..Default::default()
+        };
+        let notes = write_xlsx_sync(path.clone(), book).expect("夹具写出失败");
+        println!("夹具: {path}\n方向的账（应为空）: {notes:?}");
     }
 }

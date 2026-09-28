@@ -1080,6 +1080,7 @@ pub fn write_xlsx_sync(path: String, workbook: WorkbookPayload) -> Result<Vec<St
             sheet_name: sheet.name.clone(),
             hf: pw.hf,
             first_page_number: pw.page_number_patch,
+            drop_orientation: pw.drop_orientation,
         };
         if !patch.noop() {
             // crate 按建表顺序把表写成 xl/worksheets/sheet{1,2,…}.xml
