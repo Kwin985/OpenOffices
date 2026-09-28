@@ -1828,4 +1828,93 @@ mod tests {
         }
         println!("夹具目录: {dir}\n{}", all.join("\n"));
     }
+
+    /// **「缩放到 N 页宽」挤出来的那一档缩放会不会把页眉一起压**——v0.56 的对照夹具。
+    ///
+    /// 为什么又要一份：v0.55 量实了 `scaleWithDoc` 认的是"文档缩放"那一档（50% 下页眉 5.5pt、关掉 11pt），
+    /// 但**声明的 `@scale` 与"按页宽挤出来的实际缩放"是两回事**——Excel 把后者算出来时才决定要不要连页眉一起算。
+    /// 三件套各自要答的问题：`fw-plain`＝100% 的基线（页眉该是 11pt 那一档），
+    /// `fw-fit1`＝挤到一页宽（正文会明显变小，页眉跟着小＝接线、不跟＝只能记账），
+    /// `fw-fit1-off`＝挤到一页宽而 `scaleWithDoc=0`（若它与 `fw-fit1` 的页眉字高相同，
+    /// 就说明压缩压根没走 `scaleWithDoc` 那条通道，那"跟着压"这件事的开关语义得另说）。
+    ///
+    /// cargo test gen_fitwidth_fixture -- --ignored
+    #[test]
+    #[ignore]
+    fn gen_fitwidth_fixture() {
+        let dir = std::env::var("OO_FIXTURE_DIR")
+            .unwrap_or_else(|_| concat!(env!("CARGO_MANIFEST_DIR"), "/../tmp/x56").to_string());
+        std::fs::create_dir_all(&dir).expect("夹具目录建不出来");
+        // 14 列 × 130px ≈ 1820px ≈ 19 英寸宽，而竖版 A4 的可印宽只有 7.3 英寸：一页宽装不下，必须挤
+        let cols = 14u32;
+        let rws = 18u32;
+        let cells = || -> Vec<CellPayload> {
+            (0..rws)
+                .flat_map(|r| {
+                    (0..cols).map(move |c| CellPayload {
+                        r,
+                        c,
+                        v: Some(Json::String(format!("R{}C{}", r + 1, c + 1))),
+                        ..Default::default()
+                    })
+                })
+                .collect()
+        };
+        let widths = (0..cols).map(|c| (c, 130.0f64)).collect::<HashMap<u32, f64>>();
+        let base = SheetPrintPayload {
+            orientation: Some("portrait".into()),
+            paper_size: Some(9),
+            margins: Some(PrintMarginsPayload {
+                top: Some(0.6),
+                right: Some(0.5),
+                bottom: Some(0.6),
+                left: Some(0.5),
+                header: Some(0.3),
+                footer: Some(0.3),
+            }),
+            header: Some(PrintHfPayload {
+                odd: Some("&L{TAG}左&C{TAG}中&R{TAG}右".into()),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let plain = SheetPrintPayload {
+            scale: Some(100),
+            ..base.clone()
+        };
+        let mut fit = SheetPrintPayload {
+            fit_to_page: true,
+            fit_to_width: Some(1),
+            // 页高不限：0 在 OOXML 里是"多少页都行"，与 Excel 界面上那一格同一说法
+            fit_to_height: Some(0),
+            ..base.clone()
+        };
+        fit.scale_with_doc = None;
+        let fit_off = SheetPrintPayload {
+            scale_with_doc: Some(false),
+            ..fit.clone()
+        };
+        let cases = [("fw-plain", plain), ("fw-fit1", fit), ("fw-fit1-off", fit_off)];
+        let mut all: Vec<String> = Vec::new();
+        for (tag, mut print) in cases {
+            if let Some(h) = print.header.as_mut() {
+                h.odd = h.odd.take().map(|v| v.replace("{TAG}", tag));
+            }
+            let path = format!("{dir}/{tag}.xlsx");
+            let book = WorkbookPayload {
+                sheets: vec![SheetPayload {
+                    name: "挤一页宽".into(),
+                    cells: cells(),
+                    col_widths: widths.clone(),
+                    print: Some(print),
+                    ..Default::default()
+                }],
+                ..Default::default()
+            };
+            let mut notes = write_xlsx_sync(path.clone(), book).expect("夹具写出失败");
+            notes.insert(0, format!("{tag} 写出"));
+            all.push(notes.join(" | "));
+        }
+        println!("夹具目录: {dir}\n{}", all.join("\n"));
+    }
 }

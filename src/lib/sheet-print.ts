@@ -7,6 +7,7 @@ import type { CfPatch } from './sheet-cf-print'
 import {
   clampArea,
   columnLetter,
+  headerFooterCss,
   jobPrintPlan,
   planColumnBands,
   planSheetPrint,
@@ -241,7 +242,7 @@ function sheetHtml(
   job: JobPrintPlan,
   /** 上一趟实测定下的最终缩放（「缩放到 N 页高」压出来的那一档）；null = 照计划的缩放排 */
   forceZoom?: number | null,
-): { html: string; notes: string[] } {
+): { html: string; notes: string[]; zoom: number } {
   const notes: string[] = []
   const head = `<h3 class="sheet-print-title">${esc(sheet.name)}</h3>`
   const cls = first ? '' : ' class="sheet-print-break"'
@@ -267,7 +268,7 @@ function sheetHtml(
   if (dataRow < 0 || dataCol < 0) {
     if (plan.printArea) notes.push('打印区域指到的那一片一个格子都没有，纸上这一张表是空的')
     // 标题行始终给：没标题就没人知道这一页是哪个表打印出来的
-    return { html: `<section${cls}>${head}<p>（空表）</p></section>`, notes }
+    return { html: `<section${cls}>${head}<p>（空表）</p></section>`, notes, zoom: plan.zoom }
   }
   const truncated = dataRow >= PRINT_MAX_ROWS || dataCol >= PRINT_MAX_COLS
   const maxRow = Math.min(dataRow, PRINT_MAX_ROWS - 1)
@@ -329,7 +330,7 @@ function sheetHtml(
   for (let c = colLo; c <= colHi; c++) if (!hidC.has(c)) cols.push({ col: c, px: colAt(c) })
   if (!allRows.length || !cols.length) {
     notes.push('这一张表的可见行或可见列都在打印区域之外，纸上没有它的网格')
-    return { html: `<section${cls}>${head}<p>（打印区域里没有可打印的格子）</p></section>`, notes }
+    return { html: `<section${cls}>${head}<p>（打印区域里没有可打印的格子）</p></section>`, notes, zoom: plan.zoom }
   }
   const inTitle = (r: number) => !!titleR && r >= titleR[0] && r <= titleR[1]
   const titleRows = allRows.filter(inTitle)
@@ -436,7 +437,12 @@ function sheetHtml(
   const note = truncated
     ? `<p class="sheet-print-note">（内容超出打印上限 ${PRINT_MAX_ROWS} 行 × ${PRINT_MAX_COLS} 列，已截断）</p>`
     : ''
-  return { html: `<section${cls}>${head}${tables.join('')}${note}</section>`, notes: printNotes }
+  return {
+    html: `<section${cls}>${head}${tables.join('')}${note}</section>`,
+    notes: printNotes,
+    // 这一张表真正落到纸上的那一档缩放（分带与页高档都算在里面）：页眉的字号要按它乘
+    zoom,
+  }
 }
 
 export interface SheetsPrintResult {
@@ -459,21 +465,30 @@ export function sheetsToPrintHtml(
 ): SheetsPrintResult {
   const notes: string[] = []
   const dateText = ctx?.dateText ?? new Date().toLocaleDateString()
+  const ctxOf = (name: string) => ({ sheetName: name, dateText, fileName: ctx?.fileName })
   const plans = payload.sheets.map((s, i) =>
-    planSheetPrint(s, { sheetName: s.name, dateText, fileName: ctx?.fileName }, {
-      hfZoom: opts?.zooms?.[i] ?? null,
-    }),
+    planSheetPrint(s, ctxOf(s.name), { hfZoom: opts?.zooms?.[i] ?? null }),
   )
+  // 纸的几何先定下来：分带要按这一趟作业真正用的那张纸算（此时页眉那一版还是按计划缩放写的）
+  const paper = jobPrintPlan(plans)
+  const html = payload.sheets.map((s, i) => {
+    // 先是"这一张表想要什么纸"的账，再是网格排不下去的账
+    notes.push(...plans[i].notes)
+    const r = sheetHtml(s, i === 0, chartImages?.[i], plans[i], paper, opts?.zooms?.[i] ?? null)
+    notes.push(...r.notes)
+    // 「缩放到 N 页宽」压出来的那一档只有分了带才知道，而页眉的字号按**最终**那一档乘
+    // （Excel 的 scaleWithDoc 管的正是这个：真机对照下 fit-to-width 把页眉从 11.04pt 一起压到 4.08pt）。
+    // 于是这里把页眉那一段 CSS 重说一遍——同一段文字、只是字号，所以 parseHf 的账不再记第二遍
+    if (r.zoom !== plans[i].zoom) {
+      plans[i].pageStyle = headerFooterCss(s.print?.header, s.print?.footer, s.print ?? {}, ctxOf(s.name), {
+        zoom: r.zoom,
+        margins: plans[i].margins,
+      }).css
+    }
+    return r.html
+  })
+  // 页眉重说过之后纸面那一版才是最终形状，job 按重说过的这一份算
   const job = jobPrintPlan(plans)
-  const html = payload.sheets
-    .map((s, i) => {
-      // 先是"这一张表想要什么纸"的账，再是网格排不下去的账
-      notes.push(...plans[i].notes)
-      const r = sheetHtml(s, i === 0, chartImages?.[i], plans[i], job, opts?.zooms?.[i] ?? null)
-      notes.push(...r.notes)
-      return r.html
-    })
-    .join('')
   notes.push(...job.notes)
-  return { html, notes, plans, job }
+  return { html: html.join(''), notes, plans, job }
 }

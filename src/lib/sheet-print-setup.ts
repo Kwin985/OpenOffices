@@ -627,30 +627,34 @@ interface HfRender {
   shift: { left: number; right: number } | null
 }
 
+/** 纸上 1pt = 96/72px（CSS 的定义）。页眉页脚只有 px 说得动字号，这条换算只写在这里 */
+const ptToPx = (pt: number) => Math.round(pt * (96 / 72) * 100) / 100
+
 function segStyle(seg: HfSegment, r: HfRender): string {
   const deco = [seg.underline && 'underline', seg.strike && 'line-through'].filter(Boolean).join(' ')
-  const px = (pt: number) => Math.round(pt * 1.333 * r.scale * 100) / 100
   const parts = [
     seg.bold && 'font-weight:bold',
     seg.italic && 'font-style:italic',
     deco && `text-decoration:${deco}`,
-    seg.pt && `font-size:${px(seg.pt)}px`,
+    seg.pt && `font-size:${ptToPx(seg.pt * r.scale)}px`,
     seg.font && `font-family:"${seg.font}"`,
   ].filter(Boolean)
   return parts.length ? `;${parts.join(';')}` : ''
 }
 
-/** 我们纸面页眉的基准字号（px）：内容没写 &"字号" 那一档时继承的就是它（实测 16px 上纸字形高 12pt）。
- *  Excel 的页眉默认是 11pt——两边差的那一档与本轮无关，记在路线图里 */
-const HF_BASE_FONT_PX = 16
+/** 页眉页脚在纸上的基准字号（pt）。Excel 的页眉默认就是工作簿默认字号那一档，
+ *  真机对照量出来的正是它（v0.56：Excel 16.0 自己导出的三份 PDF，页眉与正文同为 11.04pt）；
+ *  我们从前这一条不写，margin box 继承页面那 16px（=12pt），比 Excel 整整高一档。
+ *  写死它不算"替用户声明他没设过的东西"——文件里那一层根本没有字号，纸上的字号只能由我们给，
+ *  给的目标就是与 Excel 同一档 */
+const HF_BASE_FONT_PT = 11
 
 /** 「随文档缩放」：margin box 是页级的，不在挂着 CSS zoom 的那棵 <table> 树里（实测内容 zoom 0.5 时
  *  页眉字高一字没变），所以这一档只能由这里自己把字号乘出去；margin box 的 font-size 是认的（实测 40px 生效）。
- *  倍数正是 1 时一个字都不写——"没设过就跟默认"不该变成"每次都写死一个数"；
- *  段自己带了字号（那类码）就交给 segStyle 乘，这里不重复出手 */
-function segScaleCss(seg: HfSegment, r: HfRender): string {
-  if (r.scale === 1 || seg.pt) return ''
-  return `;font-size:${Math.round(HF_BASE_FONT_PX * r.scale * 100) / 100}px`
+ *  段自己带了字号（`&"字号"` 那一类码）就交给 segStyle 乘，这里不重复出手 */
+function segFontCss(seg: HfSegment, r: HfRender): string {
+  if (seg.pt) return ''
+  return `;font-size:${ptToPx(HF_BASE_FONT_PT * r.scale)}px`
 }
 
 /** 取消「与页边距对齐」：margin box 的 width:100% 不吃（实测），认的是 margin/padding——
@@ -691,7 +695,7 @@ function boxesFor(segs: HfSegment[], edge: 'header' | 'footer', notes: string[],
       continue
     }
     seen.add(s.box)
-    out += `@${BOX_EDGE[edge]}-${s.box}{content:${s.parts.join(' ')}${shiftCss(s.box, r)}${segScaleCss(s, r)}${segStyle(s, r)};}`
+    out += `@${BOX_EDGE[edge]}-${s.box}{content:${s.parts.join(' ')}${shiftCss(s.box, r)}${segFontCss(s, r)}${segStyle(s, r)};}`
   }
   return out
 }
@@ -744,16 +748,20 @@ export function hfAndPageNumberNotes(print: SheetPrintPayload): string[] {
   return notes
 }
 
-/** 页眉页脚在纸上的两处换算，都只有真量才知道数（v0.55 前置实测）：
+/** 页眉页脚在纸上的两处换算，都只有真量才知道数（v0.55 前置实测 + v0.56 的 fit-to-width 对照件）：
  *  ① `scaleWithDoc`（缺省开着）——Excel 的那一档**真的**跟着文档缩放：同一份 50% 的件，
- *     开着时页眉字高 5.5pt、关掉时 11pt（对照件 s-on / s-scaleoff）。而我们的缩放是挂在
- *     `<table>` 上的 CSS `zoom`，margin box 是页级的、不在那棵树里（实测内容 zoom 0.5 时
+ *     开着时页眉字高 5.5pt、关掉时 11pt（对照件 s-on / s-scaleoff）。跟着缩放的不止"用户写下的那个数"：
+ *     「缩放到 1 页宽」由 Excel 自己反求出一档（14 列 × 130px 挤进竖版 A4 实测压到 37%），那一档同样
+ *     把页眉一起压（fw-fit1：页眉与正文同为 4.08pt），而 `scaleWithDoc=0` 时页眉留在 11.04pt、
+ *     正文照旧 4.08pt（fw-fit1-off）——所以这枚开关管的是**最终落到纸上的那一档**，不是"声明出来的那一档"。
+ *     而我们的缩放是挂在 `<table>` 上的 CSS `zoom`，margin box 是页级的、不在那棵树里（实测内容 zoom 0.5 时
  *     页眉字高一字没变），所以这一档只能自己把字号乘上去；margin box 的 `font-size` 认（实测 40px 生效）。
  *  ② `alignWithMargins`（缺省开着＝按页边距，正好是我们现在的形状）——关掉时 Excel 把页眉条带
  *     铺到**打印机的可打印区**（实测左右对称各留 55pt，随打印机变），我们没有打印机概念，
  *     按纸张边缘铺（实测负 margin 正好等于左右边距时文字落在 x=0 与纸宽减字宽）。 */
 export interface HfPaperOpts {
-  /** 这一趟真正落到纸上的缩放（面板/文件声明的缩放比例，或被"缩放到 N 页高"压出来的那一档） */
+  /** 这一趟真正落到纸上的缩放：面板/文件声明的那一档、被「缩放到 N 页宽」分带时反求出来的那一档、
+   *  或被「缩放到 N 页高」实测压出来的那一档，取到最后落到的那个数 */
   zoom: number
   /** 本张表的四边距（英寸，top/right/bottom/left）：负 margin 要按左右那两条往外推 */
   margins: [number, number, number, number]
