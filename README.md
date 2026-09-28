@@ -1694,6 +1694,54 @@ v0.52 的面板能设这三样，文件也存得下、Excel 也认得，唯独�
   COM 的 Normal/A1 读数、`fonts[0]` 字面、`&amp;` 转义、格值一个字符没动）+ `excel-pdf.mjs` **8 断言**
   （14/11、14/8.25、11/8.25 三条比值与那条"绝对值不可比"的自证）；tsc + build 绿
 
+## 正文的一格不许替它说话：写侧不再给未设样式的格盖上显式 xf（v0.58）
+
+上一轮末尾记的那笔账说的是同一层的下半截：`fonts[cellXfs[0].fontId]` 已经进了载荷、页眉也跟着文件说话了，
+但**正文连这一层都不吃**——因为我们存盘会给原本不带 `s=` 的格子盖上一枚显式 xf（`<c r="A1" s="1">` → Calibri/11），
+而 Excel 原件里那一格是靠**继承 Normal** 拿字号的。本轮只动写侧，而且动的是"少写"：把属于文件那一层的决定
+还给文件，我们的常量不再冒充格子自己说过的话。
+
+- **形状**：`format_for` 从"每格都带一份 Format"改成"载荷真说了样式才带"——没样式的格走 `write_string` /
+  `write_number` / `write_boolean` / `write_formula` 那几条**不带 format** 的写法，实测那样 `<c>` 上就是没有 `s=`；
+  `None`（有值没样式）与"只有默认值的空 `CellStyle`"（`has_any()` 那道门）都走这一路，
+  而"一格空值也没样式"仍旧什么都不写
+- **只说了一半的样式，底数由文件给**：格子里只勾了加粗、没说字族字号时，`seed_font(default)` 把工作簿默认字体那两味
+  **种进**那一枚 `<font>` ⇒ `<b/><sz val="14"/><name val="宋体"/>`，而不是落到 crate 的 Calibri/11 上。
+  反面守卫同样立着：文件那一层没说话时不许凭空造一层——载荷没给 `defaultFont` 时加粗格仍是 crate 那一档
+- **同一档不重复声明**（本轮新的一条规矩）：文件说的正是 Calibri/11 时一个字都不种。实测显式
+  `set_font_name("Calibri")` 写出来的那一条 `<font>` **没有** `<scheme val="minor"/>`——种了等于把"字族跟着主题走"
+  弄丢，所以 `set_default_format` 与 `seed_font` 两头共用同一条守卫（`fs` 与 11 相等、名字为空或就叫 Calibri 时不算说话）
+- **读侧的归一化参照物本轮没搬，而且这是量过之后决定的**：把 `style_for` 那把尺子从常量换成文件那一层，
+  会把"与默认同一档"的格子读成空样式，而 Univer 的默认字体是硬编码 Arial/11（v0.57 记的那枚侧通道），
+  界面上就会从宋体 14 掉回 11 号——**屏幕、纸面与这一层必须一起搬**，纸面那半还牵着 `PRINT_ROW_BIAS_PX` 的重标定。
+  于是载荷里 `s: None` 有两种来源而分不开：文件里那一格真的不带 `s=`（该继承），和它带了 `s=` 而样式正是
+  Calibri/11（该照自己写）。这一条本轮**当我说并钉住**（`empty_payload_style_is_ambiguous` + 冒烟里 stamped 那两例），
+  写侧从本轮起把后一种从"歪打正着的 Calibri/11"换成"随大流"
+- **成对夹具 `gen_inherit_fixture`**：`b-inherit` 正文格不带样式、`b-stamped` 正文格明写 Calibri/11（正是本轮之前
+  我们盖上去的那一档），两件共用同一份宋体/14 工作簿默认字体与同一句页眉，只有正文那一层不同——
+  于是"底数从哪来"在同一次运行里有对照。夹具写法上踩到的一条：**必须一趟写成，不走"读回再写"**，
+  因为 stamped 那一档 Calibri/11 会被读侧归一化成"没说话"，重写一趟就把对照件写成了实验件
+- **第三方认的分量（Excel 16.0 自己导出的 PDF，字高按文本项分三类）**：inherit 那件页眉 14.040 / 正文 14.040 /
+  只说加粗那格 14.040 ⇒ 页眉正文**比 1.000**；stamped 那件页眉 14.040、正文 11.040 ⇒ **比 1.272**，
+  也就是 v0.57 量到 1.266 的那个形状被留在同一趟里当对照。COM 面这里第一次真帮上忙：`Range.Font.Size` **会把继承解出来**
+  （inherit 的 A1/B1/D1 全报 14，stamped 的 A1 报 11 而 D1 仍报 14）——正文那一层的归属在第三方是可读的，
+  这条比量 PDF 便宜，是后续接正文底数时的首选判据
+- **我们的纸本轮一个字没动，所以量出来正好是"没动"**：两件都是页眉 **14.002pt**（跟着文件，v0.57 那条）而
+  正文 **8.244pt**（CSS `font-size:11px`＝8.25pt 那一档），我们纸上的页眉/正文比 **1.698 ≈ 14/8.25**，
+  而同一件在 Excel 的纸上是 **1.000**——这一档差（同一件正文 14.040 vs 8.244＝**1.703 倍**）就是路线图那条"正文底数"未勾项的数
+- **两处量法/部件坑**：(a) 同一行里既有 14pt 的加粗格又有 11pt 的正文格，**按基线取 `Math.max` 会把 stamped 读成 1.000**
+  （第一条判据就是这么既假绿又假红的），判据必须按文本项分类取；(b) `t="s"` 的格值住 `xl/sharedStrings.xml` 而不在
+  `sheet1.xml`，第一条只读腿先在错的部件里找 `<t>R1C1</t>`，于是集体 FAIL
+- **验证（本轮前端零改动，四腿各就各位）**：`cargo test --lib` **83 通过 / 0 失败 / 10 ignored**（五枚新断言集：
+  不带样式的格不盖 xf 且**存两次盘不许把 xf 盖回来**、只说加粗的格从文件那一层取底数、没有默认字体时照旧 crate 那一档、
+  同一档不重复声明（`<scheme>` 仍在 + 省掉那一笔之后读侧仍认得出这一层是 Calibri/11）、空样式的两种来源分不开）；
+  **Excel 16.0 只读腿两头**——`excel.ps1` **13 断言**（Normal/A1/B1/D1 的磅值、格值一个没动、加粗还在、PDF 出得来）
+  + `excel-pdf.mjs` **8 断言**（1.000 与 1.272 两条比值，含"加粗格与页眉同档、与正文不同档"那条底数来源的当面对质）；
+  **CDP 真机冒烟 16 断言 / 真失败 0、页面异常 0 条**（两件各：界面里 A1/D1 的样式来源 → 存盘 → 重开 → 格值一格没动 →
+  我们的纸上页眉与正文两档各断住）；应用真机存盘那份的字节 `app-bytes.ps1` **10 断言 / 真失败 0**
+  （`<c r="A1" t="s">` 没有 `s=`、`<c r="D1" s="1">` → fontId=1 → `<font><b/><sz val="14"/><name val="宋体"/>` 且通篇没有 Calibri、
+  Normal=宋体/14、sharedStrings 里 R1C1/R8C3/BOLD 三条都在）；tsc + build 绿
+
 ## 性能（v0.3）
 
 
@@ -1744,9 +1792,9 @@ v0.52 的面板能设这三样，文件也存得下、Excel 也认得，唯独�
 
 ```
 src-tauri/            Rust 后端
-  src/xlsx.rs         read_xlsx (calamine) / write_xlsx (rust_xlsxwriter) 命令，含样式、合并区、尺寸/字族、隐藏/冻结、公式（含缓存值）、图表与**三类规则（筛选/数据验证/条件格式，v0.46 的载荷类型 RangeRect/SheetFilterPayload/DataValidationPayload/CondFormatPayload 也在这里）**、**批注与超链接（v0.48 的载荷类型 CellNotePayload/CellLinkPayload）**、**打印设置（v0.51 的载荷类型 SheetPrintPayload/PrintMarginsPayload/PrintHfPayload，枚举收 OOXML 字面、边距收英寸、区域收 0 基含端点）**，v0.52 再加 `DEFAULT_PRINT_MARGINS` 与 `is_all_default()`/`clear_default_only_margins()`——rust_xlsxwriter 给每张表都写一份默认 `<pageMargins>`，而"没人设过边距"与"边距正好等于默认"在字节上是同一件事，所以只装着默认六数的载荷视作没声明（与 v0.48 那条「默认气泡尺寸归一回不声明」是同一条规矩），读写两头都算在这一套往返里，**v0.55 再添两枚 `Option<bool>`：`scale_with_doc` / `align_with_margins`**（`skip_serializing_if = Option::is_none`，因为这两枚的"没值"说的就是"开着"）；write_xlsx 返回 `Vec<String>` 边界账；命令为 async + spawn_blocking（同步跑主线程会让窗口冻结），`.csv` 读侧分流到 csv.rs，图表网格按 has_charts 惰性构建，`.xlsx` 才另开一趟 zip 读独立部件的批注、链接与打印设置；测试里带一份**条件格式打印夹具**（v0.47：八列各一种判定型，写出真 xlsx 供 Excel 逐格对色）与一份**打印设置夹具**（v0.51：横向 A4 + 85% + 六条边距 + 三槽页眉页脚 + 打印区域/标题行列 + 两个手动断点，`#[ignore]` 生成器与冒烟腿共用同一份产物）；**v0.57 添载荷类型 `DefaultFont { ff, fs }`（`WorkbookPayload` 改 `camelCase` 并多一枚 `defaultFont`）与写侧那一步**：在任何 `add_worksheet` 之前 `wb.set_default_format(&fmt, 20, 64)`——后两个数是 crate 自己的列宽行高度量，这么传才只动字体那一层（`sheetFormatPr defaultRowHeight="15"` 不变），走通了默认格式就是 xf 0 / `fonts[0]`，失败 `notes.push` 不再静默；`fs` 只收正数（0 与负数在这一层就是"没说话"）；测试四例（声明的落进 `fonts[0]` 且不带 `scheme`、没声明的保持 crate 形状、存两次字族与字号都在、`cellXfs` 按索引判别）
+  src/xlsx.rs         read_xlsx (calamine) / write_xlsx (rust_xlsxwriter) 命令，含样式、合并区、尺寸/字族、隐藏/冻结、公式（含缓存值）、图表与**三类规则（筛选/数据验证/条件格式，v0.46 的载荷类型 RangeRect/SheetFilterPayload/DataValidationPayload/CondFormatPayload 也在这里）**、**批注与超链接（v0.48 的载荷类型 CellNotePayload/CellLinkPayload）**、**打印设置（v0.51 的载荷类型 SheetPrintPayload/PrintMarginsPayload/PrintHfPayload，枚举收 OOXML 字面、边距收英寸、区域收 0 基含端点）**，v0.52 再加 `DEFAULT_PRINT_MARGINS` 与 `is_all_default()`/`clear_default_only_margins()`——rust_xlsxwriter 给每张表都写一份默认 `<pageMargins>`，而"没人设过边距"与"边距正好等于默认"在字节上是同一件事，所以只装着默认六数的载荷视作没声明（与 v0.48 那条「默认气泡尺寸归一回不声明」是同一条规矩），读写两头都算在这一套往返里，**v0.55 再添两枚 `Option<bool>`：`scale_with_doc` / `align_with_margins`**（`skip_serializing_if = Option::is_none`，因为这两枚的"没值"说的就是"开着"）；write_xlsx 返回 `Vec<String>` 边界账；命令为 async + spawn_blocking（同步跑主线程会让窗口冻结），`.csv` 读侧分流到 csv.rs，图表网格按 has_charts 惰性构建，`.xlsx` 才另开一趟 zip 读独立部件的批注、链接与打印设置；测试里带一份**条件格式打印夹具**（v0.47：八列各一种判定型，写出真 xlsx 供 Excel 逐格对色）与一份**打印设置夹具**（v0.51：横向 A4 + 85% + 六条边距 + 三槽页眉页脚 + 打印区域/标题行列 + 两个手动断点，`#[ignore]` 生成器与冒烟腿共用同一份产物）；**v0.57 添载荷类型 `DefaultFont { ff, fs }`（`WorkbookPayload` 改 `camelCase` 并多一枚 `defaultFont`）与写侧那一步**：在任何 `add_worksheet` 之前 `wb.set_default_format(&fmt, 20, 64)`——后两个数是 crate 自己的列宽行高度量，这么传才只动字体那一层（`sheetFormatPr defaultRowHeight="15"` 不变），走通了默认格式就是 xf 0 / `fonts[0]`，失败 `notes.push` 不再静默；`fs` 只收正数（0 与负数在这一层就是"没说话"）；测试四例（声明的落进 `fonts[0]` 且不带 `scheme`、没声明的保持 crate 形状、存两次字族与字号都在、`cellXfs` 按索引判别）；**v0.58 把"没样式的格"还给文件那一层**：`format_for(s, default)` 多收工作簿默认字体，且载荷得**真说了样式**（`has_any()`）才建得出那枚 Format——没样式的格走 `write_string`/`write_number`/`write_boolean`/`write_formula` 那几条不带 format 的写法（实测 `<c>` 上没有 `s=`，字号由 Normal 继承），合并区那条照旧要 Format 故仍走 `format_for`；新增 `seed_font(default)`（只把真正需要种的那两味交出去：名字为空或就叫 Calibri、字号正好 11 都算"文件说的就是 crate 那一档"⇒ 一个字不种，种了会把 `<scheme val="minor"/>` 弄丢，`set_default_format` 那一步共用同一条守卫）——只勾了加粗的格因此落 `<b/><sz val="14"/><name val="宋体"/>` 而不是 Calibri/11；测试五例（不盖 xf 且**存两次盘不许把 xf 盖回来**、加粗格从文件取底数、没默认字体时照旧 crate 那一档、同一档不重复声明且省掉那笔后读侧仍认得出 Calibri/11、空样式两来源分不开）+ 成对夹具 `gen_inherit_fixture`（`b-inherit` 正文不带样式 / `b-stamped` 明写 Calibri/11，共用宋体/14 与同一句页眉；一趟写成不走"读回再写"，否则 stamped 被自家读侧归一化成实验件）
   src/csv.rs          CSV 往返：RFC4180 逐字符状态机（引号/转义/字段内换行）+ 分隔符嗅探（, ; 制表符）+ UTF-8 失败退 GBK 解码 + 写侧 BOM/CRLF，read_payload 供 read_xlsx 分流、write_csv 为独立命令
-  src/xlsx_style.rs   zip + quick-xml 直读 xlsx 的 styles.xml（StyleBook：fonts/fills/borders/cellXfs/numFmts，**外加 `<dxfs>` 条件格式样式表 `parse_dxfs`**——dxf 不走 fontId/fillId 索引、实心底纹在 bgColor 而非 fgColor，故单独一趟）/ mergeCells / col·row 尺寸（字符宽·pt→px）/ 隐藏行列 / 冻结 pane / 公式 `<f>`（GeneralRef 实体重建 + unescape，calamine 无样式/公式 API）；**v0.57 起 `read_xlsx_styles` 返回 `(StyleBook→fmts, Option<DefaultFont>)`**：新增 `default_font_of(book)` 按 `cellXfs[0].fontId` **索引**查 `fonts`（不是取第一个 `<font>`，夹具里让 xf0 指 `fontId="1"` 就是为判别这一条），`ff` 与 `fs` 两头都没说就交回 `None`，**这一层不归一化字族**（"等线"归一回不声明会让写侧落 Calibri＝换字族，与 v0.48/v0.52 那两条"默认值不算声明"相反：那两条管的是别替用户声明他没设过的，这条不许抹掉文件里明写的）；ODS 那一路由 xlsx.rs 分流直接交回 `None`（`styles.xml` 的 default-style 本轮未接）
+  src/xlsx_style.rs   zip + quick-xml 直读 xlsx 的 styles.xml（StyleBook：fonts/fills/borders/cellXfs/numFmts，**外加 `<dxfs>` 条件格式样式表 `parse_dxfs`**——dxf 不走 fontId/fillId 索引、实心底纹在 bgColor 而非 fgColor，故单独一趟）/ mergeCells / col·row 尺寸（字符宽·pt→px）/ 隐藏行列 / 冻结 pane / 公式 `<f>`（GeneralRef 实体重建 + unescape，calamine 无样式/公式 API）；**v0.57 起 `read_xlsx_styles` 返回 `(StyleBook→fmts, Option<DefaultFont>)`**：新增 `default_font_of(book)` 按 `cellXfs[0].fontId` **索引**查 `fonts`（不是取第一个 `<font>`，夹具里让 xf0 指 `fontId="1"` 就是为判别这一条），`ff` 与 `fs` 两头都没说就交回 `None`，**这一层不归一化字族**（"等线"归一回不声明会让写侧落 Calibri＝换字族，与 v0.48/v0.52 那两条"默认值不算声明"相反：那两条管的是别替用户声明他没设过的，这条不许抹掉文件里明写的）；ODS 那一路由 xlsx.rs 分流直接交回 `None`（`styles.xml` 的 default-style 本轮未接）；**v0.58 只加一条注释与一枚钉**：`style_for` 的归一化参照物**没**从常量搬到文件那一层——搬了会把"与工作簿默认同一档"的格子读成空样式，而 Univer 的默认字体硬编码 Arial/11（界面就从宋体 14 掉回 11 号），屏幕、纸面与这一层得一起搬（见路线图）；`empty_payload_style_is_ambiguous` 把这份歧义钉成断言而非缺陷：`s: None` 有两种来源而载荷分不开（文件真不带 `s=`＝该继承， vs 带了 `s=` 而正是 Calibri/11＝该照自己写），写侧从 v0.58 起把后一种也归到"随大流"
   src/xlsx_rules.rs   三类规则的双向（v0.46）：写侧 `write_sheet_rules`（autoFilter + filterColumn 的 list/custom 两种形状、dataValidation 六类型与日期序列号换算、条件格式四大类 cellIs/containsText/timePeriod/top10/aboveAverage/duplicate/unique/expression + colorScale/dataBar/iconSet，含 dxf 与 x14 的 gradient/negativeBarColorSameAsPositive）、读侧 `read_sheet_rules`（quick-xml 事件流 + `cfRule` 的 begin/end 临时态、`dxfId` 查表、colId 换回绝对列、`showDropDown` 反义、整列引用等读不懂的片段原样交回由调用方记账），摆不进 / 读不出的**一律返回账目不静默少给**
   src/xlsx_cell_side.rs 单元格两位邻居的双向（v0.48）：读侧 `read_cell_side` 另开一趟 zip 按表名对回**独立部件**——legacy `commentsN.xml`（`<authors>` 表 + `authorId` 下标、正文里那行「作者:」前缀只在认得出作者时剥）、threaded `threadedComments/*.xml`（作者查 `persons/person.xml`，两种键名都收，回复并进正文并记账）、两者的归一、气泡尺寸与常开来自 `vmlDrawing`（pt→px，默认那档 128×74 **归一回不声明**）、超链接的 `ref` 在 worksheet 而外部地址在其 rels（`TargetMode="External"`）、表内跳转才是 `location` 字面；写侧 `write_sheet_side`（链接先落文本再补普通格，无 scheme 的目标按 `file:` 补试；`Note` 带作者/尺寸/常开，作者超 52 字只丢作者；`set_default_note_author("")` 让"没人署过"真是空串）+ `save_workbook`（**rust_xlsxwriter 的 `<authors>` 按名字排序而 `authorId` 按格子序登记**，两序不一致时按载荷数出来的那张表重排 `<authors>`，多重集或 `<comment ref>` 文档序对不上就宁可不改并记账）；认不出的形状一律记账
   src/xlsx_print.rs   一张纸怎么摆的双向（v0.51）：读侧 `read_print_setups` 另开一趟 zip 收 worksheet 末尾七处（`sheetPr/pageSetUpPr@fitToPage`·`printOptions`·`pageMargins`·`pageSetup`·`headerFooter` 的 odd/even/first 三槽·`rowBreaks`·`colBreaks`）**加 workbook 级两条 definedName**（`_xlnm.Print_Area`/`_xlnm.Print_Titles` 靠 `localSheetId` 分表，`$1:$2`/`$A:$B`/区域三种片段各归各的字段），`<brk id>` **原样收**（0 基，指"这一行/列自己开始新的一页"——两头实测过）；写侧 `write_sheet_print`（odd 与其余各项交 crate）+ `PrintPatch`/`patch_part_xml`（crate 只有 odd 通道、`differentOddEven`/`differentFirst` 一个字不写、又把起始页码落在布尔属性 `useFirstPageNumber` 上，故 even/first 两条串与真号码在字节上补一次：只动点名的那张 worksheet 部件，兄弟元素次序按 schema 排，页眉页脚里 `&` 是格式码故只认三条标准转义）；认不出的纸型编号与片段一律记账不硬凑；**v0.52 只补一条读侧归一**：接进 `print.clear_default_only_margins()` 之后才判 `is_empty()`，于是"文件里只有 crate 那份默认 `<pageMargins>`"的表不再被当成带着纸面设置（面板副标题、账目与 `printRef` 三处都因此说实话），测试另加两例——只含默认六边的那一份不算声明、超出默认的那一条仍算；**v0.53 补的是"没声明过的那一枚不该被替我们声明"**：`write_sheet_print` 只在真走通 setter 时才算声明过方向并回传 `drop_orientation`，`patch_part_xml` 那趟据此把 crate 逢 `<pageSetup>` 必写的 `orientation` **整枚擦掉**（`patch_orientation` 只动这一枚，其余属性与内部正文原样搬，声明过 landscape/portrait 的一张字都不改），读侧同一条分寸用在页高档上——`<pageSetup>` 里 `fitToWidth`/`fitToHeight` 被 crate 在等于 1 时省掉，而 OOXML 缺省正是 1，故开了 `fitToPage` 却没写的那两枚归一回 `Some(1)`（没开 `fitToPage` 的不许归一，那是替用户凭空声明一档缩放）；测试再加三例（没声明的方向不回来、走完整存盘链路后仍不声明且不连累 paperSize/scale、擦方向不许把页高归一也带走）与一份**成对夹具** `gen_orient_fixture`（同一趟存盘里"说了 landscape"与"从没说"两张表，第三方腿据此分辨"被擦了"与"本来就没写"）；**v0.54 只多一份夹具** `gen_parity_fixture`（一张表 140 行、横向 A4、`differentOddEven` 与 `differentFirst` **同时为真**、odd/even/first 三版页眉页脚各写不同内容、`firstPageNumber=7`——那枚 7 是装在同一份件里的对照：纸上印出 7 就说明起点漏进了我们自己的通道，而它始终印的是 1..N；只读腿与 CDP 冒烟吃的是同一份字节）；**v0.55 收的是同一元素上那两枚缺省开着的开关**：读侧新增 `off_attr()`（只把明确写 `0` 的收进载荷，缺省与显式 `1` 都归一回不声明——与 v0.52 那枚默认边距同一条规矩），写侧只在 `Some(false)` 时调 `set_header_footer_scale_with_doc(false)` / `set_header_footer_align_with_page(false)`（crate 也只在关掉时落字节，且走通 setter 会置上 `head_footer_changed`，于是"只有开关、一条页眉页脚都没有"的件也长得出 `<headerFooter>`；`patch_header_footer` 那趟只擦自家那两枚奇偶开关，crate 写的这两枚活着过第二次存盘），`merge_defaults` 按「任何一头说了关就是关」填；测试三例（关着的落进 XML 而开着的不写、存两次两枚都在、`scaleWithDoc="0" alignWithMargins="1"` 读回来是 `Some(false)` 与 `None`）+ 一份**四件套对照夹具** `gen_switch_fixture`（`s-on`/`s-scaleoff`/`s-alignon`/`s-alignoff`：同一份页眉、只动一枚开关，`align` 那两份故意用不对称边距 1in/2in，于是"按边距的中心"与"按纸边的中心"分得开；Excel 腿与冒烟腿吃同一份字节）；**v0.56 只多一份三件对照夹具** `gen_fitwidth_fixture`（同一张 14 列 × 130px 的表——竖版 A4 一页宽根本装不下、必须挤——写出 `fw-plain`（scale 100）/ `fw-fit1`（`fitToPage` + `fitToWidth=1`）/ `fw-fit1-off`（同一件再写 `scaleWithDoc="0"`）三份件，页眉三槽各带表名 tag 好让 pdf.js 认得出哪一行是页眉；它管两个问题：挤一页宽时页眉跟不跟着压、跟着的是**反求出来那一档**还是**声明出来的那一档**；Excel 只读腿与 CDP 冒烟吃同一份字节）
@@ -1948,11 +1996,22 @@ cargo check        # Rust 后端检查（在 src-tauri 下）
       而正文两件同为 8.244pt（正文那一层没被动）；Excel 打开我们重存的件报 `Normal = 宋体/14`、它自己导出的 PDF
       页眉/正文比 1.276 ⇒ 写进去的那枚 `fonts[0]` 第三方认得；另注一条改第三方件的教训：
       .NET `ZipArchive` Update 模式就地改写的 xlsx 我们读得回而 **Excel 16.0 拒开**，按原条目序重打包才正常
-- [ ] **正文底数**还没接到文件说话的那一层（页眉已经接了，正文仍旧从 CSS `font-size:11px`＝8.25pt 打印）：同一份件在
-      Excel 的纸上是 **10.440pt** 而我们 8.244pt，差 **1.266 倍**，正是 fit-to-width 那张表"页眉 4.22 / 正文 3.16"
-      那两个底数之差的来源。这一条不是把一枚数传下去就完事：格子字号是整张表排版的底，牵动列宽、行高与
-      `PRINT_ROW_BIAS_PX`；而且本轮量出一条必须一起修的——我们存盘会给原本不带 `s=` 的格子盖上显式 xf
-      （`<c r="A1" s="1">` → Calibri/11），Excel 原件里那一格是**靠继承 Normal** 拿字号的，于是正文连文件那一层也不吃了
+- [x] **写侧不再给未设样式的格盖上显式 xf**，正文那一格改由文件说话（v0.58，`b-inherit`/`b-stamped` 成对件在
+      Excel 16.0 自己导出的 PDF 上量）：`<c r="A1" s="1">` → Calibri/11 那一笔从字节上消失了（载荷没 styles 的格走
+      **不带 format** 的写法），Excel 原件里那一格本来就是**靠继承 Normal** 拿字号的；只勾了加粗的格改由
+      `seed_font` 把工作簿默认字体种进 `<font>`（`<b/><sz val="14"/><name val="宋体"/>`，不再落 Calibri/11），
+      而文件说的正是 Calibri/11 那一档时**一个字都不种**（种了会把 `<scheme val="minor"/>` 弄丢）。
+      第三条只读腿帮上了忙：`Range.Font.Size` **会把继承解出来**（inherit 的 A1 报 14 而 stamped 的 A1 报 11），
+      于是正文底数的归属有一条比量 PDF 便宜的判据；成对件的页眉正文比 inherit **1.000**、stamped **1.272
+      （＝14/11，v0.57 那个 1.266 的形状留在同一趟当对照）**
+- [ ] **正文底数**还没接到文件说话的那一层（页眉已经接了，正文仍旧从 CSS `font-size:11px`＝8.25pt 打印）：v0.58 的
+      成对件把这一档差量死在同一份文件上——inherit 那件在 Excel 的纸上页眉正文**比 1.000**（正文 14.040），
+      而我们自己的纸上是 **14.002 / 8.244＝1.698**（＝14/8.25），同一件正文差 **1.703 倍**。
+      这一条不是把一枚数传下去就完事，而是**三处必须一起搬**：① 读侧 `style_for` 的归一化参照物从常量
+      换成文件那一层（v0.58 已把这份歧义钉成断言：`s: None` 两种来源载荷分不开），② 屏幕那一层——Univer 的默认字体
+      硬编码 Arial/11、`IWorkbookData.defaultStyle` 零读取，只把归一化搬过去界面就会从宋体 14 掉回 11 号（`defaultFontRef`
+      那枚侧通道要真的喂进渲染而不是只喂存盘），③ 纸面那一层（`.sheet-print-table td{font-size:11px}` 换成跟着文件），
+      而 ③ 一动就牵着 `PRINT_ROW_BIAS_PX` 重标定（见下面那条）；格子字号还是整张表排版的底，牵动列宽与行高
 - [ ] ODS 的工作簿默认那一层还没接：`default_font_of` 只走 xlsx 一路，`.ods` 在 xlsx.rs 的分流里直接交回 `None`，
       而 ODF 的对应物是 `styles.xml` 里的 default-style（页眉底数在 ODS 件上因此仍是兜底那 11pt）
 - [ ] 打印排版的实测常数需要标定：`PRINT_ROW_BIAS_PX = 0.4`（屏底量到的行高比纸上短的那个数）是按当前这份夹具与

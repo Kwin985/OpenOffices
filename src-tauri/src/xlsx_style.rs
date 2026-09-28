@@ -469,6 +469,9 @@ fn style_for(xf: usize, book: &StyleBook) -> Option<CellStyle> {
         .get(&rec.numfmt)
         .cloned()
         .or_else(|| builtin_numfmt(rec.numfmt).map(String::from));
+    // 这一层的归一化仍旧拿常量当尺子（Calibri/等线 与 11 号算"没说话"），本轮不动它：
+    // 换成拿文件那一层当尺子会把"与默认同一档"的格子读成空样式，而 Univer 的默认字体是硬编码
+    // Arial/11（v0.57 记的侧通道），界面上就会从宋体 14 掉回 11 号——屏幕与纸面得一起搬，见路线图
     let style = CellStyle {
         bl: f.bl,
         it: f.it,
@@ -675,6 +678,35 @@ mod tests {
         assert_eq!(bd.r.as_ref().and_then(|x| x.s.as_deref()), Some("dashed"));
         assert!(bd.t.as_ref().expect("top").c.is_none(), "未写 color 则无颜色");
         assert!(style_for(0, &book).is_none());
+    }
+
+    /// 载荷里"这一格没有样式"有两种来源而分不开：文件里那一格真的不带 `s=`（该继承 Normal），
+    /// 和它带了 `s=` 但样式正是常量那一档 Calibri/11（该照自己写）。归一化搬不到文件那一层，
+    /// 是因为 Univer 的默认字体硬编码 Arial/11（v0.57 记的侧通道）——屏幕、纸面、这一层得一起搬。
+    /// 本轮把这一条**当我说**而不是修掉：写侧从 v0.58 起让不带样式的格继承 Normal，
+    /// 于是后一种少见情况从"歪打正着的 Calibri/11"换成"随大流"，量出来记在这里
+    #[test]
+    fn empty_payload_style_is_ambiguous() {
+        let book = parse_styles(
+            r#"<?xml version="1.0"?><styleSheet xmlns="x">
+              <fonts count="2"><font><sz val="14"/><name val="宋体"/></font><font><sz val="11"/><name val="Calibri"/></font></fonts>
+              <cellXfs count="2"><xf fontId="0"/><xf fontId="1"/></cellXfs>
+            </styleSheet>"#,
+        );
+        assert_eq!(
+            default_font_of(&book),
+            Some(DefaultFont {
+                ff: Some("宋体".into()),
+                fs: Some(14.0)
+            }),
+            "文件那一层说的是宋体/14"
+        );
+        let st = style_for(1, &book);
+        assert!(
+            st.as_ref().is_none_or(|x| x.ff.is_none() && x.fs.is_none()),
+            "明写 Calibri/11 的那一格在载荷里也说不出字族字号：{:?}",
+            st
+        );
     }
 
     /// 工作簿默认字体那一层：认的是 `cellXfs[0]@fontId` 指到的那一条，不是"排在 fonts 第一条"。

@@ -867,21 +867,40 @@ fn border_type(s: &str) -> Option<rust_xlsxwriter::FormatBorder> {
     })
 }
 
-fn format_for(s: Option<&CellStyle>) -> Format {
+/// 文件那一层（工作簿默认字体）里真正需要"种"进格子的那两味。
+/// crate 自己的默认就是 Calibri/11，而且带 `<scheme val="minor"/>`（字族跟着主题走）：
+/// 实测显式 `set_font_name("Calibri")` 写出来的那一条没有 scheme ⇒ 同一档时一个字都不种
+fn seed_font(default: Option<&DefaultFont>) -> (Option<&str>, Option<f64>) {
+    let Some(d) = default else { return (None, None) };
+    let ff = d
+        .ff
+        .as_deref()
+        .map(str::trim)
+        .filter(|n| !n.is_empty() && *n != "Calibri");
+    let fs = d.fs.filter(|v| *v > 0.0 && (*v - 11.0).abs() > f64::EPSILON);
+    (ff, fs)
+}
+
+fn format_for(s: Option<&CellStyle>, default: Option<&DefaultFont>) -> Format {
+    let st = s.filter(|x| x.has_any());
+    let (seed_ff, seed_fs) = seed_font(default);
     let mut f = Format::new();
-    if let Some(st) = s {
+    if let Some(st) = st {
         if st.bl {
             f = f.set_bold();
         }
         if st.it {
             f = f.set_italic();
         }
-        if let Some(fs) = st.fs {
-            f = f.set_font_size(fs);
-        }
-        if let Some(ff) = &st.ff {
-            f = f.set_font_name(ff.as_str());
-        }
+    }
+    // 正文的底数也归文件那一层说：格子里没写字族/字号时跟工作簿默认字体，不落到常量上
+    if let Some(name) = st.and_then(|x| x.ff.as_deref()).or(seed_ff) {
+        f = f.set_font_name(name);
+    }
+    if let Some(size) = st.and_then(|x| x.fs).or(seed_fs) {
+        f = f.set_font_size(size);
+    }
+    if let Some(st) = st {
         if let Some(cl) = &st.cl {
             f = f.set_font_color(Color::from(cl.as_str()));
         }
@@ -977,7 +996,9 @@ pub fn write_xlsx_sync(path: String, workbook: WorkbookPayload) -> Result<Vec<St
     if let Some(df) = workbook.default_font.as_ref() {
         let ff = df.ff.as_deref().map(str::trim).filter(|s| !s.is_empty());
         let fs = df.fs.filter(|v| *v > 0.0);
-        if ff.is_some() || fs.is_some() {
+        // 同一档不重复声明：Calibri/11 正是 crate 自己的默认，写一遍反而把 `<scheme>` 弄丢
+        let (seed_ff, seed_fs) = seed_font(Some(df));
+        if (ff.is_some() || fs.is_some()) && (seed_ff.is_some() || seed_fs.is_some()) {
             let mut fmt = Format::new();
             if let Some(name) = ff {
                 fmt = fmt.set_font_name(name);
@@ -990,6 +1011,7 @@ pub fn write_xlsx_sync(path: String, workbook: WorkbookPayload) -> Result<Vec<St
             }
         }
     }
+    let default_font = workbook.default_font.as_ref();
     // 每张表交回来的作者表（下标即 authorId），存盘时拿它核对产物里的 <authors>
     let mut tables: Vec<Option<xlsx_cell_side::AuthorTable>> = Vec::new();
     // crate 写不了的那半边打印设置，按 worksheet 部件名点名（部件序号＝建表顺序，1 基）
@@ -1018,7 +1040,7 @@ pub fn write_xlsx_sync(path: String, workbook: WorkbookPayload) -> Result<Vec<St
                 .iter()
                 .find(|x| x.r == m.start_row && x.c == m.start_column);
             let text = top.and_then(|x| x.v.as_ref()).map(cell_text).unwrap_or_default();
-            let fmt = format_for(top.and_then(|x| x.s.as_ref()));
+            let fmt = format_for(top.and_then(|x| x.s.as_ref()), default_font);
             let _ = ws.merge_range(m.start_row, sc, m.end_row, ec, text.as_str(), &fmt);
         }
         for cell in &sheet.cells {
@@ -1027,7 +1049,8 @@ pub fn write_xlsx_sync(path: String, workbook: WorkbookPayload) -> Result<Vec<St
             if in_merge(row, cell.c) {
                 continue;
             }
-            let fmt = format_for(cell.s.as_ref());
+            let st = cell.s.as_ref().filter(|x| x.has_any());
+            let fmt = format_for(st, default_font);
             if let Some(formula) = &cell.f {
                 // Formula::new 自剥 '='；缓存值随 <v> 落盘，重开（calamine 不算式）不丢数
                 let mut f = rust_xlsxwriter::Formula::new(formula);
@@ -1039,26 +1062,57 @@ pub fn write_xlsx_sync(path: String, workbook: WorkbookPayload) -> Result<Vec<St
                     };
                     f = f.set_result(s);
                 }
-                let _ = ws.write_formula_with_format(row, col, f, &fmt);
+                // 没样式的格走不带 format 的那条写法：实测那样 `<c>` 上没有 `s=`，
+                // 字号就回到"继承 Normal"——Excel 原件正是这个形状（盖上 s="1" 等于换成 Calibri/11）
+                match st {
+                    Some(_) => {
+                        let _ = ws.write_formula_with_format(row, col, f, &fmt);
+                    }
+                    None => {
+                        let _ = ws.write_formula(row, col, f);
+                    }
+                }
                 continue;
             }
             match &cell.v {
-                Some(Value::String(s)) => {
-                    let _ = ws.write_string_with_format(row, col, s.clone(), &fmt);
-                }
+                Some(Value::String(s)) => match st {
+                    Some(_) => {
+                        let _ = ws.write_string_with_format(row, col, s.clone(), &fmt);
+                    }
+                    None => {
+                        let _ = ws.write_string(row, col, s.as_str());
+                    }
+                },
                 Some(Value::Number(n)) => {
                     if let Some(f) = n.as_f64() {
-                        let _ = ws.write_number_with_format(row, col, f, &fmt);
+                        match st {
+                            Some(_) => {
+                                let _ = ws.write_number_with_format(row, col, f, &fmt);
+                            }
+                            None => {
+                                let _ = ws.write_number(row, col, f);
+                            }
+                        }
                     }
                 }
-                Some(Value::Bool(b)) => {
-                    let _ = ws.write_boolean_with_format(row, col, *b, &fmt);
-                }
-                Some(other) => {
-                    let _ = ws.write_string_with_format(row, col, other.to_string(), &fmt);
-                }
+                Some(Value::Bool(b)) => match st {
+                    Some(_) => {
+                        let _ = ws.write_boolean_with_format(row, col, *b, &fmt);
+                    }
+                    None => {
+                        let _ = ws.write_boolean(row, col, *b);
+                    }
+                },
+                Some(other) => match st {
+                    Some(_) => {
+                        let _ = ws.write_string_with_format(row, col, other.to_string(), &fmt);
+                    }
+                    None => {
+                        let _ = ws.write_string(row, col, other.to_string().as_str());
+                    }
+                },
                 None => {
-                    if cell.s.is_some() {
+                    if st.is_some() {
                         let _ = ws.write_string_with_format(row, col, "", &fmt);
                     }
                 }
@@ -2536,5 +2590,250 @@ mod tests {
             "第二趟的字节里仍是那一族：{}",
             first_font(&styles)
         );
+    }
+
+    /// 取某一格 `<c>` 的开头标签原文（找不到返回空串，好把上下文带进断言）
+    fn cell_tag(sheet_xml: &str, refs: &str) -> String {
+        let mut at = 0;
+        while let Some(i) = sheet_xml[at..].find("<c ") {
+            let start = at + i;
+            let end = start + sheet_xml[start..].find('>').unwrap_or(0) + 1;
+            let tag = &sheet_xml[start..end];
+            if tag.contains(&format!(r#"r="{refs}""#)) {
+                return tag.to_string();
+            }
+            at = end;
+        }
+        String::new()
+    }
+
+    /// 逐条 `<font>`——`fontId` 指的就是这个序，按位置取而不是按名字找
+    fn font_blocks(styles_xml: &str) -> Vec<String> {
+        let mut out = Vec::new();
+        let mut at = 0;
+        while let Some(i) = styles_xml[at..].find("<font>") {
+            let start = at + i;
+            let Some(j) = styles_xml[start..].find("</font>") else { break };
+            out.push(styles_xml[start..start + j].to_string());
+            at = start + j;
+        }
+        out
+    }
+
+    /// 载荷没说样式的格子，存盘不许盖上显式 xf：Excel 原件里那一格是靠**继承 Normal** 拿字号的，
+    /// 盖上 `s="1"` 就是把正文从文件那一层摘下来接到我们的常量上（v0.57 量出来的那条）
+    #[test]
+    fn unstyled_cells_write_no_explicit_xf() {
+        let path = tmp_path("no-xf");
+        let mut bold = cell(1, 0, json!("加粗"));
+        bold.s = Some(CellStyle { bl: true, ..Default::default() });
+        let mut blank = cell(3, 0, json!("空样式"));
+        blank.s = Some(CellStyle::default());
+        let mut formula = cell(4, 0, json!(4));
+        formula.f = Some("=2+2".into());
+        let wb = WorkbookPayload {
+            sheets: vec![SheetPayload {
+                name: "继承".into(),
+                cells: vec![cell(0, 0, json!("正文")), bold, cell(2, 0, json!(7)), blank, formula],
+                ..Default::default()
+            }],
+            default_font: Some(DefaultFont {
+                ff: Some("宋体".into()),
+                fs: Some(14.0),
+            }),
+            ..Default::default()
+        };
+        write_xlsx_sync(path.clone(), wb).expect("写失败");
+        let sheet = entry(&path, "xl/worksheets/sheet1.xml");
+        for r in ["A1", "A3", "A4", "A5"] {
+            let tag = cell_tag(&sheet, r);
+            assert!(!tag.is_empty() && !tag.contains(" s="), "{r} 那一格没样式，不许盖上显式 xf：{tag}");
+        }
+        let bold_tag = cell_tag(&sheet, "A2");
+        assert!(bold_tag.contains(" s="), "说了加粗的照旧要有自己的那一条 xf：{bold_tag}");
+        // 第二趟吃的是第一趟的字节，形状不许自己长回来
+        let back = read_xlsx_sync(path.clone()).expect("读回失败");
+        let plain = back.sheets[0]
+            .cells
+            .iter()
+            .find(|x| x.r == 0 && x.c == 0)
+            .expect("正文那格读不回来");
+        assert!(plain.s.is_none(), "读回来的正文格也不该带样式：{:?}", plain.s);
+        write_xlsx_sync(path.clone(), back).expect("第二趟写失败");
+        let tag = cell_tag(&entry(&path, "xl/worksheets/sheet1.xml"), "A1");
+        assert!(!tag.contains(" s="), "存两次盘不许把 xf 盖回来：{tag}");
+        std::fs::remove_file(&path).ok();
+    }
+
+    /// 格子里只说了"加粗"、没说字号字族 ⇒ 底数跟文件那一层走，而不是落到 crate 的 Calibri/11 上
+    #[test]
+    fn partial_style_seeds_from_workbook_font() {
+        let path = tmp_path("seed-on");
+        let mut bold = cell(0, 0, json!("加粗"));
+        bold.s = Some(CellStyle { bl: true, ..Default::default() });
+        let wb = WorkbookPayload {
+            sheets: vec![SheetPayload {
+                name: "种".into(),
+                cells: vec![bold],
+                ..Default::default()
+            }],
+            default_font: Some(DefaultFont {
+                ff: Some("宋体".into()),
+                fs: Some(14.0),
+            }),
+            ..Default::default()
+        };
+        write_xlsx_sync(path.clone(), wb).expect("写失败");
+        let styles = entry(&path, "xl/styles.xml");
+        let f = font_blocks(&styles)
+            .into_iter()
+            .find(|x| x.contains("<b/>"))
+            .unwrap_or_default();
+        assert!(
+            f.contains(r#"<sz val="14"/>"#) && f.contains(r#"<name val="宋体"/>"#) && !f.contains("Calibri"),
+            "加粗那格该继承工作簿默认字体那一层：{f}"
+        );
+        std::fs::remove_file(&path).ok();
+    }
+
+    /// 反面：文件那一层没说话时不许凭空造一层——载荷没给默认字体，加粗格仍是 crate 的 Calibri/11
+    #[test]
+    fn partial_style_without_default_keeps_crate_font() {
+        let path = tmp_path("seed-off");
+        let mut bold = cell(0, 0, json!("加粗"));
+        bold.s = Some(CellStyle { bl: true, ..Default::default() });
+        let wb = WorkbookPayload {
+            sheets: vec![SheetPayload {
+                name: "没种".into(),
+                cells: vec![bold],
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        write_xlsx_sync(path.clone(), wb).expect("写失败");
+        let styles = entry(&path, "xl/styles.xml");
+        let f = font_blocks(&styles)
+            .into_iter()
+            .find(|x| x.contains("<b/>"))
+            .unwrap_or_default();
+        assert!(
+            f.contains(r#"<sz val="11"/>"#) && f.contains(r#"<name val="Calibri"/>"#),
+            "没有工作簿默认字体可跟时就照旧用 crate 那一档：{f}"
+        );
+        std::fs::remove_file(&path).ok();
+    }
+
+    /// 文件说的正是 crate 那一档（Calibri/11）时一个字都不种：实测显式写出来的那两条没有
+    /// `<scheme val="minor"/>`，种了等于把"字族跟着主题走"这一条弄丢
+    #[test]
+    fn crate_default_font_is_not_restated() {
+        let path = tmp_path("df-calibri");
+        let mut bold = cell(1, 0, json!("加粗"));
+        bold.s = Some(CellStyle { bl: true, ..Default::default() });
+        let wb = WorkbookPayload {
+            sheets: vec![SheetPayload {
+                name: "同一档".into(),
+                cells: vec![cell(0, 0, json!("正文")), bold],
+                ..Default::default()
+            }],
+            default_font: Some(DefaultFont {
+                ff: Some("Calibri".into()),
+                fs: Some(11.0),
+            }),
+            ..Default::default()
+        };
+        write_xlsx_sync(path.clone(), wb).expect("写失败");
+        let styles = entry(&path, "xl/styles.xml");
+        assert!(
+            first_font(&styles).contains(r#"<scheme val="minor"/>"#),
+            "同一档不许多写一遍，写了就把主题那条 scheme 弄丢：{}",
+            first_font(&styles)
+        );
+        let back = read_xlsx_sync(path.clone()).expect("读回失败");
+        assert_eq!(
+            back.default_font,
+            Some(DefaultFont { ff: Some("Calibri".into()), fs: Some(11.0) }),
+            "省掉那一笔之后，读侧仍该认得出这一层是 Calibri/11"
+        );
+        std::fs::remove_file(&path).ok();
+    }
+
+    /// v0.58 只读腿的成对夹具，两份吃同一份字节形状、只有正文那一层不同：
+    /// `b-inherit` 正文格不带样式（写侧本轮让 `<c>` 上没有 `s=`，字号该从 Normal=宋体/14 继承下来），
+    /// `b-stamped` 正文格明写 Calibri/11（正是本轮之前我们盖上去的那一档，也就是 v0.57 在 Excel 纸上量到 1.276 的形状）。
+    /// 两件的页眉都只有工作簿默认字体那一层可跟，所以 Excel 自己导出的 PDF 上「页眉/正文」比一份≈1.000、一份≈14/11
+    #[test]
+    #[ignore]
+    fn gen_inherit_fixture() {
+        let dir = std::env::var("OO_FIXTURE_DIR")
+            .unwrap_or_else(|_| concat!(env!("CARGO_MANIFEST_DIR"), "/../tmp/x58").to_string());
+        std::fs::create_dir_all(&dir).expect("夹具目录建不出来");
+        let rows = 8u32;
+        let cols = 3u32;
+        let print = || SheetPrintPayload {
+            orientation: Some("portrait".into()),
+            paper_size: Some(9),
+            scale: Some(100),
+            header: Some(PrintHfPayload {
+                odd: Some("&L{TAG}左&C{TAG}中&R{TAG}右".into()),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        // stamped=true 时每个正文格都明写 Calibri/11：这是"我们的常量"那一档，不是文件那一层
+        let body = |stamped: bool| -> Vec<CellPayload> {
+            (0..rows)
+                .flat_map(|r| {
+                    (0..cols).map(move |c| CellPayload {
+                        r,
+                        c,
+                        v: Some(json!(format!("R{}C{}", r + 1, c + 1))),
+                        s: stamped.then(|| CellStyle {
+                            ff: Some("Calibri".into()),
+                            fs: Some(11.0),
+                            ..Default::default()
+                        }),
+                        ..Default::default()
+                    })
+                })
+                .collect()
+        };
+        let cases = ["inherit", "stamped"];
+        let mut all: Vec<String> = Vec::new();
+        for tag in cases {
+            let path = format!("{dir}/b-{tag}.xlsx");
+            let mut cells = body(tag == "stamped");
+            // 加粗那一格两份都只说"加粗"、不说字号：这一格的底数正该由文件那一层给
+            let mut bold = cell(0, 3, json!("BOLD"));
+            bold.s = Some(CellStyle {
+                bl: true,
+                ..Default::default()
+            });
+            cells.push(bold);
+            // 页眉串里的 {TAG} 换成件名，好让 pdf.js 认得出哪一行是页眉
+            let mut pr = print();
+            if let Some(h) = pr.header.as_mut() {
+                h.odd = h.odd.take().map(|v| v.replace("{TAG}", tag));
+            }
+            let book = WorkbookPayload {
+                sheets: vec![SheetPayload {
+                    name: "继承".into(),
+                    cells,
+                    print: Some(pr),
+                    ..Default::default()
+                }],
+                default_font: Some(DefaultFont {
+                    ff: Some("宋体".into()),
+                    fs: Some(14.0),
+                }),
+                ..Default::default()
+            };
+            // 夹具一趟写成，不走"读回再写"：b-stamped 那一档 Calibri/11 会被读侧的归一化成
+            // 没说话（本轮那条当我说），重写一趟就会把对照件写成实验件
+            let mut notes = write_xlsx_sync(path.clone(), book).expect("夹具写出失败");
+            notes.insert(0, format!("b-{tag} 写出"));
+            all.push(notes.join(" | "));
+        }
+        println!("夹具目录: {dir}\n{}", all.join("\n"));
     }
 }
