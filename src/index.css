@@ -3013,3 +3013,57 @@ button {
 .pdf-anno-del:hover {
   color: #dc2626;
 }
+
+/* ---------- v0.65 加密 PDF 的密码面板 ---------- */
+.pdf-pwd-mask {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(15, 23, 42, 0.42);
+}
+
+.pdf-pwd-card {
+  width: min(420px, calc(100vw - 48px));
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 18px 20px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.24);
+  color: var(--text);
+}
+
+.pdf-pwd-title {
+  font-size: 13px;
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pdf-pwd-ask {
+  font-size: 13px;
+  line-height: 1.55;
+}
+
+.pdf-pwd-row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.pdf-pwd-input {
+  flex: 1;
+  min-width: 0;
+}
+
+.pdf-pwd-note {
+  font-size: 11.5px;
+  line-height: 1.5;
+  color: var(--text-2);
+}

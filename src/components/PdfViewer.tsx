@@ -9,6 +9,7 @@ import { readBytes, writeBytes, pickDirectory, pickPdfFiles, pickSaveFile, baseN
 import { createRangeTransport } from '../lib/pdf-range'
 import { registerSaver } from '../lib/registry'
 import { failRaw, failStatus, statusText, statusTip } from '../lib/fail-msg'
+import { PWD_MEMORY_NOTE, pwdCancelledText, pwdPromptText, pwdReason, type PwdReason } from '../lib/pdf-password'
 import {
   fromDisplayPoints,
   fromDisplayRect,
@@ -244,6 +245,17 @@ function PdfViewer({ tab }: Props) {
   // 本次打开是否走分段读取（冒烟断言用，不参与渲染）
   const rangeModeRef = useRef(false)
 
+  // 加密 PDF 的密码闸门：pdf.js 错一次就再问一次、自己不会封顶，所以重试的次数由这道面板管着
+  const [pwdAsk, setPwdAsk] = useState<{ reason: PwdReason; attempt: number } | null>(null)
+  const [pwdInput, setPwdInput] = useState('')
+  // 已交出去一个密码、等 pdf.js 的下一次反应（再问 / 打开 / 拒绝）——期间按钮全 disable，防连点重复投
+  const [pwdBusy, setPwdBusy] = useState(false)
+  const pwdUpdateRef = useRef<((v: string | Error) => void) | null>(null)
+  const pwdAttemptRef = useRef(0)
+  // 取消只能靠界面自己记：交回的错误串到不了归因层（实测 Name=PasswordException / code=1，与我们那句无关）
+  const pwdCancelledRef = useRef(false)
+  const pwdInputRef = useRef<HTMLInputElement>(null)
+
   // layout effect：被动效果排在「这一帧画完」之后，取文档要等一次真实绘制。这条 effect
   // 不量 DOM，提前跑只是把异步任务早发出去——同构建实测 heavy.pdf 首页 746 → 473ms。
   // （更早这里记的「~317ms」后来查明主要是外壳 Suspense 的兜底节流，不是被动效果排队；
@@ -252,6 +264,13 @@ function PdfViewer({ tab }: Props) {
     if (!tab.path) return
     let disposed = false
     let openTask: PDFDocumentLoadingTask | null = null
+    // 每轮打开从零计：上一轮的取消标记与试错次数不许带过来（重载与换标签都算新一轮）
+    pwdCancelledRef.current = false
+    pwdAttemptRef.current = 0
+    pwdUpdateRef.current = null
+    setPwdAsk(null)
+    setPwdBusy(false)
+    setPwdInput('')
     ;(async () => {
       try {
         const path = tab.path!
@@ -262,23 +281,47 @@ function PdfViewer({ tab }: Props) {
         }
         // 大文件只喂文件头，正文按需区间取；小的整本读，省掉一串 IPC 往返
         const range = await createRangeTransport(path)
+        if (disposed) return
         rangeModeRef.current = !!range
         openTask = range
           ? pdfjsLib.getDocument({ ...opts, range })
           : pdfjsLib.getDocument({ ...opts, data: await readBytes(path) })
+        // 闸门必须挂在 await 之前（实测：晚一步 pdf.js 就直接按"没给密码"拒掉，面板永远不出现）。
+        // 这里只把"下一次该怎么回话"存下来并亮出面板——绝不自动投密码，因为实测 pdf.js 错一次问一次、
+        // 自己不封顶，整条重试链路的节奏只在界面上。
+        openTask.onPassword = (updatePassword: (v: string | Error) => void, code: number) => {
+          if (disposed) {
+            updatePassword(new Error('已关闭'))
+            return
+          }
+          pwdUpdateRef.current = updatePassword
+          setPwdBusy(false)
+          setPwdInput('')
+          setPwdAsk({ reason: pwdReason(code), attempt: ++pwdAttemptRef.current })
+        }
         const d = await openTask.promise
         if (disposed) {
           void d.destroy()
           return
         }
+        pwdUpdateRef.current = null
+        setPwdAsk(null)
         slots.current.clear()
         setSizes({})
         setCurPage(keepPageRef.current || 1)
         setDoc(d)
         setStatus('')
       } catch (e) {
+        // 被换掉的那一趟（开发模式下的双挂载、换标签、重新打开都会）自己按过 Error 下去，
+        // 这里的拒绝是**我们**按下去的结果，不是这一趟的真实结局。它绝不能再动状态：
+        // 晚一步落地的话，它会把还活着的那一趟刚亮起来的密码面板抹掉（setPwdAsk(null)），
+        // pdf.js 从此等不到回话——界面就卡在「正在加载…」上，看着像产品没接线。
+        if (disposed) return
         console.error(e)
-        if (!disposed) setStatus(failStatus(e, '加载失败'))
+        setPwdAsk(null)
+        pwdUpdateRef.current = null
+        // 用户自己取消的那一句不带"失败"前缀，也不带原始信息（那是我们按下去的，不是它报的）
+        setStatus(pwdCancelledRef.current ? pwdCancelledText() : failStatus(e, '加载失败'))
       }
     })()
     return () => {
@@ -1299,6 +1342,27 @@ function PdfViewer({ tab }: Props) {
     setReloadKey((k) => k + 1)
   }
 
+  // 交出一个密码。空串不当密码用（喂进去只换来一次重新提问，白耗一轮）
+  const submitPwd = (v?: string) => {
+    const up = pwdUpdateRef.current
+    if (!up || !pwdAsk || pwdBusy) return
+    const val = v ?? pwdInput
+    if (!val) return
+    setPwdBusy(true)
+    up(val)
+  }
+
+  // 取消：先记下这件事（错误串分不出用户取消与没给密码），再把闸门按下去
+  const cancelPwd = () => {
+    const up = pwdUpdateRef.current
+    pwdCancelledRef.current = true
+    pwdUpdateRef.current = null
+    setPwdAsk(null)
+    setPwdInput('')
+    setStatus(pwdCancelledText())
+    up?.(new Error('用户取消了密码输入'))
+  }
+
   const opRotate = (delta: number) =>
     pageOp('旋转', async (path, pages) => {
       await rotatePagesInPlace(path, pages, delta)
@@ -1456,6 +1520,31 @@ function PdfViewer({ tab }: Props) {
         return kind === 'rotate' ? opRotate(90) : opRemove()
       },
     }
+    // 冒烟钩子：加密 PDF 的密码闸门。feed 直接交密码（绕开 React 状态时序），dom 读真渲染那几行
+    w.__oofPdfPwd = {
+      path: () => tab.path ?? '',
+      ask: () => pwdAsk,
+      busy: () => pwdBusy,
+      cancelled: () => pwdCancelledRef.current,
+      rangeMode: () => rangeModeRef.current,
+      status: () => status,
+      numPages: () => doc?.numPages ?? 0,
+      feed: (s: string) => submitPwd(s),
+      cancel: () => cancelPwd(),
+      dom: () => {
+        const card = document.querySelector('.pdf-pwd-card')
+        if (!card) return null
+        const ok = card.querySelector<HTMLButtonElement>('.pdf-pwd-ok')
+        const cancel = card.querySelector<HTMLButtonElement>('.pdf-pwd-cancel')
+        return {
+          ask: card.querySelector('.pdf-pwd-ask')?.textContent ?? '',
+          note: card.querySelector('.pdf-pwd-note')?.textContent ?? '',
+          type: (card.querySelector('.pdf-pwd-input') as HTMLInputElement | null)?.type ?? '',
+          okDisabled: ok?.disabled ?? null,
+          cancelDisabled: cancel?.disabled ?? null,
+        }
+      },
+    }
   }
 
   // 形状标注 → SVG 元素（坐标 ×scale，与 rects 同一 PDF pt 左上原点约定）
@@ -1557,6 +1646,8 @@ function PdfViewer({ tab }: Props) {
           / {numPages || '-'}
         </span>
         {btn('▶', () => gotoPage(Math.min(numPages, curPage + 1)), !doc || curPage >= numPages, '下一页')}
+        {/* 没打开成功（含刚取消密码）时唯一的出路入口：按同一轮路径重来一遍 */}
+        {!doc && tab.path && btn('↻', () => reloadDoc(), false, '重新打开这份 PDF（设了密码的会再问一次）')}
         <span className="tb-sep" />
         {btn('－', () => setScale((s) => Math.max(SCALE_MIN, +(s / SCALE_STEP).toFixed(3))), scale <= SCALE_MIN, '缩小')}
         <span className="pdf-zoom">{Math.round(scale * 100)}%</span>
@@ -1952,6 +2043,42 @@ function PdfViewer({ tab }: Props) {
             })}
         </div>
       </div>
+      {pwdAsk && (
+        <div className="pdf-pwd-mask" role="dialog" aria-modal="true" aria-label="输入 PDF 密码">
+          <div className="pdf-pwd-card">
+            <div className="pdf-pwd-title">{baseName(tab.path ?? '') || '这份 PDF'}</div>
+            <div className="pdf-pwd-ask">{pwdPromptText(pwdAsk.reason, pwdAsk.attempt)}</div>
+            <div className="pdf-pwd-row">
+              <input
+                ref={pwdInputRef}
+                className="tb-input pdf-pwd-input"
+                type="password"
+                placeholder="打开密码"
+                value={pwdInput}
+                disabled={pwdBusy}
+                onChange={(e) => setPwdInput(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') {
+                    e.preventDefault()
+                    submitPwd()
+                  } else if (e.key === 'Escape') {
+                    e.preventDefault()
+                    cancelPwd()
+                  }
+                }}
+                autoFocus
+              />
+              <button className="tb-btn pdf-pwd-ok" disabled={pwdBusy || !pwdInput} onClick={() => submitPwd()}>
+                打开
+              </button>
+              <button className="tb-btn pdf-pwd-cancel" disabled={pwdBusy} onClick={cancelPwd}>
+                取消
+              </button>
+            </div>
+            <div className="pdf-pwd-note">{PWD_MEMORY_NOTE}</div>
+          </div>
+        </div>
+      )}
       {pop && (
         <div className="pdf-anno-pop" style={{ left: pop.x, top: Math.max(8, pop.y - 46) }} onMouseDown={(e) => e.preventDefault()}>
           {pop.mode === 'menu' ? (

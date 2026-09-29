@@ -51,7 +51,12 @@ const RULES: Rule[] = [
   },
   {
     hit: (s) => s.includes('no password given') || s.includes('passwordexception'),
-    say: '这份 PDF 设了打开密码，而我们的查看器还没有输密码的地方。要在这里看，得先在别处把密码去掉。',
+    say: '这份 PDF 设了打开密码，而没有密码就打不开（刚在密码面板上按了取消，或这一趟没能问到密码）。按工具条上的 ↻ 重新打开，会再问一次。',
+  },
+  {
+    // pdf-lib 1.17 压根不解密：任何加密件都在 load 这一步当场拒（本轮实测的原文见 README 的 v0.65 一节）
+    hit: (s) => s.includes('is encrypted') || s.includes('encryptedpdferror'),
+    say: '标注与页面管理这一层走的是 pdf-lib，而它不解密：设了密码的 PDF 只能看、不能在这里改。要改得先在别处去掉密码（或把密码告诉我们——目前没有这种通道）。',
   },
   {
     hit: (s) => s.includes('os error 32'),

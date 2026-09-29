@@ -2014,7 +2014,8 @@ not an office document?)`、`Can't find end of central directory : is this a zip
   于是那一句话必须把"太长"也带上（Windows 一般限 260 字符）——只说"目录不存在"会把人引去建目录
 - **三种不同的失败不能挤成一句话**，这一条钉成判据：`os error 32`（被别的程序开着，关掉那边再存）与 `os error 5`
   （没权限／只读／那本来是个文件夹）分两档，`os error 2` 与 `3` 分两档，EOCD 与 `Cfb error` 分两档，
-  pdf.js 的"结构读不出"与"设了口令"分两档（后者要说的是**我们的查看器还没有输密码的地方**，不是文件坏了）
+  pdf.js 的"结构读不出"与"设了口令"分两档（后者要说的是**我们的查看器还没有输密码的地方**，不是文件坏了
+  ——这一句到 v0.65 起过时了：那一档的原话如今由密码面板替用户拦住，`fail-msg.ts` 里那条判据跟着改口，见下一节）
 - **干净文案一条都不归因**：归因表不许变成"看谁都想解释一番"的说明书——`已保存`、`已复制 3 行`这类没有失败的
   字符串走 `describeFailure` 只能得到 `known: false`，于是 `failStatus` 不拼中文、`failDialog` 不重复原话
   （同一段话出现两次只会让人以为有两个不同的原因）。结构腿 D 段判的就是这一条
@@ -2052,7 +2053,74 @@ not an office document?)`、`Can't find end of central directory : is this a zip
   （`Cargo.toml`/`tauri.conf.json` 一动就重启 app，复跑真机腿是这一条老规矩）
 - **本轮没动的，量出来记着**：只测了本机**中文** OS 的消息，英文/其他语言机器上 `os error` 括号前那截会是英文
   （判据靠编号，不受影响，但"原话是否已经可读"这一条没覆盖）；写侧三种前缀不统一（`保存失败`/`ODS 写入失败`/`无法写入`）；
-  PDF 设了口令这件事现在只**说得出**、还没有输密码的入口；toast 体系未建（失败仍寄生在状态栏这一枚字符串上）
+  PDF 设了口令这件事现在只**说得出**、还没有输密码的入口（v0.65 接上了，见下一节）；toast 体系未建（失败仍寄生在状态栏这一枚字符串上）
+
+## 加密的 PDF 也打得开了：这一句"要密码"终于交回用户按键（v0.65）
+
+v0.64 收尾时自己记下的那条未勾项是本轮起点——归因表里那句「设了口令，而我们的查看器还没有输密码的地方」
+说实话说得很好，但用户对着它什么也做不了。形状早就是现成的：pdf.js 从 v0.12 接进来那天起就有 `password` 这条通道，
+只是我们从来没接；这一轮**Rust 一个字没动**（先例 v0.64），全部长度在前端那一层，而本轮最值钱的产出不是面板，
+是被这台量具当场撞出来的一处真缺陷（见下面第 4 条）。
+
+- **通道的形状只有一处容易装错，而装错的表现是"永远打不开"**：`openTask.onPassword = (updatePassword, code) => …`
+  必须装在 `getDocument(...)` **之后**、`await openTask.promise` **之前**——那份承诺一旦拒绝就没有第二次机会，
+  回调再装也来不及；`code` 实测只有两档（`1` 要密码 / `2` 密码不对，`PasswordResponses` 没有第三档，
+  未知档一律按"要密码"说，不许凭编号编出新理由）。**pdf.js 自己不封顶**：答错一次它就再问一次，可以一直问下去，
+  于是"试了几回"这件事只有界面说得出口——面板从第二回起把已经试过几次明说（`已经试过 N 次`），
+  因为界面上不说的话用户就没有退出的依据
+- **判据与文案只写一处**（`src/lib/pdf-password.ts`，照 v0.54 纸上账目与 v0.64 失败归因的先例）：
+  `pwdReason(code)` 把两档 code 收成 `'need' | 'incorrect'`，`pwdPromptText`/`pwdCancelledText`/`PWD_MEMORY_NOTE`
+  是这四句话的唯一持有者，面板与状态栏都不自带句子（结构腿 A10 扫的是**剥掉注释之后**的源文，
+  注释里引述一句不算第二份文案）；`submitPwd` 里空串不当密码用——喂进去只换来一次重新提问，白耗一轮
+- **"用户自己取消"与"压根没给密码"在错误内容上分不出来**：我们那串 `Error` 的 `name`/`message` 到不了归因层，
+  所以"是用户按的取消"只能由界面自己记着（`pwdCancelledRef`），而记的方式是**在按下去之前**记下这件事；
+  那一行的去处也跟着分岔——不带"失败"前缀（没有失败，只是没往下走），也不挂原始信息
+  （那一句是我们自己按下去的，不是文件报的，挂上去就是把用户引去提一张不存在的 issue）
+- **本轮的真缺陷：作废的那一趟把还活着的面板抹掉了**。开发模式下 `React.StrictMode` 会把挂载效应跑两遍
+  （挂 → 清 → 再挂），于是同时存在两趟 `getDocument`；被换掉的那一趟自己按过 `Error` 下去，
+  它的 `catch` 却照样执行 `setPwdAsk(null)` + `pwdUpdateRef.current = null`——**晚一步落地的话，
+  它把还活着的那一趟刚亮起来的密码面板抹掉**，pdf.js 从此等不到回话，界面卡在「正在加载…」上且没有任何错误。
+  修法是一条规矩而不是一处补丁：**「这一趟已经作废」那道门必须打在写任何共享状态之前，而不是打在最后一句上**；
+  本轮把撞到的两处写点补了（catch 头部、`rangeModeRef` 赋值前），各钉一枚判据（C17/C18）+ 一枚变异（M8/M9）。
+  顺带一条给下一轮动这块的人：**开发模式的双挂载不是噪音，它是一台免费的并发测试机**
+  ——而 `disposed` 那道门现在只补在这两处，其余 `setState`/ref 写入仍是"最后一句挂个 `!disposed`"的形状（进路线图）
+- **"能看"与"能改"之间有一条不是我们设的硬边界**：pdf-lib 1.17 不解密（`PDFDocument.load` 对加密件直接抛
+  `EncryptedPDFError`，`ignoreEncryption` 只是"照样坏"）⇒ 标注写回与页面级操作在加密件上结构上做不到。
+  这条本轮第一次成为界面里说得出的一句话：`pageOp` 第一步就是 `writeAnnosRef.current(path)`，所以点旋转
+  当场报得出「设了密码的 PDF 只能看、不能在这里改」，原话仍完整留在悬停里（P24/P25 判的是**立刻**报得出——
+  专门的探针量到 `runOp` 0.0 秒返回、那句之后 12 秒还在，也就是说上一轮那条"卡住"的感觉是冒烟腿自己的墙上时钟，不是产品）
+- **密码只留在这次会话里**这条诚实边界是本轮新立的，而"没落盘"这种断言必须自带正控制：独立字节腿（E1–E11）
+  先证明**同一个地方**扫得到最近文件路径的尾部串（E9：两枚 leveldb `.log` 命中 ⇒ 扫对了地方），
+  再判那串密码在**全部 68 个被扫文件**里都不出现（E10），另判产品源码里不出现（E11）；
+  这里有一条只有本机量得到的教训：Chromium 存 `localStorage` 的**值按 UTF-16 存**，
+  按 ASCII 字节串扫leveldb 会一无所获——第一版 E9 就是这么"证明"了全场干净（假绿），
+  改成 ASCII 与 UTF-16LE 两份编码一起扫之后正控制当场命中
+- **字节层的四条实测**（E1–E5）：AES-128 → `/CF … AESV2`、AES-256 → `AESV3`、owner-only 同样带 `/Encrypt`，
+  而 **RC4-128 那一档字节里根本不写算法名**（只有 `/Filter/Standard`+`/R 3`+`/V 2`+`/Length 128`，没有 `/CF`/`/CFM`）
+  ⇒ 判据只能按 `/R`+`/V` 编号推出，E3 一开始按字面 `RC4` 判是一枚**永远不可能成立**的空判；
+  另一条是门槛本身：`RANGE_MIN_BYTES = 4MB` 被真件夹住了（分段件 5,939,515 上、2,782,745 下，E4），
+  于是"密码闸门"与"分段模式"这两件事必须能同时成立——真机那头的 P27/P28/P29 判的就是这一档
+  （分段件输对密码照样开得完，且开完不留一枚空转的面板）
+- **只有真机能教的几条**（29 断言）：干净件**不许**长出面板（P1/P2，问都没问过就不该问）；输入框必须是
+  `type=password`（P7）且密码本身不回显在界面上（P13）；取消之后那份文档**不许**留在页面上（P18）；
+  工具栏「重试」是**从第 1 回重新数起**而不是接着上一轮的计数（P20 量到 `{reason:"need",attempt:1}`），
+  并且要把取消标记一起清掉（P21）——不清的话重试成功后第一次真失败会被归成"用户自己取消的"；
+  owner-only 那一件**不问密码**就能看（用户口令为空），这一档如果按"有没有 `/Encrypt`"来判要不要问，就会凭空拦用户一道
+- **量具自己踩的三处，每一次都像产品坏了**：① CDP 整腿在 `timeout 420` 下会**静默截断**——那枚 5.9MB 的分段件
+  把腿拖长，输出停在 P23 而没有 traceback，看着像脚本死掉其实是墙上时钟到点（放到 1200 就是 29/0）；
+  ② `cargo test --lib` 必须在 `src-tauri/` 下跑，仓库根没有 Cargo.toml，那句 `could not find Cargo.toml` + EXIT=101
+  与"工具链坏了"长得一模一样；③ 判据 C17 第一次是自打 FAIL——因为**注释里正好写着 `setPwdAsk(null)` 这个字面**，
+  按 `indexOf` 排前后就把注释当成了代码；判据吃的必须是剥掉注释的源文，这是"吃用户看得见的那一行"那条规矩在文本层的第二次兑现
+- **本轮没动的，量出来记着**（都已开进路线图）：密码只在这一次会话里有效，重开同一件还要再输一遍，
+  也没有"这次会话记住"的选项（不是我们偷懒：pdf-lib 不解密，也就没有把密码交进写侧的通道）；
+  同一件 owner-only 的文件在两头说的话不一致（不问密码就能看 vs rotate 报"它设了密码"），
+  「权限限制」与「口令限制」也没分；`disposed` 那道门只补在本轮撞到的两处；RC4-128 字节里没有算法名
+  ⇒ 归因表在这一档说不出算法名；失败提示仍旧寄生在状态栏那一枚字符串上（toast 体系未建）
+- **验证（五腿 + 编译）**：**前端结构测试 43 断言 / 真失败 0**；**变异检查 10 断言 / BAD 0**（正控制先跑一遍 43/0，
+  九枚假例各自点名该响的那几条，M8/M9 是本轮新加的两枚）；**CDP 真机冒烟 29 断言 / 真失败 0、页面异常 0 条**；
+  **独立读字节腿 21 断言 / 真失败 0**；`cargo test --lib` **97 通过 / 0 失败 / 11 ignored**（与 v0.63/0.64 同一份基线——
+  **Rust 本轮一个字没动**）；+ tsc 与 `pnpm build` 绿（2.63s）——四腿都在**版本号 bump 之后**复跑过一遍
+  （`Cargo.toml`/`tauri.conf.json` 一动就重启 app，复跑真机腿是这一条老规矩）
 
 ## 性能（v0.3）
 
@@ -2153,14 +2221,15 @@ src/                  React 前端
   lib/pdf-pages.ts    PDF 页面级操作（pdf-lib 覆盖写回）：rotatePagesInPlace / removePagesInPlace（倒序删 + 删空守卫）/ extractPages / mergePdfs / splitPdf，做完由调用方重载
   lib/pdf-geo.ts      显示空间（已套旋转·左上原点）↔ PDF 原始坐标（未旋转·左下原点）双向精确换算：normRot / displaySize / toDisplayRect / fromDisplayRect / toDisplayPoints / fromDisplayPoints + parsePageSpec（`1-3,5` 页码写法）
   lib/pdf-range.ts    大 PDF 分段读取：PDFDataRangeTransport 子类（≥4MB 才启用、64KB 文件头起手、按 begin 计数投递、abort 置 dead）+ fileSize/readRange，配 Rust 侧 file_len + read_range
+  lib/pdf-password.ts 加密 PDF 那句"要密码"的判据与文案（v0.65，纯函数、零 DOM、Node 直测，这四句话的唯一持有者）：`pwdReason(code)` 把 pdf.js 的 `PasswordResponses` 收成两档（实测只有 `1` 要密码与 `2` 密码不对，**没有第三档**，故未知档一律落 `'need'` 而不许凭编号编出新理由）；`pwdPromptText(reason, attempt)` 管问的那一句——第二回起把「已经试过 N 次」说出来（`attempt - 1` 且下限 1；pdf.js 自己**不封顶**，答错就一直再问，界面上不说用户就没有退出的依据）；`pwdCancelledText()` 是用户自己按取消的那一行，**不带"失败"前缀**（没有失败，只是没往下走）也不挂原始信息（那一句是我们按下去的，不是文件报的）；`PWD_MEMORY_NOTE` 说的是密码的去向（只留内存、关掉标签就没了、不写进任何文件）——面板与状态栏都不自带句子，结构腿 A10 扫的是剥掉注释之后的源文
   lib/editors.ts      动态 import 的唯一持有者：四类编辑器 + Workspace 外壳各自的「已解析组件表」（peekEditor/loadEditor、peekWorkspace/loadWorkspace），挂载点同步命中即不走 Suspense（v0.36）
   lib/prewarm.ts      首页空闲期预取外壳与编辑器 chunk（App 级，与 lib/editors.ts 共用同一模块 promise）：顺序为 Workspace 外壳 → 按最近文件类型的四个编辑器；实测无收益的实例级/worker 级预热与公式 worker 线程池已删除
   lib/registry.ts     跨组件保存器注册表（Ctrl+S 路由到当前标签）
   lib/open.ts         路径→标签 打开 / 带确认关闭
   lib/sync.ts         最近文件端到端加密同步（WebCrypto PBKDF2-SHA256 → AES-256-GCM，.oosync 信封）
   lib/update.ts       自动更新的**检测层**（v0.45）：`checkForUpdate()` 动态导入 updater 插件走一次 `check`，任何失败都收敛成 `{state:'failed'}` 不往外抛（抛出去的表现就是"点了没反应"）；`describeError` 按插件 error.rs 的真实字面把"源上没清单/没配端点/非 https/缺本平台条目/签名/base64/日期/连不上"归成中文，认不出的一律原样带出不编原因；`infoOf` 从 `rawJson` 里取自定义字段 `download_page`，只认 http(s) 才给按钮
-  lib/fail-msg.ts     用户可见失败的**唯一**归因处（v0.64，纯函数、零 DOM、Node 直测）：`describeFailure` 走一张按"具体在前"排的 11 条判据表（第三方库专属词形 → `os error N` 通用尾巴），`probeOf` 把 `Error` 的 `name` 也拼进匹配串并整串转小写（pdf.js 那类只靠 `name` 分类的档才有得匹配、大写 EOCD 与大写不命中是同一条判据的两面）；三种出法按去处分——`failText`（只出一句中文，给状态栏里那些本就很窄的账目位）、`failDialog`（中文一句 + `（原始信息：…）`，归因没命中时**不重复**原话，同一段话出现两次只会让人以为有两个不同的原因）、`failStatus`（可见那一行是 `prefix: 中文`，换行后挂原话）；`statusText`/`statusTip` 是那枚字符串的两把拆刀，于是"悬停能看原话"不必再多一份状态、也就多不出"文字说 A 而悬停出 B"的分叉；`failRaw` 只给原话（`isTeardown` 用它分辨"关标签拆掉的 transport"与"文件真读不出"）；判据表里每一条命中的都是**真机上量出来的原串**而不是"通常长这样"，表头的注释记着两条实测结论（本机 Windows 那一层已经是中文 ⇒ 真正看不懂的只有第三方库那几档；**路径过长报的是 `os error 3`** 而不是专门的"文件名太长"⇒ 那一句话必须把"太长"也带上）；`known` 那一位的用处是"干净文案一条都不归因"——没有失败就不许造句子，结构腿 D 段判的就是这一条
-  components/         Home（最近文件 + 从模板新建画廊 + 版本号与"检查更新"） / Workspace / SheetEditor（保存按 .xlsx/.ods/.csv 三分流，打开时把读到的规则经门面放回界面并把两侧账目显示在状态栏；**「页面设置」面板（v0.52）**——纸张/方向、六条边距（毫米）、缩放与"缩放到 N 页宽"、六个开关、打印区域与重复标题行列（可「用当前选区」「用选区首行/首列」按门面选区给）、手动分页符（按 Excel 的 `brk@id` 说法：这一行/列自己起新页）、页眉页脚三框 + 六枚格式码 + 奇/偶/首页三版 + **两枚缺省开着的开关（「页眉页脚随文档缩放」「与页边距对齐」，v0.55：勾着＝写 `null` 不声明、取消＝写 `false`，旁注一次说清哪一档我们照 Excel 乘了字号、哪一档两边差一圈）**；「确定」写进 `printRef` 侧通道、「清除这张表的设置」把它整个删掉、面板里的错把确定灰掉，做不到的那几条以账目形式随草稿说在面板上（v0.53 改了语气：页高档与居中已经接线，只剩起始页码真做不到；v0.54 之后偶数页那一版也不再是账——它真的印在偶数页上，面板这几句全部转述 `hfAndPageNumberNotes` 那一份文案）；**导出这一侧多了一段实测循环（v0.53）**——计划里勾了「缩放到 N 页高」或「上下居中」的表才走：建一次 → `measurePrintLayout` 离屏量 → `planSheetFit` 压档/算留白 → 带 `zooms` 重建，最多五趟，定档后把居中留白写回**同一份 DOM** 再交导出；账目分两头记（"压到 27%"那句要说在压它的那一趟、每张表占一格由后趟覆盖前趟，居中的账反过来只在最终缩放那份实测上算数）；DEV 门面钩子随这轮加 `printSet(表名, 载荷|null)`（落笔处＝面板「确定」那一行）与 `printHtml(zooms)`（把**将要上纸的那份 HTML**交出去，让脚本自己挂起来量真实布局）；**v0.57 工作簿默认字体走第三枚侧通道 `defaultFontRef`**（不放 Univer 快照——`IWorkbookData.defaultStyle` 在 core 里零读取、引擎兜回硬编码 Arial 11，而 `wb.save().defaultFont` 实测恒为 `null`）：加载时挂上 `dump.defaultFont`、换标签复位、在 `payloadWithCharts` 那一枚漏斗里回贴，于是存盘与导出 PDF 共吃一份而界面渲染不说谎；**v0.59 只把 DEV 钩子摊宽**（生产行为一个字没动）：`printHtml()` 的返回值多三枚——`defaultFont`（侧通道里那一层本体，冒烟据此分辨"文件说的"与"我们兜的"）、每张计划里的 `basePx`（计划算出的正文底数）、`baseVars`（那份 HTML 里所有 `--oof-print-base-size:<px>` 的含值列表，按张核）；**v0.60 添第四枚侧通道 `sheetFormatRef`**（按表名持有 `SheetFormat`，与前三枚同一脾气：加载时从 `sheets[].sheetFormat` 挂上、换标签复位、改名随 `migrateSheetName` 一起迁、在 `payloadWithCharts` 的漏斗里回贴，且 `if (f && !sheet.sheetFormat)`——快照自己说出来的那一张永远赢）；这一枚与 `defaultFontRef` 方向相反：`IWorksheetData.defaultRowHeight` 在 Univer 里是**活口**（喂了就界面认、而 Excel 根本不认它），所以这里**只收不放**——不喂编辑器也不喂纸面，只为存盘时原样落回；DEV 钩子 `printPlan()` 因此多一枚 `sheetFormats`，冒烟据此问得出"这一层交回了什么"，而结构测试那头的钉是"五个消费点里 `sheetFormat` 出现零次"；**v0.62 只撤两行**——`hasSide` 那枚判定与「ODS 暂不含批注与超链接」那句账目，因为 `.ods` 这两样现在真读得回也写得出，而另三句 ODS 账（图表／三类规则／页面设置）与 CSV 那句照旧立着（结构腿判的就是"撤干净了且只撤了这一句"）；**v0.63 只动两行**——`.ods` 那一路的 `await writeOds(...)` 改成 `writeNotes.push(...(await writeOds(path, payload)))`，于是写侧的账与 xlsx 那头走同一条汇合（`[...lost, ...writeNotes]` → 状态栏 `已保存（第一条，另有 N 条说明）`），另一行是把注释里的例子换成"规则摆不进 OOXML、批注落在被盖住的格上"；拼句的公式、`lost` 那三句 ODS 账与 CSV 那句一个字没动（本轮没有新桥：`sheet-cell-side.ts` 的取与放早就是格式无关的） / DocEditor（页面设置含分栏/页码格式、分页参考线、分页符、表格与图片上下文工具条、粘贴成图、查找替换面板、字体族·字号、缩进工具条与 Ctrl+]/[、上下标 X²/X₂、表格上下文条的底纹色与竖排对齐（上/中/下）、脚注/尾注（工具栏插入 + 文末分区编辑与定位/删除，打印时文本框换静态块）、版本历史·自动保存、模板 seed、状态栏字数节流；打开 .docx 保真导入优先、mammoth 兜底，保存按 .odoc/.odt/.docx 各自格式原地落盘） / PptEditor / PdfViewer（pdfjs-dist 懒加载，连续多页视口虚拟渲染+Ctrl 缩放+TextLayer 文字选择+全文搜索+缩略图/大纲/标注侧栏+高亮便签与矩形·椭圆·直线·手绘形状（绘制/导入/写回 pdf-lib）+标注编辑（点选/拖移/改色/删除）+「页面」工作区旋转/删除/提取/合并/拆分；≥4MB 走分段读（lib/pdf-range.ts），卸载时 destroy openTask 并 abort transport；**v0.64 四个编辑器与首页的失败出口一律改走 `lib/fail-msg.ts`**——状态栏那一行由 `{status}` 直出换成 `statusText(status)` + `title={statusTip(status)}`（四个渲染点各一处，`PptEditor` 的加载占位有两处分身所以两处都换），原生对话框那一层的 `String(e)` 换成 `failDialog(e)`，账目位里的 `${e instanceof Error ? e.message : String(e)}` 换成 `failText(e)`；`PdfViewer` 除接线外还立了两条行为——三处后台补做（页尺寸／大纲／标注）由"只 `console.error`"改成**先过 `isTeardown` 那道门再占状态栏**（拆标签时的 `Transport destroyed` 不入账，否则每次快速关标签都冒一句凭空的失败），`pageOp` 的定时清除从 `finally` 移到成功那一路（失败那一句留着，三秒就抹等于让用户读不完也悬停不到原话））
+  lib/fail-msg.ts     用户可见失败的**唯一**归因处（v0.64，纯函数、零 DOM、Node 直测）：`describeFailure` 走一张按"具体在前"排的 12 条判据表（第三方库专属词形 → `os error N` 通用尾巴；**v0.65 补的是 pdf-lib 那一档**——`is encrypted`/`EncryptedPDFError` 说的是"标注与页面管理这层走 pdf-lib，而它不解密 ⇒ 只能看、不能在这里改"，与 pdf.js 那一档"设了口令"分得清清楚楚，后者跟着改口成「刚在密码面板上按了取消，或这一趟没能问到密码」并告诉用户 ↻ 会再问一次——从前那句只能说"没有输密码的地方"，现在真的问过了），`probeOf` 把 `Error` 的 `name` 也拼进匹配串并整串转小写（pdf.js 那类只靠 `name` 分类的档才有得匹配、大写 EOCD 与大写不命中是同一条判据的两面）；三种出法按去处分——`failText`（只出一句中文，给状态栏里那些本就很窄的账目位）、`failDialog`（中文一句 + `（原始信息：…）`，归因没命中时**不重复**原话，同一段话出现两次只会让人以为有两个不同的原因）、`failStatus`（可见那一行是 `prefix: 中文`，换行后挂原话）；`statusText`/`statusTip` 是那枚字符串的两把拆刀，于是"悬停能看原话"不必再多一份状态、也就多不出"文字说 A 而悬停出 B"的分叉；`failRaw` 只给原话（`isTeardown` 用它分辨"关标签拆掉的 transport"与"文件真读不出"）；判据表里每一条命中的都是**真机上量出来的原串**而不是"通常长这样"，表头的注释记着两条实测结论（本机 Windows 那一层已经是中文 ⇒ 真正看不懂的只有第三方库那几档；**路径过长报的是 `os error 3`** 而不是专门的"文件名太长"⇒ 那一句话必须把"太长"也带上）；`known` 那一位的用处是"干净文案一条都不归因"——没有失败就不许造句子，结构腿 D 段判的就是这一条
+  components/         Home（最近文件 + 从模板新建画廊 + 版本号与"检查更新"） / Workspace / SheetEditor（保存按 .xlsx/.ods/.csv 三分流，打开时把读到的规则经门面放回界面并把两侧账目显示在状态栏；**「页面设置」面板（v0.52）**——纸张/方向、六条边距（毫米）、缩放与"缩放到 N 页宽"、六个开关、打印区域与重复标题行列（可「用当前选区」「用选区首行/首列」按门面选区给）、手动分页符（按 Excel 的 `brk@id` 说法：这一行/列自己起新页）、页眉页脚三框 + 六枚格式码 + 奇/偶/首页三版 + **两枚缺省开着的开关（「页眉页脚随文档缩放」「与页边距对齐」，v0.55：勾着＝写 `null` 不声明、取消＝写 `false`，旁注一次说清哪一档我们照 Excel 乘了字号、哪一档两边差一圈）**；「确定」写进 `printRef` 侧通道、「清除这张表的设置」把它整个删掉、面板里的错把确定灰掉，做不到的那几条以账目形式随草稿说在面板上（v0.53 改了语气：页高档与居中已经接线，只剩起始页码真做不到；v0.54 之后偶数页那一版也不再是账——它真的印在偶数页上，面板这几句全部转述 `hfAndPageNumberNotes` 那一份文案）；**导出这一侧多了一段实测循环（v0.53）**——计划里勾了「缩放到 N 页高」或「上下居中」的表才走：建一次 → `measurePrintLayout` 离屏量 → `planSheetFit` 压档/算留白 → 带 `zooms` 重建，最多五趟，定档后把居中留白写回**同一份 DOM** 再交导出；账目分两头记（"压到 27%"那句要说在压它的那一趟、每张表占一格由后趟覆盖前趟，居中的账反过来只在最终缩放那份实测上算数）；DEV 门面钩子随这轮加 `printSet(表名, 载荷|null)`（落笔处＝面板「确定」那一行）与 `printHtml(zooms)`（把**将要上纸的那份 HTML**交出去，让脚本自己挂起来量真实布局）；**v0.57 工作簿默认字体走第三枚侧通道 `defaultFontRef`**（不放 Univer 快照——`IWorkbookData.defaultStyle` 在 core 里零读取、引擎兜回硬编码 Arial 11，而 `wb.save().defaultFont` 实测恒为 `null`）：加载时挂上 `dump.defaultFont`、换标签复位、在 `payloadWithCharts` 那一枚漏斗里回贴，于是存盘与导出 PDF 共吃一份而界面渲染不说谎；**v0.59 只把 DEV 钩子摊宽**（生产行为一个字没动）：`printHtml()` 的返回值多三枚——`defaultFont`（侧通道里那一层本体，冒烟据此分辨"文件说的"与"我们兜的"）、每张计划里的 `basePx`（计划算出的正文底数）、`baseVars`（那份 HTML 里所有 `--oof-print-base-size:<px>` 的含值列表，按张核）；**v0.60 添第四枚侧通道 `sheetFormatRef`**（按表名持有 `SheetFormat`，与前三枚同一脾气：加载时从 `sheets[].sheetFormat` 挂上、换标签复位、改名随 `migrateSheetName` 一起迁、在 `payloadWithCharts` 的漏斗里回贴，且 `if (f && !sheet.sheetFormat)`——快照自己说出来的那一张永远赢）；这一枚与 `defaultFontRef` 方向相反：`IWorksheetData.defaultRowHeight` 在 Univer 里是**活口**（喂了就界面认、而 Excel 根本不认它），所以这里**只收不放**——不喂编辑器也不喂纸面，只为存盘时原样落回；DEV 钩子 `printPlan()` 因此多一枚 `sheetFormats`，冒烟据此问得出"这一层交回了什么"，而结构测试那头的钉是"五个消费点里 `sheetFormat` 出现零次"；**v0.62 只撤两行**——`hasSide` 那枚判定与「ODS 暂不含批注与超链接」那句账目，因为 `.ods` 这两样现在真读得回也写得出，而另三句 ODS 账（图表／三类规则／页面设置）与 CSV 那句照旧立着（结构腿判的就是"撤干净了且只撤了这一句"）；**v0.63 只动两行**——`.ods` 那一路的 `await writeOds(...)` 改成 `writeNotes.push(...(await writeOds(path, payload)))`，于是写侧的账与 xlsx 那头走同一条汇合（`[...lost, ...writeNotes]` → 状态栏 `已保存（第一条，另有 N 条说明）`），另一行是把注释里的例子换成"规则摆不进 OOXML、批注落在被盖住的格上"；拼句的公式、`lost` 那三句 ODS 账与 CSV 那句一个字没动（本轮没有新桥：`sheet-cell-side.ts` 的取与放早就是格式无关的） / DocEditor（页面设置含分栏/页码格式、分页参考线、分页符、表格与图片上下文工具条、粘贴成图、查找替换面板、字体族·字号、缩进工具条与 Ctrl+]/[、上下标 X²/X₂、表格上下文条的底纹色与竖排对齐（上/中/下）、脚注/尾注（工具栏插入 + 文末分区编辑与定位/删除，打印时文本框换静态块）、版本历史·自动保存、模板 seed、状态栏字数节流；打开 .docx 保真导入优先、mammoth 兜底，保存按 .odoc/.odt/.docx 各自格式原地落盘） / PptEditor / PdfViewer（pdfjs-dist 懒加载，连续多页视口虚拟渲染+Ctrl 缩放+TextLayer 文字选择+全文搜索+缩略图/大纲/标注侧栏+高亮便签与矩形·椭圆·直线·手绘形状（绘制/导入/写回 pdf-lib）+标注编辑（点选/拖移/改色/删除）+「页面」工作区旋转/删除/提取/合并/拆分；≥4MB 走分段读（lib/pdf-range.ts），卸载时 destroy openTask 并 abort transport；**v0.64 四个编辑器与首页的失败出口一律改走 `lib/fail-msg.ts`**——状态栏那一行由 `{status}` 直出换成 `statusText(status)` + `title={statusTip(status)}`（四个渲染点各一处，`PptEditor` 的加载占位有两处分身所以两处都换），原生对话框那一层的 `String(e)` 换成 `failDialog(e)`，账目位里的 `${e instanceof Error ? e.message : String(e)}` 换成 `failText(e)`；`PdfViewer` 除接线外还立了两条行为——三处后台补做（页尺寸／大纲／标注）由"只 `console.error`"改成**先过 `isTeardown` 那道门再占状态栏**（拆标签时的 `Transport destroyed` 不入账，否则每次快速关标签都冒一句凭空的失败），`pageOp` 的定时清除从 `finally` 移到成功那一路（失败那一句留着，三秒就抹等于让用户读不完也悬停不到原话）；**v0.65 加密 PDF 的密码闸门**——`openTask.onPassword` 装在 `await openTask.promise` **之前**（装晚了那份承诺已经拒绝，回调再挂也来不及），回调只做三件事：把 `updatePassword` 存进 `pwdUpdateRef`、把"第几回问"记进 `pwdAttemptRef`、亮面板（判据与文案一律走 `lib/pdf-password.ts`，组件里只负责亮与接线，句子一处都不写）；**闸门绝不自动投密码**（自动投等于替用户猜，结构腿 C2 判这一条）、空串不当密码（喂进去只换来一次重新提问）、取消时**先**记 `pwdCancelledRef` **再**把闸门按下去（错误内容分不出"用户取消"与"没给密码"，这一位只能界面自己留着），于是那一行不带"失败"也不挂原始信息；工具条的 ↻ 是**从第 1 回重新数起**并把取消标记一起清掉（不清的话重试成功后第一次真失败会被归成"用户自己取消的"）；`type=password` 且密码不回显、不在界面上；owner-only 那一件**不问密码**就能看（用户口令为空）而页面级操作当场报得出 pdf-lib 那一句；同一轮补的是一条规矩而不是一处补丁——**「这一趟已经作废」那道门必须打在写任何共享状态之前**，开发模式的双挂载下晚到的 `catch` 会抹掉还活着的那一趟刚亮起来的面板，pdf.js 从此等不到回话，表现是卡在「正在加载…」且没有任何错误（C17/C18 各钉住本轮撞到的两处写点，另外那三句账目仍在，本轮没有新的拆接线））
 scripts/              copy-pdfjs-assets.mjs（dev/build 前复制 cmaps/标准字体到 public/pdfjs） /
                       updater-release.mjs（发版：开 createUpdaterArtifacts 本机建签名包 → 读回真 .sig 与产物 →
                       出带三平台键的 latest.json → 打印要上传的清单；私钥只走子进程环境变量，`pnpm release:updater`）
@@ -2172,7 +2241,7 @@ scripts/              copy-pdfjs-assets.mjs（dev/build 前复制 cmaps/标准�
 保真导入器抛错或拆不出块时回退 `mammoth 正文 + zip 直读页眉页脚/批注/sectPr`（v0.37）；`.odt` 走 `lib/odt.ts` 双向；
 保存按标签扩展名分流——新建文档存 `.odoc` JSON（含 meta）、`.odt` 与 `.docx` 标签各自格式原地写回（导出走 docx/odt 链路）。
 演示文件流：`pptx → JSZip 解包 OOXML → Deck 模型 → 编辑器`；保存为 `.opd` JSON 或经 pptxgenjs 导出 pptx。
-PDF 文件流：查看 `pdf 磁盘 → 小于 4MB 整本 readBytes / 大于 4MB 经 file_len + read_range 分段喂给 pdf.js（首屏只取 64KB 文件头）→ pdfjs-dist（worker + canvas）`；标注 `选区高亮/便签/拖拽画的矩形·椭圆·直线·手绘 → 内存模型（rects[0] 包围盒 + polys 几何）→ Ctrl+S 时 pdf-lib 低层写 Annotation 字典回原文件`；文档导出 `@media print 排版（分栏/分页符/避免跨页折断）+ @page margin box 逐页页眉页脚页码 + 打印态纸面调色板（`color-scheme` 压回 light、主题色经变量换掉，v0.49）→ Rust export_pdf（PrintSettings 纸张与四边距；CSS `@page` 也真的说话，所以每条作业自己声明完整，见 v0.50）→ WebView2 PrintToPdf 落盘`；演示导出 `Deck → createRoot 离屏挂载 StaticSlide 分页 → 同上`；表格导出 `Univer 快照 → WorkbookPayload → lib/sheet-print-setup.ts 把那张「页面设置」翻成打印计划（纸面/四边距/缩放/打印区域/重复标题行列/手动分页符/列带/页眉页脚的 @page margin box）→ lib/sheet-print.ts 自绘 HTML 网格 → 同上（canvas 抓不到故走数据侧重排；计划同时喂 PrintToPdf 的 PrintSettings，两条通道同一组数，v0.51。**勾了「缩放到 N 页高」或「上下居中」时这份 HTML 先建后量再重建（v0.53）**——行高不在载荷里（默认行高由字体现算、声明过的只是下限、`zoom` 之后又不线性），只能离屏量真排版（`lib/sheet-print-measure.ts` + `pdfprint.measurePrintLayout`），`fitToPagesTallZoom` 按实测逐带贪心分页压出 1% 一档的缩放、`verticalCenterPadPx` 只在装得下的那一页给上留白，量稳了才把留白写回同一份 DOM 交导出）。**正文与页眉的底数吃同一层**（v0.59）：工作簿默认字体（`xl/styles.xml` 的 `cellXfs[0]→fonts`）一次读进载荷，`baseFontPt` 一处解析，页眉由 `@page` 的 margin box 乘出去、正文落在每张表 `<section>` 的 `--oof-print-base-size` 上被 `td` 的 `font-size` 吃掉，没说话时两处同落 11pt 那一档兜底）`；页面管理 `内存标注先写回 → pdf-lib 旋转/删除/提取/合并/拆分覆盖写回 → 重载并从 /Annots 重新导入标注（旋转页坐标按 /Rotate 经 pdf-geo.ts 换算）`。
+PDF 文件流：查看 `pdf 磁盘 → 小于 4MB 整本 readBytes / 大于 4MB 经 file_len + read_range 分段喂给 pdf.js（首屏只取 64KB 文件头）→ pdfjs-dist（worker + canvas）；设了打开密码的那一档由界面上的密码面板拦住（v0.65：`openTask.onPassword` 装在 `await openTask.promise` 之前，闸门只把用户按键交回的那一串投进去，密码只留在这次会话的内存里、不写盘）`；标注 `选区高亮/便签/拖拽画的矩形·椭圆·直线·手绘 → 内存模型（rects[0] 包围盒 + polys 几何）→ Ctrl+S 时 pdf-lib 低层写 Annotation 字典回原文件`；文档导出 `@media print 排版（分栏/分页符/避免跨页折断）+ @page margin box 逐页页眉页脚页码 + 打印态纸面调色板（`color-scheme` 压回 light、主题色经变量换掉，v0.49）→ Rust export_pdf（PrintSettings 纸张与四边距；CSS `@page` 也真的说话，所以每条作业自己声明完整，见 v0.50）→ WebView2 PrintToPdf 落盘`；演示导出 `Deck → createRoot 离屏挂载 StaticSlide 分页 → 同上`；表格导出 `Univer 快照 → WorkbookPayload → lib/sheet-print-setup.ts 把那张「页面设置」翻成打印计划（纸面/四边距/缩放/打印区域/重复标题行列/手动分页符/列带/页眉页脚的 @page margin box）→ lib/sheet-print.ts 自绘 HTML 网格 → 同上（canvas 抓不到故走数据侧重排；计划同时喂 PrintToPdf 的 PrintSettings，两条通道同一组数，v0.51。**勾了「缩放到 N 页高」或「上下居中」时这份 HTML 先建后量再重建（v0.53）**——行高不在载荷里（默认行高由字体现算、声明过的只是下限、`zoom` 之后又不线性），只能离屏量真排版（`lib/sheet-print-measure.ts` + `pdfprint.measurePrintLayout`），`fitToPagesTallZoom` 按实测逐带贪心分页压出 1% 一档的缩放、`verticalCenterPadPx` 只在装得下的那一页给上留白，量稳了才把留白写回同一份 DOM 交导出）。**正文与页眉的底数吃同一层**（v0.59）：工作簿默认字体（`xl/styles.xml` 的 `cellXfs[0]→fonts`）一次读进载荷，`baseFontPt` 一处解析，页眉由 `@page` 的 margin box 乘出去、正文落在每张表 `<section>` 的 `--oof-print-base-size` 上被 `td` 的 `font-size` 吃掉，没说话时两处同落 11pt 那一档兜底）`；页面管理 `内存标注先写回 → pdf-lib 旋转/删除/提取/合并/拆分覆盖写回 → 重载并从 /Annots 重新导入标注（旋转页坐标按 /Rotate 经 pdf-geo.ts 换算）`。
 
 ## 开发
 
@@ -2414,14 +2483,28 @@ cargo check        # Rust 后端检查（在 src-tauri 下）
       覆盖 28 处出口（四个编辑器 21 + 首页同步 2 + `ole` 2 + `sheet-rules` 3）；PDF 那三处后台补做从此开始说话，
       并按 `isTeardown` 把"关标签拆掉的 transport"与"文件真读不出"分开；页面级操作的失败句不再三秒自动抹掉；
       真机腿 51 断言里第一条把**原生对话框**变成判据（按 `EnumWindows` 数得出、不阻塞 CDP）
+- [x] **PDF 设了口令只说得出、还没有输密码的地方**（v0.65，Rust 零改动）：pdf.js 的 `password` 通道接上了——
+      `openTask.onPassword` 装在 `await openTask.promise` **之前**，面板亮出来、等用户按键，绝不自动投密码；
+      `No password given` 那一档判据跟着改口（见上一节）
 - [ ] **失败归因只覆盖本机中文 OS 的原串**：判据靠 `os error` 编号与第三方库的英文词形，换英文/其他语言的 Windows
       上括号前那截中文归因照旧（编号匹配不受影响），但"原话本身是否已经可读"这一条没测过；
       另外判据表是**按本轮撞到的档列的**，不是穷举第三方库的抛点——没列出的原串仍会以"原样带出"收着（这是设计而非缺陷）
 - [ ] **写侧前缀三家不统一**：同一次存盘失败在文件那边可能报成 `保存失败`（对话框标题）／`ODS 写入失败: …`（`ods.rs`）／
       `无法写入 {path}: …`（`csv.rs`）／`无法打开文件: …`（`xlsx.rs`）——归因表都吃得下，但**地点那一截的说法随格式换**，
       状态栏说的话取决于文件是什么后缀；要收得先定"前缀归谁给"（Rust 侧还是调用侧）
-- [ ] **PDF 设了口令只说得出、还没有输密码的地方**（v0.64 归因里那句"要在这里看，得先在别处把密码去掉"就是这一条的实话）：
-      pdf.js 的 `password` 通道与一个输入框没接；接上之后 `No password given` 那一档判据要跟着改口
+- [ ] **加密 PDF 的密码只留在这次会话里**（v0.65 定的诚实边界）：关掉标签就没了、也不写进任何文件（独立字节腿
+      扫 `localStorage`／`sessionStorage`／`IndexedDB` 的两份编码都扫不出那串密码，而同一处扫得到最近文件的路径 ⇒
+      扫对了地方），于是**重开同一件加密 PDF 要再输一次**；没有"这次会话记住"的选项，也没有把密码交进写侧的通道
+      ——那不是我们偷懒：pdf-lib 1.17 不解密，`ignoreEncryption` 只是"照样坏"
+- [ ] **同一件 owner-only 的文件在两头说的话不太一致**（本轮量出来的）：它**不问密码**就能看（用户口令为空），
+      而 rotate 报的是「设了密码的 PDF 只能看、不能在这里改」——按字节它确实设了 owner 口令，句子不算编的，
+      但"从没问过密码"与"它设了密码"这两件事界面上没有对上眼；「权限限制」与「口令限制」也没分
+- [ ] **`disposed` 那道门只补在了本轮撞到的两处写点**（密码面板与 `rangeModeRef`）：`PdfViewer` 里其余的
+      `setState`/ref 写入仍是"最后一句挂个 `!disposed`"的形状，本轮没有系统盘过"旧趟还会盖掉哪些共享状态"；
+      开发模式的**双挂载**不是噪音，它是一台免费的并发测试机——下一轮动这块前先想这一条
+- [ ] **RC4-128 那一档的算法名不在字节里**：加密字典只有 `/R 3 /V 2 /Length 128`，没有 `/CF` 也没有 `/CFM`
+      （AES 那两档才把 `AESV2`/`AESV3` 写出来），所以"这是哪一路加密"只能按编号推。本轮四件自造夹具覆盖的是
+      V2/V4/R3/R4 这几档，真件里遇到 R 4 / V 1 之类的怪组合时判据说什么还没测
 - [ ] **失败提示仍寄生在状态栏那一枚字符串上**：本轮的"一条字符串带两行"是**取舍**不是终局——四类编辑器各有
       自己的 `status` 生命周期，"三秒清除还是留着"的分歧本轮只在 `PdfViewer` 的 `pageOp` 改了一处，其余仍各自定时；
       独立的 toast／通知层（可复制原话、可停留）没建
