@@ -26,6 +26,7 @@ import type {
 } from '../lib/fs'
 import { renderChartPng } from '../lib/chart'
 import { registerSaver } from '../lib/registry'
+import { saveBusyTimer, saveDoneText } from '../lib/save-status'
 import { exportPdfWithOverlay, measurePrintLayout } from '../lib/pdfprint'
 import { sheetsToPrintHtml } from '../lib/sheet-print'
 import { applyVerticalPads, measureSheetPrint } from '../lib/sheet-print-measure'
@@ -709,19 +710,33 @@ function SheetEditor({ tab }: Props) {  const containerRef = useRef<HTMLDivEleme
     return payload
   }
 
+  // 「已保存」那句的收尾定时器（补趟开跑时撤掉它，见 save()）
+  const doneClearRef = useRef<number | undefined>(undefined)
+
   const save = async (asNew: boolean) => {
     const api = apiRef.current
     const wb = api?.getActiveWorkbook()
     if (!api || !wb) return
+    // 上一趟「已保存」的收尾：补的那一趟开跑时先撤掉它，否则那句话会在自己说完之前被抹成空的
+    // （v0.65 那条"迟到那一趟不许抹活着那一趟"在写侧的形状）
+    if (doneClearRef.current !== undefined) window.clearTimeout(doneClearRef.current)
+    // 这一趟要说的话说在实测的那一段之前：小件全程 18ms、2 万行件 ~590ms，
+    // 而那 590ms 里前 115~131ms 是主线程同步块（取快照 + 交进 IPC）、后 ~460ms 主线程是空闲的
+    // ⇒ 想说有地方说；而 18ms 那一档说出口就是一闪的噪音，所以由 SAVE_BUSY_MS 那枚门拦着
+    const busy = saveBusyTimer(setStatus)
+    busy.arm()
     try {
       const snapshot = wb.save() as IWorkbookData
       const payload = payloadWithCharts(wb, snapshot)
       let path = asNew ? undefined : tab.path
       if (!path) {
+        // 挑路径那一段是等用户的手、不是等我们写盘 ⇒ 撤掉那扇门，选完了再挂回来
+        busy.cancel()
         path =
           (await pickSaveFile(`${snapshot.name || '工作簿'}.xlsx`, ['xlsx', 'ods', 'csv'])) ??
           undefined
         if (!path) return
+        busy.arm()
       }
       // 按目标扩展名分流：格式不匹配会把 xlsx 字节写进 .ods/.csv 路径，打开方直接认不出文件
       const lower = path.toLowerCase()
@@ -755,14 +770,21 @@ function SheetEditor({ tab }: Props) {  const containerRef = useRef<HTMLDivEleme
         if (hasPrint) lost.push('ODS 暂不含页面设置（纸张/边距/页眉页脚/分页符），导出的 PDF 仍照它排')
       }
       const notes = [...lost, ...writeNotes]
-      setStatus(
-        notes.length
-          ? `已保存（${notes[0]}${notes.length > 1 ? `，另有 ${notes.length - 1} 条说明` : ''}）`
-          : '已保存',
+      setStatus(saveDoneText(notes))
+      doneClearRef.current = window.setTimeout(
+        () => {
+          doneClearRef.current = undefined
+          setStatus('')
+        },
+        notes.length ? 5000 : 1500,
       )
-      setTimeout(() => setStatus(''), notes.length ? 5000 : 1500)
     } catch (e) {
+      // 失败那一路必须把「正在保存」换掉：那句话留在状态栏上就是"还在存"，而这一趟已经停了；
+      // 失败那句按 v0.64 的规矩留着不清，用户才悬停得到原话
+      setStatus(failStatus(e, '保存失败'))
       await message(failDialog(e), { title: '保存失败', kind: 'error' })
+    } finally {
+      busy.cancel()
     }
   }
 
