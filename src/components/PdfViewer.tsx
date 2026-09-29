@@ -10,6 +10,7 @@ import { createRangeTransport } from '../lib/pdf-range'
 import { registerSaver } from '../lib/registry'
 import { failRaw, failStatus, statusText, statusTip } from '../lib/fail-msg'
 import { PWD_MEMORY_NOTE, pwdCancelledText, pwdPromptText, pwdReason, type PwdReason } from '../lib/pdf-password'
+import { findCountText, shouldPublish, type FindStatus } from '../lib/pdf-search'
 import {
   fromDisplayPoints,
   fromDisplayRect,
@@ -175,6 +176,17 @@ function PdfViewer({ tab }: Props) {
   const [query, setQuery] = useState('')
   const [matches, setMatches] = useState<Match[]>([])
   const [activeIdx, setActiveIdx] = useState(-1)
+  // 搜索这一趟走到哪儿了：扫完之前界面只报"扫到第几页"，绝不报"无匹配"
+  const [findStatus, setFindStatus] = useState<FindStatus>({ scanning: null, capped: false })
+  // 组件卸载后循环还挂在 await 上：seq 只分辨"换词了"，不分辨"人不在了"，所以写界面之前先看这一位。
+  // setup 里也要置回来——开发模式的 StrictMode 会跑挂→清→再挂，只在 cleanup 里置 false 就把第二次挂载也关了
+  const aliveRef = useRef(true)
+  useEffect(() => {
+    aliveRef.current = true
+    return () => {
+      aliveRef.current = false
+    }
+  }, [])
   const [sideOpen, setSideOpen] = useState(false)
   const [sideTab, setSideTab] = useState<'thumbs' | 'outline' | 'annos' | 'pages'>('thumbs')
   // 页面管理：勾选的页号（1-based）+ 忙标志 + 重载计数（页面写盘后重新读文件）
@@ -382,6 +394,7 @@ function PdfViewer({ tab }: Props) {
     setQuery('')
     setMatches([])
     setActiveIdx(-1)
+    setFindStatus({ scanning: null, capped: false })
     setSearchOpen(false)
     setOutline([])
     // "页面"是工作区而不是内容视图：页面操作后重载要留在原页签
@@ -785,31 +798,65 @@ function PdfViewer({ tab }: Props) {
     if (!d || !q) {
       setMatches([])
       setActiveIdx(-1)
+      setFindStatus({ scanning: null, capped: false })
       return
     }
+    const total = d.numPages
     const found: Match[] = []
-    outer: for (let n = 1; n <= d.numPages; n++) {
+    // 边扫边说话：700 页的件从零扫一遍实测 1.9~2.4s（并行到 16 路也只省到 1.9s，瓶颈在 pdf.js 逐页
+    // getTextContent 的往返上，每页那串 toLowerCase+indexOf 全场只花 5ms），
+    // 所以本轮不动"扫得快"，动的是"等的时候界面说的是什么"
+    let lastAt = performance.now()
+    let sinceHits = 0
+    let sincePages = 0
+    let capped = false
+    // 只把第一条命中滚进视野一次：往后每次交进度都重定向一次就是抢用户的滚动
+    let focused = false
+    const focusFirst = () => {
+      let idx = found.findIndex((m) => m.page >= curPageRef.current)
+      if (idx === -1) idx = 0
+      scrollToMatch(found, idx)
+    }
+    outer: for (let n = 1; n <= total; n++) {
       const t = await loadPageText(d, n)
-      if (seq !== searchSeq.current) return
+      // 「这一趟已经作废」那道门打在写任何共享状态之前（v0.65 的规矩）：换词会另起一趟，
+      // 组件卸载后这一趟也还在 await 上，晚到的那趟不许把界面抹回旧样子
+      if (seq !== searchSeq.current || !aliveRef.current) return
       const hay = t.full.toLowerCase()
       let pos = hay.indexOf(q)
       while (pos !== -1) {
         const b = locate(t, pos)
         const e = locate(t, pos + q.length - 1)
         found.push({ page: n, bItem: b.item, bOff: b.off, eItem: e.item, eOff: e.off + q.length })
-        if (found.length >= SEARCH_MAX_HITS) break outer
+        sinceHits++
+        if (found.length >= SEARCH_MAX_HITS) {
+          capped = true
+          break outer
+        }
         pos = hay.indexOf(q, pos + q.length)
       }
+      sincePages++
+      if (shouldPublish(performance.now(), lastAt, sinceHits, sincePages)) {
+        lastAt = performance.now()
+        sinceHits = 0
+        sincePages = 0
+        setMatches([...found])
+        setFindStatus({ scanning: { scanned: n, total }, capped })
+        if (!focused && found.length) {
+          focused = true
+          focusFirst()
+        }
+      }
     }
-    if (seq !== searchSeq.current) return
+    if (seq !== searchSeq.current || !aliveRef.current) return
     setMatches(found)
+    setFindStatus({ scanning: null, capped })
     if (!found.length) {
       setActiveIdx(-1)
       return
     }
-    let idx = found.findIndex((m) => m.page >= curPageRef.current)
-    if (idx === -1) idx = 0
-    scrollToMatch(found, idx)
+    // 命中一直等到扫完才出现（或中途只发过没命中的进度）时，这一趟的最后一次定位仍要说得出
+    if (!focused) focusFirst()
   }
 
   const gotoMatch = (delta: number) => {
@@ -892,6 +939,14 @@ function PdfViewer({ tab }: Props) {
   useEffect(() => {
     if (!doc) return
     const seq = ++searchSeq.current
+    // 打字的那一刻起这一格就该说"正在搜索"：防抖的 200ms 里旧形状的界面写的是「无匹配」，
+    // 而那一刻连一页都没扫过——那不是"没有"，那是"还没开始"。上一词的命中数也一起清掉，
+    // 否则界面会把"上一个词的第 3 条"挂在"这一个词"的格子里。
+    setMatches([])
+    setActiveIdx(-1)
+    setFindStatus(
+      query.trim() ? { scanning: { scanned: 0, total: doc.numPages }, capped: false } : { scanning: null, capped: false }
+    )
     const timer = setTimeout(() => void runSearch(query, seq), SEARCH_DEBOUNCE_MS)
     return () => clearTimeout(timer)
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -1435,6 +1490,8 @@ function PdfViewer({ tab }: Props) {
       activeIdx: () => activeIdx,
       matchPages: () => matches.map((m) => m.page),
       renderedPages: () => [...slots.current.keys()].sort((a, b) => a - b),
+      // 搜索扫过几页的文本：真机腿判"扫完全程"的唯一硬判据（与 renderedPages 同一类缓存观测量）
+      textPages: () => pageTexts.current.size,
       perf: () => ({ ...renderStats.current, cached: [...bmpCache.current.keys()] }),
       rangeMode: () => rangeModeRef.current,
       annos: () =>
@@ -1711,7 +1768,15 @@ function PdfViewer({ tab }: Props) {
               }}
             />
             <span className="pdf-search-count">
-              {matches.length ? `${activeIdx + 1}/${matches.length}` : query.trim() ? '无匹配' : ''}
+              {findCountText(
+                {
+                  scanning: findStatus.scanning,
+                  hits: matches.length,
+                  active: activeIdx,
+                  capped: findStatus.capped,
+                },
+                query.trim() !== ''
+              )}
             </span>
             {btn('▲', () => gotoMatch(-1), !matches.length, '上一个匹配 (Shift+Enter)')}
             {btn('▼', () => gotoMatch(1), !matches.length, '下一个匹配 (Enter)')}
