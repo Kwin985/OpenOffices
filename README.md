@@ -1941,6 +1941,54 @@ v0.48 那一条账目（`ODS 暂不含批注与超链接`）从写下那天起�
   **CDP 真机冒烟 17 断言 / 真失败 0、页面异常 0 条**（批注与三种链接形状进界面 → 存盘 → 重开 → 原样还在 → 状态栏不再报那一句）；
   **独立读字节腿 27 断言 / 真失败 0**；**RelaxNG 规格腿 26 断言 / 真失败 0**（三条假例 INVALID）；+ tsc 与 build 绿
 
+## 写侧也有账了：ODS 那一趟摆不下的批注与链接说得出地址（v0.63）
+
+v0.62 收尾时自己记下的那笔账是本轮的起点——「`write_ods_sync` 只回 `Result`、写侧没有回写账目通道 ⇒
+现在是**读侧有账、写侧无账**」。那一轮把批注与链接双向通了，却被留下一整类静默：界面上报「已保存」，
+文件里少了东西，而少了哪几枚、为什么少，一个字都不说。本轮动的就是这半截，而形状几乎不用新搭：**xlsx 那头 v0.46 起就有一条
+accounts 通道**（`Vec<String>` → `invoke<string[]>` → `writeNotes` → `[...lost, ...writeNotes]` → 状态栏
+`已保存（第一条，另有 N 条说明）`），本轮把同一条契约接到 ODS 这一路，前端只动两行。
+
+- **判据只有一批，三处共用**：`note_writable`（正文不为空）／`link_writable`（`odf_href` 给得出目标）／
+  `cell_covered`（落在合并区里被盖住的那一格）合成 `note_written`/`link_written`，同时被**格子渲染**
+  （`note_at`/`link_at` 的取样点）、**`used_namespaces`**、**`ods_side_accounts`** 三处读取——各写各的判据
+  就会有一种状态是「账上说没写、字节里却写了」（或反过来），共用之后「报的账」与「字节里少掉的那几枚」
+  与「命名空间声明」是同一批，这是本轮唯一的架构决定
+- **本轮新立的一条：命名空间只为真会落笔的属性服务**（`bubble_dim`）：气泡尺寸说 0／负数／NaN 时
+  `px_to_odf_len` 根本写不出成立的 `svg:length`，于是那一味不写，**`xmlns:svg` 也跟着缺席**——
+  为一条根本不出现的属性声明命名空间就是白盖一枚戳（v0.62 的「按需声明」在本轮多算了这一步，
+  是复查发射点时发现的静默不忠实，不是新加的形态）
+- **账目的顺序有说法**：先批注后链接、各按载荷里的条目序，「同格多条」那两条记在最后——同一份载荷两次存盘
+  报出**逐字相同**的一批账（幂等判据里既比字节也比账）
+- **规格腿把「账的依据」分成了两档，这是本轮最要紧的一条诚实区分**：
+  ① **文法逼的**（RelaxNG 当场 INVALID）——同一格第二枚 `office:annotation`（`table-table-cell-content`
+  只给**一枚** optional）、`<text:a>` 少了 `xlink:href`、批注排在正文之后、气泡尺寸不带单位；
+  ② **语义与约定逼的**——把批注、正文、链接分别塞进 `covered-table-cell`，**三档 RelaxNG 全部放行**
+  （本轮逐枚量出来），所以那句「ODF 在那里没有批注通道」说的不是文法而是规格正文的语义
+  （那一格的内容属于锚格）加上我们读侧的归因分寸；同理「同一格两条链接只写第一条」是**约定**
+  （Univer 与 Excel 都一格一条），不是文法强制——文案里两者都说得出地址与后果，但**依据不同，本轮把这一条写进判据注释**
+- **真机上这条通道真有活干，不是理论上摆不下的形状**：CDP 那一路量到 Univer **当场就允许**
+  「先给 B6 建批注、再把 A6:B7 合并」，批注留在被盖住的那一格里 → 保存 → 状态栏报出
+  「第 6 行第 2 列的批注落在合并区里被盖住的那一格，ODF 在那里没有批注通道，未写入」，**再存一次还说得出**
+  （不是一次性提示）；同件的锚格那枚与没被盖住的正控制那枚照旧进得了文件 ⇒ 少的只因「被盖住」；
+  干净件（什么都摆得下）的状态栏就只说「已保存」，不许凭空记账
+- **量具自己的一课**：门面那枚 `createOrUpdateNote` 吃的是 **`ISheetNote` 对象**（`{note,width,height,show}`），
+  传字符串会被 Univer 摊成按字符下标的键，而我们的侧通道只认 `note` 是字符串那一档 ⇒ 界面新建的批注读不到，
+  看着像产品没接线，其实是脚本写错
+- **四条变异检查（+ 两条正控制）证明判据会响**：字节里多塞一枚气泡 ⇒ 数枚数／「载荷减账等于字节」／
+  「未写入的正文不在字节里」／「用到的前缀都声明了」四条一起响；账目里少报一条 ⇒ 只有账目那两枚响而
+  **字节枚数那枚照旧绿**（分得清「账错」与「字节错」）；多声明一枚用不到的 `xmlns:dc` ⇒ 「声明了却没用」响；
+  把**真件**里的气泡搬到正文之后 ⇒ 规格腿「整件合 ODF 1.2 语法」与「锚格逐枚」当场 INVALID
+  （这一档补的是"真件那一档也有牙"，此前整件 VALID 只由假例自证）
+- **验证（五腿 + 变异 + 编译）**：`cargo test --lib` **97 通过 / 0 失败 / 11 ignored**（三枚新例：
+  六条摆不下的形状逐条对上字面、载荷没说话时一条账都不记、命名空间跟着字节而不是跟着载荷）；
+  **前端结构测试 28 断言 / 真失败 0**（`writeOds` 带回账这一行必须真接上，四条拆掉接线的假例各打 FAIL 且副作用面说清）；
+  **CDP 真机冒烟 28 断言 / 真失败 0、页面异常 0 条**；**独立读字节腿 40 断言 / 真失败 0**；
+  **规格腿 20 断言 / 真失败 0**；**变异检查 16 断言 / 真失败 0**；+ tsc 与 build 绿
+- **本轮没动的**：读侧那三条「落不准」的账照旧（图表／三类规则／页面设置），xlsx 那头的「同格多条」是否记同一条账
+  本轮**没核查**（只说 ODS 这一头），第三方 ODF 应用仍缺位（本机无 LibreOffice/OpenOffice，Excel 16.0 打不开 `.ods`），
+  新开的未勾项见路线图
+
 ## 性能（v0.3）
 
 
@@ -1998,7 +2046,7 @@ src-tauri/            Rust 后端
   src/xlsx_cell_side.rs 单元格两位邻居的双向（v0.48）：读侧 `read_cell_side` 另开一趟 zip 按表名对回**独立部件**——legacy `commentsN.xml`（`<authors>` 表 + `authorId` 下标、正文里那行「作者:」前缀只在认得出作者时剥）、threaded `threadedComments/*.xml`（作者查 `persons/person.xml`，两种键名都收，回复并进正文并记账）、两者的归一、气泡尺寸与常开来自 `vmlDrawing`（pt→px，默认那档 128×74 **归一回不声明**）、超链接的 `ref` 在 worksheet 而外部地址在其 rels（`TargetMode="External"`）、表内跳转才是 `location` 字面；写侧 `write_sheet_side`（链接先落文本再补普通格，无 scheme 的目标按 `file:` 补试；`Note` 带作者/尺寸/常开，作者超 52 字只丢作者；`set_default_note_author("")` 让"没人署过"真是空串）+ `save_workbook`（**rust_xlsxwriter 的 `<authors>` 按名字排序而 `authorId` 按格子序登记**，两序不一致时按载荷数出来的那张表重排 `<authors>`，多重集或 `<comment ref>` 文档序对不上就宁可不改并记账）；认不出的形状一律记账；**v0.60 只改一句账目文案**：那条"产物里没有 {}，那张表的页眉页脚、起始页码没写出去"扩成"……起始页码**或缺省行高**没写出去"——`patch_part_xml` 现在也可能因为这一枚失败而少写东西，账目得说得出它管的是什么
   src/xlsx_print.rs   一张纸怎么摆的双向（v0.51）：读侧 `read_print_setups` 另开一趟 zip 收 worksheet 末尾七处（`sheetPr/pageSetUpPr@fitToPage`·`printOptions`·`pageMargins`·`pageSetup`·`headerFooter` 的 odd/even/first 三槽·`rowBreaks`·`colBreaks`）**加 workbook 级两条 definedName**（`_xlnm.Print_Area`/`_xlnm.Print_Titles` 靠 `localSheetId` 分表，`$1:$2`/`$A:$B`/区域三种片段各归各的字段），`<brk id>` **原样收**（0 基，指"这一行/列自己开始新的一页"——两头实测过）；写侧 `write_sheet_print`（odd 与其余各项交 crate）+ `PrintPatch`/`patch_part_xml`（crate 只有 odd 通道、`differentOddEven`/`differentFirst` 一个字不写、又把起始页码落在布尔属性 `useFirstPageNumber` 上，故 even/first 两条串与真号码在字节上补一次：只动点名的那张 worksheet 部件，兄弟元素次序按 schema 排，页眉页脚里 `&` 是格式码故只认三条标准转义）；认不出的纸型编号与片段一律记账不硬凑；**v0.52 只补一条读侧归一**：接进 `print.clear_default_only_margins()` 之后才判 `is_empty()`，于是"文件里只有 crate 那份默认 `<pageMargins>`"的表不再被当成带着纸面设置（面板副标题、账目与 `printRef` 三处都因此说实话），测试另加两例——只含默认六边的那一份不算声明、超出默认的那一条仍算；**v0.53 补的是"没声明过的那一枚不该被替我们声明"**：`write_sheet_print` 只在真走通 setter 时才算声明过方向并回传 `drop_orientation`，`patch_part_xml` 那趟据此把 crate 逢 `<pageSetup>` 必写的 `orientation` **整枚擦掉**（`patch_orientation` 只动这一枚，其余属性与内部正文原样搬，声明过 landscape/portrait 的一张字都不改），读侧同一条分寸用在页高档上——`<pageSetup>` 里 `fitToWidth`/`fitToHeight` 被 crate 在等于 1 时省掉，而 OOXML 缺省正是 1，故开了 `fitToPage` 却没写的那两枚归一回 `Some(1)`（没开 `fitToPage` 的不许归一，那是替用户凭空声明一档缩放）；测试再加三例（没声明的方向不回来、走完整存盘链路后仍不声明且不连累 paperSize/scale、擦方向不许把页高归一也带走）与一份**成对夹具** `gen_orient_fixture`（同一趟存盘里"说了 landscape"与"从没说"两张表，第三方腿据此分辨"被擦了"与"本来就没写"）；**v0.54 只多一份夹具** `gen_parity_fixture`（一张表 140 行、横向 A4、`differentOddEven` 与 `differentFirst` **同时为真**、odd/even/first 三版页眉页脚各写不同内容、`firstPageNumber=7`——那枚 7 是装在同一份件里的对照：纸上印出 7 就说明起点漏进了我们自己的通道，而它始终印的是 1..N；只读腿与 CDP 冒烟吃的是同一份字节）；**v0.55 收的是同一元素上那两枚缺省开着的开关**：读侧新增 `off_attr()`（只把明确写 `0` 的收进载荷，缺省与显式 `1` 都归一回不声明——与 v0.52 那枚默认边距同一条规矩），写侧只在 `Some(false)` 时调 `set_header_footer_scale_with_doc(false)` / `set_header_footer_align_with_page(false)`（crate 也只在关掉时落字节，且走通 setter 会置上 `head_footer_changed`，于是"只有开关、一条页眉页脚都没有"的件也长得出 `<headerFooter>`；`patch_header_footer` 那趟只擦自家那两枚奇偶开关，crate 写的这两枚活着过第二次存盘），`merge_defaults` 按「任何一头说了关就是关」填；测试三例（关着的落进 XML 而开着的不写、存两次两枚都在、`scaleWithDoc="0" alignWithMargins="1"` 读回来是 `Some(false)` 与 `None`）+ 一份**四件套对照夹具** `gen_switch_fixture`（`s-on`/`s-scaleoff`/`s-alignon`/`s-alignoff`：同一份页眉、只动一枚开关，`align` 那两份故意用不对称边距 1in/2in，于是"按边距的中心"与"按纸边的中心"分得开；Excel 腿与冒烟腿吃同一份字节）；**v0.56 只多一份三件对照夹具** `gen_fitwidth_fixture`（同一张 14 列 × 130px 的表——竖版 A4 一页宽根本装不下、必须挤——写出 `fw-plain`（scale 100）/ `fw-fit1`（`fitToPage` + `fitToWidth=1`）/ `fw-fit1-off`（同一件再写 `scaleWithDoc="0"`）三份件，页眉三槽各带表名 tag 好让 pdf.js 认得出哪一行是页眉；它管两个问题：挤一页宽时页眉跟不跟着压、跟着的是**反求出来那一档**还是**声明出来的那一档**；Excel 只读腿与 CDP 冒烟吃同一份字节）；**v0.60 让这一趟定点重打包多认一处**：`PrintPatch` 多一枚 `sheet_format`（`noop()` 必须把它算进去，否则整趟被跳过、擦了个寂寞），`patch_sheet_format` 只重写 `<sheetFormatPr>` 自家那两枚属性（`defaultRowHeight` 与 `customHeight`），同元素上的旁邻属性原样搬，部件里没有这一枚时按 schema 序插在 `<cols`/`<sheetData` 之前；荒谬值（非有限数、`<= 0`）在这里再兜一次而不是落进字节；为什么不走 crate——`set_default_row_height` 会把这枚缺省盖成**每一行的显式 `ht`**，而且内部按整数像素存（17.5pt 存成 17.25），判别见 `xlsx::tests::crate_default_row_height_setter_stamps_every_row`；测试三例（这一枚落进字面而**逐行不许被盖章**、没声明时不许把 crate 那份 15 改写、补丁只动自家两枚属性）
   src/xlsx_chart.rs   zip + quick-xml 直读 chartN.xml + drawing 锚点，系列值按实时网格解析；has_charts 只做 zip 文件名嗅探
-  src/ods.rs          ODS 双向：write_ods（async 外壳 + write_ods_sync，共用 xlsx 载荷 → ODF zip，样式/尺寸去重与合并、冻结 settings.xml、公式 of:= 换算）+ read_ods_styles（直解边框/对齐/换行/列宽行高/字族/隐藏 collapse/重复单元格/合并跨度/公式 + settings.xml 冻结）+ **ODF 规则只记账不硬读**（content.xml 里有 `table:database-range`/`table:content-validations`/`table:conditional-format` 就说得出"暂未读入"，自产物不许凭空记出一条账）；**v0.61 在这一趟里多认一处住址**：`ods_default_font_of(styles.xml)` 只从 `<style:default-style style:family="table-cell">` 那条的 `<style:text-properties>` 取字族与字号（`family="text"` 那支、具名 `<style:style style:name="Default">` 那一层、兄弟元素 `<style:table-cell-properties>` 上的字号都不算），`read_ods_styles` 的返回形状随之变成 `(fmts, Option<DefaultFont>)`；`odf_font_pt` 带 `pt` 后缀就按**磅字面直取**，只有真不是 pt 的那一档才走 `odf_len_to_px`（那一趟带取整）；这一层**不归一化**（抹掉文件明写的字族＝换字族，v0.57 那条），0／负数不在读点拦（由唯一消费点兜）；写侧新增 `default_style_xml`——载荷没说话就整层不写（不盖章），说了就落 `<style:default-style style:family="table-cell"><style:text-properties style:font-name=… fo:font-family=… fo:font-size="Npt"/>` 且排在具名 style 之前；ODF 靠样式继承链表达这一层，故 xlsx 那套 `seed_font`/「同一档不重复声明」在这里用不上；**v0.62 添 `read_ods_cell_side`（批注与超链接的双向）**：这两样在 ODF 里**都是格子的孩子**（xlsx 那头是四件独立部件 + rels），所以一趟 `content.xml` 扫描按表名收齐、交回同一枚 `xlsx_cell_side::SideRead`——`flush_table` 把每张表的账目并进 `out`；读侧的判据主体是"落不准就不硬派"：`covered-table-cell` 与 `number-columns-repeated ≠ 1` 的格说不准这两样属于谁 ⇒ 各记一条账而不猜列位，同一格第二条链接「只收第一条」，`href` 缺席／既不像 §9.2.1 的内部地址（`#表名.格`，`#` 与 `.#` 两种写法、`$` 绝对引用都认）又不带 RFC-3986 scheme ⇒「位置认不出来」而不是造一条点不开的死链，`dc:date`/`creator-initials` 由 `in_meta` 挡在正文外，空正文的气泡不收，表名 `unesc` 一次（与 calamine 那一头对得上才接得进 `by_sheet`），批注内层的 `text:a` 只贡献显示文字（不是格子链接）；写侧 `annotation_xml`（排在同格正文 `<text:p>` **之前**，ODF §9.1.4 的子元素定序——`office:display` 只在说 true 时落笔、`svg:width/height` 只在载荷给那味时写且**单位必带**（`px_to_odf_len`），没署过名就不写 `dc:creator`）+ `text_p_xml`（有链接时外套 `<text:a xlink:type="simple">`，`office:title` ＝悬停提示）+ `odf_href`（载荷的 `location`"表名!A1"折成 `#表名.格`，没说表名用本表补）+ `odf_table_ref`（含空格/点/单引号的表名裹 `'…'`、`''` 是引号本身）+ `used_namespaces`（`dc`/`svg`/`xlink` **按需声明**，载荷没用到的命名空间不进根元素）；`note_at`/`link_at`/`side_at` 三个取样点让"只有批注没有值"的格子也长得出（`row_used` 与 `max_row` 都算上这两味）；**`write_ods_sync` 只回 `Result`，没有回写账目通道**（挂路线图），而"链接挂在数字格上会把该格读回成文本"这条代价与桥有关、与格式无关，本轮钉成断言
+  src/ods.rs          ODS 双向：write_ods（async 外壳 + write_ods_sync，共用 xlsx 载荷 → ODF zip，样式/尺寸去重与合并、冻结 settings.xml、公式 of:= 换算）+ read_ods_styles（直解边框/对齐/换行/列宽行高/字族/隐藏 collapse/重复单元格/合并跨度/公式 + settings.xml 冻结）+ **ODF 规则只记账不硬读**（content.xml 里有 `table:database-range`/`table:content-validations`/`table:conditional-format` 就说得出"暂未读入"，自产物不许凭空记出一条账）；**v0.61 在这一趟里多认一处住址**：`ods_default_font_of(styles.xml)` 只从 `<style:default-style style:family="table-cell">` 那条的 `<style:text-properties>` 取字族与字号（`family="text"` 那支、具名 `<style:style style:name="Default">` 那一层、兄弟元素 `<style:table-cell-properties>` 上的字号都不算），`read_ods_styles` 的返回形状随之变成 `(fmts, Option<DefaultFont>)`；`odf_font_pt` 带 `pt` 后缀就按**磅字面直取**，只有真不是 pt 的那一档才走 `odf_len_to_px`（那一趟带取整）；这一层**不归一化**（抹掉文件明写的字族＝换字族，v0.57 那条），0／负数不在读点拦（由唯一消费点兜）；写侧新增 `default_style_xml`——载荷没说话就整层不写（不盖章），说了就落 `<style:default-style style:family="table-cell"><style:text-properties style:font-name=… fo:font-family=… fo:font-size="Npt"/>` 且排在具名 style 之前；ODF 靠样式继承链表达这一层，故 xlsx 那套 `seed_font`/「同一档不重复声明」在这里用不上；**v0.62 添 `read_ods_cell_side`（批注与超链接的双向）**：这两样在 ODF 里**都是格子的孩子**（xlsx 那头是四件独立部件 + rels），所以一趟 `content.xml` 扫描按表名收齐、交回同一枚 `xlsx_cell_side::SideRead`——`flush_table` 把每张表的账目并进 `out`；读侧的判据主体是"落不准就不硬派"：`covered-table-cell` 与 `number-columns-repeated ≠ 1` 的格说不准这两样属于谁 ⇒ 各记一条账而不猜列位，同一格第二条链接「只收第一条」，`href` 缺席／既不像 §9.2.1 的内部地址（`#表名.格`，`#` 与 `.#` 两种写法、`$` 绝对引用都认）又不带 RFC-3986 scheme ⇒「位置认不出来」而不是造一条点不开的死链，`dc:date`/`creator-initials` 由 `in_meta` 挡在正文外，空正文的气泡不收，表名 `unesc` 一次（与 calamine 那一头对得上才接得进 `by_sheet`），批注内层的 `text:a` 只贡献显示文字（不是格子链接）；写侧 `annotation_xml`（排在同格正文 `<text:p>` **之前**，ODF §9.1.4 的子元素定序——`office:display` 只在说 true 时落笔、`svg:width/height` 只在载荷给那味时写且**单位必带**（`px_to_odf_len`），没署过名就不写 `dc:creator`）+ `text_p_xml`（有链接时外套 `<text:a xlink:type="simple">`，`office:title` ＝悬停提示）+ `odf_href`（载荷的 `location`"表名!A1"折成 `#表名.格`，没说表名用本表补）+ `odf_table_ref`（含空格/点/单引号的表名裹 `'…'`、`''` 是引号本身）+ `used_namespaces`（`dc`/`svg`/`xlink` **按需声明**，载荷没用到的命名空间不进根元素）；`note_at`/`link_at`/`side_at` 三个取样点让"只有批注没有值"的格子也长得出（`row_used` 与 `max_row` 都算上这两味）；**v0.63 给这一头补上回写账目通道**——`write_ods`/`write_ods_sync` 的返回从 `Result<(), Error>` 变成 `Result<Vec<String>, Error>`（与 `write_xlsx_sync` 同一条契约，`fs.ts` 的 `writeOds` 随之回 `string[]`），`ods_side_accounts` 说的就是这一趟**摆不下**的那几枚（批注没正文／落在被盖住的格上、链接两头都没目标／落在被盖住的格上、同格多于一枚的"只写了第一条"并报实际条数），顺序是先批注后链接、各按载荷条目序、重复那两枚记在最后；判据**只有一批**（`note_writable`/`link_writable`/`cell_covered` 合成 `note_written`/`link_written`），格子渲染、`used_namespaces`、`ods_side_accounts` 三处共读，于是"报的账"、"字节里少掉的那几枚"与"命名空间声明"是同一批而不是各写各的；`bubble_dim` 是本轮新立的一条——尺寸说 0／负数／NaN 时 `px_to_odf_len` 写不出成立的 `svg:length`，**那一味不写，`xmlns:svg` 也跟着不声明**（为一条根本不落笔的属性盖命名空间就是白盖章）；同一轮由规格腿量清楚了两件事：`covered-table-cell` 里塞批注/正文/链接**文法全放行**（那三条"未写入"的账依据是规格正文的语义＋我们读侧的归因分寸，不是 RelaxNG），而**同一格第二枚 `office:annotation` 是文法逼的**（`table-table-cell-content` 只给一枚 optional）、两条链接只是约定；"链接挂在数字格上会把该格读回成文本"这条代价与桥有关、与格式无关，v0.62 钉成断言、本轮照旧
   src/pdf.rs          export_pdf 命令：with_webview → WebView2 PrintToPdf（四边距英寸四元组 + 纸张宽高/朝向，cfg windows）；**纸张换算是唯一的**：`page_box(w,h)` 把"想要的纸面尺寸"折成 PrintSettings 的"竖版边长 + Orientation"（v0.50，宽>高才转横向，等边不算横向），背景/页眉页脚/四边距/纸宽纸高/方向五步设置失败**一律原样报出**（静默退默认＝"导出成功但纸不对"）；file_len + read_range（raw IPC 返回 Vec<u8>，async + spawn_blocking，供大 PDF 分段读）
   src/lib.rs          OPEN_EXTS 与 argv 文件过滤纯函数、take_startup_files 命令、single-instance 文件转发；插件链只注册 updater 的 check 能力（前端仅授 `updater:allow-check`，下载与安装没接线）
   capabilities/       dialog + fs 权限与路径作用域 + updater:allow-check（只给检查，下载/安装未接线）
@@ -2046,14 +2094,14 @@ src/                  React 前端
   lib/open.ts         路径→标签 打开 / 带确认关闭
   lib/sync.ts         最近文件端到端加密同步（WebCrypto PBKDF2-SHA256 → AES-256-GCM，.oosync 信封）
   lib/update.ts       自动更新的**检测层**（v0.45）：`checkForUpdate()` 动态导入 updater 插件走一次 `check`，任何失败都收敛成 `{state:'failed'}` 不往外抛（抛出去的表现就是"点了没反应"）；`describeError` 按插件 error.rs 的真实字面把"源上没清单/没配端点/非 https/缺本平台条目/签名/base64/日期/连不上"归成中文，认不出的一律原样带出不编原因；`infoOf` 从 `rawJson` 里取自定义字段 `download_page`，只认 http(s) 才给按钮
-  components/         Home（最近文件 + 从模板新建画廊 + 版本号与"检查更新"） / Workspace / SheetEditor（保存按 .xlsx/.ods/.csv 三分流，打开时把读到的规则经门面放回界面并把两侧账目显示在状态栏；**「页面设置」面板（v0.52）**——纸张/方向、六条边距（毫米）、缩放与"缩放到 N 页宽"、六个开关、打印区域与重复标题行列（可「用当前选区」「用选区首行/首列」按门面选区给）、手动分页符（按 Excel 的 `brk@id` 说法：这一行/列自己起新页）、页眉页脚三框 + 六枚格式码 + 奇/偶/首页三版 + **两枚缺省开着的开关（「页眉页脚随文档缩放」「与页边距对齐」，v0.55：勾着＝写 `null` 不声明、取消＝写 `false`，旁注一次说清哪一档我们照 Excel 乘了字号、哪一档两边差一圈）**；「确定」写进 `printRef` 侧通道、「清除这张表的设置」把它整个删掉、面板里的错把确定灰掉，做不到的那几条以账目形式随草稿说在面板上（v0.53 改了语气：页高档与居中已经接线，只剩起始页码真做不到；v0.54 之后偶数页那一版也不再是账——它真的印在偶数页上，面板这几句全部转述 `hfAndPageNumberNotes` 那一份文案）；**导出这一侧多了一段实测循环（v0.53）**——计划里勾了「缩放到 N 页高」或「上下居中」的表才走：建一次 → `measurePrintLayout` 离屏量 → `planSheetFit` 压档/算留白 → 带 `zooms` 重建，最多五趟，定档后把居中留白写回**同一份 DOM** 再交导出；账目分两头记（"压到 27%"那句要说在压它的那一趟、每张表占一格由后趟覆盖前趟，居中的账反过来只在最终缩放那份实测上算数）；DEV 门面钩子随这轮加 `printSet(表名, 载荷|null)`（落笔处＝面板「确定」那一行）与 `printHtml(zooms)`（把**将要上纸的那份 HTML**交出去，让脚本自己挂起来量真实布局）；**v0.57 工作簿默认字体走第三枚侧通道 `defaultFontRef`**（不放 Univer 快照——`IWorkbookData.defaultStyle` 在 core 里零读取、引擎兜回硬编码 Arial 11，而 `wb.save().defaultFont` 实测恒为 `null`）：加载时挂上 `dump.defaultFont`、换标签复位、在 `payloadWithCharts` 那一枚漏斗里回贴，于是存盘与导出 PDF 共吃一份而界面渲染不说谎；**v0.59 只把 DEV 钩子摊宽**（生产行为一个字没动）：`printHtml()` 的返回值多三枚——`defaultFont`（侧通道里那一层本体，冒烟据此分辨"文件说的"与"我们兜的"）、每张计划里的 `basePx`（计划算出的正文底数）、`baseVars`（那份 HTML 里所有 `--oof-print-base-size:<px>` 的含值列表，按张核）；**v0.60 添第四枚侧通道 `sheetFormatRef`**（按表名持有 `SheetFormat`，与前三枚同一脾气：加载时从 `sheets[].sheetFormat` 挂上、换标签复位、改名随 `migrateSheetName` 一起迁、在 `payloadWithCharts` 的漏斗里回贴，且 `if (f && !sheet.sheetFormat)`——快照自己说出来的那一张永远赢）；这一枚与 `defaultFontRef` 方向相反：`IWorksheetData.defaultRowHeight` 在 Univer 里是**活口**（喂了就界面认、而 Excel 根本不认它），所以这里**只收不放**——不喂编辑器也不喂纸面，只为存盘时原样落回；DEV 钩子 `printPlan()` 因此多一枚 `sheetFormats`，冒烟据此问得出"这一层交回了什么"，而结构测试那头的钉是"五个消费点里 `sheetFormat` 出现零次"；**v0.62 只撤两行**——`hasSide` 那枚判定与「ODS 暂不含批注与超链接」那句账目，因为 `.ods` 这两样现在真读得回也写得出，而另三句 ODS 账（图表／三类规则／页面设置）与 CSV 那句照旧立着（结构腿判的就是"撤干净了且只撤了这一句"） / DocEditor（页面设置含分栏/页码格式、分页参考线、分页符、表格与图片上下文工具条、粘贴成图、查找替换面板、字体族·字号、缩进工具条与 Ctrl+]/[、上下标 X²/X₂、表格上下文条的底纹色与竖排对齐（上/中/下）、脚注/尾注（工具栏插入 + 文末分区编辑与定位/删除，打印时文本框换静态块）、版本历史·自动保存、模板 seed、状态栏字数节流；打开 .docx 保真导入优先、mammoth 兜底，保存按 .odoc/.odt/.docx 各自格式原地落盘） / PptEditor / PdfViewer（pdfjs-dist 懒加载，连续多页视口虚拟渲染+Ctrl 缩放+TextLayer 文字选择+全文搜索+缩略图/大纲/标注侧栏+高亮便签与矩形·椭圆·直线·手绘形状（绘制/导入/写回 pdf-lib）+标注编辑（点选/拖移/改色/删除）+「页面」工作区旋转/删除/提取/合并/拆分；≥4MB 走分段读（lib/pdf-range.ts），卸载时 destroy openTask 并 abort transport））
+  components/         Home（最近文件 + 从模板新建画廊 + 版本号与"检查更新"） / Workspace / SheetEditor（保存按 .xlsx/.ods/.csv 三分流，打开时把读到的规则经门面放回界面并把两侧账目显示在状态栏；**「页面设置」面板（v0.52）**——纸张/方向、六条边距（毫米）、缩放与"缩放到 N 页宽"、六个开关、打印区域与重复标题行列（可「用当前选区」「用选区首行/首列」按门面选区给）、手动分页符（按 Excel 的 `brk@id` 说法：这一行/列自己起新页）、页眉页脚三框 + 六枚格式码 + 奇/偶/首页三版 + **两枚缺省开着的开关（「页眉页脚随文档缩放」「与页边距对齐」，v0.55：勾着＝写 `null` 不声明、取消＝写 `false`，旁注一次说清哪一档我们照 Excel 乘了字号、哪一档两边差一圈）**；「确定」写进 `printRef` 侧通道、「清除这张表的设置」把它整个删掉、面板里的错把确定灰掉，做不到的那几条以账目形式随草稿说在面板上（v0.53 改了语气：页高档与居中已经接线，只剩起始页码真做不到；v0.54 之后偶数页那一版也不再是账——它真的印在偶数页上，面板这几句全部转述 `hfAndPageNumberNotes` 那一份文案）；**导出这一侧多了一段实测循环（v0.53）**——计划里勾了「缩放到 N 页高」或「上下居中」的表才走：建一次 → `measurePrintLayout` 离屏量 → `planSheetFit` 压档/算留白 → 带 `zooms` 重建，最多五趟，定档后把居中留白写回**同一份 DOM** 再交导出；账目分两头记（"压到 27%"那句要说在压它的那一趟、每张表占一格由后趟覆盖前趟，居中的账反过来只在最终缩放那份实测上算数）；DEV 门面钩子随这轮加 `printSet(表名, 载荷|null)`（落笔处＝面板「确定」那一行）与 `printHtml(zooms)`（把**将要上纸的那份 HTML**交出去，让脚本自己挂起来量真实布局）；**v0.57 工作簿默认字体走第三枚侧通道 `defaultFontRef`**（不放 Univer 快照——`IWorkbookData.defaultStyle` 在 core 里零读取、引擎兜回硬编码 Arial 11，而 `wb.save().defaultFont` 实测恒为 `null`）：加载时挂上 `dump.defaultFont`、换标签复位、在 `payloadWithCharts` 那一枚漏斗里回贴，于是存盘与导出 PDF 共吃一份而界面渲染不说谎；**v0.59 只把 DEV 钩子摊宽**（生产行为一个字没动）：`printHtml()` 的返回值多三枚——`defaultFont`（侧通道里那一层本体，冒烟据此分辨"文件说的"与"我们兜的"）、每张计划里的 `basePx`（计划算出的正文底数）、`baseVars`（那份 HTML 里所有 `--oof-print-base-size:<px>` 的含值列表，按张核）；**v0.60 添第四枚侧通道 `sheetFormatRef`**（按表名持有 `SheetFormat`，与前三枚同一脾气：加载时从 `sheets[].sheetFormat` 挂上、换标签复位、改名随 `migrateSheetName` 一起迁、在 `payloadWithCharts` 的漏斗里回贴，且 `if (f && !sheet.sheetFormat)`——快照自己说出来的那一张永远赢）；这一枚与 `defaultFontRef` 方向相反：`IWorksheetData.defaultRowHeight` 在 Univer 里是**活口**（喂了就界面认、而 Excel 根本不认它），所以这里**只收不放**——不喂编辑器也不喂纸面，只为存盘时原样落回；DEV 钩子 `printPlan()` 因此多一枚 `sheetFormats`，冒烟据此问得出"这一层交回了什么"，而结构测试那头的钉是"五个消费点里 `sheetFormat` 出现零次"；**v0.62 只撤两行**——`hasSide` 那枚判定与「ODS 暂不含批注与超链接」那句账目，因为 `.ods` 这两样现在真读得回也写得出，而另三句 ODS 账（图表／三类规则／页面设置）与 CSV 那句照旧立着（结构腿判的就是"撤干净了且只撤了这一句"）；**v0.63 只动两行**——`.ods` 那一路的 `await writeOds(...)` 改成 `writeNotes.push(...(await writeOds(path, payload)))`，于是写侧的账与 xlsx 那头走同一条汇合（`[...lost, ...writeNotes]` → 状态栏 `已保存（第一条，另有 N 条说明）`），另一行是把注释里的例子换成"规则摆不进 OOXML、批注落在被盖住的格上"；拼句的公式、`lost` 那三句 ODS 账与 CSV 那句一个字没动（本轮没有新桥：`sheet-cell-side.ts` 的取与放早就是格式无关的） / DocEditor（页面设置含分栏/页码格式、分页参考线、分页符、表格与图片上下文工具条、粘贴成图、查找替换面板、字体族·字号、缩进工具条与 Ctrl+]/[、上下标 X²/X₂、表格上下文条的底纹色与竖排对齐（上/中/下）、脚注/尾注（工具栏插入 + 文末分区编辑与定位/删除，打印时文本框换静态块）、版本历史·自动保存、模板 seed、状态栏字数节流；打开 .docx 保真导入优先、mammoth 兜底，保存按 .odoc/.odt/.docx 各自格式原地落盘） / PptEditor / PdfViewer（pdfjs-dist 懒加载，连续多页视口虚拟渲染+Ctrl 缩放+TextLayer 文字选择+全文搜索+缩略图/大纲/标注侧栏+高亮便签与矩形·椭圆·直线·手绘形状（绘制/导入/写回 pdf-lib）+标注编辑（点选/拖移/改色/删除）+「页面」工作区旋转/删除/提取/合并/拆分；≥4MB 走分段读（lib/pdf-range.ts），卸载时 destroy openTask 并 abort transport））
 scripts/              copy-pdfjs-assets.mjs（dev/build 前复制 cmaps/标准字体到 public/pdfjs） /
                       updater-release.mjs（发版：开 createUpdaterArtifacts 本机建签名包 → 读回真 .sig 与产物 →
                       出带三平台键的 latest.json → 打印要上传的清单；私钥只走子进程环境变量，`pnpm release:updater`）
 .github/workflows/    release.yml——tag v* 触发只打 Linux（1× 计费）；Windows（2×）与 cargo test 改手动 dispatch 勾选
 ```
 
-表格文件流：`xlsx/ods 磁盘 → Rust(calamine 值 + xlsx/ods 各自 zip/quick-xml 直解样式·合并·尺寸·字族·隐藏·冻结·公式·图表·三类规则) → JSON 快照 → Univer 渲染（图表经 VChart 出 PNG 浮动图片，筛选/数据验证/条件格式经门面放回）`；CSV 走 `csv.rs` 状态机（UTF-8/GBK 自动）→ 单表载荷；保存按扩展名分流——`.xlsx` 经 `rust_xlsxwriter`（含原生图表部件与三类规则的 OOXML 落盘，带回写侧账目）、`.ods` 经 `ods.rs` 生成 ODF 包、`.csv` 经 `csv.rs` 写 BOM + CRLF 文本（只存首表）。
+表格文件流：`xlsx/ods 磁盘 → Rust(calamine 值 + xlsx/ods 各自 zip/quick-xml 直解样式·合并·尺寸·字族·隐藏·冻结·公式·图表·三类规则) → JSON 快照 → Univer 渲染（图表经 VChart 出 PNG 浮动图片，筛选/数据验证/条件格式经门面放回）`；CSV 走 `csv.rs` 状态机（UTF-8/GBK 自动）→ 单表载荷；保存按扩展名分流——`.xlsx` 经 `rust_xlsxwriter`（含原生图表部件与三类规则的 OOXML 落盘，带回写侧账目）、`.ods` 经 `ods.rs` 生成 ODF 包（v0.63 起同样带回写侧账目：这一趟摆不下的批注与链接要说得出地址）、`.csv` 经 `csv.rs` 写 BOM + CRLF 文本（只存首表）。
 文档文件流：`docx → lib/docx-fidelity.ts 直读 OOXML（w:rPr/w:pPr 直接格式 + numbering 层级 + 表格合并 + 图片 + 批注 + sectPr 页面设置）→ HTML/元数据 → TipTap`，
 保真导入器抛错或拆不出块时回退 `mammoth 正文 + zip 直读页眉页脚/批注/sectPr`（v0.37）；`.odt` 走 `lib/odt.ts` 双向；
 保存按标签扩展名分流——新建文档存 `.odoc` JSON（含 meta）、`.odt` 与 `.docx` 标签各自格式原地写回（导出走 docx/odt 链路）。
@@ -2255,9 +2303,22 @@ cargo check        # Rust 后端检查（在 src-tauri 下）
       链接是格内文本外层的 `text:a`），一趟 `content.xml` 扫描按表名收齐并交回同一枚 `SideRead`，写侧照"没声明就不写这一层"
       （`office:display`／气泡尺寸／`dc:creator`／命名空间全部按需落笔，尺寸单位必带）；落不准的一律记账不硬派
       （被合并区盖住的格、重复列、同格第二条、认不出的目标、空正文气泡）；前端只撤下那句"暂不含"，另三句账目照旧
-- [ ] **ODS 写侧没有回写账目通道**：`write_ods_sync` 只回 `Result<(), Error>`，于是"批注写在被合并区盖住的格上"、
-      "链接的目标这一头摆不下"这类**写侧**摆不进的形状是**静默丢**的（xlsx 那头有 `Vec<String>` 边界账、SheetEditor 说得出口）；
-      要么给它一条 accounts 通道随保存回报，要么在放侧先按同样判据挡掉并记账——现在的状态是"读侧有账、写侧无账"
+- [x] **ODS 写侧的回写账目通道**（v0.63）：`write_ods`/`write_ods_sync` 的返回从 `Result<(), Error>` 变成
+      `Result<Vec<String>, Error>`（与 `write_xlsx_sync` 同一条契约，前端只动两行就上了状态栏），
+      "批注落在被合并区盖住的格上"、"链接两头都没目标"、"同格第二条"这类**写侧**摆不进的形状从此报得出地址与后果；
+      判据只有一批（`note_written`/`link_written`）而格子渲染／命名空间／账目三处共读，所以"报的账"与"字节里少掉的"
+      是同一批；真机量到 Univer **当场允许**先建批注再合并，这条通道不是理论上摆不下的形状（另新开三条，见下）
+- [ ] **账目文案那句"ODF 在那里没有批注通道"按 v0.63 实测要改口**：规格腿逐枚量出 `covered-table-cell` 里塞批注、
+      正文、链接**三档 RelaxNG 全部放行**——拦住它的是规格正文的语义（那一格的内容属于锚格）加我们读侧的归因分寸，
+      不是文法；文案现在说的"没有通道"听着像文法逼的，而真机冒烟与结构腿**正按这句字面断着**，改口得连着判据一起动
+- [ ] **xlsx 写侧的"同格多条"是否记同一条账没核查**：ODS 这头本轮立了「只写第一条 + 报出实际条数」，
+      `xlsx_cell_side` 那头有没有对称的判据与账目未对照过——两头不一致时，状态栏说的话就取决于文件是什么后缀
+- [ ] **被盖住的那枚批注现在只是报得出，仍救不回来**：真正的修法要么在放侧先按同样判据挡掉（界面里就不给放），
+      要么把它搬到锚格并说清楚；本轮选的是**记账不挡**（与读侧"落不准就不硬派"同一条分寸），代价是界面上那枚气泡
+      存完就没了、只留一句账
+- [ ] **界面新建批注只有门面那一条路，而门面吃的是 `ISheetNote` 对象**：`createOrUpdateNote(字符串)` 会被 Univer
+      摊成按字符下标的键、侧通道只认 `note` 是字符串那一档（本轮冒烟在这上面栽过一次，看着像产品没接线）；
+      批注正文的富文形状（多 run）本轮没测，快照那一档只见 `note` 一个字符串
 - [ ] **链接挂在数字格上会把那一格读回成文本**（v0.62 钉成断言的已知代价）：Univer 的链接格吃 `p.body`（富文本）而不是 `v`，
       这座桥与文件格式无关 ⇒ `.ods` 与 xlsx 同形状（`office:value-type` 由 float 变 string、`office:value` 不见了），
       而同一趟里其余数字格照旧是 float；要收的是"值与链接共存"那一档，得先定桥的吃法（改一处两头都动）

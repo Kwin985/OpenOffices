@@ -1302,6 +1302,43 @@ fn odf_href(l: &CellLinkPayload, table: &str) -> Option<String> {
     Some(format!("#{}.{cell}", odf_table_ref(name)))
 }
 
+/// 载荷的批注在这一路落不落得下去：没有正文的气泡收了也只是界面上多一枚点不开的标记（与读侧同一分寸）
+fn note_writable(n: &CellNotePayload) -> bool {
+    !n.text.trim().is_empty()
+}
+
+/// 载荷的链接在这一路落不落得下去：两头（外部地址 / 表内跳转）都没说就没有 `xlink:href` 可写
+fn link_writable(l: &CellLinkPayload, table: &str) -> bool {
+    odf_href(l, table).is_some()
+}
+
+/// 这一格是否被合并区盖住（锚格自己不算被盖）。v0.63 的规格腿把这一条的**依据**量准了：往
+/// `covered-table-cell` 里塞批注、正文、链接，RelaxNG **三档全部放行**（拦它的不是文法），拦它的是 ODF 正文的
+/// 语义——那一格的内容属于锚格，写进去等于凭空多出一份没人会读的正文，读回来还会把这两样派给不该派的地址
+/// （与读侧"落不准就不硬派"是同一条分寸）
+fn cell_covered(sheet: &SheetPayload, r: u32, c: u32) -> bool {
+    sheet
+        .merges
+        .iter()
+        .any(|m| cell_in_merge(m, r, c) && !(m.start_row == r && m.start_column == c))
+}
+
+/// 这一枚批注/链接**真会**出现在字节里吗：命名空间、格子渲染与写侧账目三处都读这一条判据，
+/// 各写各的就会有一种状态是"账上说没写、字节里却写了"
+fn note_written(sheet: &SheetPayload, n: &CellNotePayload) -> bool {
+    note_writable(n) && !cell_covered(sheet, n.r, n.c)
+}
+
+fn link_written(sheet: &SheetPayload, l: &CellLinkPayload) -> bool {
+    link_writable(l, &sheet.name) && !cell_covered(sheet, l.r, l.c)
+}
+
+/// 气泡尺寸那一味真会落笔吗：`svg:length` 必须带单位，而 0 与负数换算出来是不成立的尺寸（`px_to_odf_len`
+/// 也写不出可读的厘米数）⇒ 与 `annotation_xml` 共用这条判据，否则命名空间会为一条根本不写的属性白声明
+fn bubble_dim(px: Option<f64>) -> Option<f64> {
+    px.filter(|v| v.is_finite() && *v > 0.0)
+}
+
 /// 批注 → `<office:annotation>`，调用处把它排在格子的正文 `<text:p>` **之前**（ODF §9.1.4 的
 /// 子元素顺序，写在正文之后就是不合规的件）。没声明的一味整条不写：`office:display` 只在真说了
 /// true 时落笔（缺席与 false 同一档，见读侧同一分寸），气泡尺寸只在载荷给了那一味时写——
@@ -1313,7 +1350,7 @@ fn annotation_xml(n: Option<&CellNotePayload>) -> String {
         attrs.push_str(" office:display=\"true\"");
     }
     for (name, v) in [("svg:width", n.width), ("svg:height", n.height)] {
-        if let Some(px) = v.filter(|px| px.is_finite() && *px > 0.0) {
+        if let Some(px) = bubble_dim(v) {
             attrs.push_str(&format!(" {name}=\"{}\"", px_to_odf_len(px)));
         }
     }
@@ -1346,7 +1383,8 @@ fn text_p_xml(text: &str, link: Option<&CellLinkPayload>, table: &str) -> String
     )
 }
 
-/// 这一份件真用得上的命名空间：作者用 dc、气泡尺寸用 svg（都是 length，单位必带）、链接用 xlink
+/// 这一份件真用得上的命名空间：作者用 dc、气泡尺寸用 svg（都是 length，单位必带）、链接用 xlink。
+/// 只算**真会落笔**的那几枚：落在被盖住的格上的批注根本写不出去，替它声明一趟 `xmlns:dc` 就是多盖一枚戳
 #[derive(Default)]
 struct OdfNs {
     dc: bool,
@@ -1357,22 +1395,87 @@ struct OdfNs {
 fn used_namespaces(sheets: &[SheetPayload]) -> OdfNs {
     let mut ns = OdfNs::default();
     for s in sheets {
-        for n in &s.notes {
-            if n.text.trim().is_empty() {
-                continue;
-            }
+        for n in s.notes.iter().filter(|n| note_written(s, n)) {
             if n.author.as_deref().map_or(false, |a| !a.trim().is_empty()) {
                 ns.dc = true;
             }
-            if n.width.is_some() || n.height.is_some() {
+            if bubble_dim(n.width).is_some() || bubble_dim(n.height).is_some() {
                 ns.svg = true;
             }
         }
-        if s.links.iter().any(|l| odf_href(l, &s.name).is_some()) {
+        if s.links.iter().any(|l| link_written(s, l)) {
             ns.xlink = true;
         }
     }
     ns
+}
+
+/// 写侧的边界账：这一趟有哪几枚批注/链接摆不下、要说得出来。
+/// 判据与 `render_sheet` 共用同一批函数，所以「报的账」与「字节里少掉的那几枚」是同一批——
+/// 少了这条通道就是"读侧有账、写侧无账"：界面上报保存成功，文件里却少了东西
+pub(crate) fn ods_side_accounts(sheets: &[SheetPayload]) -> Vec<String> {
+    let mut out = Vec::new();
+    for s in sheets {
+        for n in &s.notes {
+            if !note_writable(n) {
+                out.push(format!(
+                    "第 {} 行第 {} 列的批注没有正文，未写入",
+                    n.r + 1,
+                    n.c + 1
+                ));
+            } else if cell_covered(s, n.r, n.c) {
+                out.push(format!(
+                    "第 {} 行第 {} 列的批注落在合并区里被盖住的那一格，ODF 在那里没有批注通道，未写入",
+                    n.r + 1,
+                    n.c + 1
+                ));
+            }
+        }
+        for l in &s.links {
+            if !link_writable(l, &s.name) {
+                out.push(format!(
+                    "第 {} 行第 {} 列的链接既没有外部地址也没有表内跳转目标，未写入",
+                    l.r + 1,
+                    l.c + 1
+                ));
+            } else if cell_covered(s, l.r, l.c) {
+                out.push(format!(
+                    "第 {} 行第 {} 列的链接落在合并区里被盖住的那一格，ODF 在那里没有正文通道，未写入",
+                    l.r + 1,
+                    l.c + 1
+                ));
+            }
+        }
+        // 同一格只出一枚气泡、一条地址：多出来的那些不硬派成第二条，报出实际条数（按格子序说，稳定可比）
+        for (label, dups) in [
+            (
+                "批注",
+                written_dups(s.notes.iter().filter(|n| note_written(s, n)).map(|n| (n.r, n.c))),
+            ),
+            (
+                "链接",
+                written_dups(s.links.iter().filter(|l| link_written(s, l)).map(|l| (l.r, l.c))),
+            ),
+        ] {
+            for ((r, c), k) in dups {
+                out.push(format!(
+                    "第 {} 行第 {} 列写了 {k} 条{label}，只写了第一条",
+                    r + 1,
+                    c + 1
+                ));
+            }
+        }
+    }
+    out
+}
+
+/// 真落笔的那些格里的重复条目（按格子序）；只有一条的格不报名字
+fn written_dups(cells: impl Iterator<Item = (u32, u32)>) -> Vec<((u32, u32), usize)> {
+    let mut m: std::collections::BTreeMap<(u32, u32), usize> = std::collections::BTreeMap::new();
+    for k in cells {
+        *m.entry(k).or_default() += 1;
+    }
+    m.into_iter().filter(|(_, k)| *k > 1).collect()
 }
 
 fn render_sheet(
@@ -1432,18 +1535,18 @@ fn render_sheet(
             .and_then(|k| row_reg.get(&k).cloned())
     };
     let cell_at = |r: u32, c: u32| sheet.cells.iter().find(|x| x.r == r && x.c == c);
-    // 空气泡不落笔（与读侧同一分寸：没有正文的批注在界面上只是一枚点不开的标记）
+    // 落得下去的那几枚才落笔：判据与写侧账目同源（空气泡、没目标的地址、被盖住的格都摆不下）
     let note_at = |r: u32, c: u32| {
         sheet
             .notes
             .iter()
-            .find(|n| n.r == r && n.c == c && !n.text.trim().is_empty())
+            .find(|n| n.r == r && n.c == c && note_written(sheet, n))
     };
     let link_at = |r: u32, c: u32| {
         sheet
             .links
             .iter()
-            .find(|l| l.r == r && l.c == c && odf_href(l, &sheet.name).is_some())
+            .find(|l| l.r == r && l.c == c && link_written(sheet, l))
     };
     let side_at = |r: u32, c: u32| note_at(r, c).is_some() || link_at(r, c).is_some();
     let mut gap = 0u32;
@@ -1488,9 +1591,7 @@ fn render_sheet(
                 .merges
                 .iter()
                 .find(|m| m.start_row == r && m.start_column == c);
-            let covered_by = sheet.merges.iter().find(|m| {
-                cell_in_merge(m, r, c) && !(m.start_row == r && m.start_column == c)
-            });
+            let covered = cell_covered(sheet, r, c);
             if let Some(m) = merge_start {
                 flush_covered(&mut row_buf, &mut pending_covered);
                 if pending_empty > 0 {
@@ -1517,7 +1618,7 @@ fn render_sheet(
                 c = m.end_column + 1;
                 continue;
             }
-            if covered_by.is_some() {
+            if covered {
                 // 连续 covered 合并为一次 repeated
                 let span = match pending_covered.last_mut() {
                     Some(last) if last.0 + last.1 == c => {
@@ -1729,19 +1830,22 @@ pub fn ods_bytes(workbook: &WorkbookPayload) -> Result<Vec<u8>, Error> {
 }
 
 #[tauri::command]
-pub async fn write_ods(path: String, workbook: WorkbookPayload) -> Result<(), Error> {
+pub async fn write_ods(path: String, workbook: WorkbookPayload) -> Result<Vec<String>, Error> {
     crate::xlsx::to_blocking(move || write_ods_sync(path, workbook)).await
 }
 
-pub fn write_ods_sync(path: String, workbook: WorkbookPayload) -> Result<(), Error> {
+/// 存盘并带回写侧的边界账（与 `write_xlsx_sync` 同一条契约）：这一趟摆不下的批注与链接
+/// 要在状态栏说得出，不能报"已保存"而让文件里少东西
+pub fn write_ods_sync(path: String, workbook: WorkbookPayload) -> Result<Vec<String>, Error> {
     if let Some(parent) = Path::new(&path).parent() {
         if !parent.exists() {
             return Err(Error(format!("目录不存在: {}", parent.display())));
         }
     }
+    let accounts = ods_side_accounts(&workbook.sheets);
     let bytes = ods_bytes(&workbook)?;
     std::fs::write(&path, bytes).map_err(io_err)?;
-    Ok(())
+    Ok(accounts)
 }
 
 #[cfg(test)]
@@ -2771,6 +2875,270 @@ mod tests {
         assert_eq!(s.notes[0].c, 1);
         assert_eq!(s.notes[0].show, None);
         assert!(s.links.is_empty(), "没地址的链接不该读回: {:?}", s.links);
+    }
+
+    /// 写侧的账必须与字节里少掉的那几枚**同一批**：正文空的批注、落在被盖格上的批注与链接、
+    /// 同一格的第二条，都要在保存那趟说得出，而不是报"已保存"却少东西
+    #[test]
+    fn ods_write_accounts_name_exactly_what_the_bytes_drop() {
+        let wb = WorkbookPayload {
+            sheets: vec![SheetPayload {
+                name: "数据".into(),
+                // 合并区 (0,0)-(1,1)：(0,1)、(1,0)、(1,1) 都是被盖住的那几格
+                cells: vec![cell(0, 0, json!("甲")), cell(3, 0, json!("丁"))],
+                merges: vec![MergeRange {
+                    start_row: 0,
+                    start_column: 0,
+                    end_row: 1,
+                    end_column: 1,
+                }],
+                notes: vec![
+                    CellNotePayload {
+                        r: 0,
+                        c: 0,
+                        text: "落在锚格上".into(),
+                        ..Default::default()
+                    },
+                    CellNotePayload {
+                        r: 0,
+                        c: 1,
+                        text: "落在被盖的格".into(),
+                        author: Some("张三".into()),
+                        width: Some(128.0),
+                        height: Some(74.0),
+                        ..Default::default()
+                    },
+                    CellNotePayload {
+                        r: 2,
+                        c: 0,
+                        text: "   ".into(),
+                        ..Default::default()
+                    },
+                    CellNotePayload {
+                        r: 3,
+                        c: 0,
+                        text: "同格第一条".into(),
+                        ..Default::default()
+                    },
+                    CellNotePayload {
+                        r: 3,
+                        c: 0,
+                        text: "同格第二条".into(),
+                        ..Default::default()
+                    },
+                ],
+                links: vec![
+                    CellLinkPayload {
+                        r: 0,
+                        c: 0,
+                        url: Some("https://example.com/x".into()),
+                        ..Default::default()
+                    },
+                    CellLinkPayload {
+                        r: 1,
+                        c: 0,
+                        url: Some("https://example.com/covered".into()),
+                        ..Default::default()
+                    },
+                    CellLinkPayload {
+                        r: 2,
+                        c: 2,
+                        tip: Some("两头都没说".into()),
+                        ..Default::default()
+                    },
+                    CellLinkPayload {
+                        r: 3,
+                        c: 0,
+                        location: Some("数据!A1".into()),
+                        ..Default::default()
+                    },
+                    CellLinkPayload {
+                        r: 3,
+                        c: 0,
+                        location: Some("数据!B9".into()),
+                        ..Default::default()
+                    },
+                ],
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        let accounts = ods_side_accounts(&wb.sheets);
+        let content = content_of(&ods_bytes(&wb).expect("ods bytes"));
+
+        // 报出去的条数与字节里少掉的条数**当场对质**（不是各说各话）：
+        // 「未写入」一枚少一枚，「写了 k 条只写第一条」少 k−1 枚——条数从账目的字面里读出来
+        assert!(
+            !wb.sheets[0].notes.is_empty() && !wb.sheets[0].links.is_empty(),
+            "夹具里这两味是空的，等式两边就在测空气"
+        );
+        let dropped = |label: &str| -> usize {
+            let plain = accounts
+                .iter()
+                .filter(|a| a.contains(label) && a.contains("未写入"))
+                .count();
+            let dup: usize = accounts
+                .iter()
+                .filter(|a| a.contains(label) && a.contains("只写了第一条"))
+                .map(|a| {
+                    let rest = a.split("写了 ").nth(1).unwrap_or("");
+                    rest.split(" 条").next().unwrap_or("1").parse().unwrap_or(1)
+                })
+                .map(|k: usize| k - 1)
+                .sum();
+            plain + dup
+        };
+        assert_eq!(
+            content.matches("<office:annotation").count(),
+            wb.sheets[0].notes.len() - dropped("批注"),
+            "批注：报的账与少掉的那几枚对不上: {accounts:?} / {content}"
+        );
+        assert_eq!(
+            content.matches("<text:a ").count(),
+            wb.sheets[0].links.len() - dropped("链接"),
+            "链接：报的账与少掉的那几枚对不上: {accounts:?} / {content}"
+        );
+        // 同一格的第二条不写出去，但它不是"未写入"那种整条丢，而是"只写了第一条"
+        assert_eq!(
+            content.matches("<office:annotation").count(),
+            2,
+            "锚格一枚 + 同格只出一枚: {content}"
+        );
+        assert_eq!(
+            content.matches("<text:a ").count(),
+            2,
+            "锚格一枚 + 同格只出一枚: {content}"
+        );
+
+        assert_eq!(
+            accounts,
+            vec![
+                "第 1 行第 2 列的批注落在合并区里被盖住的那一格，ODF 在那里没有批注通道，未写入".to_string(),
+                "第 3 行第 1 列的批注没有正文，未写入".to_string(),
+                "第 2 行第 1 列的链接落在合并区里被盖住的那一格，ODF 在那里没有正文通道，未写入".to_string(),
+                "第 3 行第 3 列的链接既没有外部地址也没有表内跳转目标，未写入".to_string(),
+                "第 4 行第 1 列写了 2 条批注，只写了第一条".to_string(),
+                "第 4 行第 1 列写了 2 条链接，只写了第一条".to_string(),
+            ],
+            "账目逐条对字面: {accounts:?}"
+        );
+
+        // 只有"被丢掉的那些真没落笔"才算按需声明：署名与尺寸都住在没写出去的那枚批注里 ⇒ 整层缺席
+        for ns in ["xmlns:dc=", "xmlns:svg="] {
+            assert!(
+                !content.contains(ns),
+                "落笔的那几枚没用到这一层就不许声明: {ns} / {content}"
+            );
+        }
+        assert!(
+            content.contains("xmlns:xlink="),
+            "真写出去的链接要用 xlink，就得声明"
+        );
+
+        // 自家产物读回来：留下的那几枚一格不少，且不因这一趟再记出读侧的账
+        let path = std::env::temp_dir()
+            .join(format!("openoffices-ods-write-acct-{}.ods", std::process::id()))
+            .to_string_lossy()
+            .to_string();
+        let again = write_ods_sync(path.clone(), wb).expect("存盘失败");
+        assert_eq!(again.len(), 6, "第二次存盘报同一批账: {again:?}");
+        let back = crate::xlsx::read_xlsx_sync(path.clone()).expect("读回失败");
+        std::fs::remove_file(&path).ok();
+        assert_eq!(
+            back.warnings.iter().filter(|w| w.contains("ODS 里的")).count(),
+            0,
+            "自家产物不该记出读侧的账: {:?}",
+            back.warnings
+        );
+        let s = &back.sheets[0];
+        assert_eq!(s.notes.len(), 2, "留下的批注都在: {:?}", s.notes);
+        assert_eq!(s.links.len(), 2, "留下的链接都在: {:?}", s.links);
+        assert!(
+            s.notes.iter().any(|n| n.text == "同格第一条")
+                && !s.notes.iter().any(|n| n.text == "同格第二条"),
+            "同格只留第一条: {:?}",
+            s.notes
+        );
+        assert!(
+            s.links
+                .iter()
+                .any(|l| l.location.as_deref() == Some("数据!A1")),
+            "写出去的是第一条地址: {:?}",
+            s.links
+        );
+    }
+
+    /// 反面守卫：装得下的那几枚不许凭空记账（否则状态栏每次保存都在说谎）
+    #[test]
+    fn ods_write_accounts_stay_silent_when_everything_fits() {
+        let wb = WorkbookPayload {
+            sheets: vec![SheetPayload {
+                name: "数据".into(),
+                cells: vec![cell(0, 0, json!("甲")), cell(0, 1, json!("乙"))],
+                notes: vec![CellNotePayload {
+                    r: 0,
+                    c: 0,
+                    text: "要复核".into(),
+                    author: Some("李四".into()),
+                    ..Default::default()
+                }],
+                links: vec![CellLinkPayload {
+                    r: 0,
+                    c: 1,
+                    url: Some("mailto:someone@example.com".into()),
+                    ..Default::default()
+                }],
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        let path = std::env::temp_dir()
+            .join(format!("openoffices-ods-write-silent-{}.ods", std::process::id()))
+            .to_string_lossy()
+            .to_string();
+        let accounts = write_ods_sync(path.clone(), wb).expect("存盘失败");
+        std::fs::remove_file(&path).ok();
+        assert_eq!(accounts, Vec::<String>::new(), "写侧凭空记了账: {accounts:?}");
+    }
+
+    /// 命名空间只为**真会落笔**的属性服务：尺寸说了等于没说（0／负数／NaN）时那一味写不出去，
+    /// 于是 `xmlns:svg` 也不许出现——否则就是替一条根本不存在的属性盖章
+    #[test]
+    fn ods_namespaces_follow_the_bytes_not_the_payload() {
+        let dim_note = |v: f64| CellNotePayload {
+            r: 0,
+            c: 0,
+            text: "有正文".into(),
+            width: Some(v),
+            height: Some(v),
+            ..Default::default()
+        };
+        let wb_with = |note: CellNotePayload| WorkbookPayload {
+            sheets: vec![SheetPayload {
+                name: "数据".into(),
+                cells: vec![cell(0, 0, json!("甲"))],
+                notes: vec![note],
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        for v in [0.0, -8.0, f64::NAN] {
+            let content = content_of(&ods_bytes(&wb_with(dim_note(v))).expect("ods bytes"));
+            assert!(
+                !content.contains("xmlns:svg="),
+                "尺寸 {v} 落不了笔，就不许为它声明 svg: {content}"
+            );
+            assert!(
+                !content.contains("svg:width=") && !content.contains("svg:height="),
+                "命名空间与属性得同进退: {content}"
+            );
+        }
+        // 正控制：真给了尺寸 ⇒ 属性与声明都在
+        let content = content_of(&ods_bytes(&wb_with(dim_note(128.0))).expect("ods bytes"));
+        assert!(
+            content.contains("xmlns:svg=") && content.contains("svg:width=\"3.3867cm\""),
+            "真落笔的尺寸得带上声明: {content}"
+        );
     }
 
     /// 落不准位置的批注与链接一律记账而不是硬派——这一条测读侧本身（不经装配），

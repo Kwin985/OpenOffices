@@ -725,7 +725,7 @@ function SheetEditor({ tab }: Props) {  const containerRef = useRef<HTMLDivEleme
       const isCsv = lower.endsWith('.csv')
       const writeNotes: string[] = []
       if (isOds) {
-        await writeOds(path, payload)
+        writeNotes.push(...(await writeOds(path, payload)))
       } else if (isCsv) {
         await writeCsv(path, payload)
       } else {
@@ -739,7 +739,7 @@ function SheetEditor({ tab }: Props) {  const containerRef = useRef<HTMLDivEleme
       )
       // 页面设置是"这份纸该怎么摆"的那份设置：ODS/CSV 这一版都写不出，说清楚比静默丢强
       const hasPrint = payload.sheets.some((s) => s.print)
-      // 格式本身装不下的东西先说，接着一句接写侧带回来的账（有条规则摆不进 OOXML 这类）
+      // 格式本身装不下的东西先说，接着一句接写侧带回来的账（规则摆不进 OOXML、批注落在被盖住的格上这类）
       const lost: string[] = []
       if (isCsv)
         lost.push(

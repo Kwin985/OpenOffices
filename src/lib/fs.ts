@@ -400,8 +400,9 @@ export async function writeXlsx(path: string, workbook: WorkbookPayload): Promis
   return invoke<string[]>('write_xlsx', { path, workbook })
 }
 
-export async function writeOds(path: string, workbook: WorkbookPayload): Promise<void> {
-  await invoke('write_ods', { path, workbook })
+/** 存 ods，同样带回写侧的边界账：ODF 装不下的批注与链接（被合并区盖住的那几格）要说得出来 */
+export async function writeOds(path: string, workbook: WorkbookPayload): Promise<string[]> {
+  return invoke<string[]>('write_ods', { path, workbook })
 }
 
 /** 只导出第一个工作表：CSV 没有多表概念，数值/日期按显示文本落盘 */
