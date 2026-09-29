@@ -12,6 +12,7 @@ import type { SheetRules } from '../lib/sheet-rules'
 import { restampCellSide } from '../lib/sheet-cell-side'
 import type { CellSide } from '../lib/sheet-cell-side'
 import { baseName, pickSaveFile, readXlsx, writeCsv, writeOds, writeXlsx } from '../lib/fs'
+import { takeWorkbook } from '../lib/open-prefetch'
 import type {
   ChartPayload,
   ChartRangeRef,
@@ -325,9 +326,11 @@ function SheetEditor({ tab }: Props) {  const containerRef = useRef<HTMLDivEleme
     })
     ;(async () => {
       try {
-        // 读文件与建 Univer 实例互不依赖：先把 IPC 发出去，实例同时在造，两条时间线叠成一条
+        // 读文件与建 Univer 实例互不依赖：这一趟的 IPC 早在外壳开标签那一刻就发出去了
+        // （lib/open-prefetch.ts），这里只是把它取来用；取不到（不是从路径开的、或已被别处取走）
+        // 才自己发一次——不假设外壳一定先跑
         const loading: Promise<WorkbookPayload> = tab.path
-          ? readXlsx(tab.path)
+          ? takeWorkbook(tab.path) ?? readXlsx(tab.path)
           : tab.template
             ? Promise.resolve(sheetTemplate(tab.template))
             : Promise.resolve({ sheets: [] })
