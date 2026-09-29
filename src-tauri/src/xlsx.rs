@@ -348,7 +348,7 @@ pub struct CondFormatBar {
 
 /// 单元格批注。legacy comments（xl/commentsN.xml）与 threadedComments 归一成同一形状：
 /// 作者与正文分开存，不抄 Excel 写在正文里的那行「作者:」前缀
-#[derive(Serialize, Deserialize, Clone, Default)]
+#[derive(Serialize, Deserialize, Clone, Debug, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct CellNotePayload {
     pub r: u32,
@@ -366,7 +366,7 @@ pub struct CellNotePayload {
 }
 
 /// 单元格超链接：url（外部地址）与 location（本簿内跳转 "表名!A1"）二选一，tip 是悬停提示
-#[derive(Serialize, Deserialize, Clone, Default)]
+#[derive(Serialize, Deserialize, Clone, Debug, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct CellLinkPayload {
     pub r: u32,
@@ -743,10 +743,13 @@ pub fn read_xlsx_sync(path: String) -> Result<WorkbookPayload, Error> {
     };
     let mut sheets = Vec::new();
     let mut rule_notes: Vec<String> = Vec::new();
-    // 批注与超链接住在独立部件（comments / threadedComments / rels），另开一趟 zip 按表对回来；
-    // xls 不是 zip、ods 有自己的部件名，都只在这条路上读
+    // 批注与超链接：xlsx 住在独立部件（comments / threadedComments / rels），另开一趟 zip 按表对回来；
+    // ODS 的两样都在 content.xml 的格子自身里（office:annotation 与 text:a），也是一趟扫描按表名收齐——
+    // 交回同一个 SideRead 形状，所以装配侧不必知道格式。xls/csv 没有这条路
     let mut sides = if path.to_ascii_lowercase().ends_with(".xlsx") {
         xlsx_cell_side::read_cell_side(&path)
+    } else if path.to_ascii_lowercase().ends_with(".ods") {
+        crate::ods::read_ods_cell_side(&path)
     } else {
         Default::default()
     };

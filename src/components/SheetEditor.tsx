@@ -734,7 +734,6 @@ function SheetEditor({ tab }: Props) {  const containerRef = useRef<HTMLDivEleme
       renameTab(tab.id, baseName(path), path)
       markRecent(path, 'sheet')
       const hasCharts = payload.sheets.some((s) => s.charts?.length)
-      const hasSide = payload.sheets.some((s) => s.notes?.length || s.links?.length)
       const hasRules = payload.sheets.some(
         (s) => s.filter || s.dataValidations?.length || s.condFormats?.length,
       )
@@ -748,7 +747,6 @@ function SheetEditor({ tab }: Props) {  const containerRef = useRef<HTMLDivEleme
         )
       if (isOds) {
         if (hasCharts) lost.push('ODS 暂不含图表')
-        if (hasSide) lost.push('ODS 暂不含批注与超链接')
         if (hasRules) lost.push('ODS 暂不含筛选、数据验证与条件格式')
         if (hasPrint) lost.push('ODS 暂不含页面设置（纸张/边距/页眉页脚/分页符），导出的 PDF 仍照它排')
       }

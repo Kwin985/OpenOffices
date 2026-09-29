@@ -14,10 +14,11 @@ use zip::write::SimpleFileOptions;
 use zip::{CompressionMethod, ZipWriter};
 
 use crate::xlsx::{
-    BorderSide, CellBorder, CellPayload, CellStyle, DefaultFont, Error, MergeRange, SheetPayload,
-    WorkbookPayload,
+    BorderSide, CellBorder, CellLinkPayload, CellNotePayload, CellPayload, CellStyle, DefaultFont,
+    Error, MergeRange, SheetPayload, WorkbookPayload,
 };
-use crate::xlsx_style::{attr_str, read_entry, SheetFmt};
+use crate::xlsx_cell_side;
+use crate::xlsx_style::{a1_to_rc, attr_str, read_entry, SheetFmt};
 
 fn esc(s: &str) -> String {
     escape(s).to_string()
@@ -487,7 +488,9 @@ pub fn read_ods_styles(path: &str) -> (HashMap<String, SheetFmt>, Option<Default
                     }
                     "spreadsheet" if is_start => sec = "spreadsheet".into(),
                     "table" if sec == "spreadsheet" => {
-                        table_name = attr_str(e, "name");
+                        // 表名是与 calamine 对账的钥匙，必须落在同一个域里：calamine 交回的是解过实体的
+                        // 名字，这里按字面收就等于把 "汇总 & 备注" 这类表名的样式整层丢掉
+                        table_name = attr_str(e, "name").map(|v| unesc(&v));
                         fmt = SheetFmt::default();
                         row_idx = 0;
                         dim_col = 0;
@@ -606,9 +609,7 @@ pub fn read_ods_styles(path: &str) -> (HashMap<String, SheetFmt>, Option<Default
         ("<table:database-range", "ODS 里的筛选设置暂未读入（被筛掉的行按隐藏行保留）"),
         ("<table:content-validations", "ODS 里的数据验证暂未读入"),
         ("<table:conditional-format", "ODS 里的条件格式暂未读入"),
-        // 批注是格子的孩子（office:annotation 里装着作者的 text:p），链接是 text:a
-        ("<office:annotation", "ODS 里的单元格批注暂未读入"),
-        ("<text:a ", "ODS 里的单元格链接暂未读入"),
+        // 批注（office:annotation）与链接（text:a）本轮起真读，见 read_ods_cell_side
     ] {
         if xml.contains(needle) {
             missed.push(note.to_string());
@@ -676,6 +677,371 @@ fn parse_ods_freezes(xml: &str) -> Vec<(u32, u32)> {
         }
     }
     out
+}
+
+/// 事件流里的正文是原始字节（未解实体），交出去前统一解一次
+fn unesc(s: &str) -> String {
+    quick_xml::escape::unescape(s)
+        .map(|c| c.into_owned())
+        .unwrap_or_else(|_| s.to_string())
+}
+
+/// quick-xml 0.42 把 `&amp;` 这类实体拆成独立事件（不带 & 与 ;）：补回转义形状，末尾再统一解一次
+fn push_entity(buf: &mut String, raw: &str) {
+    buf.push('&');
+    buf.push_str(raw);
+    buf.push(';');
+}
+
+/// ODF 内部跳转的住址（§9.2.1）：`#表名.格`，有的应用写 `.#表名.格`；表名含空格、点或撇时
+/// 用单引号包起、内部的 ' 翻倍；行列表里的 `$`（绝对引用，§9.2.2）读时剥掉。
+/// 认不出「表名.格」这一对就交回 None，由调用处记账而不是凑一个像样的 location
+fn ods_internal_target(href: &str) -> Option<String> {
+    let rest = href
+        .strip_prefix("#.")
+        .or_else(|| href.strip_prefix(".#"))
+        .or_else(|| href.strip_prefix('#'))?;
+    let (name, tail) = split_table_ref(rest)?;
+    let cell = tail.split(':').next().unwrap_or(tail).replace('$', "");
+    if a1_to_rc(&cell).is_none() {
+        return None;
+    }
+    Some(format!("{name}!{cell}"))
+}
+
+/// `xlink:href` 里带协议名的才是外部地址（scheme 形状照 RFC 3986：字母开头，后接字母数字与 + -，
+/// 且至少两字母——单字母更像 C: 这类盘符而不是协议）。
+/// 既不带 # 又不带协议名的那一档不硬派成 url：那是一条点不开的死链，只记账
+fn odf_external_href(h: &str) -> bool {
+    let Some((scheme, rest)) = h.split_once(':') else {
+        return false;
+    };
+    !rest.is_empty()
+        && scheme.len() >= 2
+        && scheme.starts_with(|c: char| c.is_ascii_alphabetic())
+        && scheme
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'+' || b == b'-')
+}
+
+fn split_table_ref(s: &str) -> Option<(String, &str)> {
+    if let Some(q) = s.strip_prefix('\'') {
+        let bytes = q.as_bytes();
+        let mut i = 0usize;
+        while i < bytes.len() {
+            if bytes[i] == b'\'' {
+                if bytes.get(i + 1) == Some(&b'\'') {
+                    i += 2;
+                    continue;
+                }
+                let name = q[..i].replace("''", "'");
+                return q[i + 1..].strip_prefix('.').map(|r| (name, r));
+            }
+            i += 1;
+        }
+        return None; // 引号没闭合
+    }
+    let (name, tail) = s.split_once('.')?;
+    if name.is_empty() || tail.is_empty() {
+        return None;
+    }
+    Some((name.to_string(), tail))
+}
+
+/// 一条批注在读侧的中间形状：作者、正文、气泡尺寸与"是否常开"分开收，格子位置由外层记
+#[derive(Default)]
+struct RawAnnot {
+    seen: bool,
+    author: String,
+    text: String,
+    width: Option<f64>,
+    height: Option<f64>,
+    show: Option<bool>,
+}
+
+/// ODS 的批注与超链接都住在 content.xml 的**格子自身**里（xlsx 那一头是独立部件 + rels），
+/// 所以一趟扫描就能收齐：批注是格子的第一个孩子（ODF §9.1.4，正文在自家 `text:p` 里、
+/// 作者在 `dc:creator`），链接是格内文本外层的 `text:a`。
+/// 交回的形状与 `xlsx_cell_side::SideRead` 完全一致，装配侧因此不必知道格式。
+pub fn read_ods_cell_side(path: &str) -> xlsx_cell_side::SideRead {
+    let mut out = xlsx_cell_side::SideRead::default();
+    let Ok(file) = std::fs::File::open(path) else { return out };
+    let Ok(mut zip) = zip::ZipArchive::new(file) else { return out };
+    let Some(xml) = read_entry(&mut zip, "content.xml") else { return out };
+
+    let mut side = xlsx_cell_side::SheetSide::default();
+    let mut table = String::new();
+    let (mut row, mut row_repeat, mut col) = (0u32, 1u32, 0u32);
+    // 本格左上角；写在重复列上的格是 None（它落在哪一列说不准），批注与链接都别硬派
+    let mut cell: Option<(u32, u32)> = None;
+    let mut covered = false;
+    let mut annot = RawAnnot::default();
+    let mut link: Option<CellLinkPayload> = None;
+    let mut links_seen = 0usize;
+    let mut buf = String::new();
+    let (mut in_annot, mut in_creator, mut in_meta) = (false, false, false);
+
+    let mut reader = Reader::from_str(&xml);
+    while let Ok(ev) = reader.read_event() {
+        let is_start = matches!(ev, Event::Start(_));
+        match &ev {
+            Event::Start(e) | Event::Empty(e) => {
+                let nm = e.local_name();
+                match nm.as_ref() {
+                    "table" => {
+                        flush_table(&mut table, &mut side, &mut out);
+                        // 同上：表名要和 calamine 的名字对上，按字面收就接不进 by_sheet
+                        table = attr_str(e, "name").map(|v| unesc(&v)).unwrap_or_default();
+                        row = 0;
+                        row_repeat = 1;
+                        col = 0;
+                    }
+                    "table-row" => {
+                        col = 0;
+                        row_repeat = clamped_repeat(e, "number-rows-repeated");
+                        if !is_start {
+                            row += row_repeat;
+                        }
+                    }
+                    "table-cell" | "covered-table-cell" => {
+                        let repeat = clamped_repeat(e, "number-columns-repeated");
+                        // 合并区里左上那一格横向占几列——不把它算进列位，后继的格子会整体错位
+                        let spanned = clamped_repeat(e, "number-columns-spanned");
+                        covered = nm.as_ref() == "covered-table-cell";
+                        cell = if covered || repeat != 1 {
+                            None
+                        } else {
+                            Some((row, col))
+                        };
+                        col += repeat * spanned;
+                        annot = RawAnnot::default();
+                        link = None;
+                        links_seen = 0;
+                        in_annot = false;
+                        in_creator = false;
+                        in_meta = false;
+                        buf.clear();
+                        // 自闭合的格没有孩子：批注与链接都无从谈起，上面的复位已足够
+                    }
+                    "annotation" => {
+                        in_annot = true;
+                        annot.seen = true;
+                        // 缺席与 false 同一档（ODF 的缺省就是不常开），只在真说了 true 时收
+                        annot.show = attr_str(e, "display")
+                            .as_deref()
+                            .filter(|v| *v == "true")
+                            .map(|_| true);
+                        annot.width = attr_str(e, "width").as_deref().and_then(odf_len_to_px);
+                        annot.height = attr_str(e, "height").as_deref().and_then(odf_len_to_px);
+                        if !is_start {
+                            in_annot = false;
+                        }
+                    }
+                    "creator" if in_annot => {
+                        in_creator = true;
+                        buf.clear();
+                        if !is_start {
+                            in_creator = false;
+                        }
+                    }
+                    "date" | "date-string" | "creator-initials" if in_annot => {
+                        in_meta = is_start;
+                    }
+                    "p" | "h" if in_annot => {
+                        // 段落之间留一行：多段正文与 Univer 气泡里的换行同一档
+                        if !annot.text.is_empty() && !annot.text.ends_with('\n') {
+                            annot.text.push('\n');
+                        }
+                    }
+                    "s" if in_annot => {
+                        let n = attr_str(e, "c")
+                            .and_then(|v| v.parse::<u32>().ok())
+                            .unwrap_or(1)
+                            .clamp(1, 1024);
+                        for _ in 0..n {
+                            annot.text.push(' ');
+                        }
+                    }
+                    "tab" if in_annot => annot.text.push('\t'),
+                    "line-break" if in_annot => annot.text.push('\n'),
+                    "a" if !in_annot => {
+                        let Some((cr, cc)) = cell else {
+                            // 落不准确的链接不收：被盖住的格（合并区）与一次重复多列的格都说不清它属于谁
+                            side.accounts.push(if covered {
+                                format!(
+                                    "第 {} 行有链接写在被合并区盖住的格上，说不准它属于哪一格，未收进来",
+                                    row + 1
+                                )
+                            } else {
+                                format!(
+                                    "第 {} 行的链接写在一次重复多列的格上，说不准它落在哪一列，未收进来",
+                                    row + 1
+                                )
+                            });
+                            continue;
+                        };
+                        links_seen += 1;
+                        if links_seen > 1 {
+                            side.accounts.push(format!(
+                                "第 {} 行第 {} 列写了 {links_seen} 条链接，只收第一条",
+                                cr + 1,
+                                cc + 1
+                            ));
+                            continue;
+                        }
+                        let href = attr_str(e, "href")
+                            .map(|v| unesc(v.trim()))
+                            .filter(|v| !v.is_empty());
+                        let tip = attr_str(e, "title")
+                            .map(|v| unesc(v.trim()))
+                            .filter(|v| !v.is_empty());
+                        let Some(h) = href else {
+                            side.accounts.push(format!(
+                                "第 {} 行第 {} 列的链接没写它指向哪儿，未收进来",
+                                cr + 1,
+                                cc + 1
+                            ));
+                            continue;
+                        };
+                        // 有协议名（https:/mailto:/tel:…，RFC 3986 的 scheme 形状）才算外部地址；
+                        // 带 # 的按内部跳转解；两者都不像就不硬派成 url——那是一条点不开的死链
+                        if let Some(loc) = ods_internal_target(&h) {
+                            link = Some(CellLinkPayload {
+                                r: cr,
+                                c: cc,
+                                location: Some(loc),
+                                tip,
+                                ..Default::default()
+                            });
+                        } else if odf_external_href(&h) {
+                            link = Some(CellLinkPayload {
+                                r: cr,
+                                c: cc,
+                                url: Some(h),
+                                tip,
+                                ..Default::default()
+                            });
+                        } else {
+                            side.accounts.push(format!(
+                                "第 {} 行第 {} 列的链接指向「{h}」，位置认不出来，未收进来",
+                                cr + 1,
+                                cc + 1
+                            ));
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            Event::Text(t) => {
+                let s = t.as_ref();
+                if in_creator {
+                    buf.push_str(s);
+                } else if in_annot && !in_meta {
+                    annot.text.push_str(s);
+                }
+            }
+            Event::GeneralRef(r) => {
+                let s = r.as_ref();
+                if in_creator {
+                    push_entity(&mut buf, s);
+                } else if in_annot && !in_meta {
+                    push_entity(&mut annot.text, s);
+                }
+            }
+            Event::End(e) => {
+                let nm = e.local_name();
+                match nm.as_ref() {
+                    "table" => flush_table(&mut table, &mut side, &mut out),
+                    "table-row" => row += row_repeat,
+                    "table-cell" => {
+                        let Some((r, c)) = cell else {
+                            if annot.seen {
+                                side.accounts.push(
+                                    "批注写在一次重复多列的格上，说不准它落在哪一列，未收进来"
+                                        .to_string(),
+                                );
+                            }
+                            continue;
+                        };
+                        if annot.seen {
+                            let text = unesc(&annot.text);
+                            let text = text.trim_matches('\n').to_string();
+                            // 空气泡没有可显示的东西，收了反而在界面上多一枚标记
+                            if !text.trim().is_empty() {
+                                side.notes.push(CellNotePayload {
+                                    r,
+                                    c,
+                                    text,
+                                    author: Some(unesc(&annot.author).trim().to_string())
+                                        .filter(|a| !a.is_empty()),
+                                    width: annot.width,
+                                    height: annot.height,
+                                    show: annot.show,
+                                });
+                            }
+                        }
+                        if let Some(mut l) = link.take() {
+                            l.r = r;
+                            l.c = c;
+                            side.links.push(l);
+                        }
+                        annot = RawAnnot::default();
+                        in_annot = false;
+                        in_creator = false;
+                        in_meta = false;
+                        cell = None;
+                    }
+                    "covered-table-cell" => {
+                        if annot.seen {
+                            side.accounts.push(
+                                "合并区里的批注写在被盖住的格上，说不准它属于哪一格，未收进来"
+                                    .to_string(),
+                            );
+                        }
+                        annot = RawAnnot::default();
+                        in_annot = false;
+                        cell = None;
+                    }
+                    "annotation" => in_annot = false,
+                    "creator" if in_creator => {
+                        annot.author = std::mem::take(&mut buf);
+                        in_creator = false;
+                    }
+                    "date" | "date-string" | "creator-initials" => in_meta = false,
+                    _ => {}
+                }
+            }
+            Event::Eof => break,
+            _ => {}
+        }
+    }
+    if !table.is_empty() {
+        flush_table(&mut table, &mut side, &mut out);
+    }
+    out
+}
+
+/// 一张表的批注与链接结转到按表名索引的读数里：空的表不占位，表上的账并进全局账
+/// （与 `xlsx_cell_side::read_cell_side` 同一分寸：账说的是哪张表缺了什么，但别挂在别的表上）
+fn flush_table(
+    table: &mut String,
+    side: &mut xlsx_cell_side::SheetSide,
+    out: &mut xlsx_cell_side::SideRead,
+) {
+    if table.is_empty() {
+        return;
+    }
+    side.notes.sort_by_key(|n| (n.r, n.c));
+    side.links.sort_by_key(|l| (l.r, l.c));
+    out.accounts.append(&mut side.accounts);
+    if !side.notes.is_empty() || !side.links.is_empty() {
+        out.by_sheet
+            .insert(std::mem::take(table), std::mem::take(side));
+    } else {
+        side.notes.clear();
+        side.links.clear();
+        table.clear();
+    }
 }
 
 /// 值 → (office 类型属性, 内容文本)
@@ -910,6 +1276,105 @@ fn odf_to_xlsx_formula(f: &str) -> String {
 }
 
 
+/// 表名进 ODF 内部地址的写法（§9.2.1）：含空格、点或撇的要用单引号包起，内部的 ' 翻倍
+fn odf_table_ref(name: &str) -> String {
+    if name.chars().any(|c| c == ' ' || c == '.' || c == '\'') {
+        format!("'{}'", name.replace('\'', "''"))
+    } else {
+        name.to_string()
+    }
+}
+
+/// 载荷的链接 → `xlink:href`。外部地址照字面走；`location`（"表名!A1"）折成 §9.2.1 的 `#表名.格`，
+/// 没写表名的那一档用本表补齐。两头都没说就交回 None——这一条链接不落笔
+fn odf_href(l: &CellLinkPayload, table: &str) -> Option<String> {
+    if let Some(u) = l.url.as_deref().map(str::trim).filter(|v| !v.is_empty()) {
+        return Some(u.to_string());
+    }
+    let loc = l.location.as_deref().map(str::trim).filter(|v| !v.is_empty())?;
+    let (name, cell) = match loc.split_once('!') {
+        Some((n, c)) => (n, c),
+        None => (table, loc),
+    };
+    if cell.is_empty() {
+        return None;
+    }
+    Some(format!("#{}.{cell}", odf_table_ref(name)))
+}
+
+/// 批注 → `<office:annotation>`，调用处把它排在格子的正文 `<text:p>` **之前**（ODF §9.1.4 的
+/// 子元素顺序，写在正文之后就是不合规的件）。没声明的一味整条不写：`office:display` 只在真说了
+/// true 时落笔（缺席与 false 同一档，见读侧同一分寸），气泡尺寸只在载荷给了那一味时写——
+/// 替文件补一枚尺寸就是替用户决定了气泡多大
+fn annotation_xml(n: Option<&CellNotePayload>) -> String {
+    let Some(n) = n else { return String::new() };
+    let mut attrs = String::new();
+    if n.show == Some(true) {
+        attrs.push_str(" office:display=\"true\"");
+    }
+    for (name, v) in [("svg:width", n.width), ("svg:height", n.height)] {
+        if let Some(px) = v.filter(|px| px.is_finite() && *px > 0.0) {
+            attrs.push_str(&format!(" {name}=\"{}\"", px_to_odf_len(px)));
+        }
+    }
+    let mut body = String::new();
+    if let Some(a) = n.author.as_deref().map(str::trim).filter(|v| !v.is_empty()) {
+        body.push_str(&format!("<dc:creator>{}</dc:creator>", esc(a)));
+    }
+    // 一段一行：读侧把多个 text:p 以换行相连，写侧就按换行拆回去
+    for line in n.text.split('\n') {
+        body.push_str(&format!("<text:p>{}</text:p>", esc(line)));
+    }
+    format!("<office:annotation{attrs}>{body}</office:annotation>")
+}
+
+/// 格子的正文层：有链接时把文字外套一条 `text:a`（ODF 的超链接没有独立部件，就长在正文上）
+fn text_p_xml(text: &str, link: Option<&CellLinkPayload>, table: &str) -> String {
+    let inner = esc(text);
+    let Some(h) = link.and_then(|l| odf_href(l, table)) else {
+        return format!("<text:p>{inner}</text:p>");
+    };
+    let tip = link
+        .and_then(|l| l.tip.as_deref())
+        .map(str::trim)
+        .filter(|v| !v.is_empty())
+        .map(|v| format!(" office:title=\"{}\"", esc_attr(v)))
+        .unwrap_or_default();
+    format!(
+        "<text:p><text:a xlink:type=\"simple\" xlink:href=\"{}\"{tip}>{inner}</text:a></text:p>",
+        esc_attr(&h)
+    )
+}
+
+/// 这一份件真用得上的命名空间：作者用 dc、气泡尺寸用 svg（都是 length，单位必带）、链接用 xlink
+#[derive(Default)]
+struct OdfNs {
+    dc: bool,
+    svg: bool,
+    xlink: bool,
+}
+
+fn used_namespaces(sheets: &[SheetPayload]) -> OdfNs {
+    let mut ns = OdfNs::default();
+    for s in sheets {
+        for n in &s.notes {
+            if n.text.trim().is_empty() {
+                continue;
+            }
+            if n.author.as_deref().map_or(false, |a| !a.trim().is_empty()) {
+                ns.dc = true;
+            }
+            if n.width.is_some() || n.height.is_some() {
+                ns.svg = true;
+            }
+        }
+        if s.links.iter().any(|l| odf_href(l, &s.name).is_some()) {
+            ns.xlink = true;
+        }
+    }
+    ns
+}
+
 fn render_sheet(
     sheet: &SheetPayload,
     style_names: &HashMap<String, String>,
@@ -929,6 +1394,8 @@ fn render_sheet(
         .map(|x| x.r)
         .chain(sheet.merges.iter().map(|m| m.end_row))
         .chain(sheet.hidden_rows.iter().copied())
+        .chain(sheet.notes.iter().map(|n| n.r))
+        .chain(sheet.links.iter().map(|l| l.r))
         .max()
         .unwrap_or(0);
     let max_col = sheet
@@ -937,6 +1404,8 @@ fn render_sheet(
         .map(|x| x.c)
         .chain(sheet.merges.iter().map(|m| m.end_column))
         .chain(sheet.hidden_cols.iter().copied())
+        .chain(sheet.notes.iter().map(|n| n.c))
+        .chain(sheet.links.iter().map(|l| l.c))
         .max()
         .unwrap_or(0);
     let col_style_at = |c: u32| {
@@ -963,6 +1432,20 @@ fn render_sheet(
             .and_then(|k| row_reg.get(&k).cloned())
     };
     let cell_at = |r: u32, c: u32| sheet.cells.iter().find(|x| x.r == r && x.c == c);
+    // 空气泡不落笔（与读侧同一分寸：没有正文的批注在界面上只是一枚点不开的标记）
+    let note_at = |r: u32, c: u32| {
+        sheet
+            .notes
+            .iter()
+            .find(|n| n.r == r && n.c == c && !n.text.trim().is_empty())
+    };
+    let link_at = |r: u32, c: u32| {
+        sheet
+            .links
+            .iter()
+            .find(|l| l.r == r && l.c == c && odf_href(l, &sheet.name).is_some())
+    };
+    let side_at = |r: u32, c: u32| note_at(r, c).is_some() || link_at(r, c).is_some();
     let mut gap = 0u32;
     let mut row_buf = String::new();
     for r in 0..=max_row {
@@ -975,7 +1458,8 @@ fn render_sheet(
             || sheet
                 .cells
                 .iter()
-                .any(|x| x.r == r && (x.v.is_some() || x.f.is_some() || x.s.is_some()));
+                .any(|x| x.r == r && (x.v.is_some() || x.f.is_some() || x.s.is_some()))
+            || (0..=max_col).any(|c| side_at(r, c));
         if !row_used {
             gap += 1;
             continue;
@@ -1026,8 +1510,9 @@ fn render_sheet(
                     .map(|n| format!(" table:style-name=\"{n}\""))
                     .unwrap_or_default();
                 row_buf.push_str(&format!(
-                    "<table:table-cell{style} {vt}{fattr} table:number-columns-spanned=\"{col_span}\" table:number-rows-spanned=\"{row_span}\"><text:p>{}</text:p></table:table-cell>",
-                    esc(&text)
+                    "<table:table-cell{style} {vt}{fattr} table:number-columns-spanned=\"{col_span}\" table:number-rows-spanned=\"{row_span}\">{}{}</table:table-cell>",
+                    annotation_xml(note_at(r, c)),
+                    text_p_xml(&text, link_at(r, c), &sheet.name)
                 ));
                 c = m.end_column + 1;
                 continue;
@@ -1058,7 +1543,8 @@ fn render_sheet(
             let cell = cell_at(r, c);
             let has_content = cell
                 .map(|x| x.v.is_some() || x.f.is_some() || style_key(x.s.as_ref()).is_some())
-                .unwrap_or(false);
+                .unwrap_or(false)
+                || side_at(r, c);
             if !has_content {
                 pending_empty += 1;
                 c += 1;
@@ -1071,15 +1557,19 @@ fn render_sheet(
                 ));
                 pending_empty = 0;
             }
-            let x = cell.unwrap();
-            let (vt, text, fattr) = cell_content_attrs(x);
-            let style = style_key(x.s.as_ref())
+            // 只有批注或链接的格没有载荷那一枚：值那一味按"文件没说话"交回空串，格还得占位
+            let (vt, text, fattr) = cell
+                .map(cell_content_attrs)
+                .unwrap_or_else(|| ("office:value-type=\"string\"".into(), String::new(), String::new()));
+            let style = cell
+                .and_then(|x| style_key(x.s.as_ref()))
                 .and_then(|k| style_names.get(&k))
                 .map(|n| format!(" table:style-name=\"{n}\""))
                 .unwrap_or_default();
             row_buf.push_str(&format!(
-                "<table:table-cell{style} {vt}{fattr}><text:p>{}</text:p></table:table-cell>",
-                esc(&text)
+                "<table:table-cell{style} {vt}{fattr}>{}{}</table:table-cell>",
+                annotation_xml(note_at(r, c)),
+                text_p_xml(&text, link_at(r, c), &sheet.name)
             ));
             c += 1;
         }
@@ -1129,16 +1619,29 @@ fn settings_xml(sheets: &[SheetPayload]) -> Option<String> {
 pub fn ods_xml(workbook: &WorkbookPayload) -> (String, String) {
     let (style_names, styles_xml) = build_styles(&workbook.sheets);
     let (dim_xml, col_reg, row_reg) = build_dim_styles(&workbook.sheets);
-    let mut content = String::from(
+    // 命名空间按这份件真用得上的声明：没有批注与链接的件不该多出三行 xmlns（与 default_style_xml
+    // 那条「没声明就不写这一层」同一分寸——凭空声明不改字节里的内容，但也不该改文件的形状）
+    let ns = used_namespaces(&workbook.sheets);
+    let mut root = String::from(
         "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\
          <office:document-content \
          xmlns:office=\"urn:oasis:names:tc:opendocument:xmlns:office:1.0\" \
          xmlns:style=\"urn:oasis:names:tc:opendocument:xmlns:style:1.0\" \
          xmlns:fo=\"urn:oasis:names:tc:opendocument:xmlns:xsl-fo-compatible:1.0\" \
          xmlns:table=\"urn:oasis:names:tc:opendocument:xmlns:table:1.0\" \
-         xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" \
-         office:version=\"1.2\"><office:automatic-styles>",
+         xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\"",
     );
+    if ns.dc {
+        root.push_str(" xmlns:dc=\"http://purl.org/dc/elements/1.1/\"");
+    }
+    if ns.svg {
+        root.push_str(" xmlns:svg=\"urn:oasis:names:tc:opendocument:xmlns:svg-compatible:1.0\"");
+    }
+    if ns.xlink {
+        root.push_str(" xmlns:xlink=\"http://www.w3.org/1999/xlink\"");
+    }
+    root.push_str(" office:version=\"1.2\"><office:automatic-styles>");
+    let mut content = root;
     content.push_str(&styles_xml);
     content.push_str(&dim_xml);
     content.push_str(
@@ -1664,6 +2167,19 @@ mod tests {
         s
     }
 
+    /// 从内存里的 ODS 字节取出 content.xml 的字面（批注与链接的判别要看在件里的位置和形状，
+    /// 光"读得回来"证明不了顺序合规）
+    fn content_of(bytes: &[u8]) -> String {
+        use std::io::Read;
+        let mut z = zip::ZipArchive::new(Cursor::new(bytes.to_vec())).expect("zip 可解");
+        let mut s = String::new();
+        z.by_name("content.xml")
+            .expect("content.xml")
+            .read_to_string(&mut s)
+            .expect("读成串");
+        s
+    }
+
     /// 把一枚 `<style:default-style>` 摆进真的 styles.xml 骨架里再读（部件级判别，不是属性级）
     fn default_of(family: &str, body: &str) -> Option<DefaultFont> {
         let xml = format!(
@@ -1931,8 +2447,10 @@ mod tests {
         assert_eq!(s.name, "数据");
     }
 
+    /// 别人写的件：批注与链接都住在格子自身里，读侧要逐味收准——
+    /// 位置、作者、多段正文、气泡尺寸与「常开」那一枚开关、外部地址、表内跳转、悬停提示
     #[test]
-    fn ods_notes_and_links_report_their_boundaries() {
+    fn ods_notes_and_links_read_from_anothers_file() {
         let wb = WorkbookPayload {
             sheets: vec![SheetPayload {
                 name: "数据".into(),
@@ -1941,52 +2459,421 @@ mod tests {
                     cell(0, 1, json!("销量")),
                     cell(1, 0, json!("一月")),
                     cell(1, 1, json!(10)),
+                    cell(2, 0, json!("二月")),
+                    cell(2, 1, json!(20)),
                 ],
                 ..Default::default()
             }],
             ..Default::default()
         };
         let (mut content, styles) = ods_xml(&wb);
-        // 别人的件长这样：批注是格子的第一个孩子（作者的 text:p 也在里面），链接是格子里的 text:a。
-        // 前缀必须声明到位——漏了 xlink/dc 会让整份 XML 解析失败，表现为"没报错但是空表"
         content = content.replace(
             "office:version=\"1.2\"><office:automatic-styles>",
             "xmlns:dc=\"http://purl.org/dc/elements/1.1/\" \
              xmlns:xlink=\"http://www.w3.org/1999/xlink\" \
+             xmlns:svg=\"urn:oasis:names:tc:opendocument:xmlns:svg-compatible:1.0\" \
              office:version=\"1.2\"><office:automatic-styles>",
         );
+        // 批注排在正文 <text:p> 之前（这是 ODF 的子元素顺序），作者与日期各住各的层
         content = content.replace(
             "<text:p>月份</text:p>",
-            "<office:annotation><dc:creator>张三</dc:creator><text:p>这里要复核</text:p></office:annotation>\
+            "<office:annotation office:display=\"true\" svg:width=\"2.26cm\" svg:height=\"1.91cm\">\
+             <dc:creator>张三</dc:creator><dc:date>2026-09-29T10:00:00</dc:date>\
+             <text:p>这里要复核</text:p><text:p>第二行</text:p></office:annotation>\
              <text:p>月份</text:p>",
         );
+        // 只有正文的批注：作者、尺寸与常开都缺席。批注里的链接只贡献它自己的显示文字，不算格子链接
+        content = content.replace(
+            "<text:p>销量</text:p>",
+            "<office:annotation><text:p>看<text:a xlink:type=\"simple\" \
+             xlink:href=\"https://ok.example/x\">说明</text:a></text:p></office:annotation>\
+             <text:p>销量</text:p>",
+        );
+        // 外部地址：协议名在、& 转义要解一次、悬停提示走 office:title
         content = content.replace(
             "<text:p>一月</text:p>",
-            "<text:p><text:a xlink:type=\"simple\" xlink:href=\"https://example.com/a?x=1&amp;y=2\">\
-             一月</text:a></text:p>",
+            "<text:p><text:a xlink:type=\"simple\" xlink:href=\"https://example.com/a?x=1&amp;y=2\" \
+             office:title=\"例子\">一月</text:a></text:p>",
+        );
+        // 表内跳转的两种真实写法：#表名.格 与 .#表名.$格$（绝对引用的 $ 读时剥掉）
+        content = content.replace(
+            "<text:p>10</text:p>",
+            "<text:p><text:a xlink:type=\"simple\" xlink:href=\"#数据.A1\">10</text:a></text:p>",
+        );
+        content = content.replace(
+            "<text:p>二月</text:p>",
+            "<text:p><text:a xlink:type=\"simple\" xlink:href=\".#数据.$B$3\">二月</text:a></text:p>",
+        );
+        // display="false" 与缺席同一档（ODF 的缺省就是不常开），不许读成一枚说了话的 false
+        content = content.replace(
+            "<text:p>20</text:p>",
+            "<office:annotation office:display=\"false\"><text:p>收起的</text:p></office:annotation>\
+             <text:p>20</text:p>",
         );
         let path = std::env::temp_dir()
-            .join(format!("openoffices-ods-side-{}.ods", std::process::id()))
+            .join(format!("openoffices-ods-read-{}.ods", std::process::id()))
             .to_string_lossy()
             .to_string();
         std::fs::write(&path, zip_ods(&content, &styles)).expect("write");
         let back = crate::xlsx::read_xlsx_sync(path.clone()).expect("带批注与链接的 ODS 读回失败");
         std::fs::remove_file(&path).ok();
 
-        let notes = back.warnings.join("|");
-        assert!(notes.contains("批注"), "批注账要说得出: {notes}");
-        assert!(notes.contains("链接"), "链接账要说得出: {notes}");
-        assert_eq!(notes.matches("ODS 里的").count(), 2, "两样各一条: {notes}");
-        // 记账不吞值：批注的字不能混进格子（那是正文与气泡的分界），链接的字照常说得出
+        let acct = back.warnings.join("|");
+        assert!(
+            !acct.contains("批注") && !acct.contains("链接"),
+            "两样都已真读，旧的两条「暂未读入」必须消失: {acct}"
+        );
+        assert_eq!(acct.matches("ODS 里的").count(), 0, "这一趟没有账: {acct}");
+
         let s = &back.sheets[0];
+        let note_at = |r: u32, c: u32| s.notes.iter().find(|n| n.r == r && n.c == c);
+        let link_at = |r: u32, c: u32| s.links.iter().find(|l| l.r == r && l.c == c);
+
+        let n = note_at(0, 0).expect("(0,0) 的批注要收进来");
+        assert_eq!(n.text, "这里要复核\n第二行", "多段正文用换行相连");
+        assert_eq!(n.author.as_deref(), Some("张三"));
+        assert_eq!(n.width, Some(85.0), "2.26cm 落像素");
+        assert_eq!(n.height, Some(72.0), "1.91cm 落像素");
+        assert_eq!(n.show, Some(true));
+        let n = note_at(0, 1).expect("(0,1) 的批注只有正文也要收");
+        assert_eq!(n.text, "看说明", "批注里的链接只贡献它的显示文字");
+        assert_eq!(n.author, None, "没写 dc:creator 就不许凭空造一层作者");
+        assert_eq!((n.width, n.height, n.show), (None, None, None));
+        assert_eq!(
+            note_at(2, 1).map(|n| (n.text.as_str(), n.show)),
+            Some(("收起的", None)),
+            "display=false 该读成缺席"
+        );
+        assert!(note_at(1, 0).is_none() && note_at(1, 1).is_none() && note_at(2, 0).is_none());
+
+        assert_eq!(s.links.len(), 3, "格子链接只收格内的 text:a: {:?}", s.links);
+        assert!(link_at(0, 1).is_none(), "批注里的链接不是格子链接");
+        let l = link_at(1, 0).expect("外部地址要收");
+        assert_eq!(l.url.as_deref(), Some("https://example.com/a?x=1&y=2"), "实体解一次");
+        assert_eq!(l.tip.as_deref(), Some("例子"));
+        assert_eq!(l.location, None);
+        assert_eq!(link_at(1, 1).and_then(|l| l.location.as_deref()), Some("数据!A1"));
+        assert_eq!(
+            link_at(2, 0).and_then(|l| l.location.as_deref()),
+            Some("数据!B3"),
+            ".#表名.$格$ 与绝对引用的 $ 都要认"
+        );
+        assert_eq!(link_at(1, 1).and_then(|l| l.url.clone()), None, "表内跳转不硬派成 url");
+
         let at = |r: u32, c: u32| {
             s.cells
                 .iter()
                 .find(|x| x.r == r && x.c == c)
                 .and_then(|x| x.v.clone())
         };
-        assert_eq!(at(0, 0), Some(json!("月份")), "批注的字不该渗进正文: {:?}", at(0,0));
-        assert_eq!(at(1, 0), Some(json!("一月")), "链接读不懂，字还得照常出");
+        assert_eq!(at(0, 0), Some(json!("月份")), "批注的字不许渗进正文");
+        assert_eq!(at(0, 1), Some(json!("销量")));
+        assert_eq!(at(1, 0), Some(json!("一月")), "链接的字照常出");
+        assert_eq!(at(1, 1), Some(json!(10)), "批注与链接都不许挪动数值");
+        assert_eq!(at(2, 1), Some(json!(20)));
+    }
+
+    /// 写侧的字面判别（不只是"读得回来"）：批注长在格子身上且排在正文之前、内部跳转按 §9.2.1
+    /// 的 `#表名.格` 落笔、用到的命名空间才声明；然后再走真件那一趟（存 → 读 → 再存），
+    /// 确认第二次存盘还在而不是把这一层读丢了
+    #[test]
+    fn ods_notes_and_links_land_in_content_and_read_back() {
+        let wb = WorkbookPayload {
+            sheets: vec![SheetPayload {
+                name: "数据".into(),
+                cells: vec![
+                    cell(0, 0, json!("月份")),
+                    cell(0, 1, json!("销量")),
+                    cell(1, 0, json!("一月")),
+                    cell(3, 0, json!("跳转")),
+                ],
+                notes: vec![CellNotePayload {
+                    r: 0,
+                    c: 0,
+                    text: "这里要复核\n第二行".into(),
+                    author: Some("张三".into()),
+                    width: Some(128.0),
+                    height: Some(74.0),
+                    show: Some(true),
+                }],
+                links: vec![
+                    CellLinkPayload {
+                        r: 0,
+                        c: 1,
+                        url: Some("https://example.com/a?x=1&y=2".into()),
+                        tip: Some("例子 & 说明".into()),
+                        ..Default::default()
+                    },
+                    CellLinkPayload {
+                        r: 3,
+                        c: 0,
+                        location: Some("数据!B9".into()),
+                        ..Default::default()
+                    },
+                ],
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        let content = content_of(&ods_bytes(&wb).expect("ods bytes"));
+
+        // 顺序：批注必须在格子的开标签之后、正文 <text:p> 之前（ODF 的子元素顺序，写反了就是不合规的件）
+        let open = content.find("<table:table-cell").expect("格子");
+        let annot = content.find("<office:annotation").expect("批注要落进字节");
+        let body = content.find("<text:p>月份</text:p>").expect("正文");
+        assert!(
+            open < annot && annot < body,
+            "批注要排在正文之前: open={open} annot={annot} body={body}"
+        );
+        assert!(content.contains("office:display=\"true\""), "常开那枚开关要落笔");
+        assert!(
+            content.contains("<dc:creator>张三</dc:creator>"),
+            "作者走 dc:creator"
+        );
+        assert!(
+            content.contains("<text:p>这里要复核</text:p><text:p>第二行</text:p>"),
+            "多段正文一段一条 text:p"
+        );
+        assert!(
+            content.contains("svg:width=\"3.3867cm\"") && content.contains("svg:height=\"1.9579cm\""),
+            "气泡尺寸按 px→cm 落字节（单位必带）: {content}"
+        );
+        // 载荷的 "表名!A1" 是我们的约定，件里得写成 ODF 的内部地址
+        assert!(
+            content.contains("xlink:href=\"#数据.B9\""),
+            "location 折成 #表名.格: {content}"
+        );
+        assert!(
+            content.contains("xlink:href=\"https://example.com/a?x=1&amp;y=2\""),
+            "地址里的 & 要转义"
+        );
+        assert!(content.contains("office:title=\"例子 &amp; 说明\""), "提示走 office:title");
+        for ns in ["xmlns:dc=", "xmlns:svg=", "xmlns:xlink="] {
+            assert!(content.contains(ns), "用到的命名空间得声明: {ns}");
+        }
+
+        // 真件那一趟：存 → 读 → 再存，这一层两头都得在
+        let first = std::env::temp_dir()
+            .join(format!("openoffices-ods-side-{}.ods", std::process::id()))
+            .to_string_lossy()
+            .to_string();
+        std::fs::write(&first, ods_bytes(&wb).expect("ods bytes")).expect("write");
+        let back = crate::xlsx::read_xlsx_sync(first.clone()).expect("读回失败");
+        std::fs::remove_file(&first).ok();
+
+        assert_eq!(
+            back.warnings.iter().filter(|w| w.contains("ODS 里的")).count(),
+            0,
+            "自家产物不该记出账: {:?}",
+            back.warnings
+        );
+        let s = &back.sheets[0];
+        let n = s.notes.iter().find(|x| x.r == 0 && x.c == 0).expect("(0,0) 的批注");
+        assert_eq!(n.text, "这里要复核\n第二行");
+        assert_eq!(n.author.as_deref(), Some("张三"));
+        assert_eq!(
+            (n.width, n.height, n.show),
+            (Some(128.0), Some(74.0), Some(true)),
+            "尺寸往返同一档（cm 四位小数不漂）"
+        );
+        let l = s.links.iter().find(|x| x.r == 0 && x.c == 1).expect("(0,1) 的链接");
+        assert_eq!(l.url.as_deref(), Some("https://example.com/a?x=1&y=2"));
+        assert_eq!(l.tip.as_deref(), Some("例子 & 说明"));
+        let l = s.links.iter().find(|x| x.r == 3 && x.c == 0).expect("(3,0) 的链接");
+        assert_eq!(l.location.as_deref(), Some("数据!B9"));
+        assert_eq!(l.url, None, "内部跳转不许读成外部地址");
+
+        let again = content_of(&ods_bytes(&back).expect("第二次存盘"));
+        assert_eq!(
+            again.matches("<office:annotation").count(),
+            1,
+            "存两次不许多盖章: {again}"
+        );
+        assert!(again.contains("xlink:href=\"#数据.B9\""), "第二次存盘还在");
+        let second = std::env::temp_dir()
+            .join(format!("openoffices-ods-side2-{}.ods", std::process::id()))
+            .to_string_lossy()
+            .to_string();
+        std::fs::write(&second, ods_bytes(&back).expect("ods bytes")).expect("write");
+        let twice = crate::xlsx::read_xlsx_sync(second.clone()).expect("二次读回失败");
+        std::fs::remove_file(&second).ok();
+        let t = &twice.sheets[0];
+        assert_eq!(
+            (t.notes.len(), t.links.len()),
+            (1, 2),
+            "往返不收窄: notes={:?} links={:?}",
+            t.notes,
+            t.links
+        );
+    }
+
+    /// 反面守卫（v0.58/v0.61 那条「没声明就不写」在这一层同样立着）：空气泡不落笔、
+    /// 没有地址的链接整条不写、`show=false` 与缺席同档、用不上的命名空间不声明
+    #[test]
+    fn ods_undeclared_note_and_link_layers_stay_absent() {
+        let wb = WorkbookPayload {
+            sheets: vec![SheetPayload {
+                name: "数据".into(),
+                cells: vec![cell(0, 0, json!("月份")), cell(0, 1, json!("销量"))],
+                notes: vec![
+                    CellNotePayload {
+                        r: 0,
+                        c: 0,
+                        text: "  ".into(),
+                        ..Default::default()
+                    },
+                    CellNotePayload {
+                        r: 0,
+                        c: 1,
+                        text: "只有一行".into(),
+                        show: Some(false),
+                        ..Default::default()
+                    },
+                ],
+                links: vec![CellLinkPayload {
+                    r: 0,
+                    c: 1,
+                    tip: Some("没地址".into()),
+                    ..Default::default()
+                }],
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        let bytes = ods_bytes(&wb).expect("ods bytes");
+        let content = content_of(&bytes);
+        assert_eq!(
+            content.matches("<office:annotation").count(),
+            1,
+            "只有正文的那格写一条，空气泡不落笔: {content}"
+        );
+        assert!(!content.contains("office:display"), "false 与缺席同一档，不写它");
+        assert!(!content.contains("<dc:creator"), "没说作者就不许凭空造一层");
+        assert!(!content.contains("svg:width"), "没说尺寸就不替用户决定气泡多大");
+        assert!(
+            !content.contains("<text:a "),
+            "两头都没地址的链接整条不写: {content}"
+        );
+        for ns in ["xmlns:dc=", "xmlns:svg=", "xmlns:xlink="] {
+            assert!(!content.contains(ns), "用不上的命名空间不声明: {ns}");
+        }
+
+        let path = std::env::temp_dir()
+            .join(format!("openoffices-ods-side-none-{}.ods", std::process::id()))
+            .to_string_lossy()
+            .to_string();
+        std::fs::write(&path, bytes).expect("write");
+        let back = crate::xlsx::read_xlsx_sync(path.clone()).expect("读回失败");
+        std::fs::remove_file(&path).ok();
+        let s = &back.sheets[0];
+        assert_eq!(s.notes.len(), 1, "空气泡不该读回一条: {:?}", s.notes);
+        assert_eq!(s.notes[0].r, 0);
+        assert_eq!(s.notes[0].c, 1);
+        assert_eq!(s.notes[0].show, None);
+        assert!(s.links.is_empty(), "没地址的链接不该读回: {:?}", s.links);
+    }
+
+    /// 落不准位置的批注与链接一律记账而不是硬派——这一条测读侧本身（不经装配），
+    /// 因为下面这些形状都不合规，只是别人的件里真可能出现
+    #[test]
+    fn ods_notes_and_links_account_for_shapes_we_cannot_place() {
+        let wb = WorkbookPayload {
+            sheets: vec![SheetPayload {
+                name: "数据".into(),
+                cells: vec![
+                    cell(0, 0, json!("甲")),
+                    cell(0, 1, json!("乙")),
+                    cell(0, 2, json!("丙")),
+                    cell(0, 3, json!("丁")),
+                    cell(2, 2, json!("戊")),
+                    cell(2, 3, json!("己")),
+                ],
+                merges: vec![MergeRange {
+                    start_row: 0,
+                    start_column: 0,
+                    end_row: 1,
+                    end_column: 1,
+                }],
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        let (mut content, styles) = ods_xml(&wb);
+        content = content.replace(
+            "office:version=\"1.2\"><office:automatic-styles>",
+            "xmlns:dc=\"http://purl.org/dc/elements/1.1/\" \
+             xmlns:xlink=\"http://www.w3.org/1999/xlink\" \
+             office:version=\"1.2\"><office:automatic-styles>",
+        );
+        // 空气泡：正文只有空白，收了反而在界面上多一枚点开没东西的标记
+        content = content.replace(
+            "<text:p>甲</text:p>",
+            "<office:annotation><text:p>  </text:p></office:annotation><text:p>甲</text:p>",
+        );
+        // 合并区里被盖住的格：真件不会把批注写在这儿，写了也说不准属于哪一格
+        content = content.replace(
+            "<table:covered-table-cell table:number-columns-repeated=\"2\"/>",
+            "<table:covered-table-cell><office:annotation><text:p>盖住的批注</text:p>\
+             </office:annotation></table:covered-table-cell>",
+        );
+        // 一格两条链接：只收第一条并记账（载荷一位只装得下一条）
+        content = content.replace(
+            "<text:p>丙</text:p>",
+            "<text:p><text:a xlink:type=\"simple\" xlink:href=\"https://a.example/1\">丙</text:a>\
+             <text:a xlink:type=\"simple\" xlink:href=\"https://b.example/2\">丙</text:a></text:p>",
+        );
+        content = content.replace(
+            "<text:p>丁</text:p>",
+            "<text:p><text:a xlink:type=\"simple\">丁</text:a></text:p>",
+        );
+        // 既不带 # 又不带协议名（含单字母像盘符那一档）：那是点不开的死链，不硬派成 url
+        content = content.replace(
+            "<text:p>戊</text:p>",
+            "<text:p><text:a xlink:type=\"simple\" xlink:href=\"notes/readme.txt\">戊</text:a></text:p>",
+        );
+        content = content.replace(
+            "<text:p>己</text:p>",
+            "<text:p><text:a xlink:type=\"simple\" xlink:href=\"C:temp.txt\">己</text:a></text:p>",
+        );
+        // 一次重复多列的格带着批注与链接：落在哪一列说不准
+        content = content.replace(
+            "<table:table-cell table:number-columns-repeated=\"2\"/>",
+            "<table:table-cell table:number-columns-repeated=\"2\">\
+             <office:annotation><text:p>飘着的批注</text:p></office:annotation>\
+             <text:p><text:a xlink:type=\"simple\" xlink:href=\"https://x.example/9\">飘</text:a></text:p>\
+             </table:table-cell>",
+        );
+        let path = std::env::temp_dir()
+            .join(format!("openoffices-ods-sideacct-{}.ods", std::process::id()))
+            .to_string_lossy()
+            .to_string();
+        std::fs::write(&path, zip_ods(&content, &styles)).expect("write");
+        let rd = read_ods_cell_side(&path);
+        std::fs::remove_file(&path).ok();
+
+        let acct = rd.accounts.join("|");
+        for kw in [
+            "被盖住",
+            "只收第一条",
+            "没写它指向哪儿",
+            "位置认不出来",
+            "重复多列",
+        ] {
+            assert!(acct.contains(kw), "账里要说得出「{kw}」: {acct}");
+        }
+        assert_eq!(rd.accounts.len(), 7, "七处各一条，不重复记: {acct}");
+        assert_eq!(acct.matches("未收进来").count(), 6, "落不准的都未收进来: {acct}");
+
+        let s = rd.by_sheet.get("数据").expect("能落准的那条链接要进表");
+        assert_eq!(s.links.len(), 1, "只收第一条: {:?}", s.links);
+        assert_eq!(s.links[0].r, 0);
+        assert_eq!(s.links[0].c, 2);
+        assert_eq!(s.links[0].url.as_deref(), Some("https://a.example/1"));
+        assert!(
+            s.notes.is_empty(),
+            "空气泡与落不准位置的批注都不该进载荷: {:?}",
+            s.notes
+        );
     }
 
     #[test]
@@ -2078,6 +2965,37 @@ mod tests {
                 charts: vec![],
                 col_widths: [(0u32, 140.0)].into_iter().collect(),
                 row_heights: [(0u32, 32.0)].into_iter().collect(),
+                notes: vec![CellNotePayload {
+                    r: 1,
+                    c: 0,
+                    text: "这里要复核\n第二行".into(),
+                    author: Some("张三".into()),
+                    width: Some(128.0),
+                    height: Some(74.0),
+                    show: Some(true),
+                }],
+                links: vec![
+                    CellLinkPayload {
+                        r: 0,
+                        c: 1,
+                        url: Some("https://example.com/a?x=1&y=2".into()),
+                        tip: Some("例子".into()),
+                        ..Default::default()
+                    },
+                    CellLinkPayload {
+                        r: 3,
+                        c: 1,
+                        location: Some("销售!B1".into()),
+                        ..Default::default()
+                    },
+                    // 只有链接没值的一格：写侧要落笔，界面得给它一个落脚点
+                    CellLinkPayload {
+                        r: 8,
+                        c: 0,
+                        url: Some("https://example.com/b".into()),
+                        ..Default::default()
+                    },
+                ],
                 ..Default::default()
             }],
             ..Default::default()
