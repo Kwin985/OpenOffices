@@ -9,6 +9,7 @@ import { readBytes, writeBytes, pickDirectory, pickPdfFiles, pickSaveFile, baseN
 import { preparePdfSource } from '../lib/pdf-range'
 import { takePdf } from '../lib/open-prefetch'
 import { registerSaver } from '../lib/registry'
+import { saveBusyTimer, saveDoneTimer } from '../lib/save-status'
 import { failRaw, failStatus, statusText, statusTip } from '../lib/fail-msg'
 import { PWD_MEMORY_NOTE, pwdCancelledText, pwdPromptText, pwdReason, type PwdReason } from '../lib/pdf-password'
 import { findCountText, shouldPublish, type FindStatus } from '../lib/pdf-search'
@@ -1356,10 +1357,34 @@ function PdfViewer({ tab }: Props) {
   const writeAnnosRef = useRef(writeAnnosTo)
   writeAnnosRef.current = writeAnnosTo
 
+  // 「已保存」那句的收尾时钟（与表格头共用 lib/save-status.ts 那一份）
+  const doneRef = useRef<ReturnType<typeof saveDoneTimer> | null>(null)
+  if (!doneRef.current) doneRef.current = saveDoneTimer(setStatus)
+
+  // 三句话挂在 saver 这一层，不挂进 writeAnnosTo：工具条的页面操作（pageOp）自己有「旋转…」那一句，
+  // 装进共用的函数里就成了两头发话
   useEffect(() => {
     if (!tab.path) return
     const path = tab.path
-    return registerSaver(tab.id, () => writeAnnosRef.current(path))
+    const done = doneRef.current!
+    return registerSaver(tab.id, async () => {
+      // 实测（v0.70 release）：12/300/2300 页三档的全程是 11 / 143~161 / 1071~1161ms，
+      // 而这一路页内 longtask 观测器一条都没收到（门槛 50ms）⇒ 那 1.1 秒不是把一个长同步块摊在主线程上，
+      // 门到点真说得出口：大件那句有 ~940ms 可看，前两档由同一枚门拦着不闪
+      done.cancel()
+      const busy = saveBusyTimer(setStatus)
+      busy.arm()
+      try {
+        await writeAnnosRef.current(path)
+        busy.cancel()
+        done.show([])
+      } catch (e) {
+        // 失败那句必须顶掉「正在保存…」：这一趟已经停了，留着就是界面在说没在做的事。
+        // 这一路原本连这句都没有——writeAnnosTo 不 catch，而 registry 的在途锁把抛错咽了下去
+        busy.cancel()
+        setStatus(failStatus(e, '保存失败'))
+      }
+    })
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tab.id, tab.path])
 
