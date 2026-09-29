@@ -1,5 +1,5 @@
 import { create } from 'zustand'
-import { dropWorkbook, prefetchWorkbook } from './lib/open-prefetch'
+import { dropPdf, dropWorkbook, prefetchPdf, prefetchWorkbook } from './lib/open-prefetch'
 
 export type DocKind = 'doc' | 'sheet' | 'ppt' | 'pdf'
 
@@ -64,9 +64,10 @@ export const useApp = create<AppState>((set, get) => ({
       set({ view: 'workspace', activeId: existing.id })
       return
     }
-    // 表格这一头的读件在这一刻就发出去：编辑器那一大块 chunk 还要取 82ms、求值 142ms，
-    // 而读文件与 Univer 实例互不依赖（lib/open-prefetch.ts 记的是这条实测）
+    // 表格与 PDF 这两头的读件在这一刻就发出去：编辑器那一块的 chunk 取与求值还要排在那之前，
+    // 而读文件与编辑器实例互不依赖（lib/open-prefetch.ts 记的是这两头的实测，各自省多少也记在那里）
     if (tab.path && tab.kind === 'sheet') prefetchWorkbook(tab.path)
+    if (tab.path && tab.kind === 'pdf') prefetchPdf(tab.path)
     const id = `tab-${Date.now()}-${seq++}`
     set((s) => ({
       view: 'workspace',
@@ -77,9 +78,10 @@ export const useApp = create<AppState>((set, get) => ({
   closeTab: (id) =>
     set((s) => {
       const tabs = s.tabs.filter((t) => t.id !== id)
-      // 关掉的是那枚还没人取的标签 ⇒ 在途的那一份也要撤掉
+      // 关掉的是那枚还没人取的标签 ⇒ 在途的那一份也要撤掉（撤账跟着标签的格式走）
       const gone = s.tabs.find((t) => t.id === id)
       if (gone?.kind === 'sheet') dropWorkbook(gone.path)
+      if (gone?.kind === 'pdf') dropPdf(gone.path)
       let activeId = s.activeId
       if (activeId === id) {
         activeId = tabs[tabs.length - 1]?.id

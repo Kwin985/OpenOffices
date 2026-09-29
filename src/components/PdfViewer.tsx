@@ -6,7 +6,8 @@ import workerUrl from 'pdfjs-dist/build/pdf.worker.min.mjs?url'
 import type { Tab } from '../store'
 import { useApp } from '../store'
 import { readBytes, writeBytes, pickDirectory, pickPdfFiles, pickSaveFile, baseName } from '../lib/fs'
-import { createRangeTransport } from '../lib/pdf-range'
+import { preparePdfSource } from '../lib/pdf-range'
+import { takePdf } from '../lib/open-prefetch'
 import { registerSaver } from '../lib/registry'
 import { failRaw, failStatus, statusText, statusTip } from '../lib/fail-msg'
 import { PWD_MEMORY_NOTE, pwdCancelledText, pwdPromptText, pwdReason, type PwdReason } from '../lib/pdf-password'
@@ -291,13 +292,15 @@ function PdfViewer({ tab }: Props) {
           cMapPacked: true,
           standardFontDataUrl: '/pdfjs/standard_fonts/',
         }
-        // 大文件只喂文件头，正文按需区间取；小的整本读，省掉一串 IPC 往返
-        const range = await createRangeTransport(path)
+        // 首屏那次读（过 4MB 闸门的只喂文件头、没过的整本读一次）已由外壳在开标签那一刻发出去；
+        // 取不到就自己发，不假设外壳一定先跑。闸门的判断只在 preparePdfSource 那一处，这里不重复判。
+        const src = (await takePdf(path)) ?? (await preparePdfSource(path))
         if (disposed) return
-        rangeModeRef.current = !!range
-        openTask = range
-          ? pdfjsLib.getDocument({ ...opts, range })
-          : pdfjsLib.getDocument({ ...opts, data: await readBytes(path) })
+        rangeModeRef.current = src.mode === 'range'
+        openTask =
+          src.mode === 'range'
+            ? pdfjsLib.getDocument({ ...opts, range: src.transport })
+            : pdfjsLib.getDocument({ ...opts, data: src.bytes })
         // 闸门必须挂在 await 之前（实测：晚一步 pdf.js 就直接按"没给密码"拒掉，面板永远不出现）。
         // 这里只把"下一次该怎么回话"存下来并亮出面板——绝不自动投密码，因为实测 pdf.js 错一次问一次、
         // 自己不封顶，整条重试链路的节奏只在界面上。

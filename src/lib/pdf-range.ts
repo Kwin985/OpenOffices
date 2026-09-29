@@ -3,6 +3,7 @@
 
 import { invoke } from '@tauri-apps/api/core'
 import { PDFDataRangeTransport } from 'pdfjs-dist'
+import { readBytes } from './fs'
 
 // 小于这个大小整本读更划算：一次 IPC 完事，省掉后续几十次区间往返
 export const RANGE_MIN_BYTES = 4 * 1024 * 1024
@@ -64,4 +65,19 @@ export async function createRangeTransport(path: string): Promise<PDFDataRangeTr
   const head = await readRange(path, 0, Math.min(HEAD_BYTES, size)).catch(() => null)
   if (!head) return null
   return new TauriRangeTransport(path, size, head)
+}
+
+/** 首屏那一次读的结果只有这两种形状 */
+export type PdfSource =
+  | { mode: 'range'; transport: PDFDataRangeTransport }
+  | { mode: 'bytes'; bytes: Uint8Array }
+
+/**
+ * 「这枚 PDF 首屏该怎么读」那次决定本身（过闸门→只取文件头，没过→整本读一次）。
+ * 外壳的预取与编辑器的自备都调这一枚：两处各判一次闸门，就会读出两种形状。
+ */
+export async function preparePdfSource(path: string): Promise<PdfSource> {
+  const transport = await createRangeTransport(path)
+  if (transport) return { mode: 'range', transport }
+  return { mode: 'bytes', bytes: await readBytes(path) }
 }

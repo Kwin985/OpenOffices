@@ -2223,7 +2223,9 @@ debug 构建**，而一段没有 release 数字的性能工作等于凭空说话
   **key 归一**（Windows 的路径写法不止一种，argv 与文件对话框给的分隔符不同 ⇒ `\\`→`/` + 忽略大小写，
   不归一就会让 prefetch 命中不了）、**失败要有人接住但不吞**（`p.catch(() => {})` 只挡 unhandled rejection，
   原样的 rejection 仍旧留给真正的读者，由它按 v0.64 那一层说人话——这一条是真机冒烟判据 S6/S7/S8 的前提）
-- **只服务表格这一头，另外两头的理由是量出来的不是顺手的**：PDF 读字节之后还要按区间补读（>4MB 走
+- **只服务表格这一头，另外两头的理由是量出来的不是顺手的**（v0.68 改口：PDF 这一头后来也进了同一条通道，
+  而它预取的是「首屏该怎么读」那**一次决定**而不是整叠字节——下面这一条正是它当初不进的原因，也是本轮的形状根据）：
+  PDF 读字节之后还要按区间补读（>4MB 走
   `PDFDataRangeTransport`），先把整叠字节取回来正好与那条闸门相反；文档/演示的字节读得很快，慢的是随后的解析
   （在浏览器那一层），提前读字节省不出什么。**判据 A5/A6/A12 钉的就是"不发不该发的"**：PDF/文档/演示那三条路径
   不许出现 `prefetchWorkbook`，空白新建标签与模板标签也不许（没有路径可发）。反过来 gating 按的是
@@ -2279,6 +2281,66 @@ debug 构建**，而一段没有 release 数字的性能工作等于凭空说话
   `cargo test --lib` **97 通过 / 0 失败 / 11 ignored**（与 v0.63/0.64/0.65/0.66 同一份基线——**Rust 本轮一个字没动**）；
   + tsc 与 `pnpm build` 绿（2.19s，SheetEditor chunk 6,550.22 kB）。release 的 A/B 用的 exe 是**版本号 bump 之后**
   重新 `pnpm tauri build --no-bundle` 出来的（3m 55s），而结构腿/冒烟/编译也都在 bump 之后复跑（老规矩）
+
+## PDF 首开的那一枚 IPC 也提前出门了：预取的是"该怎么读"那次决定，不是整叠字节（v0.68）
+
+起点是 v0.67 收尾时自己记下的那条未勾项——「PDF 那头的 `file_len` 与首 64KB 其实是两件可以 prefetch 的小事」。
+本轮把这句话做完：**Rust 一个字没动**（先例 v0.64/0.65/0.66/0.67），改的是同一层的接线，
+而量出来的收益是表格那一头的十分之一（下面第 4 条），这句话本身就值得记——**上一轮那句"只服务表格这一头"
+是被当时的实测支撑的，本轮把它改口成"两头都服务、各自的账不同"**。
+
+- **本轮唯一的形状决定：预取那一次"决定"，不是那一次"读"**（`src/lib/pdf-range.ts` 新增 `preparePdfSource`）。
+  v0.67 那条实测说得很清楚：>4MB 的件走 `PDFDataRangeTransport`，正文按区间补读，
+  于是"先把整叠字节取回来"正好与那条闸门相反。所以外壳预取的是`{mode:'range', transport} | {mode:'bytes', bytes}`
+  这两形状之一（过闸门 ⇒ `file_len` + 首块 64KB，没过 ⇒ 整本读一次），编辑器只管按 `src.mode` 分支；
+  **闸门的判断由 `preparePdfSource` 单一持有**（结构腿 R2 判 `RANGE_MIN_BYTES` 全场只 2 次、V4 判 `PdfViewer`
+  里不再出现 `createRangeTransport`），两处各判一次就会读出两种形状
+- **三条规矩没有重写第二遍**：`open-prefetch.ts` 的 `put/take/drop` 泛化成 `<T>`，两张表（`workbooks`/`pdfs`）
+  共用同一段实现。判据 P1–P4 吃的是那三个通用函数（归一只在 `keyOf` 一处、去重早退与 `p.catch(() => {})`
+  排在交账之前、`delete` 排在 `return` 之前），所以本轮新增的不是第四第五道**规矩**，只是第四第五个**调用点**
+- **`prefetchPdf` 喂的是那次决定而不是 `readBytes`**（判据 P6 直接钉这一条：这一层里 `readBytes` 一次都不许出现）。
+  文档/演示照旧不进这一路（P5/S5 与变异 M12 判的是"不许挤进来"，它们的字节读得快、慢在随后的解析）
+- **release 的账（三枚夹具 × 每边 5 趟 × 两支真 exe，基准=起进程时刻）**：改前（v0.67 存档件）每趟的首屏读都
+  排在 PdfViewer 那块 chunk 备好**之后** 17~24ms；改后每趟都在它**之前** 4~10ms 出门。首画中位数
+  12 页小件 `632 → 579`、3.7MB/1600 页 `778 → 708`、5.9MB/2300 页分段 `992 → 966`，
+  而**那一次读自身耗时没动**（`10 → 9` / `40 → 39` / 首块 `3 → 4` ms）⇒ 省的仍是排队，不是 Rust 变快。
+  分段那一头只省 26ms 是有道理的：首屏真的只读 64KB，可叠的窗口就这么大
+- **`read_range` 枚数两头都是 92**（判据 A8）⇒ 这条通道不新增读，只是把已有的那几枚提前；
+  顺带一条只有并行才能量出来的观测量：改后 `read_range` 的**累计**耗时是改前的 3~4 倍（`949~1460 → 4415~4858`ms）
+  而**末次出门更早**——同一批区间读并行度上去了，每枚在 Resource Timing 里就长了，活并没有变多。
+  不量这一条，下一轮很容易有人拿"累计耗时涨了"当预取有害的证据
+- **一次裁决差点把这段改动删掉**：3 趟的初量算的是"出门时刻的绝对毫秒差"，两枚夹具判成 −2/−16ms（看着像没收益），
+  按 v0.36 那条"无收益即删"的规矩就该 revert。加到每边 5 趟并把判据换成**符号**（排在 chunk 备好之前还是之后）之后，
+  30/30 趟一致。绝对差被什么吃了：外壳 bundle 比上一版大，`openTab` 自己往后漂了二三十毫秒，
+  而那条漂移与本轮无关。**教训是判据的形式**：量"排队有没有叠起来"要判顺序，不能判绝对时刻
+- **腿自己撞的一坑，比产品坑更像产品坏了**：第一版 5 趟采样把四份 probe 并行发出去，结果四份记录**逐字相同**、
+  12 页的小件报出 1600 枚 canvas——`--remote-debugging-port=9222` 是**全局单端口**，先起的那枚实例抢到，
+  后起的抢不到而四个 CDP 客户端全连到了同一个页面。**A/B 腿必须严格串行**，且"两份数据一模一样"要当成腿坏了读，
+  不是当成"没有差"读
+- **开发模式的双挂载在这一路又当了一次免费测试机**（v0.65/0.67 那条）：真机 S4 量到小件每开一次读到
+  `file_len file_len plugin:fs|read_file plugin:fs|read_file`（**各两枚**，第一趟消费 prefetch、第二趟走自备），
+  而 release 每开一次各一枚。同一条判据在 dev 与 release 上数不同，所以**这条只在真机 release 上判符号**；
+  C1/C2 判的是重开同一件仍读得到（第二次又发一次，取走即失效不影响第二趟）
+- **只有真机能教的（25 断言 / 页面异常 0 条）**：**分段件不许被预取通道读成整叠字节**（R2：5.9MB 那件 `read_file` 0 枚，
+  这是本轮最要紧的一条——它判的是新通道没把 4MB 那道闸门绕过去）；坏件仍说人话且原话留在悬停里（E1/E2/N1–N3，
+  新通道没把 v0.64 那一层绕过去）；**密码面板没被绕开**（P1–P4：预取过的那一趟照样被问到、答对才开完、
+  首页真画出来）；另外三头不许多发一枚读件（K1–K3）；干净件与分段件的状态栏都没凭空记账（S3/R4，判 `null`/空）
+- **一处诚实的次序代价**：自备那一路的读现在排在 `if (disposed) return` **之前**（闸门单一持有的后果），
+  而"写共享状态之前那道门"的位置一个字没动（V3，v0.65 那条规矩）；另有一条与表格同形的既有事实——
+  外壳发了而标签在编辑器挂载前被关掉时，`dropPdf` 撤的是**字典里的账**，那一枚 IPC 已经出门收不回来
+- **验证（A/B 裁决腿 + 四条腿 + 编译）**：**A/B 22 条断言 / 0 FAIL**（三夹具各有 A1 对照件确实排在 chunk 之后、
+  A2 改后每趟提前、A3 出门中位提前、A4 首画中位不变差、A5 读本身没变慢、A6 十趟全画出来且状态栏干净、A7 不许多发，
+  分段件另有 A8 枚数一致）；**前端结构测试 21 断言 / 真失败 0**；**变异检查 14 枚 + 正控制 / BAD 0**；
+  **CDP 真机冒烟 25 断言 / 真失败 0、页面异常 0 条**；`cargo test --lib` **97 通过 / 0 失败 / 11 ignored**
+  （与 v0.63~0.67 同一份基线——**Rust 本轮一个字没动**）；+ tsc 与 `pnpm build` 绿（2.33s，SheetEditor chunk 6,550.21 kB）。
+  对照件是改前当场存档的 exe（21:11），实验件是**版本号 bump 之后**重新 `pnpm tauri build --no-bundle` 的那一支（21:34），
+  四腿与编译都在 bump 后复跑（老规矩）；A/B 跑完之后源文只动过注释，没有再 build
+- **本轮没动的，量出来记着**（已开进路线图）：改后的 579/708/966ms 里，**chunk 的取与顶层求值仍排在最前**，
+  PDF 这一头要再省就得让 PdfViewer 的实例创建也别等 chunk（与表格那一头同一个未决项）；
+  预热（`lib/prewarm.ts`）与 prefetch **仍是两条互不知情的通道**（"预热是否已把 chunk 备好"两轮都没有判据）；
+  分段件首屏那 92 枚 `read_range` 仍是 pdf.js 自己的切分节奏，没按视口排；`file_len` 与首块 64KB 现在合成一次
+  预取，但**首块之后的区间仍要等 `getDocument` 起来才开始**（要把它们也提早就得自己实现按页预取，不是免费的）；
+  写侧 release 的完整一趟（含 IPC 与快照抽取）仍未量；失败提示照旧寄生在状态栏那一枚字符串上（toast 体系未建）
 
 ## 性能（v0.3）
 
@@ -2345,7 +2407,7 @@ src-tauri/            Rust 后端
   src/lib.rs          OPEN_EXTS 与 argv 文件过滤纯函数、take_startup_files 命令、single-instance 文件转发；插件链只注册 updater 的 check 能力（前端仅授 `updater:allow-check`，下载与安装没接线）
   capabilities/       dialog + fs 权限与路径作用域 + updater:allow-check（只给检查，下载/安装未接线）
 src/                  React 前端
-  store.ts            标签页 / 最近文件 / 主题（zustand）；`openTab` 里有一行按 `tab.path && tab.kind === 'sheet'` gating 的 `prefetchWorkbook`（v0.67：表格的读件请求在开标签那一刻就出门，而不是等编辑器挂载），`closeTab` 里有一行对称的 `dropWorkbook`（关掉的是那枚还没人取的标签就撤掉在途的账）；两处都只调用 `lib/open-prefetch.ts` 而不内联那份字典（判据 A12）
+  store.ts            标签页 / 最近文件 / 主题（zustand）；`openTab` 里有**两行**按 `tab.path && tab.kind === …` gating 的预取（`prefetchWorkbook` 管表格、`prefetchPdf` 管 PDF；v0.67 起是表格那一头，v0.68 把 PDF 那一头接上同一层：读件请求在开标签那一刻就出门，而不是等编辑器挂载），`closeTab` 里有两行对称的撤账（`dropWorkbook`/`dropPdf`，关掉的是那枚还没人取的标签就撤掉在途的账，**撤账跟着标签的格式走**）；两处都只调用 `lib/open-prefetch.ts` 而不内联那份字典，也不在这一层碰读侧实现（判据 S1–S5）
   App.tsx             全局快捷键、拖拽打开、文件关联打开（启动 argv + 单实例转发）、关闭确认、懒加载路由；dev 钩子另加 `__oofFail(cmd, args)`（v0.64：原样发起一次命令调用并把失败时用户会看到的那串话交回，冒烟据此问"写侧真失败怎么说"而不必经过我们自己的读侧）
   index.css           外壳样式、两套主题，以及**纸面与屏幕主题的断钩处**（v0.49）：屏幕上的颜色一律先落进 CSS 变量（`--bg/--panel/--text/--text-2/--border/--accent/--code-bg/--quote-bg`），`@media print` 里一段同时命中 `:root` 与 `:root[data-theme='dark']` 的规则把 `color-scheme` 压回 `light` 并重声明整套纸面调色板（**段必须排在暗色段之后**，同特异度靠源序说话），顺手清掉屏幕辅助（`.fr-hit`/`.fr-active` 的查找命中高亮）；内容自己声明的字面色（段落底纹、单元格底色、幻灯片背景）不经过这条规则，所以照旧上纸；v0.50 又在这里补了 `.doc-content{min-height:0 !important}`——屏幕上那 900px 是打字辅助，矮纸（横向/A5）的可印高度不足它，正文尾巴会被顶成凭空多出的空白一页；**表格的网格线从无条件改为 `.sheet-print-grid` 一类**（v0.51：`printOptions@gridLines` 是打印设置里的一勾，而 Excel 的默认是"没勾就不印"），并新增 `.sheet-print-heading`/`.sheet-print-corner`（行列标题）与 `.sheet-print-band{break-inside:auto}`（一个列带一张表，带内可被分页切开，带与带之间由 `.sheet-print-break` 隔开）；v0.52 再添「页面设置」面板那一份（`.print-pop` 的分组 fieldset、毫米边距格、开关格、分页符 chip，以及 `.print-pop-errs` 与 `.print-pop-notes` 两本账的分色，`--danger` 同时进暗色 token 与 `@media print` 的纸面调色板——面板自己也可能被印出来，规矩照 v0.49 那条「屏幕上的颜色必须先穿过一枚 CSS 变量」）；**v0.59 换掉了 `.sheet-print-table td` 那一整档行盒**：`font-size` 从写死的 `11px` 改成 `var(--oof-print-base-size, 14.67px)`（底数由每张表 `<section>` 上那枚自定义属性说话，括号里那档只是"文件那一层没交代"时的兜底，与 `baseFontPt` 同一个数），`padding` 上下归零、`line-height` 从 1.45 收到 1.25、**`height:18px` 不再写**——底数一动，旧的固定行高就成了多出来的一截（接上文件而仍用旧行盒时 11pt 那份每行 24.98px、被挤成两页），而 1em 的方框又装不住下行墨（td 是 `overflow:hidden`，`line-height:1.0` 那一档在纸上把 p/g/y 那几笔切掉），1.25 × 底数正好落回 Excel 那一档（11pt ⇒ 13.75pt vs Excel 报的 14；14pt ⇒ 17.5 = Excel 报的 17.5）。**这一档行盒是 `PRINT_ROW_BIAS_PX` 的标定条件**：再动 `line-height`/`padding`/把 `height` 写回来，那枚偏置必须重跑实测
   lib/univer.ts       Univer 实例工厂（公式 worker + 八个社区预设：核心/筛选/排序/条件格式/数据验证/查找替换/绘图 + **批注与超链接**（v0.48，超链接的 `urlHandler` 把外链交给系统默认浏览器——桌面上 `window.open` 会开出一个新 WebView 窗口））
@@ -2381,18 +2443,18 @@ src/                  React 前端
   lib/pptx-import.ts  pptx → Deck（JSZip 解包 + OOXML 解析 + 媒体还原）
   lib/pdf-pages.ts    PDF 页面级操作（pdf-lib 覆盖写回）：rotatePagesInPlace / removePagesInPlace（倒序删 + 删空守卫）/ extractPages / mergePdfs / splitPdf，做完由调用方重载
   lib/pdf-geo.ts      显示空间（已套旋转·左上原点）↔ PDF 原始坐标（未旋转·左下原点）双向精确换算：normRot / displaySize / toDisplayRect / fromDisplayRect / toDisplayPoints / fromDisplayPoints + parsePageSpec（`1-3,5` 页码写法）
-  lib/pdf-range.ts    大 PDF 分段读取：PDFDataRangeTransport 子类（≥4MB 才启用、64KB 文件头起手、按 begin 计数投递、abort 置 dead）+ fileSize/readRange，配 Rust 侧 file_len + read_range
+  lib/pdf-range.ts    大 PDF 分段读取：PDFDataRangeTransport 子类（≥4MB 才启用、64KB 文件头起手、按 begin 计数投递、abort 置 dead）+ fileSize/readRange，配 Rust 侧 file_len + read_range；**v0.68 新增 `preparePdfSource(path)`——「这枚 PDF 首屏该怎么读」那次决定的唯一持有者**，返回 `{mode:'range', transport} | {mode:'bytes', bytes}` 两种形状之一（先判闸门再决定读法：过了 4MB 只取文件头，没过才整本读一次，顺序反了就等于把分段件读成整叠字节），外壳的预取与编辑器的自备**共吃这一枚**（阈值 `RANGE_MIN_BYTES` 全场只这一处，判据 R1/R2/R3）
   lib/pdf-password.ts 加密 PDF 那句"要密码"的判据与文案（v0.65，纯函数、零 DOM、Node 直测，这四句话的唯一持有者）：`pwdReason(code)` 把 pdf.js 的 `PasswordResponses` 收成两档（实测只有 `1` 要密码与 `2` 密码不对，**没有第三档**，故未知档一律落 `'need'` 而不许凭编号编出新理由）；`pwdPromptText(reason, attempt)` 管问的那一句——第二回起把「已经试过 N 次」说出来（`attempt - 1` 且下限 1；pdf.js 自己**不封顶**，答错就一直再问，界面上不说用户就没有退出的依据）；`pwdCancelledText()` 是用户自己按取消的那一行，**不带"失败"前缀**（没有失败，只是没往下走）也不挂原始信息（那一句是我们按下去的，不是文件报的）；`PWD_MEMORY_NOTE` 说的是密码的去向（只留内存、关掉标签就没了、不写进任何文件）——面板与状态栏都不自带句子，结构腿 A10 扫的是剥掉注释之后的源文
   lib/pdf-search.ts   全文搜索那一格的文案与"什么时候肯把进度交出去"（v0.66，纯函数、零 DOM、Node 直测，这两件事的唯一持有者）：`findCountText(st, hasQuery)` 按顺序判四档——还在扫就先说扫到第几页（`scanned=0` 那一档页号还没得说，只说「正在搜索…」；有命中时把「第几条/共几条」与进度写在同一句里，因为用户等的是命中数而界面要说的是还在干活），扫完才许说「无匹配」（**这一句只有扫完全程才配说出口**：真机量到旧形状在打字后 ~25ms 就报"没有"，而那是一页都没扫的防抖窗），查询串为空则整格为空（不给凭空的否定）；`shouldPublish(now, lastAt, sinceHits, sincePages)` 是节流的唯一判据（新命中攒够 `SEARCH_PUBLISH_HITS=20` 立刻交、否则按 `SEARCH_PROGRESS_MS=120` 的时间窗交，而 `sincePages === 0` 拦死——一页都没扫就不许交，否则空转也上屏），两个阈值是被真机数定出来的：一趟 700 页全程界面说 **20 句**，每页一句会把主线程点着、全程一句又回到"扫完才说话"的旧形状；`FindStatus` 那一位只存 `scanning` 与 `capped`（命中条数与激活下标跟着 `matches`/`activeIdx` 走，不在这里重复存一份，重复存就会分叉）
   lib/editors.ts      动态 import 的唯一持有者：四类编辑器 + Workspace 外壳各自的「已解析组件表」（peekEditor/loadEditor、peekWorkspace/loadWorkspace），挂载点同步命中即不走 Suspense（v0.36）
   lib/prewarm.ts      首页空闲期预取外壳与编辑器 chunk（App 级，与 lib/editors.ts 共用同一模块 promise）：顺序为 Workspace 外壳 → 按最近文件类型的四个编辑器；实测无收益的实例级/worker 级预热与公式 worker 线程池已删除
   lib/registry.ts     跨组件保存器注册表（Ctrl+S 路由到当前标签）
   lib/open.ts         路径→标签 打开 / 带确认关闭
-  lib/open-prefetch.ts 开标签那一刻就把表格的读件 IPC 发出去（v0.67，纯模块、零 React 零 DOM，所以 Node 可直测）：`prefetchWorkbook(path)` 发一次并留在途字典、`takeWorkbook(path)` **取走即失效**（载荷是几 MB 的对象图，留着就是第二份账而编辑器只要它一次；拿不到就交回 null 让挂载点自己发，**不假设外壳一定先跑**）、`dropWorkbook(path)` 给 `closeTab` 撤账（别让一叠没人要的字节挂在图上）；`keyOf` 按「反斜杠→正斜杠 + 忽略大小写」归一（Windows 的路径写法不止一种，argv 与文件对话框给的分隔符不同，不归一就会让 prefetch 命中不了）；`p.catch(() => {})` **只挡 unhandled rejection 不吞失败**——原样的 rejection 留给真正的读者，由它按 v0.64 那一层说人话（真机冒烟 S6/S7/S8 判的就是这条通道没把归因绕过去）；注释里留着那条把串行归因说死的实测：**发出 `invoke` 后立刻占住主线程 200ms，那次请求在 Resource Timing 里的起点仍是发出那一刻** ⇒ 串行不是 WebView2 的脾气，是发得太晚；只服务表格这一头（PDF 读字节后还要按区间补读，先把整叠字节取回来正好与那条闸门相反；文档/演示慢的是随后的解析而不是读）
+  lib/open-prefetch.ts 开标签那一刻就把表格的读件 IPC 发出去（v0.67，纯模块、零 React 零 DOM，所以 Node 可直测）：`prefetchWorkbook(path)` 发一次并留在途字典、`takeWorkbook(path)` **取走即失效**（载荷是几 MB 的对象图，留着就是第二份账而编辑器只要它一次；拿不到就交回 null 让挂载点自己发，**不假设外壳一定先跑**）、`dropWorkbook(path)` 给 `closeTab` 撤账（别让一叠没人要的字节挂在图上）；`keyOf` 按「反斜杠→正斜杠 + 忽略大小写」归一（Windows 的路径写法不止一种，argv 与文件对话框给的分隔符不同，不归一就会让 prefetch 命中不了）；`p.catch(() => {})` **只挡 unhandled rejection 不吞失败**——原样的 rejection 留给真正的读者，由它按 v0.64 那一层说人话（真机冒烟 S6/S7/S8 判的就是这条通道没把归因绕过去）；注释里留着那条把串行归因说死的实测：**发出 `invoke` 后立刻占住主线程 200ms，那次请求在 Resource Timing 里的起点仍是发出那一刻** ⇒ 串行不是 WebView2 的脾气，是发得太晚；只服务表格这一头（PDF 读字节后还要按区间补读，先把整叠字节取回来正好与那条闸门相反；文档/演示慢的是随后的解析而不是读）**⇒ v0.68 改口：现在是两条通道、三条规矩只写一处**——`put/take/drop` 泛化成 `<T>`，`workbooks`／`pdfs` 各一张表，本轮新增的是调用点而不是第四第五道规矩；PDF 这一头预取的不是整叠字节而是 `preparePdfSource` 那**一次决定**（所以那条"与闸门相反"的顾虑由闸门自己持有而不由这一层猜），表格那头省的是排队的大头（首开 1550→1300ms 一档）而 PDF 这头按发布包 5 趟中位只省 26~70ms（首屏真读的只有 64KB 或几 MB 整本的那一次），另有一条实测留给下一轮：`read_range` 的**累计**耗时在改后涨到 3~4 倍而枚数不变（92/92）、末次出门更早 ⇒ 那是并行度上去了不是活变多；文档/演示照旧不进这一路
   lib/sync.ts         最近文件端到端加密同步（WebCrypto PBKDF2-SHA256 → AES-256-GCM，.oosync 信封）
   lib/update.ts       自动更新的**检测层**（v0.45）：`checkForUpdate()` 动态导入 updater 插件走一次 `check`，任何失败都收敛成 `{state:'failed'}` 不往外抛（抛出去的表现就是"点了没反应"）；`describeError` 按插件 error.rs 的真实字面把"源上没清单/没配端点/非 https/缺本平台条目/签名/base64/日期/连不上"归成中文，认不出的一律原样带出不编原因；`infoOf` 从 `rawJson` 里取自定义字段 `download_page`，只认 http(s) 才给按钮
   lib/fail-msg.ts     用户可见失败的**唯一**归因处（v0.64，纯函数、零 DOM、Node 直测）：`describeFailure` 走一张按"具体在前"排的 12 条判据表（第三方库专属词形 → `os error N` 通用尾巴；**v0.65 补的是 pdf-lib 那一档**——`is encrypted`/`EncryptedPDFError` 说的是"标注与页面管理这层走 pdf-lib，而它不解密 ⇒ 只能看、不能在这里改"，与 pdf.js 那一档"设了口令"分得清清楚楚，后者跟着改口成「刚在密码面板上按了取消，或这一趟没能问到密码」并告诉用户 ↻ 会再问一次——从前那句只能说"没有输密码的地方"，现在真的问过了），`probeOf` 把 `Error` 的 `name` 也拼进匹配串并整串转小写（pdf.js 那类只靠 `name` 分类的档才有得匹配、大写 EOCD 与大写不命中是同一条判据的两面）；三种出法按去处分——`failText`（只出一句中文，给状态栏里那些本就很窄的账目位）、`failDialog`（中文一句 + `（原始信息：…）`，归因没命中时**不重复**原话，同一段话出现两次只会让人以为有两个不同的原因）、`failStatus`（可见那一行是 `prefix: 中文`，换行后挂原话）；`statusText`/`statusTip` 是那枚字符串的两把拆刀，于是"悬停能看原话"不必再多一份状态、也就多不出"文字说 A 而悬停出 B"的分叉；`failRaw` 只给原话（`isTeardown` 用它分辨"关标签拆掉的 transport"与"文件真读不出"）；判据表里每一条命中的都是**真机上量出来的原串**而不是"通常长这样"，表头的注释记着两条实测结论（本机 Windows 那一层已经是中文 ⇒ 真正看不懂的只有第三方库那几档；**路径过长报的是 `os error 3`** 而不是专门的"文件名太长"⇒ 那一句话必须把"太长"也带上）；`known` 那一位的用处是"干净文案一条都不归因"——没有失败就不许造句子，结构腿 D 段判的就是这一条
-  components/         Home（最近文件 + 从模板新建画廊 + 版本号与"检查更新"） / Workspace / SheetEditor（保存按 .xlsx/.ods/.csv 三分流，打开时把读到的规则经门面放回界面并把两侧账目显示在状态栏；**「页面设置」面板（v0.52）**——纸张/方向、六条边距（毫米）、缩放与"缩放到 N 页宽"、六个开关、打印区域与重复标题行列（可「用当前选区」「用选区首行/首列」按门面选区给）、手动分页符（按 Excel 的 `brk@id` 说法：这一行/列自己起新页）、页眉页脚三框 + 六枚格式码 + 奇/偶/首页三版 + **两枚缺省开着的开关（「页眉页脚随文档缩放」「与页边距对齐」，v0.55：勾着＝写 `null` 不声明、取消＝写 `false`，旁注一次说清哪一档我们照 Excel 乘了字号、哪一档两边差一圈）**；「确定」写进 `printRef` 侧通道、「清除这张表的设置」把它整个删掉、面板里的错把确定灰掉，做不到的那几条以账目形式随草稿说在面板上（v0.53 改了语气：页高档与居中已经接线，只剩起始页码真做不到；v0.54 之后偶数页那一版也不再是账——它真的印在偶数页上，面板这几句全部转述 `hfAndPageNumberNotes` 那一份文案）；**导出这一侧多了一段实测循环（v0.53）**——计划里勾了「缩放到 N 页高」或「上下居中」的表才走：建一次 → `measurePrintLayout` 离屏量 → `planSheetFit` 压档/算留白 → 带 `zooms` 重建，最多五趟，定档后把居中留白写回**同一份 DOM** 再交导出；账目分两头记（"压到 27%"那句要说在压它的那一趟、每张表占一格由后趟覆盖前趟，居中的账反过来只在最终缩放那份实测上算数）；DEV 门面钩子随这轮加 `printSet(表名, 载荷|null)`（落笔处＝面板「确定」那一行）与 `printHtml(zooms)`（把**将要上纸的那份 HTML**交出去，让脚本自己挂起来量真实布局）；**v0.57 工作簿默认字体走第三枚侧通道 `defaultFontRef`**（不放 Univer 快照——`IWorkbookData.defaultStyle` 在 core 里零读取、引擎兜回硬编码 Arial 11，而 `wb.save().defaultFont` 实测恒为 `null`）：加载时挂上 `dump.defaultFont`、换标签复位、在 `payloadWithCharts` 那一枚漏斗里回贴，于是存盘与导出 PDF 共吃一份而界面渲染不说谎；**v0.59 只把 DEV 钩子摊宽**（生产行为一个字没动）：`printHtml()` 的返回值多三枚——`defaultFont`（侧通道里那一层本体，冒烟据此分辨"文件说的"与"我们兜的"）、每张计划里的 `basePx`（计划算出的正文底数）、`baseVars`（那份 HTML 里所有 `--oof-print-base-size:<px>` 的含值列表，按张核）；**v0.60 添第四枚侧通道 `sheetFormatRef`**（按表名持有 `SheetFormat`，与前三枚同一脾气：加载时从 `sheets[].sheetFormat` 挂上、换标签复位、改名随 `migrateSheetName` 一起迁、在 `payloadWithCharts` 的漏斗里回贴，且 `if (f && !sheet.sheetFormat)`——快照自己说出来的那一张永远赢）；这一枚与 `defaultFontRef` 方向相反：`IWorksheetData.defaultRowHeight` 在 Univer 里是**活口**（喂了就界面认、而 Excel 根本不认它），所以这里**只收不放**——不喂编辑器也不喂纸面，只为存盘时原样落回；DEV 钩子 `printPlan()` 因此多一枚 `sheetFormats`，冒烟据此问得出"这一层交回了什么"，而结构测试那头的钉是"五个消费点里 `sheetFormat` 出现零次"；**v0.62 只撤两行**——`hasSide` 那枚判定与「ODS 暂不含批注与超链接」那句账目，因为 `.ods` 这两样现在真读得回也写得出，而另三句 ODS 账（图表／三类规则／页面设置）与 CSV 那句照旧立着（结构腿判的就是"撤干净了且只撤了这一句"）；**v0.63 只动两行**——`.ods` 那一路的 `await writeOds(...)` 改成 `writeNotes.push(...(await writeOds(path, payload)))`，于是写侧的账与 xlsx 那头走同一条汇合（`[...lost, ...writeNotes]` → 状态栏 `已保存（第一条，另有 N 条说明）`），另一行是把注释里的例子换成"规则摆不进 OOXML、批注落在被盖住的格上"；拼句的公式、`lost` 那三句 ODS 账与 CSV 那句一个字没动（本轮没有新桥：`sheet-cell-side.ts` 的取与放早就是格式无关的）；**v0.67 只动两行**——挂载点那一句 `readXlsx(tab.path)` 换成 `takeWorkbook(tab.path) ?? readXlsx(tab.path)`（这一趟的 IPC 早在外壳开标签那一刻就发出去了，这里只是把它取来用；取不到——不是从路径开的、或已被别处取走——才自己发一次，**不假设外壳一定先跑**），另一行是那条注释改口（它还写着 v0.35 的"先把 IPC 发出去，实例同时在造"，而现在发得比挂载更早）；dev 下 `React.StrictMode` 的双挂载会让第一趟消费掉 prefetch 而第二趟走自备那一路，于是**开发模式开一次表格标签读到两次件**（真机 S5 量到 `read_xlsx` 的条目 2→4）——这是 dev 独占的形状不是缺陷，判据钉的是"取在前、发在后"那个 `??` 顺序而不是"只发一次"，反过来为 dev 好看而阻塞第二趟就是拿生产行为换开发控制台 / DocEditor（页面设置含分栏/页码格式、分页参考线、分页符、表格与图片上下文工具条、粘贴成图、查找替换面板、字体族·字号、缩进工具条与 Ctrl+]/[、上下标 X²/X₂、表格上下文条的底纹色与竖排对齐（上/中/下）、脚注/尾注（工具栏插入 + 文末分区编辑与定位/删除，打印时文本框换静态块）、版本历史·自动保存、模板 seed、状态栏字数节流；打开 .docx 保真导入优先、mammoth 兜底，保存按 .odoc/.odt/.docx 各自格式原地落盘） / PptEditor / PdfViewer（pdfjs-dist 懒加载，连续多页视口虚拟渲染+Ctrl 缩放+TextLayer 文字选择+全文搜索+缩略图/大纲/标注侧栏+高亮便签与矩形·椭圆·直线·手绘形状（绘制/导入/写回 pdf-lib）+标注编辑（点选/拖移/改色/删除）+「页面」工作区旋转/删除/提取/合并/拆分；≥4MB 走分段读（lib/pdf-range.ts），卸载时 destroy openTask 并 abort transport；**v0.64 四个编辑器与首页的失败出口一律改走 `lib/fail-msg.ts`**——状态栏那一行由 `{status}` 直出换成 `statusText(status)` + `title={statusTip(status)}`（四个渲染点各一处，`PptEditor` 的加载占位有两处分身所以两处都换），原生对话框那一层的 `String(e)` 换成 `failDialog(e)`，账目位里的 `${e instanceof Error ? e.message : String(e)}` 换成 `failText(e)`；`PdfViewer` 除接线外还立了两条行为——三处后台补做（页尺寸／大纲／标注）由"只 `console.error`"改成**先过 `isTeardown` 那道门再占状态栏**（拆标签时的 `Transport destroyed` 不入账，否则每次快速关标签都冒一句凭空的失败），`pageOp` 的定时清除从 `finally` 移到成功那一路（失败那一句留着，三秒就抹等于让用户读不完也悬停不到原话）；**v0.65 加密 PDF 的密码闸门**——`openTask.onPassword` 装在 `await openTask.promise` **之前**（装晚了那份承诺已经拒绝，回调再挂也来不及），回调只做三件事：把 `updatePassword` 存进 `pwdUpdateRef`、把"第几回问"记进 `pwdAttemptRef`、亮面板（判据与文案一律走 `lib/pdf-password.ts`，组件里只负责亮与接线，句子一处都不写）；**闸门绝不自动投密码**（自动投等于替用户猜，结构腿 C2 判这一条）、空串不当密码（喂进去只换来一次重新提问）、取消时**先**记 `pwdCancelledRef` **再**把闸门按下去（错误内容分不出"用户取消"与"没给密码"，这一位只能界面自己留着），于是那一行不带"失败"也不挂原始信息；工具条的 ↻ 是**从第 1 回重新数起**并把取消标记一起清掉（不清的话重试成功后第一次真失败会被归成"用户自己取消的"）；`type=password` 且密码不回显、不在界面上；owner-only 那一件**不问密码**就能看（用户口令为空）而页面级操作当场报得出 pdf-lib 那一句；同一轮补的是一条规矩而不是一处补丁——**「这一趟已经作废」那道门必须打在写任何共享状态之前**，开发模式的双挂载下晚到的 `catch` 会抹掉还活着的那一趟刚亮起来的面板，pdf.js 从此等不到回话，表现是卡在「正在加载…」且没有任何错误（C17/C18 各钉住本轮撞到的两处写点，另外那三句账目仍在，本轮没有新的拆接线）；**v0.66 搜索这一趟改由界面自己记着"在扫"**——查询一变化就标 `scanning:{scanned:0,total}` 并把上一词的命中与激活位**在同一处**清掉（防抖那 200ms 里界面不许回到「无匹配」，也不许拿旧词的第 3 条说新词的事），扫页循环里按 `shouldPublish` 交进度（`setMatches` 与 `setFindStatus` 同交，一句里不许半新半旧），收尾那一句先过作废门再把 `scanning` 清掉；**v0.65 那条"门打在写任何共享状态之前"在这里再兑现一次**：`seq !== searchSeq.current || !aliveRef.current` 那道门排在 `await loadPageText(...)` **之后**、任何 `setState`/ref 写入**之前**（排在 await 之前拦不住晚到的那一趟，排在最后一句就晚了），`aliveRef` 在 setup 里置回 `true`，于是开发模式 `React.StrictMode` 的第二次挂载不被当成已卸载——真机量到换词 1.2s 起那一格的文本零变化（被作废的那趟没能把界面抹回旧样子）；句子一律走 `lib/pdf-search.ts`，组件里不留「无匹配」「正在搜索」的字面（B2/B10 判这一条，而 B10 吃的是剥掉注释之后的源文）；`textPages` 这枚 DEV 钩子由本轮的临时归因**转正为常备观测量**——"扫完全程"只能硬判缓存枚数，把判据建在那句文案上就等于建在实现上）
+  components/         Home（最近文件 + 从模板新建画廊 + 版本号与"检查更新"） / Workspace / SheetEditor（保存按 .xlsx/.ods/.csv 三分流，打开时把读到的规则经门面放回界面并把两侧账目显示在状态栏；**「页面设置」面板（v0.52）**——纸张/方向、六条边距（毫米）、缩放与"缩放到 N 页宽"、六个开关、打印区域与重复标题行列（可「用当前选区」「用选区首行/首列」按门面选区给）、手动分页符（按 Excel 的 `brk@id` 说法：这一行/列自己起新页）、页眉页脚三框 + 六枚格式码 + 奇/偶/首页三版 + **两枚缺省开着的开关（「页眉页脚随文档缩放」「与页边距对齐」，v0.55：勾着＝写 `null` 不声明、取消＝写 `false`，旁注一次说清哪一档我们照 Excel 乘了字号、哪一档两边差一圈）**；「确定」写进 `printRef` 侧通道、「清除这张表的设置」把它整个删掉、面板里的错把确定灰掉，做不到的那几条以账目形式随草稿说在面板上（v0.53 改了语气：页高档与居中已经接线，只剩起始页码真做不到；v0.54 之后偶数页那一版也不再是账——它真的印在偶数页上，面板这几句全部转述 `hfAndPageNumberNotes` 那一份文案）；**导出这一侧多了一段实测循环（v0.53）**——计划里勾了「缩放到 N 页高」或「上下居中」的表才走：建一次 → `measurePrintLayout` 离屏量 → `planSheetFit` 压档/算留白 → 带 `zooms` 重建，最多五趟，定档后把居中留白写回**同一份 DOM** 再交导出；账目分两头记（"压到 27%"那句要说在压它的那一趟、每张表占一格由后趟覆盖前趟，居中的账反过来只在最终缩放那份实测上算数）；DEV 门面钩子随这轮加 `printSet(表名, 载荷|null)`（落笔处＝面板「确定」那一行）与 `printHtml(zooms)`（把**将要上纸的那份 HTML**交出去，让脚本自己挂起来量真实布局）；**v0.57 工作簿默认字体走第三枚侧通道 `defaultFontRef`**（不放 Univer 快照——`IWorkbookData.defaultStyle` 在 core 里零读取、引擎兜回硬编码 Arial 11，而 `wb.save().defaultFont` 实测恒为 `null`）：加载时挂上 `dump.defaultFont`、换标签复位、在 `payloadWithCharts` 那一枚漏斗里回贴，于是存盘与导出 PDF 共吃一份而界面渲染不说谎；**v0.59 只把 DEV 钩子摊宽**（生产行为一个字没动）：`printHtml()` 的返回值多三枚——`defaultFont`（侧通道里那一层本体，冒烟据此分辨"文件说的"与"我们兜的"）、每张计划里的 `basePx`（计划算出的正文底数）、`baseVars`（那份 HTML 里所有 `--oof-print-base-size:<px>` 的含值列表，按张核）；**v0.60 添第四枚侧通道 `sheetFormatRef`**（按表名持有 `SheetFormat`，与前三枚同一脾气：加载时从 `sheets[].sheetFormat` 挂上、换标签复位、改名随 `migrateSheetName` 一起迁、在 `payloadWithCharts` 的漏斗里回贴，且 `if (f && !sheet.sheetFormat)`——快照自己说出来的那一张永远赢）；这一枚与 `defaultFontRef` 方向相反：`IWorksheetData.defaultRowHeight` 在 Univer 里是**活口**（喂了就界面认、而 Excel 根本不认它），所以这里**只收不放**——不喂编辑器也不喂纸面，只为存盘时原样落回；DEV 钩子 `printPlan()` 因此多一枚 `sheetFormats`，冒烟据此问得出"这一层交回了什么"，而结构测试那头的钉是"五个消费点里 `sheetFormat` 出现零次"；**v0.62 只撤两行**——`hasSide` 那枚判定与「ODS 暂不含批注与超链接」那句账目，因为 `.ods` 这两样现在真读得回也写得出，而另三句 ODS 账（图表／三类规则／页面设置）与 CSV 那句照旧立着（结构腿判的就是"撤干净了且只撤了这一句"）；**v0.63 只动两行**——`.ods` 那一路的 `await writeOds(...)` 改成 `writeNotes.push(...(await writeOds(path, payload)))`，于是写侧的账与 xlsx 那头走同一条汇合（`[...lost, ...writeNotes]` → 状态栏 `已保存（第一条，另有 N 条说明）`），另一行是把注释里的例子换成"规则摆不进 OOXML、批注落在被盖住的格上"；拼句的公式、`lost` 那三句 ODS 账与 CSV 那句一个字没动（本轮没有新桥：`sheet-cell-side.ts` 的取与放早就是格式无关的）；**v0.67 只动两行**——挂载点那一句 `readXlsx(tab.path)` 换成 `takeWorkbook(tab.path) ?? readXlsx(tab.path)`（这一趟的 IPC 早在外壳开标签那一刻就发出去了，这里只是把它取来用；取不到——不是从路径开的、或已被别处取走——才自己发一次，**不假设外壳一定先跑**），另一行是那条注释改口（它还写着 v0.35 的"先把 IPC 发出去，实例同时在造"，而现在发得比挂载更早）；dev 下 `React.StrictMode` 的双挂载会让第一趟消费掉 prefetch 而第二趟走自备那一路，于是**开发模式开一次表格标签读到两次件**（真机 S5 量到 `read_xlsx` 的条目 2→4）——这是 dev 独占的形状不是缺陷，判据钉的是"取在前、发在后"那个 `??` 顺序而不是"只发一次"，反过来为 dev 好看而阻塞第二趟就是拿生产行为换开发控制台 / DocEditor（页面设置含分栏/页码格式、分页参考线、分页符、表格与图片上下文工具条、粘贴成图、查找替换面板、字体族·字号、缩进工具条与 Ctrl+]/[、上下标 X²/X₂、表格上下文条的底纹色与竖排对齐（上/中/下）、脚注/尾注（工具栏插入 + 文末分区编辑与定位/删除，打印时文本框换静态块）、版本历史·自动保存、模板 seed、状态栏字数节流；打开 .docx 保真导入优先、mammoth 兜底，保存按 .odoc/.odt/.docx 各自格式原地落盘） / PptEditor / PdfViewer（pdfjs-dist 懒加载，连续多页视口虚拟渲染+Ctrl 缩放+TextLayer 文字选择+全文搜索+缩略图/大纲/标注侧栏+高亮便签与矩形·椭圆·直线·手绘形状（绘制/导入/写回 pdf-lib）+标注编辑（点选/拖移/改色/删除）+「页面」工作区旋转/删除/提取/合并/拆分；≥4MB 走分段读（lib/pdf-range.ts），卸载时 destroy openTask 并 abort transport；**v0.64 四个编辑器与首页的失败出口一律改走 `lib/fail-msg.ts`**——状态栏那一行由 `{status}` 直出换成 `statusText(status)` + `title={statusTip(status)}`（四个渲染点各一处，`PptEditor` 的加载占位有两处分身所以两处都换），原生对话框那一层的 `String(e)` 换成 `failDialog(e)`，账目位里的 `${e instanceof Error ? e.message : String(e)}` 换成 `failText(e)`；`PdfViewer` 除接线外还立了两条行为——三处后台补做（页尺寸／大纲／标注）由"只 `console.error`"改成**先过 `isTeardown` 那道门再占状态栏**（拆标签时的 `Transport destroyed` 不入账，否则每次快速关标签都冒一句凭空的失败），`pageOp` 的定时清除从 `finally` 移到成功那一路（失败那一句留着，三秒就抹等于让用户读不完也悬停不到原话）；**v0.65 加密 PDF 的密码闸门**——`openTask.onPassword` 装在 `await openTask.promise` **之前**（装晚了那份承诺已经拒绝，回调再挂也来不及），回调只做三件事：把 `updatePassword` 存进 `pwdUpdateRef`、把"第几回问"记进 `pwdAttemptRef`、亮面板（判据与文案一律走 `lib/pdf-password.ts`，组件里只负责亮与接线，句子一处都不写）；**闸门绝不自动投密码**（自动投等于替用户猜，结构腿 C2 判这一条）、空串不当密码（喂进去只换来一次重新提问）、取消时**先**记 `pwdCancelledRef` **再**把闸门按下去（错误内容分不出"用户取消"与"没给密码"，这一位只能界面自己留着），于是那一行不带"失败"也不挂原始信息；工具条的 ↻ 是**从第 1 回重新数起**并把取消标记一起清掉（不清的话重试成功后第一次真失败会被归成"用户自己取消的"）；`type=password` 且密码不回显、不在界面上；owner-only 那一件**不问密码**就能看（用户口令为空）而页面级操作当场报得出 pdf-lib 那一句；同一轮补的是一条规矩而不是一处补丁——**「这一趟已经作废」那道门必须打在写任何共享状态之前**，开发模式的双挂载下晚到的 `catch` 会抹掉还活着的那一趟刚亮起来的面板，pdf.js 从此等不到回话，表现是卡在「正在加载…」且没有任何错误（C17/C18 各钉住本轮撞到的两处写点，另外那三句账目仍在，本轮没有新的拆接线）；**v0.66 搜索这一趟改由界面自己记着"在扫"**——查询一变化就标 `scanning:{scanned:0,total}` 并把上一词的命中与激活位**在同一处**清掉（防抖那 200ms 里界面不许回到「无匹配」，也不许拿旧词的第 3 条说新词的事），扫页循环里按 `shouldPublish` 交进度（`setMatches` 与 `setFindStatus` 同交，一句里不许半新半旧），收尾那一句先过作废门再把 `scanning` 清掉；**v0.65 那条"门打在写任何共享状态之前"在这里再兑现一次**：`seq !== searchSeq.current || !aliveRef.current` 那道门排在 `await loadPageText(...)` **之后**、任何 `setState`/ref 写入**之前**（排在 await 之前拦不住晚到的那一趟，排在最后一句就晚了），`aliveRef` 在 setup 里置回 `true`，于是开发模式 `React.StrictMode` 的第二次挂载不被当成已卸载——真机量到换词 1.2s 起那一格的文本零变化（被作废的那趟没能把界面抹回旧样子）；句子一律走 `lib/pdf-search.ts`，组件里不留「无匹配」「正在搜索」的字面（B2/B10 判这一条，而 B10 吃的是剥掉注释之后的源文）；`textPages` 这枚 DEV 钩子由本轮的临时归因**转正为常备观测量**——"扫完全程"只能硬判缓存枚数，把判据建在那句文案上就等于建在实现上；**v0.68 只动两行**——加载那一路的 `await createRangeTransport(path)` 换成 `const src = (await takePdf(path)) ?? (await preparePdfSource(path))`（外壳已在开标签那一刻把那次决定连同要读的字节发出去了，这里只是取来用；取不到就自己发，**不假设外壳一定先跑**），随后 `getDocument` 按 `src.mode` 分支，于是这一层**不再自己判闸门**（V1/V2/V4 钉的就是这三件事）；另一行是那条注释改口（它还写着"大文件只喂文件头、小的整本读"的选法，而现在选法在 `preparePdfSource` 那一处）。次序上有一条诚实的代价：自备那一路的读现在排在 `if (disposed) return` **之前**（闸门单一持有的后果），而**"写共享状态之前那道门"的位置一个字没动**（V3，v0.65 那条规矩在这里继续成立——`rangeModeRef.current = src.mode === 'range'` 仍排在门之后））
 scripts/              copy-pdfjs-assets.mjs（dev/build 前复制 cmaps/标准字体到 public/pdfjs） /
                       updater-release.mjs（发版：开 createUpdaterArtifacts 本机建签名包 → 读回真 .sig 与产物 →
                       出带三平台键的 latest.json → 打印要上传的清单；私钥只走子进程环境变量，`pnpm release:updater`）
@@ -2404,7 +2466,7 @@ scripts/              copy-pdfjs-assets.mjs（dev/build 前复制 cmaps/标准�
 保真导入器抛错或拆不出块时回退 `mammoth 正文 + zip 直读页眉页脚/批注/sectPr`（v0.37）；`.odt` 走 `lib/odt.ts` 双向；
 保存按标签扩展名分流——新建文档存 `.odoc` JSON（含 meta）、`.odt` 与 `.docx` 标签各自格式原地写回（导出走 docx/odt 链路）。
 演示文件流：`pptx → JSZip 解包 OOXML → Deck 模型 → 编辑器`；保存为 `.opd` JSON 或经 pptxgenjs 导出 pptx。
-PDF 文件流：查看 `pdf 磁盘 → 小于 4MB 整本 readBytes / 大于 4MB 经 file_len + read_range 分段喂给 pdf.js（首屏只取 64KB 文件头）→ pdfjs-dist（worker + canvas）；设了打开密码的那一档由界面上的密码面板拦住（v0.65：`openTask.onPassword` 装在 `await openTask.promise` 之前，闸门只把用户按键交回的那一串投进去，密码只留在这次会话的内存里、不写盘）；全文搜索 `逐页 getTextContent 的页文本缓存（loadPageText，跨查询共用——换一个词重扫只需 234ms，而第一次冷扫 700 页要 1.9~2.4s，钱在 pdf.js 的逐页往返上、每页的 toLowerCase+indexOf 全场只花 5ms，并行取页实测只省 1.3× 故不做）→ 串行扫全程、命中上限 500（撞到就说「500+」不说总数），而**"这一趟在不在扫"由界面自己记着**（v0.66：查询一变化就标 `scanning`，进度按 `shouldPublish` 的时间窗与新命中数交，「无匹配」只有扫完全程才说得出）；四档文案与那两条节流判据都在 lib/pdf-search.ts，Rust 不参与这一趟` ；标注 `选区高亮/便签/拖拽画的矩形·椭圆·直线·手绘 → 内存模型（rects[0] 包围盒 + polys 几何）→ Ctrl+S 时 pdf-lib 低层写 Annotation 字典回原文件`；文档导出 `@media print 排版（分栏/分页符/避免跨页折断）+ @page margin box 逐页页眉页脚页码 + 打印态纸面调色板（`color-scheme` 压回 light、主题色经变量换掉，v0.49）→ Rust export_pdf（PrintSettings 纸张与四边距；CSS `@page` 也真的说话，所以每条作业自己声明完整，见 v0.50）→ WebView2 PrintToPdf 落盘`；演示导出 `Deck → createRoot 离屏挂载 StaticSlide 分页 → 同上`；表格导出 `Univer 快照 → WorkbookPayload → lib/sheet-print-setup.ts 把那张「页面设置」翻成打印计划（纸面/四边距/缩放/打印区域/重复标题行列/手动分页符/列带/页眉页脚的 @page margin box）→ lib/sheet-print.ts 自绘 HTML 网格 → 同上（canvas 抓不到故走数据侧重排；计划同时喂 PrintToPdf 的 PrintSettings，两条通道同一组数，v0.51。**勾了「缩放到 N 页高」或「上下居中」时这份 HTML 先建后量再重建（v0.53）**——行高不在载荷里（默认行高由字体现算、声明过的只是下限、`zoom` 之后又不线性），只能离屏量真排版（`lib/sheet-print-measure.ts` + `pdfprint.measurePrintLayout`），`fitToPagesTallZoom` 按实测逐带贪心分页压出 1% 一档的缩放、`verticalCenterPadPx` 只在装得下的那一页给上留白，量稳了才把留白写回同一份 DOM 交导出）。**正文与页眉的底数吃同一层**（v0.59）：工作簿默认字体（`xl/styles.xml` 的 `cellXfs[0]→fonts`）一次读进载荷，`baseFontPt` 一处解析，页眉由 `@page` 的 margin box 乘出去、正文落在每张表 `<section>` 的 `--oof-print-base-size` 上被 `td` 的 `font-size` 吃掉，没说话时两处同落 11pt 那一档兜底）`；页面管理 `内存标注先写回 → pdf-lib 旋转/删除/提取/合并/拆分覆盖写回 → 重载并从 /Annots 重新导入标注（旋转页坐标按 /Rotate 经 pdf-geo.ts 换算）`。
+PDF 文件流：查看 `pdf 磁盘 → 小于 4MB 整本 readBytes / 大于 4MB 经 file_len + read_range 分段喂给 pdf.js（首屏只取 64KB 文件头）→ pdfjs-dist（worker + canvas）；**这"首屏该怎么读"的一次决定连同要读的那一点字节，也在 shell 的 `openTab` 那一刻就出门**（v0.68：闸门由 `preparePdfSource` 单一持有，预取的因此不是整叠字节而是 `{mode:'range'|'bytes'}` 那两种形状之一；发布包 5 趟中位——改前每趟排在 PdfViewer 的 chunk 备好之后 17~24ms 才出门、改后每趟提前到它之前 4~10ms，首画 632→579／778→708／992→966ms，而那一次读自身耗时没动（10→9／40→39／3→4ms）⇒ 省的仍是排队；分段件的 `read_range` 枚数两头都是 92 ⇒ 这条通道不新增读，只是提前已有的那几枚）`；设了打开密码的那一档由界面上的密码面板拦住（v0.65：`openTask.onPassword` 装在 `await openTask.promise` 之前，闸门只把用户按键交回的那一串投进去，密码只留在这次会话的内存里、不写盘）；全文搜索 `逐页 getTextContent 的页文本缓存（loadPageText，跨查询共用——换一个词重扫只需 234ms，而第一次冷扫 700 页要 1.9~2.4s，钱在 pdf.js 的逐页往返上、每页的 toLowerCase+indexOf 全场只花 5ms，并行取页实测只省 1.3× 故不做）→ 串行扫全程、命中上限 500（撞到就说「500+」不说总数），而**"这一趟在不在扫"由界面自己记着**（v0.66：查询一变化就标 `scanning`，进度按 `shouldPublish` 的时间窗与新命中数交，「无匹配」只有扫完全程才说得出）；四档文案与那两条节流判据都在 lib/pdf-search.ts，Rust 不参与这一趟` ；标注 `选区高亮/便签/拖拽画的矩形·椭圆·直线·手绘 → 内存模型（rects[0] 包围盒 + polys 几何）→ Ctrl+S 时 pdf-lib 低层写 Annotation 字典回原文件`；文档导出 `@media print 排版（分栏/分页符/避免跨页折断）+ @page margin box 逐页页眉页脚页码 + 打印态纸面调色板（`color-scheme` 压回 light、主题色经变量换掉，v0.49）→ Rust export_pdf（PrintSettings 纸张与四边距；CSS `@page` 也真的说话，所以每条作业自己声明完整，见 v0.50）→ WebView2 PrintToPdf 落盘`；演示导出 `Deck → createRoot 离屏挂载 StaticSlide 分页 → 同上`；表格导出 `Univer 快照 → WorkbookPayload → lib/sheet-print-setup.ts 把那张「页面设置」翻成打印计划（纸面/四边距/缩放/打印区域/重复标题行列/手动分页符/列带/页眉页脚的 @page margin box）→ lib/sheet-print.ts 自绘 HTML 网格 → 同上（canvas 抓不到故走数据侧重排；计划同时喂 PrintToPdf 的 PrintSettings，两条通道同一组数，v0.51。**勾了「缩放到 N 页高」或「上下居中」时这份 HTML 先建后量再重建（v0.53）**——行高不在载荷里（默认行高由字体现算、声明过的只是下限、`zoom` 之后又不线性），只能离屏量真排版（`lib/sheet-print-measure.ts` + `pdfprint.measurePrintLayout`），`fitToPagesTallZoom` 按实测逐带贪心分页压出 1% 一档的缩放、`verticalCenterPadPx` 只在装得下的那一页给上留白，量稳了才把留白写回同一份 DOM 交导出）。**正文与页眉的底数吃同一层**（v0.59）：工作簿默认字体（`xl/styles.xml` 的 `cellXfs[0]→fonts`）一次读进载荷，`baseFontPt` 一处解析，页眉由 `@page` 的 margin box 乘出去、正文落在每张表 `<section>` 的 `--oof-print-base-size` 上被 `td` 的 `font-size` 吃掉，没说话时两处同落 11pt 那一档兜底）`；页面管理 `内存标注先写回 → pdf-lib 旋转/删除/提取/合并/拆分覆盖写回 → 重载并从 /Annots 重新导入标注（旋转页坐标按 /Rotate 经 pdf-geo.ts 换算）`。
 
 ## 开发
 
@@ -2682,10 +2744,30 @@ cargo check        # Rust 后端检查（在 src-tauri 下）
       的长任务）仍排在 Univer 建实例之前、也就是仍在首帧的关键路径上**；要再省就得把建实例也提到外壳，
       而它需要真实 DOM 容器（本轮没动，也不是免费），另需查清"空闲预热（`lib/prewarm.ts`）到底有没有把 chunk 备好"——
       预热与本轮的 prefetch 是**两条互不知情的通道**，两者在 Resource Timing 里的顺序会互相挪动，本轮没有判据
-- [ ] **在途通道只有一条，而首开要读的东西不止一件**：`.ods`／`.csv`／`.xls` 同走这一条（它们吃同一枚
-      `read_xlsx` 命令、由 Rust 按后缀分流），但**PDF 与文档/演示仍在挂载点才发**——理由是量出来的
-      （PDF 读字节后还要按区间补读，先把整叠字节取回来正好与那条分段闸门相反；文档/演示慢的是随后的解析而不是读），
-      真要覆盖 PDF 得先决定"分段那一头谁先动"（`file_len` 与首 64KB 是可以 prefetch 的两件小事）
+      （v0.68 依旧没有：PDF 那一头的 A/B 判的是"读件排在 chunk 之前还是之后"，不是"预热有没有把 chunk 备好"）
+- [ ] **PDF 这一头的 chunk 取与求值也仍排在首帧关键路径上**：改后 579／708／966ms 里，`PdfViewer` 那块 chunk 的
+      下载与顶层求值还是在最前，预取只把"读"这一件叠了进去；要再省就得连 pdf.js 的 `getDocument` 也提到外壳，
+      而它需要真实 DOM 容器（与上面表格那一头是同一个未决项，不是两处独立的账）
+- [ ] **分段件首屏那 92 枚 `read_range` 仍是 pdf.js 自己的切分节奏**：预取把首块 64KB 提前了，
+      而**首块之后的区间要等 `getDocument` 起来才开始**（要连它们也提前就得自己按页预取，不是免费的）；
+      另有一条观测量留给下一轮当解释用：改后 `read_range` 的**累计**耗时涨到改前的 3~4 倍而枚数不变（92/92）、
+      末次出门反而更早 ⇒ 那是并行度上去了，不是活变多——不写清就会被读成"预取让读变慢"
+- [ ] **发布包 A/B 腿的两条量具纪律（本轮各撞一次）**：① **采样必须严格串行**——`--remote-debugging-port=9222`
+      是全局单端口，四份 probe 并行发出去时后起的实例抢不到端口而四个 CDP 客户端全连到同一个页面，
+      于是四份记录**逐字相同**、12 页的小件报出 1600 枚 canvas（"两份数据一模一样"要当成腿坏了读，不是当成"没有差"读）；
+      ② **判据要判顺序而不是判绝对时刻**——本轮 3 趟初量按"出门时刻的绝对毫秒差"把两枚夹具判成 −2/−16ms，
+      按 v0.36 那条"无收益即删"就该 revert；加到每边 5 趟并换成符号判据（排在 chunk 备好之前/之后）之后 30/30 趟一致。
+      绝对差是被外壳 bundle 变大、`openTab` 自己往后漂二三十毫秒吃掉的，而那一截漂移与本轮无关
+- [x] **在途通道只有一条，而首开要读的东西不止一件**（v0.68 把 PDF 这一头接上了）：`.ods`／`.csv`／`.xls` 同走
+      表格那一条（它们吃同一枚 `read_xlsx` 命令、由 Rust 按后缀分流），**PDF 现在是第二条通道**——
+      `store.openTab` 里加一行按 `tab.kind === 'pdf'` gating 的 `prefetchPdf`，`PdfViewer` 加载那一路换成
+      `takePdf(path) ?? preparePdfSource(path)`；而它预取的是**「首屏该怎么读」那次决定**而不是整叠字节，
+      所以上一轮那句"先把整叠字节取回来正好与那条分段闸门相反"不再是拦路的理由（闸门由 `preparePdfSource`
+      单一持有，外壳不猜）；`put/take/drop` 泛化成 `<T>`，两张表共用同一段实现（本轮没新增规矩，只新增调用点）；
+      21 条结构判据 + 14 枚变异 + 25 断言真机冒烟 + A/B 腿 22 断言全绿，收益按发布包 5 趟中位是
+      **首画省 26~70ms**（表格那一头是 250ms 一档，两头不该按同一个期待比）
+- [ ] **文档/演示仍在挂载点才发**：理由是量出来的而不是顺手的（它们的字节读得快，慢的是随后的解析，
+      提前读字节省不出什么）——但若下一轮动 docx/pptx 的解析（挪进 Rust 或 worker），这一条要重新量
 - [ ] **dev 下开一次表格标签读到两次件**（真机 S5 量到 `read_xlsx` 的 Resource Timing 条目 2→4）：
       `React.StrictMode` 的双挂载里第一趟消费掉 prefetch、第二趟走自备那一路——**这是 dev 独占的形状不是缺陷**
       （挂载点写的是"取不到就自己发"，发布包只有一次挂载而那次必然取得到），但**首开耗时在 dev 上因此不可与 release 比**；
