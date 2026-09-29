@@ -48,6 +48,7 @@ import { FindReplace, frPluginKey, activeIndexOf } from '../lib/find-replace'
 import { docTemplate } from '../lib/templates'
 import { odtToHtml, prosemirrorToOdtBytes } from '../lib/odt'
 import { registerSaver } from '../lib/registry'
+import { failDialog, failStatus, statusText, statusTip } from '../lib/fail-msg'
 
 interface Props {
   tab: Tab
@@ -387,7 +388,7 @@ function DocEditor({ tab }: Props) {
         markDirty(tab.id, false)
       } catch (e) {
         console.error(e)
-        setStatus(`加载失败: ${e instanceof Error ? e.message : String(e)}`)
+        setStatus(failStatus(e, '加载失败'))
       }
     })()
     return () => {
@@ -423,7 +424,7 @@ function DocEditor({ tab }: Props) {
       setStatus('已保存')
       setTimeout(() => setStatus(''), 1500)
     } catch (e) {
-      await message(String(e), { title: '保存失败', kind: 'error' })
+      await message(failDialog(e), { title: '保存失败', kind: 'error' })
     }
   }
 
@@ -437,7 +438,7 @@ function DocEditor({ tab }: Props) {
       setStatus('已保存（docx）')
       setTimeout(() => setStatus(''), 1500)
     } catch (e) {
-      await message(String(e), { title: '导出 docx 失败', kind: 'error' })
+      await message(failDialog(e), { title: '导出 docx 失败', kind: 'error' })
     }
   }
 
@@ -450,7 +451,7 @@ function DocEditor({ tab }: Props) {
       setStatus('已保存（odt）')
       setTimeout(() => setStatus(''), 1500)
     } catch (e) {
-      await message(String(e), { title: '导出 odt 失败', kind: 'error' })
+      await message(failDialog(e), { title: '导出 odt 失败', kind: 'error' })
     }
   }
 
@@ -503,7 +504,7 @@ function DocEditor({ tab }: Props) {
       setTimeout(() => setStatus(''), 1500)
     } catch (e) {
       setStatus('')
-      await message(String(e), { title: '导出 PDF 失败', kind: 'error' })
+      await message(failDialog(e), { title: '导出 PDF 失败', kind: 'error' })
     }
   }
 
@@ -524,7 +525,7 @@ function DocEditor({ tab }: Props) {
       const mime = ext === 'svg' ? 'image/svg+xml' : ext === 'jpg' || ext === 'jpeg' ? 'image/jpeg' : `image/${ext}`
       editor.chain().focus().setImage({ src: `data:${mime};base64,${btoa(bin)}` }).run()
     } catch (e) {
-      await message(String(e), { title: '插入图片失败', kind: 'error' })
+      await message(failDialog(e), { title: '插入图片失败', kind: 'error' })
     }
   }
 
@@ -795,7 +796,11 @@ function DocEditor({ tab }: Props) {
         {btn('历史版本', () => setHistOpen((v) => !v), histOpen, '会话内快照：每 60 秒自动留存，可一键恢复')}
         {btn('打印 / PDF', () => window.print(), false, '调用系统打印，可选择另存为 PDF')}
         {btn('导出 PDF', exportPdf, false, 'WebView2 原生 PrintToPdf：按打印样式矢量输出，含高亮底色')}
-        {status && <span className="editor-status">{status}</span>}
+        {status && (
+          <span className="editor-status" title={statusTip(status)}>
+            {statusText(status)}
+          </span>
+        )}
         {!status && autoSavedAt && (
           <span className="editor-status">已自动保存 {autoSavedAt.toLocaleTimeString()}</span>
         )}

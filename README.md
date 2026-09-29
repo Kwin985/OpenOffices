@@ -1989,6 +1989,71 @@ accounts 通道**（`Vec<String>` → `invoke<string[]>` → `writeNotes` → `[
   本轮**没核查**（只说 ODS 这一头），第三方 ODF 应用仍缺位（本机无 LibreOffice/OpenOffice，Excel 16.0 打不开 `.ods`），
   新开的未勾项见路线图
 
+## 失败也说人话：用户可见的每一个出口归成中文一句，原话退到悬停里（v0.64）
+
+本轮**不加功能**，动的是"失败的时候它怎么说"。此前几十轮把读侧写侧都通了账，而用户真撞上失败时看到的仍是
+第三方库的原串——`无法打开文件: Xls error: Cfb error: Invalid OLE (17 bytes is too small, signature D6 07... invalid,
+not an office document?)`、`Can't find end of central directory : is this a zip file ? ...`。这些话对我们等于答案，
+对用户等于噪音。起点是那条支配本轮的判断：「把已经做的功能做易用」——而**报不出原因的失败是最贵的一类不易用**：
+用户会照着"文件坏了"去重做一遍，而真原因只是"后缀被手动改过"。
+
+- **本轮唯一的架构决定：一条字符串带两行，而不是给四个编辑器各加一份状态**。`failStatus` 交出
+  `加载失败: {中文一句}\n{原话}`，渲染点用 `statusText` 取可见那一行、`statusTip` 取换行后那一段（`title`）。
+  之所以要塞进同一枚字符串：状态栏本来就只有 `status` 一维，为"悬停能看原话"再各加一份状态，
+  就多出一条**"文字说 A 而悬停出 B"的新分叉**——这一类分叉在前几轮是被当缺陷修的，不是新加的选项
+- **归因表 11 条，按"具体在前"排**：先按第三方库的专属词形命中（calamine / rust zip / JSZip / cfb / pdf.js /
+  `JSON.parse`），落到后面的才是 `os error N` 这类通用尾巴；`probeOf` 把 `Error` 的 **`name` 也拼进匹配串**
+  （pdf.js 那类只靠 `name` 分类的档才有得匹配），且整串转小写（`Could not find EOCD` 与大写同判）。
+  两条纪律都不是本轮新立的：**文案只写在这一处**（先例 v0.54「纸上账目的文案只写一处」——四个编辑器与首页只调
+  `failText`/`failDialog`/`failStatus`，否则同一件事在表格上叫「被占用」、在文档上叫「拒绝访问」就分叉了）、
+  **认不出来的原样带出，不编原因**（先例 v0.45 的更新通道：猜错原因比不说更糟，用户会照着不存在的理由去折腾）
+- **前置实测改掉了当初设想的两条**（判据表里每一条命中的都是**真机上量出来的原串**，不是按"通常长这样"写的）：
+  ① Windows 那一层**本机已经是中文**——`拒绝访问。 (os error 5)`、`另一个程序正在使用此文件，进程无法访问。 (os error 32)`、
+  `系统找不到指定的文件。 (os error 2)`，所以真正看不懂的只有括号前那截第三方库的话；
+  ② **路径过长报的是 `os error 3`**（"系统找不到指定的路径"）而不是专门的"文件名太长"，
+  于是那一句话必须把"太长"也带上（Windows 一般限 260 字符）——只说"目录不存在"会把人引去建目录
+- **三种不同的失败不能挤成一句话**，这一条钉成判据：`os error 32`（被别的程序开着，关掉那边再存）与 `os error 5`
+  （没权限／只读／那本来是个文件夹）分两档，`os error 2` 与 `3` 分两档，EOCD 与 `Cfb error` 分两档，
+  pdf.js 的"结构读不出"与"设了口令"分两档（后者要说的是**我们的查看器还没有输密码的地方**，不是文件坏了）
+- **干净文案一条都不归因**：归因表不许变成"看谁都想解释一番"的说明书——`已保存`、`已复制 3 行`这类没有失败的
+  字符串走 `describeFailure` 只能得到 `known: false`，于是 `failStatus` 不拼中文、`failDialog` 不重复原话
+  （同一段话出现两次只会让人以为有两个不同的原因）。结构腿 D 段判的就是这一条
+- **PDF 那三处后台副作用本轮才开始说话**（页尺寸预读／大纲／标注导入）：它们从前只 `console.error`，
+  于是侧栏空着而用户不知道为什么空。新立的 `isTeardown` 把"**Transport destroyed**"（用户已经把这页关掉了 ⇒ 不入账）
+  与"文件真的读不出"（要说）分开——不分就会在每次快速关标签时冒出一句凭空的失败。
+  同一条分寸用在别处：`failStatus` 的 `prefix` 交调用方给（`页尺寸读取失败`/`大纲读取失败`/`标注读取失败`/`渲染失败`），
+  归因说的是**原因**而**地点由调用方说**，这样表格里不必为四个场景各写一句
+- **页面级操作的失败那一句不定时清除**：`pageOp` 原来在 `finally` 里一律 `setTimeout(setStatus(''), 3000)`，
+  于是失败文案也三秒就没了——**三秒后抹掉等于让用户读不完，也悬停不到原话**（原话才是提 issue 时唯一能贴给我们的东西）。
+  现在成功那一路清、失败那一路留着；`PptEditor` 的加载占位（它有两处分身）与四个编辑器的状态栏同一套拆行
+- **覆盖的出口（28 处）**：四个编辑器 21 处（加载 4、保存与导出 9、插图与插图表 2、规则还原上状态栏那一句 1、
+  PDF 那一头 5＝渲染 + 三处后台补做 + 页面级操作那一条被四个标签名共用）+ 首页同步导入导出 2 句 +
+  `ole` 嵌入体解不开 2 句 + `sheet-rules` 三类规则还原 3 句；`App.tsx` 另加一枚 dev 钩子 `__oofFail(cmd, args)`，
+  让冒烟脚本能原样发起一次命令调用、拿回**用户会看到的那串话**（本轮判据不吃我们自己的读侧，只吃 DOM 上真渲染出来的那一行）
+- **真机腿量到的都是只有真机能教的**（51 断言，全落在 DOM 的 `textContent` + `title` 这一对上）：
+  十件坏件各读出中文一句、悬停里原话还在、可见那一行既没有换行也没有英文尾巴；写侧两档（只读文件的 `os error 5`
+  与 PowerShell 拿独占句柄占住的 `os error 32`）先按路径找回标签、用 `runOp([1],'rotate')` 走真按钮同一条 `opRotate`，
+  再判 3.8 秒后那句**还在**；两条对照件（干净件与好表）判"不许凭空记账"；**原生对话框这一轮第一次成为判据而不是打印**——
+  标题为「保存失败」的窗口按 `EnumWindows` 数得出（`Get-Process MainWindowTitle` 里根本没有它），
+  且**不阻塞 CDP**（对话框立着的时候 `1+1` 照样回 2）
+- **量具自己栽的四次，每一次都像产品坏了**：① 编辑器挂载前的占位与加载中的初始 status **都是**「正在加载…」，
+  按"状态栏有字"判"读完了"会在第一拍返回，十枚坏件全读到占位文案（本轮第一版就这么假失败了一整轮）；
+  ② `__oofSheetByTab` 是 `??=` 的字典、关掉标签不删条目，只数键长会把上一轮的残留当成读完了 ⇒ 表格按**当前标签 id** 取；
+  ③ **vite 会发一份陈旧的 transform 模块**——改完 `SheetEditor.tsx` 后页面里那份还是旧的（有 `failStatus`、没有 `statusText`），
+  6 条失败看着像接线没做，其实是缓存（`touch` + `Page.reload(ignoreCache)` 才回得来）；
+  这一趟反过来成为一条**没计划到的变异检查**：它造出的正是这条腿要找的失败签名（可见行带 `\n`、悬停为空）；
+  ④ 原生对话框**关不掉**（SendKeys 与 `AppActivate` 静默无效），要靠 `PostMessage(WM_CLOSE)` 按 hwnd 发，
+  且判据改成按**计数增量**写——本机可能被上一轮留下同标题窗口
+- **变异检查证明归因表会响**（结构腿 81 断言里的一条条假例）：拆掉四个编辑器的拆行接线各打 FAIL 且副作用面说清、
+  首页退回裸串打 2 条、另两处账目退回裸串打 2 条、把判据表抄一份到调用方打 1 条、抹掉 `isTeardown` 那道门打 1 条
+- **验证（四腿 + 编译）**：**前端结构测试 81 断言 / 真失败 0**；**CDP 真机冒烟 51 断言 / 真失败 0、页面异常 0 条**；
+  `cargo test --lib` **97 通过 / 0 失败 / 11 ignored**（与 v0.63 同一份基线——**Rust 本轮一个字没动**，
+  本轮全在前端那一层）；+ tsc 与 `pnpm build` 绿（2.37s）——四腿都在**版本号 bump 之后**复跑过一遍
+  （`Cargo.toml`/`tauri.conf.json` 一动就重启 app，复跑真机腿是这一条老规矩）
+- **本轮没动的，量出来记着**：只测了本机**中文** OS 的消息，英文/其他语言机器上 `os error` 括号前那截会是英文
+  （判据靠编号，不受影响，但"原话是否已经可读"这一条没覆盖）；写侧三种前缀不统一（`保存失败`/`ODS 写入失败`/`无法写入`）；
+  PDF 设了口令这件事现在只**说得出**、还没有输密码的入口；toast 体系未建（失败仍寄生在状态栏这一枚字符串上）
+
 ## 性能（v0.3）
 
 
@@ -2052,11 +2117,11 @@ src-tauri/            Rust 后端
   capabilities/       dialog + fs 权限与路径作用域 + updater:allow-check（只给检查，下载/安装未接线）
 src/                  React 前端
   store.ts            标签页 / 最近文件 / 主题（zustand）
-  App.tsx             全局快捷键、拖拽打开、文件关联打开（启动 argv + 单实例转发）、关闭确认、懒加载路由
+  App.tsx             全局快捷键、拖拽打开、文件关联打开（启动 argv + 单实例转发）、关闭确认、懒加载路由；dev 钩子另加 `__oofFail(cmd, args)`（v0.64：原样发起一次命令调用并把失败时用户会看到的那串话交回，冒烟据此问"写侧真失败怎么说"而不必经过我们自己的读侧）
   index.css           外壳样式、两套主题，以及**纸面与屏幕主题的断钩处**（v0.49）：屏幕上的颜色一律先落进 CSS 变量（`--bg/--panel/--text/--text-2/--border/--accent/--code-bg/--quote-bg`），`@media print` 里一段同时命中 `:root` 与 `:root[data-theme='dark']` 的规则把 `color-scheme` 压回 `light` 并重声明整套纸面调色板（**段必须排在暗色段之后**，同特异度靠源序说话），顺手清掉屏幕辅助（`.fr-hit`/`.fr-active` 的查找命中高亮）；内容自己声明的字面色（段落底纹、单元格底色、幻灯片背景）不经过这条规则，所以照旧上纸；v0.50 又在这里补了 `.doc-content{min-height:0 !important}`——屏幕上那 900px 是打字辅助，矮纸（横向/A5）的可印高度不足它，正文尾巴会被顶成凭空多出的空白一页；**表格的网格线从无条件改为 `.sheet-print-grid` 一类**（v0.51：`printOptions@gridLines` 是打印设置里的一勾，而 Excel 的默认是"没勾就不印"），并新增 `.sheet-print-heading`/`.sheet-print-corner`（行列标题）与 `.sheet-print-band{break-inside:auto}`（一个列带一张表，带内可被分页切开，带与带之间由 `.sheet-print-break` 隔开）；v0.52 再添「页面设置」面板那一份（`.print-pop` 的分组 fieldset、毫米边距格、开关格、分页符 chip，以及 `.print-pop-errs` 与 `.print-pop-notes` 两本账的分色，`--danger` 同时进暗色 token 与 `@media print` 的纸面调色板——面板自己也可能被印出来，规矩照 v0.49 那条「屏幕上的颜色必须先穿过一枚 CSS 变量」）；**v0.59 换掉了 `.sheet-print-table td` 那一整档行盒**：`font-size` 从写死的 `11px` 改成 `var(--oof-print-base-size, 14.67px)`（底数由每张表 `<section>` 上那枚自定义属性说话，括号里那档只是"文件那一层没交代"时的兜底，与 `baseFontPt` 同一个数），`padding` 上下归零、`line-height` 从 1.45 收到 1.25、**`height:18px` 不再写**——底数一动，旧的固定行高就成了多出来的一截（接上文件而仍用旧行盒时 11pt 那份每行 24.98px、被挤成两页），而 1em 的方框又装不住下行墨（td 是 `overflow:hidden`，`line-height:1.0` 那一档在纸上把 p/g/y 那几笔切掉），1.25 × 底数正好落回 Excel 那一档（11pt ⇒ 13.75pt vs Excel 报的 14；14pt ⇒ 17.5 = Excel 报的 17.5）。**这一档行盒是 `PRINT_ROW_BIAS_PX` 的标定条件**：再动 `line-height`/`padding`/把 `height` 写回来，那枚偏置必须重跑实测
   lib/univer.ts       Univer 实例工厂（公式 worker + 八个社区预设：核心/筛选/排序/条件格式/数据验证/查找替换/绘图 + **批注与超链接**（v0.48，超链接的 `urlHandler` 把外链交给系统默认浏览器——桌面上 `window.open` 会开出一个新 WebView 窗口））
   lib/univer-io.ts    xlsx 数据+样式（粗斜/颜色/字族/边框/对齐/换行/数字格式）/合并/图表/列宽行高/隐藏行列/冻结窗格 ↔ Univer 快照 转换（样式去重注册）；**规则走侧通道**——取完单元格再按 sheetId 把 `extractRules(resources)` 的结果对回每张表，`warnings` 由 `aggregateNotes` 聚合；**批注与链接同一条侧通道**（v0.48）：取侧交给 `extractCellSide`，放侧把 `resources` 写成 `[noteResourceOf(...)]`（实测裸写就能被门面读回）、链接写成带 `customRanges` 的富文本格（**公式格上那枚先记账不硬放**，只有链接没内容的格子也要占一格）；`payloadToWorkbook` 因此多收一个 `accounts` 出参
-  lib/sheet-rules.ts  三类规则的前端桥（v0.46）：`extractRules` 从工作簿快照的 `resources` 里按表取规则（Univer 三个插件各写各的 JSON，条件格式按快照原序交回=高优先级在前），`applySheetRules` 经门面放回界面（**条件格式倒着插**，因为这一版门面按插入顺序的倒序吐规则；builder 无 `setRanges`，作用区在 `build()` 之后挂产物），`buildDataValidation` 只建门面表达得出的四类 + custom；归一化（`normColor` 收 rgb/#、`normDateValue` 收 ISO、`listOf` 拆 JSON 数组串与区域引用、`neg === pos` 的负色丢掉）与 `aggregateNotes`（同类收成"文案×N"）都在这，`textLength`/`time`/`any` 这类摆不进模型的退成边界账而不是硬建一条
+  lib/sheet-rules.ts  三类规则的前端桥（v0.46）：`extractRules` 从工作簿快照的 `resources` 里按表取规则（Univer 三个插件各写各的 JSON，条件格式按快照原序交回=高优先级在前），`applySheetRules` 经门面放回界面（**条件格式倒着插**，因为这一版门面按插入顺序的倒序吐规则；builder 无 `setRanges`，作用区在 `build()` 之后挂产物），`buildDataValidation` 只建门面表达得出的四类 + custom；归一化（`normColor` 收 rgb/#、`normDateValue` 收 ISO、`listOf` 拆 JSON 数组串与区域引用、`neg === pos` 的负色丢掉）与 `aggregateNotes`（同类收成"文案×N"）都在这，`textLength`/`time`/`any` 这类摆不进模型的退成边界账而不是硬建一条；**v0.64 那三句"没能还原"后面的原串改走 `lib/fail-msg.ts` 的 `failText`**（账目本来就上状态栏，原话只该有一份出处）
   lib/sheet-cell-side.ts 批注与超链接的前端桥（v0.48，纯函数、零 DOM、Node 直测）：`extractCellSide` 从 `resources` 的 `SHEET_NOTE_PLUGIN` 按表取批注、从每格 `p.body.customRanges`（`rangeType` 只认 HYPERLINK）取链接，`noteResourceOf` 反向建 resources（实测裸写即可被门面读回，所以**不发消息不走门面**），`richTextOf`/`richTextBox` 负责"链接格吃的是 p 不是 v"这一层，`univerUrlOf`/`locationOfUniverUrl` 在 OOXML 的 `Sheet2!A1` 与 Univer 的 `#gid=<表 id>&range=` 之间换算（`quoteSheetName`：含空格或长得像单元格引用的表名要加单引号、`''` 是引号本身），`restampCellSide` 存盘前按格子把 Univer 模型装不下的 `author`/`tip` 回贴（**只在缺的时候贴**，界面上新写的那一枚不冒用别人的署名），装不下的形状退成边界账而不是挑个像样的凑数
   lib/chart.ts        ChartPayload → VChart spec → 离屏 canvas PNG dataURL（动态导入分包）
   lib/docx.ts         docx 导入导出（ProseMirror JSON ↔ docx，字色/字族/字号/高亮/页眉页脚/TOC 域/批注/页面设置 sectPr（纸张·四边距·w:cols 栏数栏距）/页码格式（PAGE·NUMPAGES）/分页符/表格合并映射（首行行级 tableHeader、列表 numbering.config 真编号）、单元格四边 `w:tcBorders`（**显式去边写 `w:val="nil"`**——none 压不住表级默认边框）、`w:shd` 底纹、`w:vAlign` 竖排、`w:tblInd` 表缩进、`w:vertAlign` 上下标、段落 `w:spacing`（行距 + 段前段后，**只写声明过的**）/`w:shd`/`w:pBdr`、脚注与尾注（`footnotes`/`endnotes` 记录 + 正文各带自动编号 `<w:footnoteRef/>`、多段拆多个 `w:p`、部件与 rels 注册））；文本节点兼容顶层 text 与 attrs.text；字节经 Packer.toBase64String + atob 取（toBuffer 走 jszip 的 nodebuffer 通道，浏览器里没有 Buffer））
@@ -2094,7 +2159,8 @@ src/                  React 前端
   lib/open.ts         路径→标签 打开 / 带确认关闭
   lib/sync.ts         最近文件端到端加密同步（WebCrypto PBKDF2-SHA256 → AES-256-GCM，.oosync 信封）
   lib/update.ts       自动更新的**检测层**（v0.45）：`checkForUpdate()` 动态导入 updater 插件走一次 `check`，任何失败都收敛成 `{state:'failed'}` 不往外抛（抛出去的表现就是"点了没反应"）；`describeError` 按插件 error.rs 的真实字面把"源上没清单/没配端点/非 https/缺本平台条目/签名/base64/日期/连不上"归成中文，认不出的一律原样带出不编原因；`infoOf` 从 `rawJson` 里取自定义字段 `download_page`，只认 http(s) 才给按钮
-  components/         Home（最近文件 + 从模板新建画廊 + 版本号与"检查更新"） / Workspace / SheetEditor（保存按 .xlsx/.ods/.csv 三分流，打开时把读到的规则经门面放回界面并把两侧账目显示在状态栏；**「页面设置」面板（v0.52）**——纸张/方向、六条边距（毫米）、缩放与"缩放到 N 页宽"、六个开关、打印区域与重复标题行列（可「用当前选区」「用选区首行/首列」按门面选区给）、手动分页符（按 Excel 的 `brk@id` 说法：这一行/列自己起新页）、页眉页脚三框 + 六枚格式码 + 奇/偶/首页三版 + **两枚缺省开着的开关（「页眉页脚随文档缩放」「与页边距对齐」，v0.55：勾着＝写 `null` 不声明、取消＝写 `false`，旁注一次说清哪一档我们照 Excel 乘了字号、哪一档两边差一圈）**；「确定」写进 `printRef` 侧通道、「清除这张表的设置」把它整个删掉、面板里的错把确定灰掉，做不到的那几条以账目形式随草稿说在面板上（v0.53 改了语气：页高档与居中已经接线，只剩起始页码真做不到；v0.54 之后偶数页那一版也不再是账——它真的印在偶数页上，面板这几句全部转述 `hfAndPageNumberNotes` 那一份文案）；**导出这一侧多了一段实测循环（v0.53）**——计划里勾了「缩放到 N 页高」或「上下居中」的表才走：建一次 → `measurePrintLayout` 离屏量 → `planSheetFit` 压档/算留白 → 带 `zooms` 重建，最多五趟，定档后把居中留白写回**同一份 DOM** 再交导出；账目分两头记（"压到 27%"那句要说在压它的那一趟、每张表占一格由后趟覆盖前趟，居中的账反过来只在最终缩放那份实测上算数）；DEV 门面钩子随这轮加 `printSet(表名, 载荷|null)`（落笔处＝面板「确定」那一行）与 `printHtml(zooms)`（把**将要上纸的那份 HTML**交出去，让脚本自己挂起来量真实布局）；**v0.57 工作簿默认字体走第三枚侧通道 `defaultFontRef`**（不放 Univer 快照——`IWorkbookData.defaultStyle` 在 core 里零读取、引擎兜回硬编码 Arial 11，而 `wb.save().defaultFont` 实测恒为 `null`）：加载时挂上 `dump.defaultFont`、换标签复位、在 `payloadWithCharts` 那一枚漏斗里回贴，于是存盘与导出 PDF 共吃一份而界面渲染不说谎；**v0.59 只把 DEV 钩子摊宽**（生产行为一个字没动）：`printHtml()` 的返回值多三枚——`defaultFont`（侧通道里那一层本体，冒烟据此分辨"文件说的"与"我们兜的"）、每张计划里的 `basePx`（计划算出的正文底数）、`baseVars`（那份 HTML 里所有 `--oof-print-base-size:<px>` 的含值列表，按张核）；**v0.60 添第四枚侧通道 `sheetFormatRef`**（按表名持有 `SheetFormat`，与前三枚同一脾气：加载时从 `sheets[].sheetFormat` 挂上、换标签复位、改名随 `migrateSheetName` 一起迁、在 `payloadWithCharts` 的漏斗里回贴，且 `if (f && !sheet.sheetFormat)`——快照自己说出来的那一张永远赢）；这一枚与 `defaultFontRef` 方向相反：`IWorksheetData.defaultRowHeight` 在 Univer 里是**活口**（喂了就界面认、而 Excel 根本不认它），所以这里**只收不放**——不喂编辑器也不喂纸面，只为存盘时原样落回；DEV 钩子 `printPlan()` 因此多一枚 `sheetFormats`，冒烟据此问得出"这一层交回了什么"，而结构测试那头的钉是"五个消费点里 `sheetFormat` 出现零次"；**v0.62 只撤两行**——`hasSide` 那枚判定与「ODS 暂不含批注与超链接」那句账目，因为 `.ods` 这两样现在真读得回也写得出，而另三句 ODS 账（图表／三类规则／页面设置）与 CSV 那句照旧立着（结构腿判的就是"撤干净了且只撤了这一句"）；**v0.63 只动两行**——`.ods` 那一路的 `await writeOds(...)` 改成 `writeNotes.push(...(await writeOds(path, payload)))`，于是写侧的账与 xlsx 那头走同一条汇合（`[...lost, ...writeNotes]` → 状态栏 `已保存（第一条，另有 N 条说明）`），另一行是把注释里的例子换成"规则摆不进 OOXML、批注落在被盖住的格上"；拼句的公式、`lost` 那三句 ODS 账与 CSV 那句一个字没动（本轮没有新桥：`sheet-cell-side.ts` 的取与放早就是格式无关的） / DocEditor（页面设置含分栏/页码格式、分页参考线、分页符、表格与图片上下文工具条、粘贴成图、查找替换面板、字体族·字号、缩进工具条与 Ctrl+]/[、上下标 X²/X₂、表格上下文条的底纹色与竖排对齐（上/中/下）、脚注/尾注（工具栏插入 + 文末分区编辑与定位/删除，打印时文本框换静态块）、版本历史·自动保存、模板 seed、状态栏字数节流；打开 .docx 保真导入优先、mammoth 兜底，保存按 .odoc/.odt/.docx 各自格式原地落盘） / PptEditor / PdfViewer（pdfjs-dist 懒加载，连续多页视口虚拟渲染+Ctrl 缩放+TextLayer 文字选择+全文搜索+缩略图/大纲/标注侧栏+高亮便签与矩形·椭圆·直线·手绘形状（绘制/导入/写回 pdf-lib）+标注编辑（点选/拖移/改色/删除）+「页面」工作区旋转/删除/提取/合并/拆分；≥4MB 走分段读（lib/pdf-range.ts），卸载时 destroy openTask 并 abort transport））
+  lib/fail-msg.ts     用户可见失败的**唯一**归因处（v0.64，纯函数、零 DOM、Node 直测）：`describeFailure` 走一张按"具体在前"排的 11 条判据表（第三方库专属词形 → `os error N` 通用尾巴），`probeOf` 把 `Error` 的 `name` 也拼进匹配串并整串转小写（pdf.js 那类只靠 `name` 分类的档才有得匹配、大写 EOCD 与大写不命中是同一条判据的两面）；三种出法按去处分——`failText`（只出一句中文，给状态栏里那些本就很窄的账目位）、`failDialog`（中文一句 + `（原始信息：…）`，归因没命中时**不重复**原话，同一段话出现两次只会让人以为有两个不同的原因）、`failStatus`（可见那一行是 `prefix: 中文`，换行后挂原话）；`statusText`/`statusTip` 是那枚字符串的两把拆刀，于是"悬停能看原话"不必再多一份状态、也就多不出"文字说 A 而悬停出 B"的分叉；`failRaw` 只给原话（`isTeardown` 用它分辨"关标签拆掉的 transport"与"文件真读不出"）；判据表里每一条命中的都是**真机上量出来的原串**而不是"通常长这样"，表头的注释记着两条实测结论（本机 Windows 那一层已经是中文 ⇒ 真正看不懂的只有第三方库那几档；**路径过长报的是 `os error 3`** 而不是专门的"文件名太长"⇒ 那一句话必须把"太长"也带上）；`known` 那一位的用处是"干净文案一条都不归因"——没有失败就不许造句子，结构腿 D 段判的就是这一条
+  components/         Home（最近文件 + 从模板新建画廊 + 版本号与"检查更新"） / Workspace / SheetEditor（保存按 .xlsx/.ods/.csv 三分流，打开时把读到的规则经门面放回界面并把两侧账目显示在状态栏；**「页面设置」面板（v0.52）**——纸张/方向、六条边距（毫米）、缩放与"缩放到 N 页宽"、六个开关、打印区域与重复标题行列（可「用当前选区」「用选区首行/首列」按门面选区给）、手动分页符（按 Excel 的 `brk@id` 说法：这一行/列自己起新页）、页眉页脚三框 + 六枚格式码 + 奇/偶/首页三版 + **两枚缺省开着的开关（「页眉页脚随文档缩放」「与页边距对齐」，v0.55：勾着＝写 `null` 不声明、取消＝写 `false`，旁注一次说清哪一档我们照 Excel 乘了字号、哪一档两边差一圈）**；「确定」写进 `printRef` 侧通道、「清除这张表的设置」把它整个删掉、面板里的错把确定灰掉，做不到的那几条以账目形式随草稿说在面板上（v0.53 改了语气：页高档与居中已经接线，只剩起始页码真做不到；v0.54 之后偶数页那一版也不再是账——它真的印在偶数页上，面板这几句全部转述 `hfAndPageNumberNotes` 那一份文案）；**导出这一侧多了一段实测循环（v0.53）**——计划里勾了「缩放到 N 页高」或「上下居中」的表才走：建一次 → `measurePrintLayout` 离屏量 → `planSheetFit` 压档/算留白 → 带 `zooms` 重建，最多五趟，定档后把居中留白写回**同一份 DOM** 再交导出；账目分两头记（"压到 27%"那句要说在压它的那一趟、每张表占一格由后趟覆盖前趟，居中的账反过来只在最终缩放那份实测上算数）；DEV 门面钩子随这轮加 `printSet(表名, 载荷|null)`（落笔处＝面板「确定」那一行）与 `printHtml(zooms)`（把**将要上纸的那份 HTML**交出去，让脚本自己挂起来量真实布局）；**v0.57 工作簿默认字体走第三枚侧通道 `defaultFontRef`**（不放 Univer 快照——`IWorkbookData.defaultStyle` 在 core 里零读取、引擎兜回硬编码 Arial 11，而 `wb.save().defaultFont` 实测恒为 `null`）：加载时挂上 `dump.defaultFont`、换标签复位、在 `payloadWithCharts` 那一枚漏斗里回贴，于是存盘与导出 PDF 共吃一份而界面渲染不说谎；**v0.59 只把 DEV 钩子摊宽**（生产行为一个字没动）：`printHtml()` 的返回值多三枚——`defaultFont`（侧通道里那一层本体，冒烟据此分辨"文件说的"与"我们兜的"）、每张计划里的 `basePx`（计划算出的正文底数）、`baseVars`（那份 HTML 里所有 `--oof-print-base-size:<px>` 的含值列表，按张核）；**v0.60 添第四枚侧通道 `sheetFormatRef`**（按表名持有 `SheetFormat`，与前三枚同一脾气：加载时从 `sheets[].sheetFormat` 挂上、换标签复位、改名随 `migrateSheetName` 一起迁、在 `payloadWithCharts` 的漏斗里回贴，且 `if (f && !sheet.sheetFormat)`——快照自己说出来的那一张永远赢）；这一枚与 `defaultFontRef` 方向相反：`IWorksheetData.defaultRowHeight` 在 Univer 里是**活口**（喂了就界面认、而 Excel 根本不认它），所以这里**只收不放**——不喂编辑器也不喂纸面，只为存盘时原样落回；DEV 钩子 `printPlan()` 因此多一枚 `sheetFormats`，冒烟据此问得出"这一层交回了什么"，而结构测试那头的钉是"五个消费点里 `sheetFormat` 出现零次"；**v0.62 只撤两行**——`hasSide` 那枚判定与「ODS 暂不含批注与超链接」那句账目，因为 `.ods` 这两样现在真读得回也写得出，而另三句 ODS 账（图表／三类规则／页面设置）与 CSV 那句照旧立着（结构腿判的就是"撤干净了且只撤了这一句"）；**v0.63 只动两行**——`.ods` 那一路的 `await writeOds(...)` 改成 `writeNotes.push(...(await writeOds(path, payload)))`，于是写侧的账与 xlsx 那头走同一条汇合（`[...lost, ...writeNotes]` → 状态栏 `已保存（第一条，另有 N 条说明）`），另一行是把注释里的例子换成"规则摆不进 OOXML、批注落在被盖住的格上"；拼句的公式、`lost` 那三句 ODS 账与 CSV 那句一个字没动（本轮没有新桥：`sheet-cell-side.ts` 的取与放早就是格式无关的） / DocEditor（页面设置含分栏/页码格式、分页参考线、分页符、表格与图片上下文工具条、粘贴成图、查找替换面板、字体族·字号、缩进工具条与 Ctrl+]/[、上下标 X²/X₂、表格上下文条的底纹色与竖排对齐（上/中/下）、脚注/尾注（工具栏插入 + 文末分区编辑与定位/删除，打印时文本框换静态块）、版本历史·自动保存、模板 seed、状态栏字数节流；打开 .docx 保真导入优先、mammoth 兜底，保存按 .odoc/.odt/.docx 各自格式原地落盘） / PptEditor / PdfViewer（pdfjs-dist 懒加载，连续多页视口虚拟渲染+Ctrl 缩放+TextLayer 文字选择+全文搜索+缩略图/大纲/标注侧栏+高亮便签与矩形·椭圆·直线·手绘形状（绘制/导入/写回 pdf-lib）+标注编辑（点选/拖移/改色/删除）+「页面」工作区旋转/删除/提取/合并/拆分；≥4MB 走分段读（lib/pdf-range.ts），卸载时 destroy openTask 并 abort transport；**v0.64 四个编辑器与首页的失败出口一律改走 `lib/fail-msg.ts`**——状态栏那一行由 `{status}` 直出换成 `statusText(status)` + `title={statusTip(status)}`（四个渲染点各一处，`PptEditor` 的加载占位有两处分身所以两处都换），原生对话框那一层的 `String(e)` 换成 `failDialog(e)`，账目位里的 `${e instanceof Error ? e.message : String(e)}` 换成 `failText(e)`；`PdfViewer` 除接线外还立了两条行为——三处后台补做（页尺寸／大纲／标注）由"只 `console.error`"改成**先过 `isTeardown` 那道门再占状态栏**（拆标签时的 `Transport destroyed` 不入账，否则每次快速关标签都冒一句凭空的失败），`pageOp` 的定时清除从 `finally` 移到成功那一路（失败那一句留着，三秒就抹等于让用户读不完也悬停不到原话））
 scripts/              copy-pdfjs-assets.mjs（dev/build 前复制 cmaps/标准字体到 public/pdfjs） /
                       updater-release.mjs（发版：开 createUpdaterArtifacts 本机建签名包 → 读回真 .sig 与产物 →
                       出带三平台键的 latest.json → 打印要上传的清单；私钥只走子进程环境变量，`pnpm release:updater`）
@@ -2178,7 +2244,7 @@ cargo check        # Rust 后端检查（在 src-tauri 下）
 - [x] 文档保真续项五：文本框展平（`w:txbxContent` 新旧两种外壳 + ODF `draw:text-box`，位置与环绕不保但字不丢）+ 公式线性化（OMML 与 MathML 翻成同一套 `x^2`/`a/b`/`√(y)`/`∑_i^n`）+ `mc:AlternateContent` 只取一支（Word 16.0 只读腿按 `wdTextFrameStory` 逐句核对）
 - [x] 文档保真续项六之一：SmartArt（`diagrams/dataN.xml` 的 DiagramML 数据模型 → 嵌套列表）与图表（`charts/chartN.xml` 的 ChartML 缓存值 → 标题 + 数据表）读回，格内走层级缩进展平，还原不了的记边界
 - [x] 文档保真续项六之二：域**编号重算**（`SEQ` 按文档顺序现算并压掉缓存、`\* ROMAN`/`\* roman`/`\* ALPHABETIC`/`\* alphabetic` 四形态按开关自身大小写、`REF` 无缓存时按书签所在段落文本兜底、`PAGE`/`PAGEREF`/`DOCPROPERTY` 沿缓存且无缓存记边界、`fldSimple` 同路、被跳过的目录不占号）+ OLE 嵌入对象预览解不开时留一行看得见的占位（ProgID + 部件文件名，.odoc/docx/odt 三链路都在）
-- [x] 文档保真续项六剩下：OLE 嵌入对象的**内容**提取（复合文档 `cfb.ts` + `\x01Ole10Native` 的字段布局与兜底扫描 → 内层 docx 递归展开 / xlsx 与 CSV 取值成表 / txt 分段；两条接缝 docx `w:object` 与 ODT `draw:frame`（内联 base64 与 `Objects/objN/` 两种），块级正文作段落兄弟块、格内压行内，取不出的带真名与大小记边界）
+- [x] 文档保真续项六剩下：OLE 嵌入对象的**内容**提取（复合文档 `cfb.ts` + `\x01Ole10Native` 的字段布局与兜底扫描 → 内层 docx 递归展开 / xlsx 与 CSV 取值成表 / txt 分段；两条接缝 docx `w:object` 与 ODT `draw:frame`（内联 base64 与 `Objects/objN/` 两种），块级正文作段落兄弟块、格内压行内，取不出的带真名与大小记边界；**v0.64 那两句"嵌入的 X 解不开"的原串尾巴同样改走 `failText`**（docx 与 xlsx 两路））
 - [x] 表格保真五期：筛选 / 数据验证 / 条件格式 **xlsx 全链路往返**（Univer `resources` 双向桥 + 门面放回界面 + OOXML autoFilter/dataValidation/cfRule·dxf·x14 读写，Excel 16.0 实机核对；被筛掉的行喂打印；ODS/CSV 只记边界账不谎称读回）
 - [x] 表格保真六期：**PDF 打印保真**（条件格式在打印侧按载荷重算一遍→底色/字色/粗斜/数据条/色阶真上色，六处判据与 Excel 16.0 的 `DisplayFormat` 逐格核对；图表位图按锚点格覆盖进网格并让锚点撑开边界，"图浮在数据块外就整个不见"就此修掉；打印纸面兜白底（外壳的 `var(--bg)` 曾把整页铺成屏幕色）；算不出的一律进状态栏记账）
 - [x] 表格保真七期：**批注 / 超链接 xlsx 全链路往返**（批注走 `resources` 的 `SHEET_NOTE_PLUGIN`、链接走每格的富文本 `customRanges`，两头都是纯函数所以**不放命令**；legacy `commentsN.xml` 与 `threadedComments`/`person.xml` 两种写法归一、气泡尺寸与常开从 `vmlDrawing` 认回；作者与悬停提示 Univer 装不下，按格子回贴且界面新写的那枚不冒用别人署名；写侧修掉 rust_xlsxwriter 把 `<authors>` 按名字排序而 `authorId` 按格子序登记的**串署名**缺陷（核对不过宁可不改）；Excel 16.0 只读腿对写侧原产物与应用重存件各跑一遍；ODS/CSV 只记边界账不谎称读回——**这句 v0.62 起改口**：`.ods` 的批注与链接现在双向了（见 ods.rs 的 `read_ods_cell_side`），只剩 CSV 与「ODS 的图表／三类规则／页面设置」还在记边界账）
@@ -2341,6 +2407,24 @@ cargo check        # Rust 后端检查（在 src-tauri 下）
       按同一列从上到下的基线差逐行求和，而不是取中位数——中位数会挑到抖出来的那一档）；**留着旧的 0.4 不是保守而是凭空
       多压一档缩放**，这一条钉成结构腿的假例（同一份实测在 0.4 下变 15 页），注释里的约束改口为「这枚数跟着行盒走，
       再动 `line-height`/`padding`/把 `height` 写回来都必须重跑这段实测」
+- [x] **易用性一期：用户可见的失败出口说人话**（v0.64，Rust 零改动）：新建 `src/lib/fail-msg.ts`——11 条判据按
+      "具体在前"排（calamine / rust zip / JSZip / cfb / pdf.js / `JSON.parse` 的专属词形 → `os error N` 通用尾巴），
+      每一条命中的都是**真机上量出来的原串**；`failStatus` 把中文一句与原话装进**同一枚字符串**（两行），
+      渲染点用 `statusText`/`statusTip` 拆，于是不必给四个编辑器各加一份状态、也不多出一条"文字与提示不同步"的分叉；
+      覆盖 28 处出口（四个编辑器 21 + 首页同步 2 + `ole` 2 + `sheet-rules` 3）；PDF 那三处后台补做从此开始说话，
+      并按 `isTeardown` 把"关标签拆掉的 transport"与"文件真读不出"分开；页面级操作的失败句不再三秒自动抹掉；
+      真机腿 51 断言里第一条把**原生对话框**变成判据（按 `EnumWindows` 数得出、不阻塞 CDP）
+- [ ] **失败归因只覆盖本机中文 OS 的原串**：判据靠 `os error` 编号与第三方库的英文词形，换英文/其他语言的 Windows
+      上括号前那截中文归因照旧（编号匹配不受影响），但"原话本身是否已经可读"这一条没测过；
+      另外判据表是**按本轮撞到的档列的**，不是穷举第三方库的抛点——没列出的原串仍会以"原样带出"收着（这是设计而非缺陷）
+- [ ] **写侧前缀三家不统一**：同一次存盘失败在文件那边可能报成 `保存失败`（对话框标题）／`ODS 写入失败: …`（`ods.rs`）／
+      `无法写入 {path}: …`（`csv.rs`）／`无法打开文件: …`（`xlsx.rs`）——归因表都吃得下，但**地点那一截的说法随格式换**，
+      状态栏说的话取决于文件是什么后缀；要收得先定"前缀归谁给"（Rust 侧还是调用侧）
+- [ ] **PDF 设了口令只说得出、还没有输密码的地方**（v0.64 归因里那句"要在这里看，得先在别处把密码去掉"就是这一条的实话）：
+      pdf.js 的 `password` 通道与一个输入框没接；接上之后 `No password given` 那一档判据要跟着改口
+- [ ] **失败提示仍寄生在状态栏那一枚字符串上**：本轮的"一条字符串带两行"是**取舍**不是终局——四类编辑器各有
+      自己的 `status` 生命周期，"三秒清除还是留着"的分歧本轮只在 `PdfViewer` 的 `pageOp` 改了一处，其余仍各自定时；
+      独立的 toast／通知层（可复制原话、可停留）没建
 - [ ] 自动更新：应用内**下载并安装**（要先决策：真实更新源托管在哪、`updater:allow-download`+`allow-install` 权限、
       以及"装完自动重启"的取舍——见 v0.45 一节末尾的接线清单）
 - [ ] macOS 打包（需签名/公证凭据）

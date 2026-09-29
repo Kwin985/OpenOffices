@@ -6,6 +6,7 @@ import { useApp, type DocKind } from '../store'
 import { pickOpenFile, pickSaveFile, readText, writeText } from '../lib/fs'
 import { encryptRecents, decryptRecents } from '../lib/sync'
 import { openPath } from '../lib/open'
+import { failText } from '../lib/fail-msg'
 import { TEMPLATES } from '../lib/templates'
 import { checkForUpdate, type UpdateState } from '../lib/update'
 
@@ -66,7 +67,7 @@ export default function Home() {
       await writeText(path, await encryptRecents(recents, pass))
       setSyncStatus(`已导出加密副本：${path.split(/[\\/]/).pop()}（${recents.length} 条）`)
     } catch (e) {
-      setSyncStatus(`导出失败：${e instanceof Error ? e.message : String(e)}`)
+      setSyncStatus(`导出失败：${failText(e)}`)
     }
   }
 
@@ -82,7 +83,7 @@ export default function Home() {
       const added = mergeRecents(incoming)
       setSyncStatus(`合并完成：导入 ${incoming.length} 条，新增 ${added} 条`)
     } catch (e) {
-      setSyncStatus(`导入失败：${e instanceof Error ? e.message : String(e)}`)
+      setSyncStatus(`导入失败：${failText(e)}`)
     }
   }
 

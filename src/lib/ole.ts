@@ -15,6 +15,7 @@
 
 import { isCfb, openCfb } from './cfb'
 import { allDesc, attr, els, local, parseXml, textOf, type XEl } from './ooxml'
+import { failText } from './fail-msg'
 
 /** 单个嵌入部件最多读这么多：真件里见过 74MB 的嵌入体，不设上限等于让一次导入吃光内存 */
 const MAX_EMBED = 24 * 1024 * 1024
@@ -370,14 +371,14 @@ export async function embedHtml(content: EmbedContent, depth = 0): Promise<Embed
           notes: [`嵌入文档已展开为正文${r.warnings.length ? `（其中 ${r.warnings.length} 项未保真）` : ''}`],
         }
       } catch (e) {
-        return { html: '', notes: [`嵌入的 ${content.name} 解不开：${e instanceof Error ? e.message : String(e)}`] }
+        return { html: '', notes: [`嵌入的 ${content.name} 解不开：${failText(e)}`] }
       }
     }
     case 'xlsx':
       try {
         return await xlsxEmbedHtml(content.bytes, content.name)
       } catch (e) {
-        return { html: '', notes: [`嵌入的 ${content.name} 解不开：${e instanceof Error ? e.message : String(e)}`] }
+        return { html: '', notes: [`嵌入的 ${content.name} 解不开：${failText(e)}`] }
       }
     case 'csv':
     case 'txt':

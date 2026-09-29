@@ -79,6 +79,12 @@ function MainApp() {
     w.__oofOpenTab = (kind: 'doc' | 'sheet' | 'ppt' | 'pdf') =>
       useApp.getState().openTab({ kind, title: titles[kind] })
     w.__oofCloseTab = (id: string) => useApp.getState().closeTab(id)
+    // 冒烟钩子：原样发起一次命令调用，把失败时用户会看到的那串话交回来
+    w.__oofFail = (cmd: string, args?: Record<string, unknown>) =>
+      invoke<string>(cmd, args ?? {}).then(
+        (v) => ({ ok: true, text: JSON.stringify(v)?.slice(0, 120) ?? '' }),
+        (e: unknown) => ({ ok: false, text: String(e) }),
+      )
   }
 
   useEffect(() => {

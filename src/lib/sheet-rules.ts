@@ -13,6 +13,7 @@ import type {
   RangeRect,
   SheetFilterPayload,
 } from './fs'
+import { failText } from './fail-msg'
 
 export interface SheetRules {
   filter?: SheetFilterPayload
@@ -607,7 +608,7 @@ export function applySheetRules(
       if (built) ws.addConditionalFormattingRule(built as never)
       else notes.push('有条条件格式的判定界面建不出来，未在界面还原')
     } catch (e) {
-      notes.push(`条件格式没能还原（${e instanceof Error ? e.message : String(e)}）`)
+      notes.push(`条件格式没能还原（${failText(e)}）`)
     }
   }
   for (const rule of rules.dataValidations ?? []) {
@@ -621,7 +622,7 @@ export function applySheetRules(
         ws.getRange(...rectArgs(range)).setDataValidation(obj as never)
       }
     } catch (e) {
-      notes.push(`数据验证没能还原（${e instanceof Error ? e.message : String(e)}）`)
+      notes.push(`数据验证没能还原（${failText(e)}）`)
     }
   }
   const fl = rules.filter
@@ -649,7 +650,7 @@ export function applySheetRules(
           notes.push('有条筛选条件没能落到界面上')
       }
     } catch (e) {
-      notes.push(`筛选没能还原（${e instanceof Error ? e.message : String(e)}）`)
+      notes.push(`筛选没能还原（${failText(e)}）`)
     }
   }
   return notes

@@ -7,6 +7,7 @@ import { useApp } from '../store'
 import { createSheetApp } from '../lib/univer'
 import { payloadToWorkbook, workbookToPayload } from '../lib/univer-io'
 import { aggregateNotes, applySheetRules } from '../lib/sheet-rules'
+import { failDialog, failStatus, failText, statusText, statusTip } from '../lib/fail-msg'
 import type { SheetRules } from '../lib/sheet-rules'
 import { restampCellSide } from '../lib/sheet-cell-side'
 import type { CellSide } from '../lib/sheet-cell-side'
@@ -400,7 +401,7 @@ function SheetEditor({ tab }: Props) {  const containerRef = useRef<HTMLDivEleme
               notes.push(...applySheetRules(api, wb, s.name, rules))
             } catch (e) {
               console.error('规则还原失败', e)
-              notes.push(`有条规则没能还原（${e instanceof Error ? e.message : String(e)}）`)
+              notes.push(`有条规则没能还原（${failText(e)}）`)
             }
           }
         }
@@ -438,7 +439,7 @@ function SheetEditor({ tab }: Props) {  const containerRef = useRef<HTMLDivEleme
         }, 800)
       } catch (e) {
         console.error(e)
-        setStatus(`加载失败: ${e instanceof Error ? e.message : String(e)}`)
+        setStatus(failStatus(e, '加载失败'))
       }
     })()
     return () => {
@@ -469,7 +470,7 @@ function SheetEditor({ tab }: Props) {  const containerRef = useRef<HTMLDivEleme
       markDirty(tab.id, true)
       flash('已插入图表')
     } catch (e) {
-      await message(String(e), { title: '插入图表失败', kind: 'error' })
+      await message(failDialog(e), { title: '插入图表失败', kind: 'error' })
     }
   }
 
@@ -758,7 +759,7 @@ function SheetEditor({ tab }: Props) {  const containerRef = useRef<HTMLDivEleme
       )
       setTimeout(() => setStatus(''), notes.length ? 5000 : 1500)
     } catch (e) {
-      await message(String(e), { title: '保存失败', kind: 'error' })
+      await message(failDialog(e), { title: '保存失败', kind: 'error' })
     }
   }
 
@@ -870,7 +871,7 @@ function SheetEditor({ tab }: Props) {  const containerRef = useRef<HTMLDivEleme
       await exportPdfToRef.current(path)
     } catch (e) {
       setStatus('')
-      await message(String(e), { title: '导出 PDF 失败', kind: 'error' })
+      await message(failDialog(e), { title: '导出 PDF 失败', kind: 'error' })
     }
   }
 
@@ -1379,7 +1380,11 @@ function SheetEditor({ tab }: Props) {  const containerRef = useRef<HTMLDivEleme
             {!panelWs && <div className="print-pop-errs">「{draftSheet}」这张表已经不在了，先关掉这个面板</div>}
           </div>
         )}
-        {status && <span className="editor-status">{status}</span>}
+        {status && (
+          <span className="editor-status" title={statusTip(status)}>
+            {statusText(status)}
+          </span>
+        )}
         <span className="editor-hint">内核: Univer (Apache-2.0) · xlsx 读写: calamine / rust_xlsxwriter · 图表渲染: VChart (MIT)</span>
       </div>
       <div className="sheet-container" ref={containerRef} />

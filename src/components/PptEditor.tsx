@@ -32,6 +32,7 @@ import { deckToPptxBytes } from '../lib/pptx-export'
 import { pptxBytesToDeck } from '../lib/pptx-import'
 import { exportPdfWithOverlay } from '../lib/pdfprint'
 import { registerSaver } from '../lib/registry'
+import { failDialog, failStatus, statusText, statusTip } from '../lib/fail-msg'
 import { pptTemplate } from '../lib/templates'
 import StaticSlide from './StaticSlide'
 
@@ -79,7 +80,7 @@ function PptEditor({ tab }: Props) {
         setStatus('')
       } catch (e) {
         console.error(e)
-        setStatus(`加载失败: ${e instanceof Error ? e.message : String(e)}`)
+        setStatus(failStatus(e, '加载失败'))
         setLoaded(true)
       }
     })()
@@ -211,7 +212,7 @@ function PptEditor({ tab }: Props) {
       setStatus('已保存')
       setTimeout(() => setStatus(''), 1500)
     } catch (e) {
-      await message(String(e), { title: '保存失败', kind: 'error' })
+      await message(failDialog(e), { title: '保存失败', kind: 'error' })
     }
   }
 
@@ -228,7 +229,7 @@ function PptEditor({ tab }: Props) {
       setStatus('已导出 pptx')
       setTimeout(() => setStatus(''), 2000)
     } catch (e) {
-      await message(String(e), { title: '导出失败', kind: 'error' })
+      await message(failDialog(e), { title: '导出失败', kind: 'error' })
     }
   }
 
@@ -271,7 +272,7 @@ function PptEditor({ tab }: Props) {
       await exportPdfTo(path)
     } catch (e) {
       setStatus('')
-      await message(String(e), { title: '导出 PDF 失败', kind: 'error' })
+      await message(failDialog(e), { title: '导出 PDF 失败', kind: 'error' })
     }
   }
 
@@ -321,9 +322,15 @@ function PptEditor({ tab }: Props) {
     return (
       <div className="editor-pane">
         <div className="editor-toolbar">
-          {status && <span className="editor-status">{status}</span>}
+          {status && (
+            <span className="editor-status" title={statusTip(status)}>
+              {statusText(status)}
+            </span>
+          )}
         </div>
-        <div className="ppt-loading">{status || '正在加载…'}</div>
+        <div className="ppt-loading" title={status ? statusTip(status) : undefined}>
+          {status ? statusText(status) : '正在加载…'}
+        </div>
       </div>
     )
   }
@@ -483,7 +490,11 @@ function PptEditor({ tab }: Props) {
         >
           放映
         </button>
-        {status && <span className="editor-status">{status}</span>}
+        {status && (
+          <span className="editor-status" title={statusTip(status)}>
+            {statusText(status)}
+          </span>
+        )}
         <span className="editor-hint">存档 .opd · 导入/导出 pptx (ECMA-376) · 生成: pptxgenjs (MIT)</span>
       </div>
 

@@ -8,6 +8,7 @@ import { useApp } from '../store'
 import { readBytes, writeBytes, pickDirectory, pickPdfFiles, pickSaveFile, baseName } from '../lib/fs'
 import { createRangeTransport } from '../lib/pdf-range'
 import { registerSaver } from '../lib/registry'
+import { failRaw, failStatus, statusText, statusTip } from '../lib/fail-msg'
 import {
   fromDisplayPoints,
   fromDisplayRect,
@@ -46,6 +47,13 @@ const BITMAP_CACHE_PX = 32_000_000
 const THUMB_W = 120
 // 大纲条目上限：恶意/异常深文档防御
 const OUTLINE_MAX = 1000
+
+/**
+ * 关标签时文档与 transport 被销毁，在途的 getPage/render 就抛 Transport destroyed。
+ * 后台补齐（页尺寸、大纲、标注）据此把"拆除的声音"与"文件真的读不出"分开：前者是用户已经把这一页
+ * 关掉了，不入账；后者要说，否则侧栏空着而用户不知道为什么空。
+ */
+const isTeardown = (e: unknown) => failRaw(e).toLowerCase().includes('transport destroyed')
 
 interface OutlineEntry {
   title: string
@@ -270,7 +278,7 @@ function PdfViewer({ tab }: Props) {
         setStatus('')
       } catch (e) {
         console.error(e)
-        if (!disposed) setStatus(`加载失败: ${e instanceof Error ? e.message : String(e)}`)
+        if (!disposed) setStatus(failStatus(e, '加载失败'))
       }
     })()
     return () => {
@@ -309,8 +317,11 @@ function PdfViewer({ tab }: Props) {
       }
       flush()
     })().catch((e) => {
-      // 关标签时文档被销毁，在途的 getPage 会抛 Transport destroyed——扫尺寸是尽力而为
-      if (!cancelled) console.error(e)
+      // 扫尺寸是尽力而为：只在"不是因为关标签而销毁"时占状态栏，否则用户看到的是凭空冒出的失败
+      if (!cancelled) {
+        console.error(e)
+        if (!isTeardown(e)) setStatus(failStatus(e, '页尺寸读取失败'))
+      }
       cancelled = true
     })
     return () => {
@@ -380,6 +391,7 @@ function PdfViewer({ tab }: Props) {
         if (!cancelled) setOutline(flat)
       } catch (e) {
         console.error(e)
+        if (!cancelled && !isTeardown(e)) setStatus(failStatus(e, '大纲读取失败'))
       }
     })()
     return () => {
@@ -451,8 +463,11 @@ function PdfViewer({ tab }: Props) {
       }
       if (!cancelled) setAnnos(out)
     })().catch((e) => {
-      // 同上：关标签销毁文档时在途的 getPage 会抛，标注导入是后台补做
-      if (!cancelled) console.error(e)
+      // 标注导入是后台补做：拆除时的抛话不入账，其余要说——侧栏空着而不说为什么空，用户只能猜
+      if (!cancelled) {
+        console.error(e)
+        if (!isTeardown(e)) setStatus(failStatus(e, '标注读取失败'))
+      }
       cancelled = true
     })
     return () => {
@@ -526,7 +541,7 @@ function PdfViewer({ tab }: Props) {
       const name = e instanceof Error ? e.name : ''
       if (!me.cancelled && name !== 'RenderingCancelledException' && !(e instanceof DOMException && e.name === 'AbortError')) {
         console.error(e)
-        setStatus(`渲染失败: ${e instanceof Error ? e.message : String(e)}`)
+        setStatus(failStatus(e, '渲染失败'))
       }
     } finally {
       me.rendering = false
@@ -1267,11 +1282,12 @@ function PdfViewer({ tab }: Props) {
       setPageSel(new Set())
       reloadDoc()
       setStatus(msg)
+      setTimeout(() => setStatus(''), 3000)
     } catch (e) {
-      setStatus(`${label}失败: ${e instanceof Error ? e.message : String(e)}`)
+      // 失败的那一句不定时清除：三秒后抹掉就等于让用户读不完，也悬停不到原话
+      setStatus(failStatus(e, `${label}失败`))
     } finally {
       setPageBusy(false)
-      setTimeout(() => setStatus(''), 3000)
     }
   }
 
@@ -1519,7 +1535,9 @@ function PdfViewer({ tab }: Props) {
   return (
     <div className="editor-pane">
       <div className="editor-toolbar">
-        <span className="editor-status">{status}</span>
+        <span className="editor-status" title={statusTip(status)}>
+          {statusText(status)}
+        </span>
         <span className="editor-hint">PDF · 选文字加高亮/便签（Ctrl+S 存回文件） · ✎ 标注工具：点选/拖移/改色/删除，▭◯↗✏ 拖拽绘制形状 · Ctrl+滚轮缩放 · Ctrl+F 搜索 · ☰ 侧栏</span>
       </div>
       <div className="pdf-toolbar">
