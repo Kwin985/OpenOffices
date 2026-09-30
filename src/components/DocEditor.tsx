@@ -49,6 +49,7 @@ import { docTemplate } from '../lib/templates'
 import { odtToHtml, prosemirrorToOdtBytes } from '../lib/odt'
 import { registerSaver } from '../lib/registry'
 import { failDialog, failStatus, statusText, statusTip } from '../lib/fail-msg'
+import { saveDoneTimer } from '../lib/save-status'
 
 interface Props {
   tab: Tab
@@ -118,6 +119,12 @@ function DocEditor({ tab }: Props) {
   const [histOpen, setHistOpen] = useState(false)
   const [hist, setHist] = useState<{ t: number; note: string; json: string; metaJson: string }[]>([])
   const [autoSavedAt, setAutoSavedAt] = useState<Date | null>(null)
+  // 收尾那句的时钟与表格头（v0.69）、PDF 头（v0.70）共用模块那一份：两份 1500/5000 就是两把尺子。
+  // 进度门这一头不挂——v0.71 实测 .docx/.odt 原地保存整趟 30~92ms、write_file 自身 6~62ms，
+  // 说出口就是一闪的噪音（同一枚 200ms 的门在表格大件那一路才有 366ms 的窗口可说）
+  const doneRef = useRef<ReturnType<typeof saveDoneTimer> | null>(null)
+  if (!doneRef.current) doneRef.current = saveDoneTimer(setStatus)
+  const done = doneRef.current
 
   const editor = useEditor({
     extensions: [
@@ -198,8 +205,8 @@ function DocEditor({ tab }: Props) {
       setMeta: (p: Partial<DocMeta>) => patchMeta(p),
       meta: () => meta,
       exportPdfTo: (path: string) => exportPdfTo(path),
-      exportDocxTo: (path: string) => exportDocxTo(path),
-      exportOdtTo: (path: string) => exportOdtTo(path),
+      exportDocxTo: (path: string) => writeDocxTo(path, editor.getJSON() as PMNode),
+      exportOdtTo: (path: string) => writeOdtTo(path, editor.getJSON() as PMNode),
       counts: () => counts,
       notes: () => notesOf(editor),
       insertNote: (kind: NoteKind, text: string) => editor.commands.insertNote(kind, text),
@@ -397,61 +404,51 @@ function DocEditor({ tab }: Props) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [editor, tab.id])
 
+  // 只负责"把这份内容写成那个文件"：不替界面决定说什么，也不替标签记账。
+  // v0.71 之前这两句挂在写手身上，于是「导出 docx」那一路也说「已保存（docx）」，
+  // 而 .docx 标签按 Ctrl+S 走同一个写手 ⇒ 文件真写进去了、标签的 ● 却还挂着（界面自相矛盾）
+  const writeDocxTo = async (path: string, json: PMNode) => {
+    const bytes = await prosemirrorToDocxBytes(json, meta)
+    await writeBytes(path, bytes)
+    markRecent(path, 'doc')
+  }
+
+  const writeOdtTo = async (path: string, json: PMNode) => {
+    const bytes = await prosemirrorToOdtBytes(json, meta)
+    await writeBytes(path, bytes)
+    markRecent(path, 'doc')
+  }
+
   const saveOdoc = async (asNew: boolean) => {
     if (!editor) return
     const cur = tab.path
     // .odt / .docx 标签的 Ctrl+S 原地按各自格式导出，不能把 JSON 存档写进 Office 扩展名
-    if (!asNew && cur?.toLowerCase().endsWith('.odt')) {
-      await exportOdtTo(cur)
-      return
-    }
-    if (!asNew && cur?.toLowerCase().endsWith('.docx')) {
-      await exportDocxTo(cur)
-      return
-    }
+    const inPlace = !asNew && cur && /\.(odt|docx)$/i.test(cur) ? cur : ''
+    done.cancel()
     try {
-      let path = asNew ? undefined : tab.path
-      const name = tab.path ? baseName(tab.path) : tab.title || '未命名文档'
-      if (!path || asNew) {
+      let path = inPlace || (asNew ? undefined : cur)
+      if (!path) {
+        const name = tab.path ? baseName(tab.path) : tab.title || '未命名文档'
         path = (await pickSaveFile(name.replace(/\.docx$/i, '') + '.odoc', ['odoc'])) ?? undefined
         if (!path) return
       }
-      const content = JSON.stringify({ ...ODOC_HEADER, content: editor.getJSON(), meta })
-      await writeText(path, content)
+      const json = editor.getJSON() as PMNode
+      if (inPlace) {
+        await (/\.odt$/i.test(inPlace) ? writeOdtTo(inPlace, json) : writeDocxTo(inPlace, json))
+      } else {
+        await writeText(path, JSON.stringify({ ...ODOC_HEADER, content: json, meta }))
+        markRecent(path, 'doc')
+        pushHist('保存')
+      }
+      // 落盘成功才记这笔账：renameTab 里带 dirty:false，标签的 ● 从此与文件一致
+      // （v0.63 起 .odoc 那一路就是这么记的，本轮把原地 Office 那两档并进来）
       renameTab(tab.id, baseName(path), path)
-      markRecent(path, 'doc')
-      pushHist('保存')
-      setStatus('已保存')
-      setTimeout(() => setStatus(''), 1500)
+      done.show([])
     } catch (e) {
-      await message(failDialog(e), { title: '保存失败', kind: 'error' })
-    }
-  }
-
-  // 直接格式 → OOXML 字节；.docx 标签的原地保存与「导出 docx」共用一条链路
-  const exportDocxTo = async (path: string) => {
-    if (!editor) return
-    try {
-      const bytes = await prosemirrorToDocxBytes(editor.getJSON() as PMNode, meta)
-      await writeBytes(path, bytes)
-      markRecent(path, 'doc')
-      setStatus('已保存（docx）')
-      setTimeout(() => setStatus(''), 1500)
-    } catch (e) {
-      await message(failDialog(e), { title: '导出 docx 失败', kind: 'error' })
-    }
-  }
-
-  const exportOdtTo = async (path: string) => {
-    if (!editor) return
-    try {
-      const bytes = await prosemirrorToOdtBytes(editor.getJSON() as PMNode, meta)
-      await writeBytes(path, bytes)
-      markRecent(path, 'doc')
-      setStatus('已保存（odt）')
-      setTimeout(() => setStatus(''), 1500)
-    } catch (e) {
-      await message(failDialog(e), { title: '导出 odt 失败', kind: 'error' })
+      // 失败那句顶掉上一句，原话留在悬停 title 里（v0.64 的规矩）；
+      // 不再弹阻塞式原生模态：v0.71 实测那枚 #32770 要把 Tauri 主线程占到用户点 OK 为止
+      done.cancel()
+      setStatus(failStatus(e, '保存失败'))
     }
   }
 
@@ -459,25 +456,25 @@ function DocEditor({ tab }: Props) {
   saveRef.current = saveOdoc
   useEffect(() => registerSaver(tab.id, (asNew) => saveRef.current(asNew)), [tab.id])
 
-  const exportDocx = async () => {
+  // 「导出 docx / 导出 odt」是另拷一份出去，不替标签记「已保存」的账：
+  // 所以这一路说「已导出 X」且不清 ● —— 与演示头的「已导出 pptx」同一个说法（v0.71 之前它说的是「已保存（docx）」）
+  const exportAs = async (ext: 'docx' | 'odt') => {
     if (!editor) return
     const path = await pickSaveFile(
-      (tab.path ? baseName(tab.path).replace(/\.[^.]+$/, '') : '未命名文档') + '.docx',
-      ['docx'],
+      (tab.path ? baseName(tab.path).replace(/\.[^.]+$/, '') : '未命名文档') + `.${ext}`,
+      [ext],
     )
     if (!path) return
-    await exportDocxTo(path)
+    try {
+      await (ext === 'docx' ? writeDocxTo(path, editor.getJSON() as PMNode) : writeOdtTo(path, editor.getJSON() as PMNode))
+      done.show([], `已导出 ${ext}`)
+    } catch (e) {
+      await message(failDialog(e), { title: `导出 ${ext} 失败`, kind: 'error' })
+    }
   }
 
-  const exportOdt = async () => {
-    if (!editor) return
-    const path = await pickSaveFile(
-      (tab.path ? baseName(tab.path).replace(/\.[^.]+$/, '') : '未命名文档') + '.odt',
-      ['odt'],
-    )
-    if (!path) return
-    await exportOdtTo(path)
-  }
+  const exportDocx = () => exportAs('docx')
+  const exportOdt = () => exportAs('odt')
 
   // WebView2 原生 PrintToPdf：主窗口按 @media print 样式矢量落盘，需当前文档标签处于激活态
   const exportPdfTo = async (path: string) => {
@@ -762,7 +759,7 @@ function DocEditor({ tab }: Props) {
   return (
     <div className="editor-pane">
       <div className="editor-toolbar">
-        {btn('保存', () => saveOdoc(false), false, '保存为 .odoc')}
+        {btn('保存', () => saveOdoc(false), false, 'Ctrl+S：原地写回当前文件（.docx/.odt 各按自己的格式，其余存 .odoc）')}
         {btn('另存为', () => saveOdoc(true))}
         {btn('导出 docx', exportDocx)}
         {btn('导出 odt', exportOdt, false, '导出 OpenDocument 文本（LibreOffice 系通用）')}
