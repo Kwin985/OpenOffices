@@ -33,6 +33,7 @@ import { pptxBytesToDeck } from '../lib/pptx-import'
 import { exportPdfWithOverlay } from '../lib/pdfprint'
 import { registerSaver } from '../lib/registry'
 import { failDialog, failStatus, statusText, statusTip } from '../lib/fail-msg'
+import { saveDoneTimer } from '../lib/save-status'
 import { pptTemplate } from '../lib/templates'
 import StaticSlide from './StaticSlide'
 
@@ -65,6 +66,12 @@ function PptEditor({ tab }: Props) {
   const markRecent = useApp((s) => s.markRecent)
   const dirtyRef = useRef(false)
   const fileRef = useRef<HTMLInputElement>(null)
+  // 收尾那句的时钟吃模块那一份（表格头 v0.69、PDF 头 v0.70、文档头 v0.71 都是它）：
+  // 这一头原先自持三枚裸 1500/2000/1500，隔 1 秒连按两次时第一趟的裸 1500 会把第二趟那句提前抹掉
+  // （v0.72 实测 R3：第二句只活 481~491ms）。进度门这一头不挂——三档整趟实测 5/8~9/13~14ms、longtask 0 条
+  const doneRef = useRef<ReturnType<typeof saveDoneTimer> | null>(null)
+  if (!doneRef.current) doneRef.current = saveDoneTimer(setStatus)
+  const done = doneRef.current
 
   useEffect(() => {
     if (!tab.path) return
@@ -200,6 +207,8 @@ function PptEditor({ tab }: Props) {
   }
 
   const save = async (asNew: boolean) => {
+    // 下一趟开跑先撤上一句的收尾时钟（否则它会在这一句说话说到一半时把屏抹成空白）
+    done.cancel()
     try {
       let path = asNew ? undefined : tab.path
       if (!path || /\.pptx?$/i.test(path)) {
@@ -209,10 +218,13 @@ function PptEditor({ tab }: Props) {
       await writeText(path, serializeDeck(deck))
       renameTab(tab.id, baseName(path), path)
       markRecent(path, 'ppt')
-      setStatus('已保存')
-      setTimeout(() => setStatus(''), 1500)
+      done.show([])
     } catch (e) {
-      await message(failDialog(e), { title: '保存失败', kind: 'error' })
+      // 失败那句顶掉上一句，原话留在悬停 title 里（v0.64 的规矩）。
+      // v0.72 之前这一路只弹阻塞式原生模态：实测只读件按 Ctrl+S 之后状态栏全程一句都没说
+      // （文本拍只有 [null]），而那一枚 #32770 要把主线程占到用户点 OK 为止
+      done.cancel()
+      setStatus(failStatus(e, '保存失败'))
     }
   }
 
@@ -226,8 +238,9 @@ function PptEditor({ tab }: Props) {
       if (!path) return
       await writeBytes(path, await deckToPptxBytes(deck))
       markRecent(path, 'ppt')
-      setStatus('已导出 pptx')
-      setTimeout(() => setStatus(''), 2000)
+      // 导出是另拷一份出去，不替标签记「已保存」的账（不清 ●），但收尾那句吃同一个时钟：
+      // base 由按下的那个动作给（v0.71 开的那个口子）。这一句的停留因此从自持的 2000 变成模块的 1500
+      done.show([], '已导出 pptx')
     } catch (e) {
       await message(failDialog(e), { title: '导出失败', kind: 'error' })
     }
@@ -252,10 +265,9 @@ function PptEditor({ tab }: Props) {
         pageSizeInches: [13.335, 7.5], // 338.7×190.5mm，正好容纳 1280×720px 幻灯片
       })
       markRecent(path, 'pdf')
-      setStatus('已导出 PDF')
+      done.show([], '已导出 PDF')
     } finally {
       root.unmount()
-      setTimeout(() => setStatus(''), 1500)
     }
   }
   const exportPdfToRef = useRef(exportPdfTo)
