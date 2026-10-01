@@ -50,7 +50,8 @@ import { odtToHtml, prosemirrorToOdtBytes } from '../lib/odt'
 import { registerSaver, runExclusive } from '../lib/registry'
 import { failDialog, failStatus, statusText, statusTip } from '../lib/fail-msg'
 import { saveDoneTimer } from '../lib/save-status'
-import { autoDelayMs, autoFailStatus, autoOkTip, createAutoSaveLedger } from '../lib/auto-save'
+import { autoDelayMs, autoFailStatus, autoOkTip, createAutoSaveLedger, staleFailureClaim } from '../lib/auto-save'
+import type { FailureClaim } from '../lib/auto-save'
 
 interface Props {
   tab: Tab
@@ -126,8 +127,12 @@ function DocEditor({ tab }: Props) {
   const doneRef = useRef<ReturnType<typeof saveDoneTimer> | null>(null)
   if (!doneRef.current) doneRef.current = saveDoneTimer(setStatus)
   const done = doneRef.current
-  // 自动保存那一路写在屏上的就是它自己这一句，别的句子（手动存盘的「已保存」）不归它撤
-  const autoStatusRef = useRef<string>('')
+  // 这一格上挂着的"这个文件没存上"那句：句子 + 它说的是哪个路径。
+  // v0.73 只按身份比较撤"自己那一句"，于是手动 Ctrl+S 的失败句不归任何人撤——
+  // v0.76 对照件（0.75 那支）实测：权限恢复后定时那一趟真的落盘了（● 也归 0），
+  // 那句「保存失败: …」仍从 213961ms 挂到整窗末拍 470959ms（比落定晚 20,614ms）。
+  // 规矩改成按路径认领：谁写的不要紧，只要它说的是**这个文件**没存上，而这个文件现在存上了，就该撤
+  const saveFailRef = useRef<FailureClaim | null>(null)
   // 这一路的失败账与延迟吃模块那一份（两头同一套规矩，v0.75）：必须是**每枚标签一份**，
   // 做成模块级单例的话，A 件写坏了会把 B 件的时钟也推后——而标签是全部常驻挂载的（v0.68）
   const autoLedgerRef = useRef<ReturnType<typeof createAutoSaveLedger> | null>(null)
@@ -437,6 +442,8 @@ function DocEditor({ tab }: Props) {
     // .odt / .docx 标签的 Ctrl+S 原地按各自格式导出，不能把 JSON 存档写进 Office 扩展名
     const inPlace = !asNew && cur && /\.(odt|docx)$/i.test(cur) ? cur : ''
     done.cancel()
+    // 这一趟要写的到底是哪个文件——失败那句得按路径认领，所以它得活到 catch 里
+    let target: string | undefined
     try {
       let path = inPlace || (asNew ? undefined : cur)
       if (!path) {
@@ -444,6 +451,7 @@ function DocEditor({ tab }: Props) {
         path = (await pickSaveFile(name.replace(/\.docx$/i, '') + '.odoc', ['odoc'])) ?? undefined
         if (!path) return
       }
+      target = path
       const json = editor.getJSON() as PMNode
       if (inPlace) {
         await (/\.odt$/i.test(inPlace) ? writeOdtTo(inPlace, json) : writeDocxTo(inPlace, json))
@@ -459,12 +467,17 @@ function DocEditor({ tab }: Props) {
       // 这一趟不算进自动保存的次数账：那句「已自动保存」说的只能是真的自动保存过
       auto.clearBackoff()
       autoRescheduleRef.current?.()
+      // 文件现在真的在盘上了 ⇒ 这一格上不再欠任何一句"没存上"（包括上一回定时留下的那句）
+      saveFailRef.current = null
       done.show([])
     } catch (e) {
       // 失败那句顶掉上一句，原话留在悬停 title 里（v0.64 的规矩）；
-      // 不再弹阻塞式原生模态：v0.71 实测那枚 #32770 要把 Tauri 主线程占到用户点 OK 为止
+      // 不再弹阻塞式原生模态：v0.71 实测那枚 #32770 要把 Tauri 主线程占到用户点 OK 为止。
+      // 登记的这一句要带上它说的是哪个文件：只有"同一个文件后来存上了"才有谁去撤它的资格（v0.76）
       done.cancel()
-      setStatus(failStatus(e, '保存失败'))
+      const msg = failStatus(e, '保存失败')
+      saveFailRef.current = { msg, path: target ?? '' }
+      setStatus(msg)
     }
   }
 
@@ -662,11 +675,13 @@ function DocEditor({ tab }: Props) {
               s.markDirty(tab.id, false)
               auto.noteSuccess()
               setAutoSavedAt(new Date())
-              // 只撤这一路自己写上去的那句：手动存盘的「已保存」不归它管（v0.65 那条「迟到一趟不许抹活着一趟」的形状）
-              const mine = autoStatusRef.current
-              if (mine) {
-                autoStatusRef.current = ''
-                setStatus((cur) => (cur === mine ? '' : cur))
+              // 撤掉这一格上"关于这个文件没存上"的那句（v0.73 只撤自己写的，v0.76 把认领做成按路径）：
+              // 手动那句说的就是同一个路径，而它现在过期了；别的文件/别的动作的句子仍然不许抹
+              // （v0.65 那条「迟到那一趟不许抹活着一趟」在这里没被改宽，只是认领范围对了）
+              const stale = staleFailureClaim(saveFailRef.current, p)
+              if (stale) {
+                saveFailRef.current = null
+                setStatus((cur) => (cur === stale ? '' : cur))
               }
             } catch (e) {
               // 失败仍然重试，但重试不再是唯一的动作：v0.73 实测改前这里 `catch {}`，
@@ -674,7 +689,7 @@ function DocEditor({ tab }: Props) {
               // 一次都没落盘，而屏上还在报一个已经不真的时间）。状态栏非空顺手把那条过期的成功宣称挤掉。
               auto.noteFailure()
               const msg = autoFailStatus(e, auto.fails, autoDelayMs(auto.fails))
-              autoStatusRef.current = msg
+              saveFailRef.current = { msg, path: p }
               setStatus(msg)
             }
           })

@@ -34,7 +34,8 @@ import { exportPdfWithOverlay } from '../lib/pdfprint'
 import { registerSaver, runExclusive } from '../lib/registry'
 import { failDialog, failStatus, statusText, statusTip } from '../lib/fail-msg'
 import { saveDoneTimer } from '../lib/save-status'
-import { autoDelayMs, autoFailStatus, autoOkTip, createAutoSaveLedger } from '../lib/auto-save'
+import { autoDelayMs, autoFailStatus, autoOkTip, createAutoSaveLedger, staleFailureClaim } from '../lib/auto-save'
+import type { FailureClaim } from '../lib/auto-save'
 import { pptTemplate } from '../lib/templates'
 import StaticSlide from './StaticSlide'
 
@@ -63,7 +64,8 @@ function PptEditor({ tab }: Props) {
   const [status, setStatus] = useState<string>(tab.path ? '正在加载…' : '')
   const [loaded, setLoaded] = useState(!tab.path)
   const [autoSavedAt, setAutoSavedAt] = useState<Date | null>(null)
-  const autoStatusRef = useRef<string>('')
+  // 这一格上挂着的"这个文件没存上"那句：句子 + 它说的是哪个路径（与文档头同一条规矩，v0.76）
+  const saveFailRef = useRef<FailureClaim | null>(null)
   // 定时那一路的失败账与延迟吃模块那一份（与文档头同一套规矩，v0.75），每枚标签一份：
   // 共享一份账会让一件的失败把另一件的时钟推后，而标签是全部常驻挂载的（v0.68）
   const autoLedgerRef = useRef<ReturnType<typeof createAutoSaveLedger> | null>(null)
@@ -221,12 +223,15 @@ function PptEditor({ tab }: Props) {
   const save = async (asNew: boolean) => {
     // 下一趟开跑先撤上一句的收尾时钟（否则它会在这一句说话说到一半时把屏抹成空白）
     done.cancel()
+    // 这一趟要写的到底是哪个文件——失败那句要按路径认领，所以它得活到 catch 里（与文档头同一条，v0.76）
+    let target: string | undefined
     try {
       let path = asNew ? undefined : tab.path
       if (!path || /\.pptx?$/i.test(path)) {
         path = (await pickSaveFile(`${deck.title || '演示'}.opd`, ['opd'])) ?? undefined
         if (!path) return
       }
+      target = path
       await writeText(path, serializeDeck(deck))
       renameTab(tab.id, baseName(path), path)
       markRecent(path, 'ppt')
@@ -234,13 +239,17 @@ function PptEditor({ tab }: Props) {
       // 但不进自动保存的次数账
       auto.clearBackoff()
       autoRescheduleRef.current?.()
+      // 文件现在真的在盘上了 ⇒ 这一格上不再欠任何一句"没存上"
+      saveFailRef.current = null
       done.show([])
     } catch (e) {
       // 失败那句顶掉上一句，原话留在悬停 title 里（v0.64 的规矩）。
       // v0.72 之前这一路只弹阻塞式原生模态：实测只读件按 Ctrl+S 之后状态栏全程一句都没说
       // （文本拍只有 [null]），而那一枚 #32770 要把主线程占到用户点 OK 为止
       done.cancel()
-      setStatus(failStatus(e, '保存失败'))
+      const msg = failStatus(e, '保存失败')
+      saveFailRef.current = { msg, path: target ?? '' }
+      setStatus(msg)
     }
   }
 
@@ -273,15 +282,17 @@ function PptEditor({ tab }: Props) {
               dirtyRef.current = false
               auto.noteSuccess()
               setAutoSavedAt(new Date())
-              const mine = autoStatusRef.current
-              if (mine) {
-                autoStatusRef.current = ''
-                setStatus((cur) => (cur === mine ? '' : cur))
+              // 撤掉这一格上"关于这个文件没存上"的那句（与文档头同一条规矩，v0.76）：
+              // 手动那句说的就是同一个路径，而它现在过期了；别的文件/别的动作的句子仍然不许抹
+              const stale = staleFailureClaim(saveFailRef.current, p)
+              if (stale) {
+                saveFailRef.current = null
+                setStatus((cur) => (cur === stale ? '' : cur))
               }
             } catch (e) {
               auto.noteFailure()
               const msg = autoFailStatus(e, auto.fails, autoDelayMs(auto.fails))
-              autoStatusRef.current = msg
+              saveFailRef.current = { msg, path: p }
               setStatus(msg)
             }
           })
