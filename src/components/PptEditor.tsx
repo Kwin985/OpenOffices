@@ -31,7 +31,7 @@ import {
 import { deckToPptxBytes } from '../lib/pptx-export'
 import { pptxBytesToDeck } from '../lib/pptx-import'
 import { exportPdfWithOverlay } from '../lib/pdfprint'
-import { registerSaver } from '../lib/registry'
+import { registerSaver, runExclusive } from '../lib/registry'
 import { failDialog, failStatus, statusText, statusTip } from '../lib/fail-msg'
 import { saveDoneTimer } from '../lib/save-status'
 import { pptTemplate } from '../lib/templates'
@@ -61,6 +61,8 @@ function PptEditor({ tab }: Props) {
   const [showNotes, setShowNotes] = useState(false)
   const [status, setStatus] = useState<string>(tab.path ? '正在加载…' : '')
   const [loaded, setLoaded] = useState(!tab.path)
+  const [autoSavedAt, setAutoSavedAt] = useState<Date | null>(null)
+  const autoStatusRef = useRef<string>('')
   const renameTab = useApp((s) => s.renameTab)
   const markDirty = useApp((s) => s.markDirty)
   const markRecent = useApp((s) => s.markRecent)
@@ -72,6 +74,8 @@ function PptEditor({ tab }: Props) {
   const doneRef = useRef<ReturnType<typeof saveDoneTimer> | null>(null)
   if (!doneRef.current) doneRef.current = saveDoneTimer(setStatus)
   const done = doneRef.current
+  const deckRef = useRef(deck)
+  deckRef.current = deck
 
   useEffect(() => {
     if (!tab.path) return
@@ -231,6 +235,41 @@ function PptEditor({ tab }: Props) {
   const saveRef = useRef(save)
   saveRef.current = save
   useEffect(() => registerSaver(tab.id, (asNew) => saveRef.current(asNew)), [tab.id])
+
+  // .opd 已落盘路径的自动保存（新片没挑过路径、.pptx 静默写盘会把保真丢了：这两档都走手动保存）。
+  // 四条规矩照 v0.73 的 .odoc 那一路：跳过不脏、只在写成功之后 markDirty+setAutoSavedAt、
+  // 只撤自己那句（手动存盘的「已保存」不归它管）、失败上状态栏顶掉过期时间且下次仍重试。
+  // 这一头的句子说的仍是「最近一次自动保存的结果」，不挂进度门、也不共用模块那枚 saveDoneTimer——
+  // v0.72 前置实测这一路整趟 5~14ms、longtask 0 条，30 秒才是常态；1500ms 收尾反而会把失败那句抹掉。
+  // v0.74 新增的第三条约束：走 registry 的 runExclusive，与手动 Ctrl+S 共用同一把在途锁
+  // （实测：.odoc 那一路改前绕过这一层，三趟全重现"旧快照后落地、用户新打的半句被吞"）。
+  useEffect(() => {
+    if (!loaded) return
+    const p = tab.path
+    if (!p?.toLowerCase().endsWith('.opd')) return
+    const iv = setInterval(async () => {
+      const s = useApp.getState()
+      if (!s.tabs.some((t) => t.id === tab.id && t.dirty)) return
+      await runExclusive(tab.id, async () => {
+        try {
+          await writeText(p, serializeDeck(deckRef.current))
+          s.markDirty(tab.id, false)
+          dirtyRef.current = false
+          setAutoSavedAt(new Date())
+          const mine = autoStatusRef.current
+          if (mine) {
+            autoStatusRef.current = ''
+            setStatus((cur) => (cur === mine ? '' : cur))
+          }
+        } catch (e) {
+          const msg = failStatus(e, '自动保存失败')
+          autoStatusRef.current = msg
+          setStatus(msg)
+        }
+      })
+    }, 30_000)
+    return () => clearInterval(iv)
+  }, [loaded, tab.path, tab.id])
 
   const exportPptx = async () => {
     try {
@@ -506,6 +545,9 @@ function PptEditor({ tab }: Props) {
           <span className="editor-status" title={statusTip(status)}>
             {statusText(status)}
           </span>
+        )}
+        {!status && autoSavedAt && (
+          <span className="editor-status">已自动保存 {autoSavedAt.toLocaleTimeString()}</span>
         )}
         <span className="editor-hint">存档 .opd · 导入/导出 pptx (ECMA-376) · 生成: pptxgenjs (MIT)</span>
       </div>

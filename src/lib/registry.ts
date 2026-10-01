@@ -28,6 +28,32 @@ export function saveTab(tabId: string, asNew = false): boolean {
   return true
 }
 
+// 定时自动保存那一路专用：与 saveTab 共用同一把在途锁，但**不共用它的句子**。
+// v0.74 实测：改前 .odoc 的 30 秒定时直接调 writeText，绕过 running/again；在定时那枚写刚出门时
+// 手动按 Ctrl+S，两枚 write_text_file 同一毫秒各发一次（三趟全重现），而旧快照往往后落地
+// ——屏上「已保存」说了，文件里那半句新打的字没落。这一层要买的就是那一格。
+// 语义：锁空闲 ⇒ 跑 fn；锁忙 ⇒ 本趟跳过（手动那趟的快照本来就更新，它落完就已经是最新内容存了盘，
+// 30 秒后下一趟再来）。fn 跑完若 again 被置位（锁在途时用户按了 Ctrl+S），交给 drain 补跑，
+// 让手动的句子与 fresh 快照最终落地——不补跑就等于把用户那一下吃掉，锁不卡死但事没做。
+export async function runExclusive(tabId: string, fn: () => Promise<void>): Promise<boolean> {
+  if (running.has(tabId)) return false
+  running.add(tabId)
+  try {
+    await fn()
+  } finally {
+    running.delete(tabId)
+    if (again.has(tabId)) {
+      const saver = savers.get(tabId)
+      if (saver) {
+        const asNew = again.get(tabId) as boolean
+        again.delete(tabId)
+        void drain(tabId, saver, asNew)
+      }
+    }
+  }
+  return true
+}
+
 async function drain(tabId: string, saver: Saver, asNew: boolean): Promise<void> {
   running.add(tabId)
   let next = asNew

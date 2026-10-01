@@ -47,7 +47,7 @@ import { ParagraphStyle, ruleOf, type LineRule } from '../lib/paragraph-style'
 import { FindReplace, frPluginKey, activeIndexOf } from '../lib/find-replace'
 import { docTemplate } from '../lib/templates'
 import { odtToHtml, prosemirrorToOdtBytes } from '../lib/odt'
-import { registerSaver } from '../lib/registry'
+import { registerSaver, runExclusive } from '../lib/registry'
 import { failDialog, failStatus, statusText, statusTip } from '../lib/fail-msg'
 import { saveDoneTimer } from '../lib/save-status'
 
@@ -632,24 +632,30 @@ function DocEditor({ tab }: Props) {
     const iv = setInterval(async () => {
       const s = useApp.getState()
       if (!s.tabs.some((t) => t.id === tab.id && t.dirty)) return
-      try {
-        await writeText(p, JSON.stringify({ ...ODOC_HEADER, content: editor.getJSON(), meta: metaRef.current }))
-        s.markDirty(tab.id, false)
-        setAutoSavedAt(new Date())
-        // 只撤这一路自己写上去的那句：手动存盘的「已保存」不归它管（v0.65 那条「迟到一趟不许抹活着一趟」的形状）
-        const mine = autoStatusRef.current
-        if (mine) {
-          autoStatusRef.current = ''
-          setStatus((cur) => (cur === mine ? '' : cur))
+      // v0.74 实测（三趟全重现）：这一路改前直接调 writeText、绕过 registry 的在途锁，
+      // 于是"定时那枚写刚出门 + 手动 Ctrl+S"会同一毫秒各发一枚 write_text_file，
+      // 旧快照往往最后落地——屏上「已保存」说了，文件里那半句新打的字没落。
+      // 走 runExclusive：锁忙 ⇒ 本趟跳过（手动那趟的快照本来就更新、它落完就是最新内容存了盘）。
+      await runExclusive(tab.id, async () => {
+        try {
+          await writeText(p, JSON.stringify({ ...ODOC_HEADER, content: editor.getJSON(), meta: metaRef.current }))
+          s.markDirty(tab.id, false)
+          setAutoSavedAt(new Date())
+          // 只撤这一路自己写上去的那句：手动存盘的「已保存」不归它管（v0.65 那条「迟到一趟不许抹活着一趟」的形状）
+          const mine = autoStatusRef.current
+          if (mine) {
+            autoStatusRef.current = ''
+            setStatus((cur) => (cur === mine ? '' : cur))
+          }
+        } catch (e) {
+          // 失败仍然下一轮自然重试，但重试不再是唯一的动作：v0.73 实测改前这里 `catch {}`，
+          // 于是上一轮那句「已自动保存 16:11:20」会在只读的件上一直挂到窗口关掉（写请求每 30 秒出一次门、
+          // 一次都没落盘，而屏上还在报一个已经不真的时间）。状态栏非空顺手把那条过期的成功宣称挤掉。
+          const msg = failStatus(e, '自动保存失败')
+          autoStatusRef.current = msg
+          setStatus(msg)
         }
-      } catch (e) {
-        // 失败仍然下一轮自然重试，但重试不再是唯一的动作：v0.73 实测改前这里 `catch {}`，
-        // 于是上一轮那句「已自动保存 16:11:20」会在只读的件上一直挂到窗口关掉（写请求每 30 秒出一次门、
-        // 一次都没落盘，而屏上还在报一个已经不真的时间）。状态栏非空顺手把那条过期的成功宣称挤掉。
-        const msg = failStatus(e, '自动保存失败')
-        autoStatusRef.current = msg
-        setStatus(msg)
-      }
+      })
     }, 30_000)
     return () => clearInterval(iv)
   }, [editor, tab.path, tab.id])
