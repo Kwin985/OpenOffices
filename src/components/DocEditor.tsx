@@ -125,6 +125,8 @@ function DocEditor({ tab }: Props) {
   const doneRef = useRef<ReturnType<typeof saveDoneTimer> | null>(null)
   if (!doneRef.current) doneRef.current = saveDoneTimer(setStatus)
   const done = doneRef.current
+  // 自动保存那一路写在屏上的就是它自己这一句，别的句子（手动存盘的「已保存」）不归它撤
+  const autoStatusRef = useRef<string>('')
 
   const editor = useEditor({
     extensions: [
@@ -619,7 +621,10 @@ function DocEditor({ tab }: Props) {
     return () => clearInterval(iv)
   }, [editor, tab.id])
 
-  // .odoc 已落盘路径的静默自动保存（新/ foreign 路径不抢对话，走手动保存）
+  // .odoc 已落盘路径的自动保存（新/ foreign 路径不抢对话，走手动保存）。
+  // 这一路的句子说的是「最近一次自动保存的结果」，不是收尾句：所以它不挂进度门、也不共用模块那枚
+  // saveDoneTimer——v0.73 实测这一路写自身 5~8ms，两枚时钟周期之间的 30 秒才是它的常态，
+  // 而那句失败的话要一直挂到下一次结果出来为止，1500ms 的收尾反而会把它抹掉。
   useEffect(() => {
     if (!editor) return
     const p = tab.path
@@ -631,8 +636,19 @@ function DocEditor({ tab }: Props) {
         await writeText(p, JSON.stringify({ ...ODOC_HEADER, content: editor.getJSON(), meta: metaRef.current }))
         s.markDirty(tab.id, false)
         setAutoSavedAt(new Date())
-      } catch {
-        /* 写盘失败下一轮自然重试，不打断编辑 */
+        // 只撤这一路自己写上去的那句：手动存盘的「已保存」不归它管（v0.65 那条「迟到一趟不许抹活着一趟」的形状）
+        const mine = autoStatusRef.current
+        if (mine) {
+          autoStatusRef.current = ''
+          setStatus((cur) => (cur === mine ? '' : cur))
+        }
+      } catch (e) {
+        // 失败仍然下一轮自然重试，但重试不再是唯一的动作：v0.73 实测改前这里 `catch {}`，
+        // 于是上一轮那句「已自动保存 16:11:20」会在只读的件上一直挂到窗口关掉（写请求每 30 秒出一次门、
+        // 一次都没落盘，而屏上还在报一个已经不真的时间）。状态栏非空顺手把那条过期的成功宣称挤掉。
+        const msg = failStatus(e, '自动保存失败')
+        autoStatusRef.current = msg
+        setStatus(msg)
       }
     }, 30_000)
     return () => clearInterval(iv)
