@@ -50,6 +50,7 @@ import { odtToHtml, prosemirrorToOdtBytes } from '../lib/odt'
 import { registerSaver, runExclusive } from '../lib/registry'
 import { failDialog, failStatus, statusText, statusTip } from '../lib/fail-msg'
 import { saveDoneTimer } from '../lib/save-status'
+import { autoDelayMs, autoFailStatus, autoOkTip, createAutoSaveLedger } from '../lib/auto-save'
 
 interface Props {
   tab: Tab
@@ -127,6 +128,15 @@ function DocEditor({ tab }: Props) {
   const done = doneRef.current
   // 自动保存那一路写在屏上的就是它自己这一句，别的句子（手动存盘的「已保存」）不归它撤
   const autoStatusRef = useRef<string>('')
+  // 这一路的失败账与延迟吃模块那一份（两头同一套规矩，v0.75）：必须是**每枚标签一份**，
+  // 做成模块级单例的话，A 件写坏了会把 B 件的时钟也推后——而标签是全部常驻挂载的（v0.68）
+  const autoLedgerRef = useRef<ReturnType<typeof createAutoSaveLedger> | null>(null)
+  if (!autoLedgerRef.current) autoLedgerRef.current = createAutoSaveLedger()
+  const auto = autoLedgerRef.current
+  // 「撤掉在途那枚时钟、按账重挂一枚」的通道，由下面那一路定时效果交出来（v0.75）。
+  // 归零账只管下一枚延迟，而已经排上的那一枚最坏还要等 240 秒——用户刚按成一次 Ctrl+S，
+  // 这时候把节奏拉回 30 秒才是他按下那一下的意思，所以手动成功那一路要连时钟一起重挂
+  const autoRescheduleRef = useRef<(() => void) | null>(null)
 
   const editor = useEditor({
     extensions: [
@@ -445,6 +455,10 @@ function DocEditor({ tab }: Props) {
       // 落盘成功才记这笔账：renameTab 里带 dirty:false，标签的 ● 从此与文件一致
       // （v0.63 起 .odoc 那一路就是这么记的，本轮把原地 Office 那两档并进来）
       renameTab(tab.id, baseName(path), path)
+      // 用户自己按成功了 ⇒ 退避归零并撤掉在途的那一枚，定时那一路立刻回到 30 秒的节奏（v0.75）。
+      // 这一趟不算进自动保存的次数账：那句「已自动保存」说的只能是真的自动保存过
+      auto.clearBackoff()
+      autoRescheduleRef.current?.()
       done.show([])
     } catch (e) {
       // 失败那句顶掉上一句，原话留在悬停 title 里（v0.64 的规矩）；
@@ -625,39 +639,62 @@ function DocEditor({ tab }: Props) {
   // 这一路的句子说的是「最近一次自动保存的结果」，不是收尾句：所以它不挂进度门、也不共用模块那枚
   // saveDoneTimer——v0.73 实测这一路写自身 5~8ms，两枚时钟周期之间的 30 秒才是它的常态，
   // 而那句失败的话要一直挂到下一次结果出来为止，1500ms 的收尾反而会把它抹掉。
+  // v0.74 新增的约束：走 registry 的 runExclusive，与手动 Ctrl+S 共用同一把在途锁。
+  // v0.75 换掉的是"隔多久再来一枚"：setInterval 没有退避（实测只读件 4 分钟敲 8 次、每次注定失败），
+  // 改成自续的 setTimeout，延迟由这一路的账给；跳过与失败分开记（锁忙那一趟根本没跑，不算失败）。
   useEffect(() => {
     if (!editor) return
     const p = tab.path
     if (!p?.toLowerCase().endsWith('.odoc')) return
-    const iv = setInterval(async () => {
-      const s = useApp.getState()
-      if (!s.tabs.some((t) => t.id === tab.id && t.dirty)) return
-      // v0.74 实测（三趟全重现）：这一路改前直接调 writeText、绕过 registry 的在途锁，
-      // 于是"定时那枚写刚出门 + 手动 Ctrl+S"会同一毫秒各发一枚 write_text_file，
-      // 旧快照往往最后落地——屏上「已保存」说了，文件里那半句新打的字没落。
-      // 走 runExclusive：锁忙 ⇒ 本趟跳过（手动那趟的快照本来就更新、它落完就是最新内容存了盘）。
-      await runExclusive(tab.id, async () => {
-        try {
-          await writeText(p, JSON.stringify({ ...ODOC_HEADER, content: editor.getJSON(), meta: metaRef.current }))
-          s.markDirty(tab.id, false)
-          setAutoSavedAt(new Date())
-          // 只撤这一路自己写上去的那句：手动存盘的「已保存」不归它管（v0.65 那条「迟到一趟不许抹活着一趟」的形状）
-          const mine = autoStatusRef.current
-          if (mine) {
-            autoStatusRef.current = ''
-            setStatus((cur) => (cur === mine ? '' : cur))
-          }
-        } catch (e) {
-          // 失败仍然下一轮自然重试，但重试不再是唯一的动作：v0.73 实测改前这里 `catch {}`，
-          // 于是上一轮那句「已自动保存 16:11:20」会在只读的件上一直挂到窗口关掉（写请求每 30 秒出一次门、
-          // 一次都没落盘，而屏上还在报一个已经不真的时间）。状态栏非空顺手把那条过期的成功宣称挤掉。
-          const msg = failStatus(e, '自动保存失败')
-          autoStatusRef.current = msg
-          setStatus(msg)
+    let stopped = false
+    let timer: number | undefined
+    const schedule = () => {
+      timer = window.setTimeout(async () => {
+        const s = useApp.getState()
+        if (s.tabs.some((t) => t.id === tab.id && t.dirty)) {
+          // v0.74 实测（三趟全重现）：这一路改前直接调 writeText、绕过 registry 的在途锁，
+          // 于是"定时那枚写刚出门 + 手动 Ctrl+S"会同一毫秒各发一枚 write_text_file，
+          // 旧快照往往最后落地——屏上「已保存」说了，文件里那半句新打的字没落。
+          // 锁忙 ⇒ 本趟跳过（手动那趟的快照本来就更新、它落完就是最新内容存了盘），而跳过不进退避的账。
+          await runExclusive(tab.id, async () => {
+            try {
+              await writeText(p, JSON.stringify({ ...ODOC_HEADER, content: editor.getJSON(), meta: metaRef.current }))
+              s.markDirty(tab.id, false)
+              auto.noteSuccess()
+              setAutoSavedAt(new Date())
+              // 只撤这一路自己写上去的那句：手动存盘的「已保存」不归它管（v0.65 那条「迟到一趟不许抹活着一趟」的形状）
+              const mine = autoStatusRef.current
+              if (mine) {
+                autoStatusRef.current = ''
+                setStatus((cur) => (cur === mine ? '' : cur))
+              }
+            } catch (e) {
+              // 失败仍然重试，但重试不再是唯一的动作：v0.73 实测改前这里 `catch {}`，
+              // 于是上一轮那句「已自动保存 16:11:20」会在只读的件上一直挂到窗口关掉（写请求每 30 秒出一次门、
+              // 一次都没落盘，而屏上还在报一个已经不真的时间）。状态栏非空顺手把那条过期的成功宣称挤掉。
+              auto.noteFailure()
+              const msg = autoFailStatus(e, auto.fails, autoDelayMs(auto.fails))
+              autoStatusRef.current = msg
+              setStatus(msg)
+            }
+          })
         }
-      })
-    }, 30_000)
-    return () => clearInterval(iv)
+        if (!stopped) schedule()
+      }, autoDelayMs(auto.fails))
+    }
+    schedule()
+    // 交给手动存盘那一路：撤掉在途的这一枚，按当前的账重挂一枚
+    // （只归零账不重挂的话，用户按成一次 Ctrl+S 之后定时那一路仍要等已经在途的那枚 240 秒）
+    autoRescheduleRef.current = () => {
+      if (stopped) return
+      if (timer !== undefined) window.clearTimeout(timer)
+      schedule()
+    }
+    return () => {
+      stopped = true
+      autoRescheduleRef.current = null
+      if (timer !== undefined) window.clearTimeout(timer)
+    }
   }, [editor, tab.path, tab.id])
 
   const restoreHist = (h: { json: string; metaJson: string; note: string }) => {
@@ -821,7 +858,9 @@ function DocEditor({ tab }: Props) {
           </span>
         )}
         {!status && autoSavedAt && (
-          <span className="editor-status">已自动保存 {autoSavedAt.toLocaleTimeString()}</span>
+          <span className="editor-status" title={autoOkTip(auto)}>
+            已自动保存 {autoSavedAt.toLocaleTimeString()}
+          </span>
         )}
         <span className="editor-hint">
           字数 {counts.words} · 字符 {counts.chars} · 约{' '}

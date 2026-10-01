@@ -34,6 +34,7 @@ import { exportPdfWithOverlay } from '../lib/pdfprint'
 import { registerSaver, runExclusive } from '../lib/registry'
 import { failDialog, failStatus, statusText, statusTip } from '../lib/fail-msg'
 import { saveDoneTimer } from '../lib/save-status'
+import { autoDelayMs, autoFailStatus, autoOkTip, createAutoSaveLedger } from '../lib/auto-save'
 import { pptTemplate } from '../lib/templates'
 import StaticSlide from './StaticSlide'
 
@@ -63,6 +64,13 @@ function PptEditor({ tab }: Props) {
   const [loaded, setLoaded] = useState(!tab.path)
   const [autoSavedAt, setAutoSavedAt] = useState<Date | null>(null)
   const autoStatusRef = useRef<string>('')
+  // 定时那一路的失败账与延迟吃模块那一份（与文档头同一套规矩，v0.75），每枚标签一份：
+  // 共享一份账会让一件的失败把另一件的时钟推后，而标签是全部常驻挂载的（v0.68）
+  const autoLedgerRef = useRef<ReturnType<typeof createAutoSaveLedger> | null>(null)
+  if (!autoLedgerRef.current) autoLedgerRef.current = createAutoSaveLedger()
+  const auto = autoLedgerRef.current
+  // 「撤掉在途那枚时钟、按账重挂一枚」的通道，由下面那一路定时效果交出来（与文档头同一条）
+  const autoRescheduleRef = useRef<(() => void) | null>(null)
   const renameTab = useApp((s) => s.renameTab)
   const markDirty = useApp((s) => s.markDirty)
   const markRecent = useApp((s) => s.markRecent)
@@ -222,6 +230,10 @@ function PptEditor({ tab }: Props) {
       await writeText(path, serializeDeck(deck))
       renameTab(tab.id, baseName(path), path)
       markRecent(path, 'ppt')
+      // 用户自己按成功了 ⇒ 定时那一路的退避归零并重挂一枚（与文档头同一条规矩，v0.75），
+      // 但不进自动保存的次数账
+      auto.clearBackoff()
+      autoRescheduleRef.current?.()
       done.show([])
     } catch (e) {
       // 失败那句顶掉上一句，原话留在悬停 title 里（v0.64 的规矩）。
@@ -241,34 +253,54 @@ function PptEditor({ tab }: Props) {
   // 只撤自己那句（手动存盘的「已保存」不归它管）、失败上状态栏顶掉过期时间且下次仍重试。
   // 这一头的句子说的仍是「最近一次自动保存的结果」，不挂进度门、也不共用模块那枚 saveDoneTimer——
   // v0.72 前置实测这一路整趟 5~14ms、longtask 0 条，30 秒才是常态；1500ms 收尾反而会把失败那句抹掉。
-  // v0.74 新增的第三条约束：走 registry 的 runExclusive，与手动 Ctrl+S 共用同一把在途锁
-  // （实测：.odoc 那一路改前绕过这一层，三趟全重现"旧快照后落地、用户新打的半句被吞"）。
+  // v0.74 新增：走 registry 的 runExclusive，与手动 Ctrl+S 共用同一把在途锁。
+  // v0.75 新增：延迟由 lib/auto-save.ts 的账给（连续失败翻倍、240 秒封顶），定时器自续；
+  // 与文档头共用同一套公式 ⇒ 两头说的话与节奏不会分叉（v0.74 的回归判据就是这一条同步）。
   useEffect(() => {
     if (!loaded) return
     const p = tab.path
     if (!p?.toLowerCase().endsWith('.opd')) return
-    const iv = setInterval(async () => {
-      const s = useApp.getState()
-      if (!s.tabs.some((t) => t.id === tab.id && t.dirty)) return
-      await runExclusive(tab.id, async () => {
-        try {
-          await writeText(p, serializeDeck(deckRef.current))
-          s.markDirty(tab.id, false)
-          dirtyRef.current = false
-          setAutoSavedAt(new Date())
-          const mine = autoStatusRef.current
-          if (mine) {
-            autoStatusRef.current = ''
-            setStatus((cur) => (cur === mine ? '' : cur))
-          }
-        } catch (e) {
-          const msg = failStatus(e, '自动保存失败')
-          autoStatusRef.current = msg
-          setStatus(msg)
+    let stopped = false
+    let timer: number | undefined
+    const schedule = () => {
+      timer = window.setTimeout(async () => {
+        const s = useApp.getState()
+        if (s.tabs.some((t) => t.id === tab.id && t.dirty)) {
+          await runExclusive(tab.id, async () => {
+            try {
+              await writeText(p, serializeDeck(deckRef.current))
+              s.markDirty(tab.id, false)
+              dirtyRef.current = false
+              auto.noteSuccess()
+              setAutoSavedAt(new Date())
+              const mine = autoStatusRef.current
+              if (mine) {
+                autoStatusRef.current = ''
+                setStatus((cur) => (cur === mine ? '' : cur))
+              }
+            } catch (e) {
+              auto.noteFailure()
+              const msg = autoFailStatus(e, auto.fails, autoDelayMs(auto.fails))
+              autoStatusRef.current = msg
+              setStatus(msg)
+            }
+          })
         }
-      })
-    }, 30_000)
-    return () => clearInterval(iv)
+        if (!stopped) schedule()
+      }, autoDelayMs(auto.fails))
+    }
+    schedule()
+    // 交给手动存盘那一路：撤掉在途的这一枚，按当前的账重挂一枚（与文档头同一条规矩，v0.75）
+    autoRescheduleRef.current = () => {
+      if (stopped) return
+      if (timer !== undefined) window.clearTimeout(timer)
+      schedule()
+    }
+    return () => {
+      stopped = true
+      autoRescheduleRef.current = null
+      if (timer !== undefined) window.clearTimeout(timer)
+    }
   }, [loaded, tab.path, tab.id])
 
   const exportPptx = async () => {
@@ -547,7 +579,9 @@ function PptEditor({ tab }: Props) {
           </span>
         )}
         {!status && autoSavedAt && (
-          <span className="editor-status">已自动保存 {autoSavedAt.toLocaleTimeString()}</span>
+          <span className="editor-status" title={autoOkTip(auto)}>
+            已自动保存 {autoSavedAt.toLocaleTimeString()}
+          </span>
         )}
         <span className="editor-hint">存档 .opd · 导入/导出 pptx (ECMA-376) · 生成: pptxgenjs (MIT)</span>
       </div>
