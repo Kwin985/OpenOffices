@@ -76,7 +76,6 @@ function PptEditor({ tab }: Props) {
   const renameTab = useApp((s) => s.renameTab)
   const markDirty = useApp((s) => s.markDirty)
   const markRecent = useApp((s) => s.markRecent)
-  const dirtyRef = useRef(false)
   const fileRef = useRef<HTMLInputElement>(null)
   // 收尾那句的时钟吃模块那一份（表格头 v0.69、PDF 头 v0.70、文档头 v0.71 都是它）：
   // 这一头原先自持三枚裸 1500/2000/1500，隔 1 秒连按两次时第一趟的裸 1500 会把第二趟那句提前抹掉
@@ -112,10 +111,10 @@ function PptEditor({ tab }: Props) {
     setDeck((d) => {
       const next: Deck = { ...d, slides: d.slides.map((s) => ({ ...s })) }
       fn(next)
-      if (!dirtyRef.current) {
-        dirtyRef.current = true
-        markDirty(tab.id, true)
-      }
+      // 每次都标脏，不再有"只在第一次标"那道闸：去重 store 的 markDirty 本来就做（脏值没变不触发订阅），
+      // 而那道闸**永远不会复位**（唯一复位在定时成功那一路，手动成功走 renameTab 清的是标签的 dirty 不是 ref）
+      // ⇒ v0.78 实测：手动存成功之后再打字，● 回不来、定时的写不再发、晚打的字面永远不落盘（数字在 README）
+      markDirty(tab.id, true)
       return next
     })
   }
@@ -281,7 +280,6 @@ function PptEditor({ tab }: Props) {
         try {
           await writeText(p, serializeDeck(deckRef.current))
           s.markDirty(tab.id, false)
-          dirtyRef.current = false
           auto.noteSuccess()
           setAutoSavedAt(new Date())
           // 撤掉这一格上"关于这个文件没存上"的那句（与文档头同一条规矩，v0.76）：
