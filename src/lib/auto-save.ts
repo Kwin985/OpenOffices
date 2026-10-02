@@ -1,7 +1,8 @@
+import { getCurrentWindow } from '@tauri-apps/api/window'
 import { failStatus } from './fail-msg'
 
 /**
- * 定时自动保存那一路的账：连续失败几回、下一枚隔多久、那两句话怎么说，只写在这一处。
+ * 定时自动保存那一路的账：连续失败几回、下一枚隔多久、焦点回来时能不能再探一次、那两句话怎么说，只写在这一处。
  *
  * 照 v0.54「纸上账目的文案只写一处」那一条先例（v0.64 失败归因 / v0.65 密码提示 / v0.66 搜索进度 /
  * v0.69~0.72 存盘的收尾时钟），两头（`.odoc` 与 `.opd`）共吃这一份，不各自抄延迟公式。
@@ -57,6 +58,23 @@ export interface AutoSaveLedger {
   /** 手动存盘成功：退避归零（调用方还要撤掉在途那一枚重挂，否则下一次仍是长的那枚），
    *  但次数账不动——那一趟不是我这一路存上的 */
   clearBackoff(): void
+  /**
+   * 这一路最近一次真的把写请求发出门的时刻（页内毫秒时钟；0 = 还没敲过门）。
+   * 手动 Ctrl+S 不登记这一枚（v0.76 那条"手动那一趟不是自动那一路的账"继续成立）：手动刚存成功之后
+   * 标签本来就不脏，探写在那一步就返回了，不会真多发一枚写请求。
+   */
+  lastAttemptAt: number
+  /** 真的发过一枚写请求才登记：锁忙跳过、不脏跳过都不算（它们没有敲过门）*/
+  noteAttempt(): void
+  /**
+   * 窗口重新拿到焦点时这一路能不能立刻再探一次：两次真敲过门之间至少隔 AUTO_BASE_MS。
+   *
+   * 下界定在基数而不是"来一次焦点就探一次"，量的是 v0.77 前置实测②：连打 6 次 Alt+Tab 只到 3 枚
+   * `tauri://focus`，时刻 [24562,28097,31709]、相邻间隔 [3535,3612]ms ⇒ 人手能造成的最快闪动已经
+   * 比 30 秒慢一个数量级，而焦点探写的用途是"权限解开了"这一件事，不是保存每一次按键——
+   * 一旦允许比基数更频繁，它就成了 v0.75 要修的那个"明知不行还一直敲"的新入口（而且是用户看不见的）。
+   */
+  canProbe(now?: number): boolean
 }
 
 export function createAutoSaveLedger(): AutoSaveLedger {
@@ -75,6 +93,41 @@ export function createAutoSaveLedger(): AutoSaveLedger {
     clearBackoff() {
       this.fails = 0
     },
+    lastAttemptAt: 0,
+    noteAttempt() {
+      this.lastAttemptAt = Date.now()
+    },
+    canProbe(now = Date.now()) {
+      return now - this.lastAttemptAt >= AUTO_BASE_MS
+    },
+  }
+}
+
+/**
+ * 窗口重新拿到焦点时叫一次回调（焦点探写的入口，两头共用）。
+ *
+ * 为什么走这一层而不是各头自己写监听：原始事件对象是 `{"event":"tauri://focus","payload":null,"id":6}`
+ * ——**没有窗口标签**，用 `{kind:'Any'}` 监听分不开主窗与演讲者窗（v0.77 前置实测①量出来的），
+ * 而 `getCurrentWindow().onFocusChanged()` 的监听目标是 `{kind:'Window', label}`，只报"这一扇窗"的焦点。
+ * 监听侧的权限 `core:default` 本来就给了（capabilities 不用改）；`is_focused` 不能替代事件——实测外部
+ * 把前台偷走再还给应用时 `is_focused` 仍是 false，事件只在真正翻转的那一刻到。
+ *
+ * `then` 之后才发现"这一趟已经被换掉了"（StrictMode 双挂载），所以要补一次取消而不是丢掉它。
+ */
+export function onFocusBack(fn: () => void): () => void {
+  let stopped = false
+  let un: (() => void) | null = null
+  getCurrentWindow()
+    .onFocusChanged((e) => {
+      if (!stopped && e.payload) fn()
+    })
+    .then((u) => {
+      if (stopped) u()
+      else un = u
+    })
+  return () => {
+    stopped = true
+    if (un) un()
   }
 }
 

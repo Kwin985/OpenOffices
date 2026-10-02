@@ -34,7 +34,7 @@ import { exportPdfWithOverlay } from '../lib/pdfprint'
 import { registerSaver, runExclusive } from '../lib/registry'
 import { failDialog, failStatus, statusText, statusTip } from '../lib/fail-msg'
 import { saveDoneTimer } from '../lib/save-status'
-import { autoDelayMs, autoFailStatus, autoOkTip, createAutoSaveLedger, staleFailureClaim } from '../lib/auto-save'
+import { autoDelayMs, autoFailStatus, autoOkTip, createAutoSaveLedger, onFocusBack, staleFailureClaim } from '../lib/auto-save'
 import type { FailureClaim } from '../lib/auto-save'
 import { pptTemplate } from '../lib/templates'
 import StaticSlide from './StaticSlide'
@@ -265,38 +265,43 @@ function PptEditor({ tab }: Props) {
   // v0.74 新增：走 registry 的 runExclusive，与手动 Ctrl+S 共用同一把在途锁。
   // v0.75 新增：延迟由 lib/auto-save.ts 的账给（连续失败翻倍、240 秒封顶），定时器自续；
   // 与文档头共用同一套公式 ⇒ 两头说的话与节奏不会分叉（v0.74 的回归判据就是这一条同步）。
+  // v0.77 两头同时加：窗口重新拿到焦点 ⇒ 立刻探一次，不等下一枚退避时钟。
   useEffect(() => {
     if (!loaded) return
     const p = tab.path
     if (!p?.toLowerCase().endsWith('.opd')) return
     let stopped = false
     let timer: number | undefined
+    // 与文档头同一份"敲一次门"的动作：定时那一枚与焦点探写共用，区别只在什么时候被允许跑（v0.77）
+    const attempt = async () => {
+      const s = useApp.getState()
+      if (!s.tabs.some((t) => t.id === tab.id && t.dirty)) return
+      await runExclusive(tab.id, async () => {
+        auto.noteAttempt()
+        try {
+          await writeText(p, serializeDeck(deckRef.current))
+          s.markDirty(tab.id, false)
+          dirtyRef.current = false
+          auto.noteSuccess()
+          setAutoSavedAt(new Date())
+          // 撤掉这一格上"关于这个文件没存上"的那句（与文档头同一条规矩，v0.76）：
+          // 手动那句说的就是同一个路径，而它现在过期了；别的文件/别的动作的句子仍然不许抹
+          const stale = staleFailureClaim(saveFailRef.current, p)
+          if (stale) {
+            saveFailRef.current = null
+            setStatus((cur) => (cur === stale ? '' : cur))
+          }
+        } catch (e) {
+          auto.noteFailure()
+          const msg = autoFailStatus(e, auto.fails, autoDelayMs(auto.fails))
+          saveFailRef.current = { msg, path: p }
+          setStatus(msg)
+        }
+      })
+    }
     const schedule = () => {
       timer = window.setTimeout(async () => {
-        const s = useApp.getState()
-        if (s.tabs.some((t) => t.id === tab.id && t.dirty)) {
-          await runExclusive(tab.id, async () => {
-            try {
-              await writeText(p, serializeDeck(deckRef.current))
-              s.markDirty(tab.id, false)
-              dirtyRef.current = false
-              auto.noteSuccess()
-              setAutoSavedAt(new Date())
-              // 撤掉这一格上"关于这个文件没存上"的那句（与文档头同一条规矩，v0.76）：
-              // 手动那句说的就是同一个路径，而它现在过期了；别的文件/别的动作的句子仍然不许抹
-              const stale = staleFailureClaim(saveFailRef.current, p)
-              if (stale) {
-                saveFailRef.current = null
-                setStatus((cur) => (cur === stale ? '' : cur))
-              }
-            } catch (e) {
-              auto.noteFailure()
-              const msg = autoFailStatus(e, auto.fails, autoDelayMs(auto.fails))
-              saveFailRef.current = { msg, path: p }
-              setStatus(msg)
-            }
-          })
-        }
+        await attempt()
         if (!stopped) schedule()
       }, autoDelayMs(auto.fails))
     }
@@ -307,9 +312,16 @@ function PptEditor({ tab }: Props) {
       if (timer !== undefined) window.clearTimeout(timer)
       schedule()
     }
+    // v0.77：窗口重新拿到焦点 ⇒ 立刻探一次（与文档头同一条，包括"不造第二枚时钟"、"下界 AUTO_BASE_MS 由账给"
+    // 与"失败不动基数"这三处——那一头的注释里有实测数字）
+    const offFocus = onFocusBack(() => {
+      if (stopped || !auto.canProbe()) return
+      void attempt().then(() => autoRescheduleRef.current?.())
+    })
     return () => {
       stopped = true
       autoRescheduleRef.current = null
+      offFocus()
       if (timer !== undefined) window.clearTimeout(timer)
     }
   }, [loaded, tab.path, tab.id])

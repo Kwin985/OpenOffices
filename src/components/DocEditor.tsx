@@ -50,7 +50,7 @@ import { odtToHtml, prosemirrorToOdtBytes } from '../lib/odt'
 import { registerSaver, runExclusive } from '../lib/registry'
 import { failDialog, failStatus, statusText, statusTip } from '../lib/fail-msg'
 import { saveDoneTimer } from '../lib/save-status'
-import { autoDelayMs, autoFailStatus, autoOkTip, createAutoSaveLedger, staleFailureClaim } from '../lib/auto-save'
+import { autoDelayMs, autoFailStatus, autoOkTip, createAutoSaveLedger, onFocusBack, staleFailureClaim } from '../lib/auto-save'
 import type { FailureClaim } from '../lib/auto-save'
 
 interface Props {
@@ -655,45 +655,51 @@ function DocEditor({ tab }: Props) {
   // v0.74 新增的约束：走 registry 的 runExclusive，与手动 Ctrl+S 共用同一把在途锁。
   // v0.75 换掉的是"隔多久再来一枚"：setInterval 没有退避（实测只读件 4 分钟敲 8 次、每次注定失败），
   // 改成自续的 setTimeout，延迟由这一路的账给；跳过与失败分开记（锁忙那一趟根本没跑，不算失败）。
+  // v0.77 加的是"什么时候可以不等那一枚"：窗口重新拿到焦点 ⇒ 探一次（同一份 attempt、同一把锁、同一套句子）。
   useEffect(() => {
     if (!editor) return
     const p = tab.path
     if (!p?.toLowerCase().endsWith('.odoc')) return
     let stopped = false
     let timer: number | undefined
+    // 这一路真正敲一次门的动作：定时那一枚与焦点探写共用同一份，区别只在"什么时候被允许跑"
+    const attempt = async () => {
+      const s = useApp.getState()
+      if (!s.tabs.some((t) => t.id === tab.id && t.dirty)) return
+      // v0.74 实测（三趟全重现）：这一路改前直接调 writeText、绕过 registry 的在途锁，
+      // 于是"定时那枚写刚出门 + 手动 Ctrl+S"会同一毫秒各发一枚 write_text_file，
+      // 旧快照往往最后落地——屏上「已保存」说了，文件里那半句新打的字没落。
+      // 锁忙 ⇒ 本趟跳过（手动那趟的快照本来就更新、它落完就是最新内容存了盘），而跳过不进退避的账。
+      await runExclusive(tab.id, async () => {
+        // 真出门了才算"敲过门"：焦点探写的节流下界读这一枚（不脏就 return 的那一趟没有敲门，锁忙被跳过的也没有）
+        auto.noteAttempt()
+        try {
+          await writeText(p, JSON.stringify({ ...ODOC_HEADER, content: editor.getJSON(), meta: metaRef.current }))
+          s.markDirty(tab.id, false)
+          auto.noteSuccess()
+          setAutoSavedAt(new Date())
+          // 撤掉这一格上"关于这个文件没存上"的那句（v0.73 只撤自己写的，v0.76 把认领做成按路径）：
+          // 手动那句说的就是同一个路径，而它现在过期了；别的文件/别的动作的句子仍然不许抹
+          // （v0.65 那条「迟到那一趟不许抹活着一趟」在这里没被改宽，只是认领范围对了）
+          const stale = staleFailureClaim(saveFailRef.current, p)
+          if (stale) {
+            saveFailRef.current = null
+            setStatus((cur) => (cur === stale ? '' : cur))
+          }
+        } catch (e) {
+          // 失败仍然重试，但重试不再是唯一的动作：v0.73 实测改前这里 `catch {}`，
+          // 于是上一轮那句「已自动保存 16:11:20」会在只读的件上一直挂到窗口关掉（写请求每 30 秒出一次门、
+          // 一次都没落盘，而屏上还在报一个已经不真的时间）。状态栏非空顺手把那条过期的成功宣称挤掉。
+          auto.noteFailure()
+          const msg = autoFailStatus(e, auto.fails, autoDelayMs(auto.fails))
+          saveFailRef.current = { msg, path: p }
+          setStatus(msg)
+        }
+      })
+    }
     const schedule = () => {
       timer = window.setTimeout(async () => {
-        const s = useApp.getState()
-        if (s.tabs.some((t) => t.id === tab.id && t.dirty)) {
-          // v0.74 实测（三趟全重现）：这一路改前直接调 writeText、绕过 registry 的在途锁，
-          // 于是"定时那枚写刚出门 + 手动 Ctrl+S"会同一毫秒各发一枚 write_text_file，
-          // 旧快照往往最后落地——屏上「已保存」说了，文件里那半句新打的字没落。
-          // 锁忙 ⇒ 本趟跳过（手动那趟的快照本来就更新、它落完就是最新内容存了盘），而跳过不进退避的账。
-          await runExclusive(tab.id, async () => {
-            try {
-              await writeText(p, JSON.stringify({ ...ODOC_HEADER, content: editor.getJSON(), meta: metaRef.current }))
-              s.markDirty(tab.id, false)
-              auto.noteSuccess()
-              setAutoSavedAt(new Date())
-              // 撤掉这一格上"关于这个文件没存上"的那句（v0.73 只撤自己写的，v0.76 把认领做成按路径）：
-              // 手动那句说的就是同一个路径，而它现在过期了；别的文件/别的动作的句子仍然不许抹
-              // （v0.65 那条「迟到那一趟不许抹活着一趟」在这里没被改宽，只是认领范围对了）
-              const stale = staleFailureClaim(saveFailRef.current, p)
-              if (stale) {
-                saveFailRef.current = null
-                setStatus((cur) => (cur === stale ? '' : cur))
-              }
-            } catch (e) {
-              // 失败仍然重试，但重试不再是唯一的动作：v0.73 实测改前这里 `catch {}`，
-              // 于是上一轮那句「已自动保存 16:11:20」会在只读的件上一直挂到窗口关掉（写请求每 30 秒出一次门、
-              // 一次都没落盘，而屏上还在报一个已经不真的时间）。状态栏非空顺手把那条过期的成功宣称挤掉。
-              auto.noteFailure()
-              const msg = autoFailStatus(e, auto.fails, autoDelayMs(auto.fails))
-              saveFailRef.current = { msg, path: p }
-              setStatus(msg)
-            }
-          })
-        }
+        await attempt()
         if (!stopped) schedule()
       }, autoDelayMs(auto.fails))
     }
@@ -705,9 +711,23 @@ function DocEditor({ tab }: Props) {
       if (timer !== undefined) window.clearTimeout(timer)
       schedule()
     }
+    // v0.77：窗口重新拿到焦点 ⇒ 立刻探一次，不等下一枚退避时钟。
+    // 量的就是那一格最贵的代价：退避涨到 240 秒封顶之后，用户把权限改回来、切走又切回，
+    // 屏上仍挂着「保存失败」而下一枚自动写在 4 分钟之外（v0.76 记下那条没做的"重新聚焦立刻再试"，
+    // 当时判的是"页面里没有可用信号"——v0.77 前置实测①推翻了它：Alt+Tab 切回之后 `tauri://focus` 在 533ms 到，
+    // 比 200ms 一把的 `document.hasFocus()` 轮询（那一拍 15291ms 才读到 true）还早；
+    // 而真机上这一路的写与那一枚 focus 同一毫秒出门（Δ0ms），落定之后 13ms 那句「已自动保存」就上屏了。
+    // 探写不造第二枚时钟：跑完仍然走 autoRescheduleRef 那一刀（撤掉在途的、按当前的账重挂一枚），
+    // 而它失败时 `fails` 已经涨过 ⇒ 重挂出来的那枚只会更远，不会变成"明知不行还一直敲"。
+    // 下界 AUTO_BASE_MS 由账给（实测最快的手动闪动是 3535ms 一枚，见 lib/auto-save.ts 的 canProbe）。
+    const offFocus = onFocusBack(() => {
+      if (stopped || !auto.canProbe()) return
+      void attempt().then(() => autoRescheduleRef.current?.())
+    })
     return () => {
       stopped = true
       autoRescheduleRef.current = null
+      offFocus()
       if (timer !== undefined) window.clearTimeout(timer)
     }
   }, [editor, tab.path, tab.id])
