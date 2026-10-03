@@ -3212,7 +3212,100 @@ updater 里面」。本轮动的是前端那一层的一个文件的一行**位�
   **`setDeck` 的 updater 里仍有整片 `slides.map(s => ({ …s }))` 拷贝**（本轮只挪了一句，没量 updater 被双跑时的拷贝成本）；
   另存为／导出 pptx 之后"再编辑 ● 该不该亮"仍未量（与 v0.78 同源）、多枚 `.opd` 同时脏时每枚各自的时钟与认领关系仍未量、
   「已自动保存 X」有悬停而手动那句仍没有次数账、DocEditor 剩四枚裸 `setTimeout`、`SheetEditor.exportPdfTo` 内联那份
-  拼句公式、PDF 大件 ~1030ms 仍未归因、中件 164ms 与门值 200ms 只差 36ms、在途锁按 `tabId` 不按 `path`、
+  拼句公式、PDF 大件 ~1030ms 仍未归因（**⇒ v0.80 改口：已归因为 pdf-lib 的宏任务让出并兑现，见下一节**）、
+  中件 164ms 与门值 200ms 只差 36ms、在途锁按 `tabId` 不按 `path`、
+  `SAVE_BUSY_MS` / `AUTO_BASE_MS` / `AUTO_MAX_MS` 是单机数、写侧前缀三家不统一、toast 体系照旧未建；
+  自动更新的应用内下载安装与 macOS 打包按指令继续等信号
+
+## 那 1030ms 是 pdf-lib 在等时钟而不是在写文件：让出粒度按块预算定在一处（v0.80）
+
+起点是 v0.70 记下的那一格、并在 v0.71~v0.79 连续七轮收尾时被写成「仍未归因」的那条：大件（2300 页）按 Ctrl+S
+整趟 1071~1161ms，而 `write_file` 自身只有 4~95ms ⇒ 钱在 pdf-lib 的 `load` + `save`，但没有分段打点就说不出口
+各档占多少。本轮把它归因并兑现，改动全在前端那一层（新建 `src/lib/pdf-ticks.ts` + 六处站点各多一个参数），
+**Rust 一个字没动**（先例 v0.64~v0.79），没有新增时钟、没有新增分层、没有动 worker。
+
+- **前置实测①（`tmp/x80/pre2d.mjs` / `pre2e.mjs`，dev 腿 + 临时打点，只量不改产品）先把"等"与"忙"分开**：
+  ① 分段（同一枚件连打两趟）——`read=14/12`、`load=236/233`、`strip=2/3`、`add=1/1`、`save=749/746`、
+  `write=23/15`，整趟 1025/1010ms ⇒ 九成以上的时间在那两段 **await** 上；② **而这两段根本不是同步块**——
+  同一枚函数按"只算同步那一截"与"算到 await 结束"各量一遍，得到 `loadSyncOnly=0 / loadAwaitOnly=236`、
+  `saveSyncOnly=0 / saveAwaitOnly=750`；③ 页内 10ms 空闲打点器在那一截里 `gapCount=0`、`longtask=[]`，
+  Node 侧往返 `max=8 / p90=2 / med=1` ⇒ 主线程没被占住，也没有在跨进程上排队；④ 忙的比例（`dTask` 增量
+  133/100ms 对整趟 1022/996ms）⇒ **`mainThreadShare=10.9%`，且它含本轮的 CDP 轮询所以是上界**；
+  ⑤ 正控制——`E0 busy300 control: dScript=300.4 dTask=302.0`（打点器认得出人为的 300ms 块）而真保存那一趟
+  `dScript=1.6/1.5` ⇒ **这把尺量得到东西，所以"量不到忙"不是尺的失灵**。
+  结论形状：约九成时间主线程**空着**，而它空着是因为 pdf-lib 每处理 `objectsPerTick` 枚对象就
+  `waitForTick()` 让出一个宏任务（`setTimeout(…, 0)`，Chromium 对嵌套零延迟定时器钳到 ≥4ms）
+- **前置实测②（`pre2f.mjs` / `pre3.mjs` / `pre3b.mjs`）把"让出多少枚 × 每枚值多少"量成算术，再扫一根粒度阶梯**：
+  件里 `objects=4764`，库默认（load 100 / save 50）下 expected-yields = 4764/100 + 4764/50 = **142 枚**，
+  钳位隐含 568ms 而实测差 938ms ⇒ **每枚让出约 6.6ms**（比 4ms 的钳位下限贵，因为宏任务之间还有别的活）；
+  阶梯（同一枚 2300 页件，页内墙钟）——默认 100/50 **985ms** → t500 157 → **t1500 73/96** → t4000 57 → fastest 55；
+  **产物字节随粒度不变**：五档 `hash=c4b260253a7f` 同一份（小件 12 页那档 wall 2~3ms、`54b74efb14d0` 同样五档一致）
+  ⇒ 这一改只动时间不动内容，这是本轮敢做的前提；而**越激进单枚同步块越长**：`maxGap` 默认 0 → t1500 28 →
+  t4000 35 → fastest 65，Node 侧往返 `max` 3 → 10 → 22 → 54 ⇒ 本轮取 **1500**（pdf-lib 自己的
+  `ParseSpeeds.Fast`）而不是最快档——最快档把 65ms 的块留在主线程上，那是 v0.66「别把主线程点着」那一族
+- **本轮唯一的架构决定：一枚常数、一处持有、六处站点**——新建 `src/lib/pdf-ticks.ts` 只导出
+  `PDF_OBJECTS_PER_TICK = 1500`，喂给全仓六处 pdf-lib 站点（两处 `PDFDocument.load({parseSpeed})`：
+  `PdfViewer.writeAnnosTo` 与 `lib/pdf-pages.ts` 的 `loadDoc`；四处 `.save({objectsPerTick})`：viewer 那一路的
+  `pdoc.save` 与 `saveDoc`/`extractPages`/`splitPdf`）。**没有**做的三件事各有理由：不搬进 worker（本轮的账是
+  "等"而不是"忙"，搬到 worker 只是把等待换个线程，而 `save` 的返回要跨线程回递给界面）、不做"只写变更的注解"
+  （那是内容层的改动，与让出粒度不同一件事，且会把 v0.32 那条"整片清旧注解"的账重开）、
+  也不给读与写各立一个数（实测里 `load` 与 `save` 两段的让出成本同一量级，两个数就是两根阶梯要各扫一遍）
+- **release A/B 的账（两支真 exe × 3 趟 / 27 通过 / 真失败 0 / 显式 SKIP 0 / 页面异常 0 条）**——对照件＝本轮
+  改动前当场存档的那支 0.79 exe：● **按键到写出门** ctrl Δ `[1024, 1028, 1034]` / exp Δ `[148, 172, 153]`，
+  E7b 两支逐趟分开（对照件最小 1024 > 实验件最大 172）；● **门值那一格兑现**：实验件三趟 Δ 全部落在
+  `SAVE_BUSY_MS=200` 之下 ⇒ 那句「正在保存…」不再上屏（`progressRows=[]`），而对照件每趟都在 **217~219ms**
+  上屏并活 `[819, 818, 828]`ms——v0.70 那句"进度句可看 940ms"说的就是这一段，本轮买的是"等待没了所以句子
+  没有内容可说"；● **内容一格没动**：两支写出去的字节同一份 `d46fd9db95ae3c0d`（A9）、两支各只一枚写请求（A10）、
+  盘上 `{pages:2300, annos:40}` 与侧栏落定枚数逐趟相同（G6a/G6b/G6c）；● **没长出新等待**：每趟"按键之后那一截"
+  的同步块 `[]`（G7）；● 落定之后 ● 归 0、屏上「已保存」、`savedGap` 25~33ms；● 写自身 ctrl `[15,15,18]` /
+  exp `[19,19,18]`ms（Rust 那一头本来就一字未动）。**分界 `DIV=600` 在本腿跑之前就定好**（v0.70 实测那一格
+  ~1030ms 的一半留量），不拿本轮烟测的读数倒推门槛值
+- **顺带量到一枚既有缺陷（早退那一趟 `X80_EARLY=1`，两支同犯，本轮一毫秒没为它改）**：在标注导入扫完之前按
+  Ctrl+S，写回去的那一份会把 **`/Annots` 整片抹掉**——按下时页龄 ctrl 594 / exp 1447ms（侧栏那枚计数还没落定），
+  两支落盘都是 `annos: 0` 且哈希同为 `ca72e8c365681d03`，而屏上照旧「已保存」、● 照旧归 0 ⇒ 界面说"存好了"
+  而 40 枚标注没了。正常那一臂因此改成**先等侧栏「标注 N」落定再按**（`settleAnnos()`，判据吃
+  `disk.annos === sideCount` 而不是硬编码 40）。这一格需要的是"读侧未就绪就不许写"那道闸，与让出粒度不是
+  同一件事，**已开进路线图而不是并进本轮**。诚实记账：早退那一趟的 G6b/G6c 读数是空集合 `[]`（那两枚只吃
+  gated 趟），所以它们在那一趟**不表态**，只有 `disk.annos=0` 这一格当证据
+- **前端结构 21 / 0**（B0 自检 5/5，吃**剥掉注释之后**的源文）：S1a/S1c 钉"这枚数只在一处导出、整个前端只有
+  这一处定义"、S1b 钉定义处字面量 = 1500、S2a 钉 load 站点数 = 2 且 S2b 每一处都带 `parseSpeed:
+  PDF_OBJECTS_PER_TICK`、S3a 钉 pdf-lib 的 save 站点数 = 4 且 S3b 每一处都带 `objectsPerTick: …`、S4 钉站点上
+  没有写死的数字、S5a/S5b 钉两处各从 `./pdf-ticks` 与 `../lib/pdf-ticks` 取、S6 钉"没有一处走库默认的让出
+  粒度"、S7 钉文档/表格/演示/外壳不吃这枚常量
+- **变异检查 14 枚（12 枚 + 2 枚正控制）/ BAD 0 / 多打中 0**：M1~M6 把六处站点逐一退回库默认或裸调用（各响
+  S2b 或 S3b + S6）、M7 常数被改成库默认的 50（响 S1b）、M8 站点写死数字而不吃常量（响 S2b+S4）、M9 组件里
+  另立一份同名常数（响 S1a+S1c）、M10 页面操作不走那一处而自带一份（响 S1c+S5a）、M11 表格头被顺手接上
+  （响 S7）；P1 注释里的假站点不算站点、P2 代码里的真站点必须响（两枚正控制）
+- **CDP dev 腿只吃形状**（15 通过 / 真失败 0 / 显式 SKIP 0 / 页面异常 0 条 / `staleIpc=0`）：D0b 新模块在跑的
+  这一趟上（值 = 1500）、D1a/D1b 大件 2300 页且内存标注**非零**（否则"一枚没少"是空断言）、D2a 写请求出过门
+  （dev 只判 ≥1 枚不判枚数）、D2b/D2c 落定在「已保存」且 ● 不在、D3a `f5ae02e02ded166a → d46fd9db95ae3c0d`、
+  D3b/D3c 重载之后页数没变且标注 40→40、D4a 同一枚件第二次保存仍然成功、D5a/D5b 小件那一头也走得通。
+  **dev 的数字一律不吃成产品指标**（v0.66 那条老规矩第五次兑现）：归因那两批腿也全在 dev 上（release 上
+  没有分段落点），本轮吃的是"同步段为 0 / 让出枚数与墙钟对得上 / 哈希随粒度不变"这三条**形状**
+- **本轮撞到四处量具坑，都不是产品**：① **`SKIP(cond) || check` 是假绿形状**——`null || x` 会把 `x` 照常求值，
+  而空集合上的 `every([])` 自己为真，于是"这一条本轮没跑"被报成 `PASS ctrl·G6b … :: []`；改成
+  `need(present, check)`（判据先认得"这一臂没跑"才谈得上报 SKIP）；② **模块级 `const` 声明在用它的那段之后**
+  ⇒ `ReferenceError: Cannot access 'SKIP' before initialization` 崩在 7 条 PASS 之后——"跑起来了"和"跑完了"
+  是两件事，长跑腿的日志要能看到它死在第几行；③ **整窗的 longtask 计数会把文档打开那一段算到这次保存头上**——
+  第一版实验件读到 `longCount:2 / longMax:240`，看着像"本轮把等待换成了卡顿"，按 `t >= pressAt - 5` 筛之后
+  两支都是 `[]`（那几枚 ≥50ms 的块属于 opening，不属于 Ctrl+S），与 v0.73「窗口判据的起点要锚在触发之后」同族；
+  ④ **一支的读数不能同时当两支的门槛**——烟测那趟实验件读到 331ms 时，先写的 `E7 < 300ms` 会把自己的改动判成
+  缺陷；分界必须由 prior 实测给（本轮 `DIV=600`），本轮因此另立 E7b「两支逐趟分开」这种纯分离形判据
+- **验证（五腿 + 编译）**：release A/B 真机 **27 / 真失败 0 / 显式 SKIP 0**（3 趟 × 两支真 exe）、前端结构
+  **21 / 0**、变异检查 **14 枚 + 正控制 / BAD 0**、CDP dev **15 / 0、页面异常 0 条**，`cargo test --lib`
+  **97 通过 / 0 失败 / 11 ignored**（与 v0.63~v0.79 同一份基线——Rust 本轮一个字没动），+ tsc 与
+  `pnpm tauri build --no-bundle` 绿（openoffices v0.80.0）；五腿都在**版本号 bump 之后**跑（老规矩），
+  结构腿与变异腿在最终源文上复跑过一次（21 / 0 与 `RESULT mutants=14 bad=0`，与 bump 后那两份同数）
+- **本轮没动的，量出来记着**（已开进路线图）：**存盘走在标注导入之前会把 `/Annots` 整片抹掉**（上面那一格的
+  账，两支同犯、0.79 同样犯，本轮只量出代价没有修）；**更激进的两档只由 dev 侧阶梯量过**（t4000 57ms /
+  fastest 55ms，而单枚同步块 35 / 65ms）——本轮选 1500，那两档没在 release 真机走过；
+  **`PDF_OBJECTS_PER_TICK = 1500` 是本机单机的数**（换机器或换件要重扫那根阶梯，而 4ms 钳位是 Chromium 的不
+  是我们的）；**release 上没有分段落点** ⇒ 分段归因只能来自 dev（本轮为此临时改过一份 `PdfViewer`，产物已删；
+  想要长期观测就得给存盘那一路做正式打点通道）；**页面操作五路（旋转/删除/提取/合并/拆分）wired 但没在真
+  大件上量过整趟**（结构腿与变异腿判的是接线）；**中件那一档 A/B 没跑**（本轮只跑 2300 页件，所以"Δ 落在
+  门值之下"这一格在大件上成立、在中件上仍是 v0.70 那次的旧读数）；另存为／导出 pptx 之后"再编辑 ● 该不该亮"
+  仍未量、多枚 `.opd` 同时脏时每枚各自的时钟与认领关系仍未量、「已自动保存 X」有悬停而手动那句仍没有次数账、
+  DocEditor 剩四枚裸 `setTimeout`、`SheetEditor.exportPdfTo` 内联那份拼句公式、在途锁按 `tabId` 不按 `path`、
   `SAVE_BUSY_MS` / `AUTO_BASE_MS` / `AUTO_MAX_MS` 是单机数、写侧前缀三家不统一、toast 体系照旧未建；
   自动更新的应用内下载安装与 macOS 打包按指令继续等信号
 
@@ -3315,7 +3408,8 @@ src/                  React 前端
   lib/sheet-print.ts  WorkbookPayload → 打印 HTML 网格（值/边框/对齐/换行/数字格式/字族/合并/列宽行高/跳过隐藏行列/**跳过被筛掉的行（`filter.filteredOut` 与 hiddenRows 并列）**/**条件格式算出的底色·字色·粗斜·下划线·删除线·数据条（v0.47）**/**图表位图按锚点格绝对覆盖、锚点撑开网格边界（v0.47）**/**纸张·边距·缩放·打印区域·重复标题行列·手动分页符·列带·水平居中·网格线与行列标题（v0.51，一切先过 `planSheetPrint`）**/分页/截断）；一个列带一张 `<table>`、每带各一份 `<thead>`（实测 Blink 会自己重复表头，我们不再手工插第二份）；返回 `{html, notes, plans, job}`——页面上只印"这份打印件缺了什么"，其余账目交回调用方进状态栏，`job` 那三个数直接喂 `pdfprint`；**v0.53 多收一枚 `opts.zooms`（按表序，null＝这张不动）**：那是上一趟实测定下的最终缩放，说话权在它而不在计划的 `zoom`，于是"按 N 页高压一档"能真的把这份 HTML 重建成那一档；**v0.55 让同一枚数再往下走一步**——`planSheetPrint(s, ctx, { hfZoom: opts?.zooms?.[i] })`，正文被压了页眉就跟着压；**v0.56 补上宽度分带挤出来的那一档**：`sheetHtml` 的返回值多一枚 `zoom`（它**真正挂到 `<table>` 上的那一个数**，空表与"打印区域里没有可打印格子"那两条早退路径回报计划的 `plan.zoom`），`sheetsToPrintHtml` 发现它与计划用的那档不同就**只重说页眉那份 CSS**（同一次解析、`notes` 故意不重复推，否则同一笔账说两遍）并把 `job` **重算一次**——纸的那三个数与"各表的页眉页脚不一样"那本账都要在页眉重说之后才算最终答案；这里刻意不把列带几何再算一遍，两处各算一套宽度迟早分叉；**v0.57**：`const hfBasePt = payload.defaultFont?.fs ?? null` 一次取，既喂 `planSheetPrint` 的 `opts.hfBasePt`，也喂 v0.56 那趟"页眉重说"的 `headerFooterCss(..., { basePt })`——底数在两趟里必须是同一个数，否则重说出来的那份 CSS 与计划那份不是同一档纸；**v0.59 让同一层再往下走一步到正文**：`const defaultFont = payload.defaultFont ?? null` 一次取出，既喂 `planSheetPrint` 的 `opts.defaultFont`（计划里那枚 `defaultFontPx` 由它算），也喂 v0.56 那趟"页眉重说"的 `headerFooterCss(..., { defaultFont })`；`sheetHtml` 里新增一枚 `bstyle`，把 `--oof-print-base-size:<px>` 挂到每张表的 `<section>` 上（**三条出口都挂**：正常网格、空表、"打印区域里没有可打印的格子"——后两条那格里的字同样要上纸，底数不该因为没网格就换一档），`styleParts` 里格子自带的 `s.fs` 改走导出的 `ptToPx`（不再各算一份 `×1.333`）；格子说了字号仍由 `styleParts` 盖在格上、`&12` 那类段仍走 `segStyle`，一次读出两处共吃、不重复出手）
   lib/pptx-export.ts  Deck → pptx（pptxgenjs）
   lib/pptx-import.ts  pptx → Deck（JSZip 解包 + OOXML 解析 + 媒体还原）
-  lib/pdf-pages.ts    PDF 页面级操作（pdf-lib 覆盖写回）：rotatePagesInPlace / removePagesInPlace（倒序删 + 删空守卫）/ extractPages / mergePdfs / splitPdf，做完由调用方重载
+  lib/pdf-pages.ts    PDF 页面级操作（pdf-lib 覆盖写回）：rotatePagesInPlace / removePagesInPlace（倒序删 + 删空守卫）/ extractPages / mergePdfs / splitPdf，做完由调用方重载；**v0.80：这一层的两处 `load` 与三处 `save` 不再走库默认的让出粒度，一律吃 `./pdf-ticks` 那一枚常数**（`loadDoc` 带 `parseSpeed`，`saveDoc`/`extractPages`/`splitPdf` 带 `objectsPerTick`；这一层自己不留第二个数，M10 把"自带一份"判成违例）
+  lib/pdf-ticks.ts    pdf-lib 让出粒度的唯一持有者（v0.80，一枚常数 + 它的实测理由）：`PDF_OBJECTS_PER_TICK = 1500`（= 库自己的 `ParseSpeeds.Fast`）。为什么是这一个数：库默认（load 100 / save 50）下 2300 页件（`objects=4764`）要让出 **142 枚**宏任务，每枚被 Chromium 的嵌套零延迟钳位吃到 ~6.6ms ⇒ 整趟 985ms 里约九成是**等**而不是忙（dev 打点：`loadSyncOnly=0 / loadAwaitOnly=236`、`saveSyncOnly=0 / saveAwaitOnly=750`、页内 `longtask=[]`、`mainThreadShare ≤10.9%` 且那还是含 CDP 轮询的上界）；粒度阶梯（同一枚件、页内墙钟）默认 985 → t500 157 → **t1500 73/96** → t4000 57 → fastest 55，而**产物字节五档同一份**（`c4b260253a7f`）⇒ 只动时间不动内容；不取最快档是因为越激进单枚同步块越长（`maxGap` t1500 28 / t4000 35 / fastest 65ms，Node 侧往返 max 10/22/54），那是 v0.66「别把主线程点着」那一族。真机的账在 release A/B：按键→写出门 **1024/1028/1034 → 148/172/153ms**，因此那句 `SAVE_BUSY_MS=200` 的「正在保存…」从"上屏并活 819ms"变成根本不上屏（v0.70 那一格买到的句子，本轮买的是它不必再说）。**读与写共用这一枚数**（两段的让出成本同一量级，两个数就是两根阶梯）；它是本机单机的数，换机器要重扫
   lib/pdf-geo.ts      显示空间（已套旋转·左上原点）↔ PDF 原始坐标（未旋转·左下原点）双向精确换算：normRot / displaySize / toDisplayRect / fromDisplayRect / toDisplayPoints / fromDisplayPoints + parsePageSpec（`1-3,5` 页码写法）
   lib/pdf-range.ts    大 PDF 分段读取：PDFDataRangeTransport 子类（≥4MB 才启用、64KB 文件头起手、按 begin 计数投递、abort 置 dead）+ fileSize/readRange，配 Rust 侧 file_len + read_range；**v0.68 新增 `preparePdfSource(path)`——「这枚 PDF 首屏该怎么读」那次决定的唯一持有者**，返回 `{mode:'range', transport} | {mode:'bytes', bytes}` 两种形状之一（先判闸门再决定读法：过了 4MB 只取文件头，没过才整本读一次，顺序反了就等于把分段件读成整叠字节），外壳的预取与编辑器的自备**共吃这一枚**（阈值 `RANGE_MIN_BYTES` 全场只这一处，判据 R1/R2/R3）
   lib/pdf-password.ts 加密 PDF 那句"要密码"的判据与文案（v0.65，纯函数、零 DOM、Node 直测，这四句话的唯一持有者）：`pwdReason(code)` 把 pdf.js 的 `PasswordResponses` 收成两档（实测只有 `1` 要密码与 `2` 密码不对，**没有第三档**，故未知档一律落 `'need'` 而不许凭编号编出新理由）；`pwdPromptText(reason, attempt)` 管问的那一句——第二回起把「已经试过 N 次」说出来（`attempt - 1` 且下限 1；pdf.js 自己**不封顶**，答错就一直再问，界面上不说用户就没有退出的依据）；`pwdCancelledText()` 是用户自己按取消的那一行，**不带"失败"前缀**（没有失败，只是没往下走）也不挂原始信息（那一句是我们按下去的，不是文件报的）；`PWD_MEMORY_NOTE` 说的是密码的去向（只留内存、关掉标签就没了、不写进任何文件）——面板与状态栏都不自带句子，结构腿 A10 扫的是剥掉注释之后的源文
@@ -3399,7 +3493,7 @@ updater 里从此只剩 `fn(next)` 与 `return next`——**副作用不许住�
 （eager state / 并发渲染 / StrictMode 三条路径都能动它）；判据侧的两枚量具账记在这里：`S2a` 全仓扫"有没有头往 updater 里写脏值"
 时 `setTimeout(() => { … })` 与 React 的 updater **文本同形**（要 `NOT_AN_UPDATER` 黑名单排除），而 `S2d`「`renameTab` 仍把标签归到不脏」
 一度是**判据空转**（整文件找 `dirty: false` 会被 `openTab` 里那枚同名键顶住 ⇒ 改成按 `renameTab:` 切块，起点取**最后一枚**，
-因为 `State` 接口在 `store.ts:32` 先声明了一次同名键）——这一枚由变异 M7 抓出）/ PdfViewer（pdfjs-dist 懒加载，连续多页视口虚拟渲染+Ctrl 缩放+TextLayer 文字选择+全文搜索+缩略图/大纲/标注侧栏+高亮便签与矩形·椭圆·直线·手绘形状（绘制/导入/写回 pdf-lib）+标注编辑（点选/拖移/改色/删除）+「页面」工作区旋转/删除/提取/合并/拆分；≥4MB 走分段读（lib/pdf-range.ts），卸载时 destroy openTask 并 abort transport；**v0.64 四个编辑器与首页的失败出口一律改走 `lib/fail-msg.ts`**——状态栏那一行由 `{status}` 直出换成 `statusText(status)` + `title={statusTip(status)}`（四个渲染点各一处，`PptEditor` 的加载占位有两处分身所以两处都换），原生对话框那一层的 `String(e)` 换成 `failDialog(e)`，账目位里的 `${e instanceof Error ? e.message : String(e)}` 换成 `failText(e)`；`PdfViewer` 除接线外还立了两条行为——三处后台补做（页尺寸／大纲／标注）由"只 `console.error`"改成**先过 `isTeardown` 那道门再占状态栏**（拆标签时的 `Transport destroyed` 不入账，否则每次快速关标签都冒一句凭空的失败），`pageOp` 的定时清除从 `finally` 移到成功那一路（失败那一句留着，三秒就抹等于让用户读不完也悬停不到原话）；**v0.65 加密 PDF 的密码闸门**——`openTask.onPassword` 装在 `await openTask.promise` **之前**（装晚了那份承诺已经拒绝，回调再挂也来不及），回调只做三件事：把 `updatePassword` 存进 `pwdUpdateRef`、把"第几回问"记进 `pwdAttemptRef`、亮面板（判据与文案一律走 `lib/pdf-password.ts`，组件里只负责亮与接线，句子一处都不写）；**闸门绝不自动投密码**（自动投等于替用户猜，结构腿 C2 判这一条）、空串不当密码（喂进去只换来一次重新提问）、取消时**先**记 `pwdCancelledRef` **再**把闸门按下去（错误内容分不出"用户取消"与"没给密码"，这一位只能界面自己留着），于是那一行不带"失败"也不挂原始信息；工具条的 ↻ 是**从第 1 回重新数起**并把取消标记一起清掉（不清的话重试成功后第一次真失败会被归成"用户自己取消的"）；`type=password` 且密码不回显、不在界面上；owner-only 那一件**不问密码**就能看（用户口令为空）而页面级操作当场报得出 pdf-lib 那一句；同一轮补的是一条规矩而不是一处补丁——**「这一趟已经作废」那道门必须打在写任何共享状态之前**，开发模式的双挂载下晚到的 `catch` 会抹掉还活着的那一趟刚亮起来的面板，pdf.js 从此等不到回话，表现是卡在「正在加载…」且没有任何错误（C17/C18 各钉住本轮撞到的两处写点，另外那三句账目仍在，本轮没有新的拆接线）；**v0.66 搜索这一趟改由界面自己记着"在扫"**——查询一变化就标 `scanning:{scanned:0,total}` 并把上一词的命中与激活位**在同一处**清掉（防抖那 200ms 里界面不许回到「无匹配」，也不许拿旧词的第 3 条说新词的事），扫页循环里按 `shouldPublish` 交进度（`setMatches` 与 `setFindStatus` 同交，一句里不许半新半旧），收尾那一句先过作废门再把 `scanning` 清掉；**v0.65 那条"门打在写任何共享状态之前"在这里再兑现一次**：`seq !== searchSeq.current || !aliveRef.current` 那道门排在 `await loadPageText(...)` **之后**、任何 `setState`/ref 写入**之前**（排在 await 之前拦不住晚到的那一趟，排在最后一句就晚了），`aliveRef` 在 setup 里置回 `true`，于是开发模式 `React.StrictMode` 的第二次挂载不被当成已卸载——真机量到换词 1.2s 起那一格的文本零变化（被作废的那趟没能把界面抹回旧样子）；句子一律走 `lib/pdf-search.ts`，组件里不留「无匹配」「正在搜索」的字面（B2/B10 判这一条，而 B10 吃的是剥掉注释之后的源文）；`textPages` 这枚 DEV 钩子由本轮的临时归因**转正为常备观测量**——"扫完全程"只能硬判缓存枚数，把判据建在那句文案上就等于建在实现上；**v0.68 只动两行**——加载那一路的 `await createRangeTransport(path)` 换成 `const src = (await takePdf(path)) ?? (await preparePdfSource(path))`（外壳已在开标签那一刻把那次决定连同要读的字节发出去了，这里只是取来用；取不到就自己发，**不假设外壳一定先跑**），随后 `getDocument` 按 `src.mode` 分支，于是这一层**不再自己判闸门**（V1/V2/V4 钉的就是这三件事）；另一行是那条注释改口（它还写着"大文件只喂文件头、小的整本读"的选法，而现在选法在 `preparePdfSource` 那一处）。次序上有一条诚实的代价：自备那一路的读现在排在 `if (disposed) return` **之前**（闸门单一持有的后果），而**"写共享状态之前那道门"的位置一个字没动**（V3，v0.65 那条规矩在这里继续成立——`rangeModeRef.current = src.mode === 'range'` 仍排在门之后）；**v0.70 Ctrl+S 那一路开始说话**——`registerSaver` 里那一个 `async` 函数从"只 `await writeAnnosTo(path)`"变成「撤上一句收尾 → 挂进度门 → 写 → 撤门 + `done.show([])`，catch 里 `setStatus(failStatus(e, '保存失败'))`」，句子与时钟一律在 `lib/save-status.ts`（A5/A6/A7 判这三句的次序与去处），而**三句挂在 saver 层不挂进 `writeAnnosTo`**（那一函数与工具条的 `pageOp` 共用，写进去就是两头发话：A8 + 变异 M5；`pageOp` 原有的「旋转…」与失败句一个字没动：A9 + M6）。改前的形状是 `writeAnnosTo` 从不 catch 而 `registry.drain` 的 `catch {}` 把抛错咽了下去 ⇒ **只读件按 Ctrl+S 之后屏上连一句失败都没有**，成功那一路也只有 `markDirty(false)` 而没有「已保存」——本轮补的就是这一格（release A/B 里 R1/R6e 判改前那支的静默，R6a~R6d 判改后这一路说出口的每句话））
+因为 `State` 接口在 `store.ts:32` 先声明了一次同名键）——这一枚由变异 M7 抓出）/ PdfViewer（pdfjs-dist 懒加载，连续多页视口虚拟渲染+Ctrl 缩放+TextLayer 文字选择+全文搜索+缩略图/大纲/标注侧栏+高亮便签与矩形·椭圆·直线·手绘形状（绘制/导入/写回 pdf-lib）+标注编辑（点选/拖移/改色/删除）+「页面」工作区旋转/删除/提取/合并/拆分；≥4MB 走分段读（lib/pdf-range.ts），卸载时 destroy openTask 并 abort transport；**v0.64 四个编辑器与首页的失败出口一律改走 `lib/fail-msg.ts`**——状态栏那一行由 `{status}` 直出换成 `statusText(status)` + `title={statusTip(status)}`（四个渲染点各一处，`PptEditor` 的加载占位有两处分身所以两处都换），原生对话框那一层的 `String(e)` 换成 `failDialog(e)`，账目位里的 `${e instanceof Error ? e.message : String(e)}` 换成 `failText(e)`；`PdfViewer` 除接线外还立了两条行为——三处后台补做（页尺寸／大纲／标注）由"只 `console.error`"改成**先过 `isTeardown` 那道门再占状态栏**（拆标签时的 `Transport destroyed` 不入账，否则每次快速关标签都冒一句凭空的失败），`pageOp` 的定时清除从 `finally` 移到成功那一路（失败那一句留着，三秒就抹等于让用户读不完也悬停不到原话）；**v0.65 加密 PDF 的密码闸门**——`openTask.onPassword` 装在 `await openTask.promise` **之前**（装晚了那份承诺已经拒绝，回调再挂也来不及），回调只做三件事：把 `updatePassword` 存进 `pwdUpdateRef`、把"第几回问"记进 `pwdAttemptRef`、亮面板（判据与文案一律走 `lib/pdf-password.ts`，组件里只负责亮与接线，句子一处都不写）；**闸门绝不自动投密码**（自动投等于替用户猜，结构腿 C2 判这一条）、空串不当密码（喂进去只换来一次重新提问）、取消时**先**记 `pwdCancelledRef` **再**把闸门按下去（错误内容分不出"用户取消"与"没给密码"，这一位只能界面自己留着），于是那一行不带"失败"也不挂原始信息；工具条的 ↻ 是**从第 1 回重新数起**并把取消标记一起清掉（不清的话重试成功后第一次真失败会被归成"用户自己取消的"）；`type=password` 且密码不回显、不在界面上；owner-only 那一件**不问密码**就能看（用户口令为空）而页面级操作当场报得出 pdf-lib 那一句；同一轮补的是一条规矩而不是一处补丁——**「这一趟已经作废」那道门必须打在写任何共享状态之前**，开发模式的双挂载下晚到的 `catch` 会抹掉还活着的那一趟刚亮起来的面板，pdf.js 从此等不到回话，表现是卡在「正在加载…」且没有任何错误（C17/C18 各钉住本轮撞到的两处写点，另外那三句账目仍在，本轮没有新的拆接线）；**v0.66 搜索这一趟改由界面自己记着"在扫"**——查询一变化就标 `scanning:{scanned:0,total}` 并把上一词的命中与激活位**在同一处**清掉（防抖那 200ms 里界面不许回到「无匹配」，也不许拿旧词的第 3 条说新词的事），扫页循环里按 `shouldPublish` 交进度（`setMatches` 与 `setFindStatus` 同交，一句里不许半新半旧），收尾那一句先过作废门再把 `scanning` 清掉；**v0.65 那条"门打在写任何共享状态之前"在这里再兑现一次**：`seq !== searchSeq.current || !aliveRef.current` 那道门排在 `await loadPageText(...)` **之后**、任何 `setState`/ref 写入**之前**（排在 await 之前拦不住晚到的那一趟，排在最后一句就晚了），`aliveRef` 在 setup 里置回 `true`，于是开发模式 `React.StrictMode` 的第二次挂载不被当成已卸载——真机量到换词 1.2s 起那一格的文本零变化（被作废的那趟没能把界面抹回旧样子）；句子一律走 `lib/pdf-search.ts`，组件里不留「无匹配」「正在搜索」的字面（B2/B10 判这一条，而 B10 吃的是剥掉注释之后的源文）；`textPages` 这枚 DEV 钩子由本轮的临时归因**转正为常备观测量**——"扫完全程"只能硬判缓存枚数，把判据建在那句文案上就等于建在实现上；**v0.68 只动两行**——加载那一路的 `await createRangeTransport(path)` 换成 `const src = (await takePdf(path)) ?? (await preparePdfSource(path))`（外壳已在开标签那一刻把那次决定连同要读的字节发出去了，这里只是取来用；取不到就自己发，**不假设外壳一定先跑**），随后 `getDocument` 按 `src.mode` 分支，于是这一层**不再自己判闸门**（V1/V2/V4 钉的就是这三件事）；另一行是那条注释改口（它还写着"大文件只喂文件头、小的整本读"的选法，而现在选法在 `preparePdfSource` 那一处）。次序上有一条诚实的代价：自备那一路的读现在排在 `if (disposed) return` **之前**（闸门单一持有的后果），而**"写共享状态之前那道门"的位置一个字没动**（V3，v0.65 那条规矩在这里继续成立——`rangeModeRef.current = src.mode === 'range'` 仍排在门之后）；**v0.70 Ctrl+S 那一路开始说话**——`registerSaver` 里那一个 `async` 函数从"只 `await writeAnnosTo(path)`"变成「撤上一句收尾 → 挂进度门 → 写 → 撤门 + `done.show([])`，catch 里 `setStatus(failStatus(e, '保存失败'))`」，句子与时钟一律在 `lib/save-status.ts`（A5/A6/A7 判这三句的次序与去处），而**三句挂在 saver 层不挂进 `writeAnnosTo`**（那一函数与工具条的 `pageOp` 共用，写进去就是两头发话：A8 + 变异 M5；`pageOp` 原有的「旋转…」与失败句一个字没动：A9 + M6）。改前的形状是 `writeAnnosTo` 从不 catch 而 `registry.drain` 的 `catch {}` 把抛错咽了下去 ⇒ **只读件按 Ctrl+S 之后屏上连一句失败都没有**，成功那一路也只有 `markDirty(false)` 而没有「已保存」——本轮补的就是这一格（release A/B 里 R1/R6e 判改前那支的静默，R6a~R6d 判改后这一路说出口的每句话）**。**v0.80 只在这一头的两处 pdf-lib 调用上各加一个参数**——`writeAnnosTo` 里 `PDFDocument.load(bytes, { updateMetadata: false, parseSpeed: PDF_OBJECTS_PER_TICK })` 与 `pdoc.save({ addDefaultPage: false, objectsPerTick: PDF_OBJECTS_PER_TICK })`，两者都从 `../lib/pdf-ticks` 取而不在这层写字面量（S1a/S1c/M9 钉这一条）；这一层**没有**新增时钟、没有搬 worker、句子与三道门（撤收尾 → 挂进度门 → 撤门）一个字没动，只是它等的东西变短了：实测按键→写出门 1030ms → 148~172ms，于是那句 `SAVE_BUSY_MS=200` 的「正在保存…」在这件上不再有机会上屏（v0.70 那一节里"进度句可看 940ms"说的是它的**第一次也是唯一一次**兑现）；顺带量到一条**既有缺陷**并已开进路线图而**本轮未修**：标注读侧那一路（`setAnnos`，逐页扫 `/Annots`）还没扫完就按 Ctrl+S，写回去的那一份会把 40 枚注解**整片抹掉**而屏上照旧「已保存」（早退那一趟：按下时页龄 594 / 1447ms ⇒ 两支落盘都是 `annos: 0`、哈希同为 `ca72e8c365681d03`）——要的是"未就绪不许写"那道闸，与让出粒度不是同一件事
 scripts/              copy-pdfjs-assets.mjs（dev/build 前复制 cmaps/标准字体到 public/pdfjs） /
                       updater-release.mjs（发版：开 createUpdaterArtifacts 本机建签名包 → 读回真 .sig 与产物 →
                       出带三平台键的 latest.json → 打印要上传的清单；私钥只走子进程环境变量，`pnpm release:updater`）
@@ -3465,7 +3559,7 @@ React 为此在 DEV 报「Cannot update a component (Workspace) while rendering 
 **这一格在 release 上没有可观测面，实验证据只能由 dev 腿给**（与 v0.77 那条"不脏就不写只有 release 能判"正好反过来），
 见 v0.79 那一节。
 
-PDF 文件流：查看 `pdf 磁盘 → 小于 4MB 整本 readBytes / 大于 4MB 经 file_len + read_range 分段喂给 pdf.js（首屏只取 64KB 文件头）→ pdfjs-dist（worker + canvas）；**这"首屏该怎么读"的一次决定连同要读的那一点字节，也在 shell 的 `openTab` 那一刻就出门**（v0.68：闸门由 `preparePdfSource` 单一持有，预取的因此不是整叠字节而是 `{mode:'range'|'bytes'}` 那两种形状之一；发布包 5 趟中位——改前每趟排在 PdfViewer 的 chunk 备好之后 17~24ms 才出门、改后每趟提前到它之前 4~10ms，首画 632→579／778→708／992→966ms，而那一次读自身耗时没动（10→9／40→39／3→4ms）⇒ 省的仍是排队；分段件的 `read_range` 枚数两头都是 92 ⇒ 这条通道不新增读，只是提前已有的那几枚）`；设了打开密码的那一档由界面上的密码面板拦住（v0.65：`openTask.onPassword` 装在 `await openTask.promise` 之前，闸门只把用户按键交回的那一串投进去，密码只留在这次会话的内存里、不写盘）；全文搜索 `逐页 getTextContent 的页文本缓存（loadPageText，跨查询共用——换一个词重扫只需 234ms，而第一次冷扫 700 页要 1.9~2.4s，钱在 pdf.js 的逐页往返上、每页的 toLowerCase+indexOf 全场只花 5ms，并行取页实测只省 1.3× 故不做）→ 串行扫全程、命中上限 500（撞到就说「500+」不说总数），而**"这一趟在不在扫"由界面自己记着**（v0.66：查询一变化就标 `scanning`，进度按 `shouldPublish` 的时间窗与新命中数交，「无匹配」只有扫完全程才说得出）；四档文案与那两条节流判据都在 lib/pdf-search.ts，Rust 不参与这一趟` ；标注 `选区高亮/便签/拖拽画的矩形·椭圆·直线·手绘 → 内存模型（rects[0] 包围盒 + polys 几何）→ Ctrl+S 时 pdf-lib 低层写 Annotation 字典回原文件`（**存盘那一段现在会说话**，v0.70：release 上 12/300/2300 页三档的整趟是 11/143~161/1071~1161ms，而 `write_file` 自身只有 4~95ms ⇒ 钱在 pdf-lib 的 load+save 而不是写盘那一步；同一枚 `SAVE_BUSY_MS=200` 的门只让大件那一档开口（进度句可看 940ms、中件 164ms 差一口气不闪），成功补上「已保存」、失败补上 `failStatus(e,'保存失败')` 而原话留在悬停里——改前三句都没有，因为 `writeAnnosTo` 从不 catch 而 `registry.drain` 的 `catch {}` 把抛错咽了下去；三句挂在 `registerSaver` 那一层不挂进与工具条共用的 `writeAnnosTo`，收尾时钟与表格头共用 `lib/save-status.ts` 那一份。另外两头按实测**不接**：文档整趟 ≤122ms、演示 ≤45ms，接了就是闪，而它们本来就各自说着「已保存（docx）」「已保存」（A12a/A12b 把"没接"钉成判据）**⇒ v0.71 改口：文档头量完并接了收尾时钟与失败句，就是不接进度门**（实测整趟 30~92ms），演示头照旧**⇒ v0.72 改口：演示头也接上了，同样是只接收尾时钟与失败句、不接进度门**（实测三档整趟 5~14ms））；四类编辑器的**存盘**那一路现在吃同一份收尾时钟）；文档导出 `@media print 排版（分栏/分页符/避免跨页折断）+ @page margin box 逐页页眉页脚页码 + 打印态纸面调色板（`color-scheme` 压回 light、主题色经变量换掉，v0.49）→ Rust export_pdf（PrintSettings 纸张与四边距；CSS `@page` 也真的说话，所以每条作业自己声明完整，见 v0.50）→ WebView2 PrintToPdf 落盘`；演示导出 `Deck → createRoot 离屏挂载 StaticSlide 分页 → 同上`；表格导出 `Univer 快照 → WorkbookPayload → lib/sheet-print-setup.ts 把那张「页面设置」翻成打印计划（纸面/四边距/缩放/打印区域/重复标题行列/手动分页符/列带/页眉页脚的 @page margin box）→ lib/sheet-print.ts 自绘 HTML 网格 → 同上（canvas 抓不到故走数据侧重排；计划同时喂 PrintToPdf 的 PrintSettings，两条通道同一组数，v0.51。**勾了「缩放到 N 页高」或「上下居中」时这份 HTML 先建后量再重建（v0.53）**——行高不在载荷里（默认行高由字体现算、声明过的只是下限、`zoom` 之后又不线性），只能离屏量真排版（`lib/sheet-print-measure.ts` + `pdfprint.measurePrintLayout`），`fitToPagesTallZoom` 按实测逐带贪心分页压出 1% 一档的缩放、`verticalCenterPadPx` 只在装得下的那一页给上留白，量稳了才把留白写回同一份 DOM 交导出）。**正文与页眉的底数吃同一层**（v0.59）：工作簿默认字体（`xl/styles.xml` 的 `cellXfs[0]→fonts`）一次读进载荷，`baseFontPt` 一处解析，页眉由 `@page` 的 margin box 乘出去、正文落在每张表 `<section>` 的 `--oof-print-base-size` 上被 `td` 的 `font-size` 吃掉，没说话时两处同落 11pt 那一档兜底）`；页面管理 `内存标注先写回 → pdf-lib 旋转/删除/提取/合并/拆分覆盖写回 → 重载并从 /Annots 重新导入标注（旋转页坐标按 /Rotate 经 pdf-geo.ts 换算）`。
+PDF 文件流：查看 `pdf 磁盘 → 小于 4MB 整本 readBytes / 大于 4MB 经 file_len + read_range 分段喂给 pdf.js（首屏只取 64KB 文件头）→ pdfjs-dist（worker + canvas）；**这"首屏该怎么读"的一次决定连同要读的那一点字节，也在 shell 的 `openTab` 那一刻就出门**（v0.68：闸门由 `preparePdfSource` 单一持有，预取的因此不是整叠字节而是 `{mode:'range'|'bytes'}` 那两种形状之一；发布包 5 趟中位——改前每趟排在 PdfViewer 的 chunk 备好之后 17~24ms 才出门、改后每趟提前到它之前 4~10ms，首画 632→579／778→708／992→966ms，而那一次读自身耗时没动（10→9／40→39／3→4ms）⇒ 省的仍是排队；分段件的 `read_range` 枚数两头都是 92 ⇒ 这条通道不新增读，只是提前已有的那几枚）`；设了打开密码的那一档由界面上的密码面板拦住（v0.65：`openTask.onPassword` 装在 `await openTask.promise` 之前，闸门只把用户按键交回的那一串投进去，密码只留在这次会话的内存里、不写盘）；全文搜索 `逐页 getTextContent 的页文本缓存（loadPageText，跨查询共用——换一个词重扫只需 234ms，而第一次冷扫 700 页要 1.9~2.4s，钱在 pdf.js 的逐页往返上、每页的 toLowerCase+indexOf 全场只花 5ms，并行取页实测只省 1.3× 故不做）→ 串行扫全程、命中上限 500（撞到就说「500+」不说总数），而**"这一趟在不在扫"由界面自己记着**（v0.66：查询一变化就标 `scanning`，进度按 `shouldPublish` 的时间窗与新命中数交，「无匹配」只有扫完全程才说得出）；四档文案与那两条节流判据都在 lib/pdf-search.ts，Rust 不参与这一趟` ；标注 `选区高亮/便签/拖拽画的矩形·椭圆·直线·手绘 → 内存模型（rects[0] 包围盒 + polys 几何）→ Ctrl+S 时 pdf-lib 低层写 Annotation 字典回原文件`（**存盘那一段现在会说话**，v0.70：release 上 12/300/2300 页三档的整趟是 11/143~161/1071~1161ms，而 `write_file` 自身只有 4~95ms ⇒ 钱在 pdf-lib 的 load+save 而不是写盘那一步；同一枚 `SAVE_BUSY_MS=200` 的门只让大件那一档开口（进度句可看 940ms、中件 164ms 差一口气不闪），成功补上「已保存」、失败补上 `failStatus(e,'保存失败')` 而原话留在悬停里——改前三句都没有，因为 `writeAnnosTo` 从不 catch 而 `registry.drain` 的 `catch {}` 把抛错咽了下去；三句挂在 `registerSaver` 那一层不挂进与工具条共用的 `writeAnnosTo`，收尾时钟与表格头共用 `lib/save-status.ts` 那一份。另外两头按实测**不接**：文档整趟 ≤122ms、演示 ≤45ms，接了就是闪，而它们本来就各自说着「已保存（docx）」「已保存」（A12a/A12b 把"没接"钉成判据）**⇒ v0.71 改口：文档头量完并接了收尾时钟与失败句，就是不接进度门**（实测整趟 30~92ms），演示头照旧**⇒ v0.72 改口：演示头也接上了，同样是只接收尾时钟与失败句、不接进度门**（实测三档整趟 5~14ms）**⇒ v0.80 改口：大件那一档的等待已经归因并拆掉，那句话因此不再上屏**（归因的形状是"等"而不是"忙"：那 ~1030ms 里 pdf-lib 每处理 `objectsPerTick` 枚对象就 `waitForTick()` 让出一个宏任务（`setTimeout(…, 0)`，Chromium 对嵌套零延迟钳到 ≥4ms），dev 打点量到 `loadSyncOnly=0 / loadAwaitOnly=236`、`saveSyncOnly=0 / saveAwaitOnly=750`、页内 `longtask=[]`、`mainThreadShare ≤10.9%`（含 CDP 轮询，是上界），件里 `objects=4764` 在库默认 100/50 下要让出 **142 枚**、实测每枚 ~6.6ms；让出粒度定在 `PDF_OBJECTS_PER_TICK = 1500`（`lib/pdf-ticks.ts` 一处持有，两处 `load` 与四处 `save` 共吃，产物字节五档同一份）之后，release 实测按键→写出门 **1024/1028/1034 → 148/172/153ms**、写自身 [15,15,18]→[19,19,18]ms（Rust 一字未动）、两支写出去的字节同一份 `d46fd9db95ae3c0d`，实验件三趟 Δ 全部落在 `SAVE_BUSY_MS=200` 之下 ⇒ 那句「正在保存…」不再上屏（对照件每趟 217~219ms 上屏并活 819/818/828ms）；句子、三道门与 `writeAnnosTo` 的接线一个字没动——本轮改的只有"等多久"））；四类编辑器的**存盘**那一路现在吃同一份收尾时钟）；文档导出 `@media print 排版（分栏/分页符/避免跨页折断）+ @page margin box 逐页页眉页脚页码 + 打印态纸面调色板（`color-scheme` 压回 light、主题色经变量换掉，v0.49）→ Rust export_pdf（PrintSettings 纸张与四边距；CSS `@page` 也真的说话，所以每条作业自己声明完整，见 v0.50）→ WebView2 PrintToPdf 落盘`；演示导出 `Deck → createRoot 离屏挂载 StaticSlide 分页 → 同上`；表格导出 `Univer 快照 → WorkbookPayload → lib/sheet-print-setup.ts 把那张「页面设置」翻成打印计划（纸面/四边距/缩放/打印区域/重复标题行列/手动分页符/列带/页眉页脚的 @page margin box）→ lib/sheet-print.ts 自绘 HTML 网格 → 同上（canvas 抓不到故走数据侧重排；计划同时喂 PrintToPdf 的 PrintSettings，两条通道同一组数，v0.51。**勾了「缩放到 N 页高」或「上下居中」时这份 HTML 先建后量再重建（v0.53）**——行高不在载荷里（默认行高由字体现算、声明过的只是下限、`zoom` 之后又不线性），只能离屏量真排版（`lib/sheet-print-measure.ts` + `pdfprint.measurePrintLayout`），`fitToPagesTallZoom` 按实测逐带贪心分页压出 1% 一档的缩放、`verticalCenterPadPx` 只在装得下的那一页给上留白，量稳了才把留白写回同一份 DOM 交导出）。**正文与页眉的底数吃同一层**（v0.59）：工作簿默认字体（`xl/styles.xml` 的 `cellXfs[0]→fonts`）一次读进载荷，`baseFontPt` 一处解析，页眉由 `@page` 的 margin box 乘出去、正文落在每张表 `<section>` 的 `--oof-print-base-size` 上被 `td` 的 `font-size` 吃掉，没说话时两处同落 11pt 那一档兜底）`；页面管理 `内存标注先写回 → pdf-lib 旋转/删除/提取/合并/拆分覆盖写回 → 重载并从 /Annots 重新导入标注（旋转页坐标按 /Rotate 经 pdf-geo.ts 换算）`。
 
 ## 开发
 
@@ -3807,9 +3901,33 @@ cargo check        # Rust 后端检查（在 src-tauri 下）
       验证：release A/B **37 断言 / 真失败 0**（ dots 1→0、打脸 0 拍、各趟只落一次盘、按键→上屏 32→31ms、写自身 7→6ms、
       longtask `[]`、页面异常 0 条 ⇒ 本轮没让写侧变快，改的是界面说什么）、dev 真机 **16 / 0（含 D7c/D7d 两条分层判据）**、
       前端结构 **31 / 0**、变异 **14 枚 + 正控制 / BAD 0**、`cargo test --lib` **97 / 0 / 11**（Rust 一个字没动）
-- [ ] **PDF 大件那 ~1030ms（按键到写出门）没有归因**：本轮只判了它**不是** chunk 取、且全程**没有 ≥200ms 的长任务**
+- [x] **PDF 大件那 ~1030ms（按键到写出门）没有归因**：本轮只判了它**不是** chunk 取、且全程**没有 ≥200ms 的长任务**
       （`longtask=[]`），而 `write_file` 自身只 91~99ms ⇒ 钱在 pdf-lib 的 `PDFDocument.load` + `save()` 那条 await 链上，
       但没有分段打点说不出各档占多少；再省要么把它挪进 worker，要么像表格那样只写变更的注解（本轮一毫秒都没为此改动）
+      ——**v0.80 已归因并兑现**：打点量到的形状是"等"而不是"忙"（`loadSyncOnly=0 / loadAwaitOnly=236`、
+      `saveSyncOnly=0 / saveAwaitOnly=750`、页内 `longtask=[]`、`mainThreadShare ≤10.9%` 且那是含 CDP 轮询的上界，
+      正控制 `E0 busy300 dScript=300.4` 证这把尺量得到东西），算术也对得上（件里 `objects=4764` ⇒ 库默认 100/50
+      下要让出 **142 枚**宏任务、实测每枚 ~6.6ms，而 Chromium 把嵌套零延迟定时器钳到 ≥4ms）⇒ **不必搬 worker**：
+      把让出粒度定在 `PDF_OBJECTS_PER_TICK = 1500`（`lib/pdf-ticks.ts` 一处持有、六处站点共吃）之后，release 实测
+      按键→写出门 **1024/1028/1034 → 148/172/153ms**，写出去的字节两支同一份 `d46fd9db95ae3c0d`、各只一枚写请求、
+      按键之后没有长出新的同步块，而那句 `SAVE_BUSY_MS=200` 的「正在保存…」因此在大件上也不再上屏；
+      "只写变更的注解"那一路同样没走——它改的是内容而不是等待。验证：release A/B **27 / 真失败 0 / 显式 SKIP 0**
+      （3 趟 × 两支真 exe，对照件＝改前当场存档的 0.79 那支）、前端结构 **21 / 0**（B0 自检 5/5）、
+      变异 **14 枚 + 正控制 / BAD 0**、CDP dev **15 / 0、页面异常 0 条**、`cargo test --lib` **97 / 0 / 11**
+      （Rust 一个字没动）
+- [ ] **标注还没扫完就按 Ctrl+S，会把 `/Annots` 整片抹掉**（v0.80 的 A/B 顺带量到的既有缺陷，本轮一毫秒没为它改）：
+      写那一路把内存里的标注整片重盖进文件，而读那一路（逐页扫 `/Annots` 之后 `setAnnos`）是异步的——早退那一趟
+      按下时页龄 ctrl 594 / exp 1447ms，两支落盘都是 `annos: 0` 且哈希同为 `ca72e8c365681d03`，而屏上照旧「已保存」、
+      ● 照旧归 0 ⇒ **界面说"存好了"而 40 枚注解没了**；正常那一臂因此改成先等侧栏「标注 N」落定再按
+      （判据吃 `disk.annos === sideCount` 而不是硬编码枚数）。要的是"读侧未就绪不许写"那道闸（或未就绪时先补扫），
+      与让出粒度不是同一件事；0.79 同样犯，所以这不是本轮引入的回归，但它是本轮**看到**的第一格会丢用户数据的形状
+- [ ] **t4000 与最快那一档只由 dev 侧的粒度阶梯量过**（页内墙钟 57 / 55ms，而单枚同步块 35 / 65ms）：本轮选 1500，
+      更激进的两档没在 release 真机走过 ⇒ "再省 18ms 值不值一枚 65ms 的块"没有真机判据；
+      `PDF_OBJECTS_PER_TICK = 1500` 是本机单机的数，换机器要重扫那根阶梯（4ms 的钳位是 Chromium 的而不是我们的）
+- [ ] **release 上没有分段落点** ⇒ 分段归因只能来自 dev（v0.80 为此临时改过一份 `PdfViewer`，产物已删）：
+      想要长期观测就得给存盘那一路做正式的打点通道，否则下一轮"再省一档"又要重摆一遍临时探针
+- [ ] **页面操作五路（旋转/删除/提取/合并/拆分）wired 而没在真大件上量过整趟**：v0.80 的结构腿与变异腿判的是
+      这六处各吃了那一枚常数（S2a/S2b/S3a/S3b + M1~M6、M10），而 2300 页件上"旋转一页要等多久"仍然没有读数
 - [x] **演示头的失败仍只进原生弹窗、不上状态栏**（v0.71 只补了文档头这一半）——**v0.72 已补**：前置实测先把它坏在哪儿量清楚（可写件那一路本来就是对的：`dots=[0,1,0]`、字面真落盘、「已保存」在屏 1499ms、按键→出门 3ms、`write_text_file` 自身 6~8ms、longtask `[]` ⇒ 本轮没有去修一个不存在的锚点缺陷，与文档头 v0.71 那处不同形），而**只读件那一路状态栏全程 `[null]`**、失败只落在阻塞式 `#32770` 里（前=0 后=1 峰值=[1]，写请求确实出过门 440+7ms）⇒ 与 v0.70 给 PDF 头补的是**同一格**；本轮把 `save()` 的 `catch` 换成 `setStatus(failStatus(e,'保存失败'))`（原话留悬停、不再新立弹窗、● 留 1 而不记成已存），连按两次那一路量到**第二句在改前只活 489/496ms**（`cancel` 的第二个用途在这一头第二次兑现，而且是量出来的不是搬过来的）；三档 2/60/150 页整趟 **5 / 8~9 / 13~14ms** ⇒ **这一头连门都不挂**（`SAVE_BUSY_MS=200` 在这一路根本没有调用点，A9a/A9b 那类"没接"判据继续在）。**本轮没有把文档头那套"写手／动作"分层搬过来**——三个动作（`save`/`exportPptx`/`exportPdfTo`）各自直接写文件、没有共用写手的形状，硬抽一层就是为不存在的问题建层；只搬真正被复用到的东西：收尾时钟与句子归模块，而 v0.71 的 `base` 参数在这一头同时服务三个动作（D5a~c 直调 `__oofPpt.exportPdfTo` 判「已导出 PDF」而不是「已保存」且 ● 不清账）。验证：release A/B **18 断言 / 真失败 0**（对照件＝改动前存档的 0.71 exe；R2c 判的就是对照件全程没说任何一句 ⇒ 判据不是空的；R3b 改后 1501/1506ms；按键→上屏 14→12ms、写自身 [6,7]→[6,6]ms ⇒ **本轮没让写侧变快**）、dev 真机 **20 / 0、页面异常 0 条**、前端结构 **36 / 0**、变异 **14 枚 + 正控制 / BAD 0**、`cargo test --lib` **97 / 0 / 11**（Rust 一个字没动）
 - [ ] **收尾时钟只收了存盘这一路**：文档头（v0.71）现在吃 `saveDoneTimer`，而**导出那几路仍各持裸时钟**——
       `SheetEditor.exportPdfTo:875` 那句「已导出 PDF」还**内联抄了一份拼句公式**（`notes.length ? 5000 : 1500`，
@@ -3974,7 +4092,10 @@ cargo check        # Rust 后端检查（在 src-tauri 下）
       改成"从第二枚写的 `responseEnd` 起算那句还在屏上多久"才量到 504ms（改前）／1504ms（改后）。
       与 v0.70 那条「"结束"要按事件的完整集合定义」同族：**"说了多久"要按落定时刻定义，而不是按文案的边界**
 - [ ] **中件 164ms 与门值 200ms 只差 36ms**：PDF 那一档在真机上"刚好不闪"是运气而不是设计——同一枚件换一台机器
-      （或磁盘缓存刚冷）就会闪一句「正在保存…」再落定；这一条与下面那条 `SAVE_BUSY_MS` 的机器账要一起复判
+      （或磁盘缓存刚冷）就会闪一句「正在保存…」再落定；这一条与下面那条 `SAVE_BUSY_MS` 的机器账要一起复判。
+      **v0.80 只改口而不勾掉**：大件那一档改让出粒度之后实测 Δ 148/172/153ms、进度句三趟都不再上屏，
+      所以"大件会开口"这一格已经翻篇；而**中件那一档本轮没有重跑**（A/B 只跑 2300 页件），
+      它现在的 Δ 仍是 v0.70 那次 143~161ms 的旧读数，"差 36ms 靠运气"这件事在换机器上要不要翻脸仍未复判
 - [ ] **在途锁按 `tabId` 不按 `path`**：同一件文件开两个标签（今天 `openTab` 按路径去重，走"找回已有标签"那一路，
       所以撞不上）时锁就管不到跨标签同路径并发了；真要先改的是去重还是锁，得等出现"两个标签指向同一文件"的形状
 - [ ] **`SAVE_BUSY_MS = 200` 是本机单机的数**：它在 115~131ms 的同步块与 471ms 的 IPC 之间取了一档，

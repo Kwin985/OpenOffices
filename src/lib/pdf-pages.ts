@@ -5,6 +5,7 @@
  * 内存标注直接从新文件的 /Annots 重新导入，不必自己维护页序映射表。
  */
 import { readBytes, writeBytes } from './fs'
+import { PDF_OBJECTS_PER_TICK } from './pdf-ticks'
 
 type Doc = import('pdf-lib').PDFDocument
 type Lib = typeof import('pdf-lib')
@@ -12,12 +13,12 @@ type Lib = typeof import('pdf-lib')
 async function loadDoc(path: string): Promise<{ doc: Doc; lib: Lib }> {
   const lib = await import('pdf-lib')
   const bytes = await readBytes(path)
-  const doc = await lib.PDFDocument.load(bytes, { updateMetadata: false })
+  const doc = await lib.PDFDocument.load(bytes, { updateMetadata: false, parseSpeed: PDF_OBJECTS_PER_TICK })
   return { doc, lib }
 }
 
 async function saveDoc(doc: Doc, path: string) {
-  await writeBytes(path, await doc.save({ addDefaultPage: false }))
+  await writeBytes(path, await doc.save({ addDefaultPage: false, objectsPerTick: PDF_OBJECTS_PER_TICK }))
 }
 
 /** 1-based 页号 → 0-based 索引 */
@@ -56,7 +57,7 @@ export async function extractPages(path: string, outPath: string, pages: number[
   const out = await lib.PDFDocument.create()
   const copied = await out.copyPages(doc, idx(pages).sort((a, b) => a - b))
   for (const pg of copied) out.addPage(pg)
-  await writeBytes(outPath, await out.save())
+  await writeBytes(outPath, await out.save({ objectsPerTick: PDF_OBJECTS_PER_TICK }))
   return copied.length
 }
 
@@ -84,7 +85,7 @@ export async function splitPdf(path: string, dir: string): Promise<string[]> {
     const [pg] = await out.copyPages(doc, [i])
     out.addPage(pg)
     const name = `${stem}-${String(i + 1).padStart(3, '0')}.pdf`
-    await writeBytes(`${dir}${sep}${name}`, await out.save())
+    await writeBytes(`${dir}${sep}${name}`, await out.save({ objectsPerTick: PDF_OBJECTS_PER_TICK }))
     written.push(name)
   }
   return written

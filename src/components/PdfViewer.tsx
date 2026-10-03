@@ -13,6 +13,7 @@ import { saveBusyTimer, saveDoneTimer } from '../lib/save-status'
 import { failRaw, failStatus, statusText, statusTip } from '../lib/fail-msg'
 import { PWD_MEMORY_NOTE, pwdCancelledText, pwdPromptText, pwdReason, type PwdReason } from '../lib/pdf-password'
 import { findCountText, shouldPublish, type FindStatus } from '../lib/pdf-search'
+import { PDF_OBJECTS_PER_TICK } from '../lib/pdf-ticks'
 import {
   fromDisplayPoints,
   fromDisplayRect,
@@ -1231,7 +1232,7 @@ function PdfViewer({ tab }: Props) {
       // pdf-lib 1.17 无高层标注 API：用 context 手建 /Annot 字典（Highlight/Text 标准注解，其他阅读器可见）
       const { PDFDocument, PDFName, PDFDict, PDFHexString } = await import('pdf-lib')
       const bytes = await readBytes(path)
-      const pdoc = await PDFDocument.load(bytes, { updateMetadata: false })
+      const pdoc = await PDFDocument.load(bytes, { updateMetadata: false, parseSpeed: PDF_OBJECTS_PER_TICK })
       const pages = pdoc.getPages()
       for (const pg of pages) {
         const arr = pg.node.Annots()
@@ -1350,7 +1351,7 @@ function PdfViewer({ tab }: Props) {
           }
         }
       }
-      const out = await pdoc.save({ addDefaultPage: false })
+      const out = await pdoc.save({ addDefaultPage: false, objectsPerTick: PDF_OBJECTS_PER_TICK })
       await writeBytes(path, out)
       markDirty(tab.id, false)
   }
