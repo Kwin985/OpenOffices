@@ -3137,6 +3137,85 @@ debug 构建**，而一段没有 release 数字的性能工作等于凭空说话
   `SAVE_BUSY_MS` / `AUTO_BASE_MS` / `AUTO_MAX_MS` 是单机数、写侧前缀三家不统一、toast 体系照旧未建；
   自动更新的应用内下载安装与 macOS 打包按指令继续等信号
 
+## 那句标脏搬出 updater：演示头一枚按键只敲一次 store，React 的渲染阶段不再替它写全局（v0.79）
+
+起点是 v0.78 收尾时自己记下的两条未勾项——「每次都标脏换来的按键成本没量」与「`markDirty` 调在 `setDeck` 的
+updater 里面」。本轮动的是前端那一层的一个文件的一行**位置**（`PptEditor.tsx` 的 `edit()`），**Rust 一个字没动**
+（先例 v0.64~v0.78），也没有新增常数、没有新增任何一路时钟。
+
+- **前置实测（`tmp/x79/predev.mjs`，dev 腿，只量不改产品）先把"这一枚按键里到底发生了什么"量成五格**：
+  ① **调用次数**——0.78 那一支上一枚按键把 `markDirty` 换来 **2 次**（连打 4 枚 = 8 次、6 枚标签之下再打一枚 = 2 次），
+  0.79 那一支是 **1 次**（4 枚 = 4 次、6 枚标签下 1 次）；② **栈里有没有渲染阶段的帧**——改前第一枚按键被 dump
+  出来的那一枚调用，栈是 `markDirty ← PptEditor.tsx:93（updater 体内）← basicStateReducer ← updateReducerImpl ←
+  updateReducer ← Object.useState` ⇒ 它跑在**渲染阶段**；改后是 `markDirty ← edit ← editSlide ← onChange ←
+  executeDispatch` ⇒ 事件处理器里；③ **单次耗时**——改前中位 0.1ms / 最大 0.3ms（4 枚合计 0.900ms），
+  改后中位 0.1ms / 最大 0.1ms（合计 0.400ms）⇒ **本轮买到的不是速度**（0.5ms 的差在本机噪声里，
+  而 6 枚标签之下那一枚读到 0ms）；④ **store 订阅被通知几次**——脏值 false→true 那一枚按键 1 次，
+  已经脏了之后连打 4 枚 = **0 次** ⇒ v0.78 那条"去重住在 `store.markDirty`"第二次兑现，而它恰好解释了
+  "每次按键都标脏为什么不贵"；⑤ **React 自己怎么看这件事**——改前抓到 1 条 DEV 告警
+  `Cannot update a component (Workspace) while rendering a different component (PptEditor)`，改后 **0 条**
+- **量具的说明书由正控制签出来，而它真的自毁过一次**：探针给 `useApp` 的 `markDirty` 包一层壳去数次数与抓栈，
+  "这一枚调用算不算渲染阶段"靠栈帧分类。第一版拿 `basicStateReducer` 当渲染标记，于是**两条路径被判成同一类**——
+  它在 eager 那一路也在（`basicStateReducer ← dispatchSetStateInternal ← dispatchSetState`），真正的分水岭是它的
+  **调用方**。正控制（`__oofPpt.setDeck(d => …)` 由 React 自己调，按契约必然在渲染阶段）当场报 **FAIL**，
+  同一趟 0.78 的阶段读数全报 `["other","other"]` ⇒ 腿自己那条规矩「正控制没被认成渲染阶段 ⇒ 后面的阶段读数一律不吃」
+  把那一趟的分类读数整批作废。修法是先判处理器标记（`dispatchSetState|onChange|editSlide|callCallback|…`）
+  再判渲染标记（`updateReducerImpl|renderWithHooks|performUnitOfWork|…`）；**所以上面第 ② 格只吃两样东西**：
+  dump 出来的原始栈帧，以及那条 DEV 告警——改前那一趟的分类器读数不吃（它已被自己的正控制作废）
+- **本轮唯一的架构决定：那句 `markDirty(tab.id, true)` 从 updater 体内提到 `setDeck(…)` 语句之后**，
+  而不是"在里面补一份只跑一次的门"——updater 按 React 契约是**纯函数**，它被调几次、在哪个阶段被调由不得我们
+  （eager state、并发渲染、`StrictMode` 三条路径都能动它），把"这一枚标签脏了"写进全局 store 这件事如果发生在里面，
+  等于把它的可见性交给 React 的调度器；提到外面 ⇒ 一枚按键恰好一次、必然在事件处理器里
+  （S1a 钉位置、S1b 钉 updater 体里只剩 `fn(next)` 与 `return next`、S1c 钉那道闸不许回到里面、S1d 钉那句是顶格的裸调用）
+- **release A/B 的账（两支真 exe × 两臂 / 30 通过 / 真失败 0 / 页面异常 0 条）：结论是"持平"**——0.78 与 0.79
+  在同一套格子上读出来的行为一模一样：● 起得来（首拍 @1722 / @1701）、定时那一枚写在 30.0 秒处出门
+  （落定锚 @30230 / @30190）、落定之后 **12ms / 11ms** 那一拍 ● 归 0 且那句是「已自动保存 22:37:39」/「22:38:50」、
+  手动那趟「已保存」+ `_m1` 真在盘上 + ●=0、**手存之后再打字 ● 回得来**（首拍 @32903 / @32821，按键 @32899 / @32804）、
+  再编辑之后写枚数 2→3、晚打的 `_a2` 真在盘上（第二枚落定锚 @62499 / @62408，● 归 0 首拍距锚 **4ms / 13ms**）；
+  写自身 ctrl `[5.7, 7, 14.7]` / exp `[7.1, 4, 6.2]`ms ⇒ 没变快也没变慢。**记账**：**「渲染阶段写全局」这一格在
+  release 上根本没有可观测面**（那条告警是 React DEV-only），所以本轮的实验证据只能来自 dev 腿，
+  release 这一臂买的是"没有回归"而不是"改好了什么"——这与 v0.77 那条"不脏就不写只有 release 能判"正好反过来
+- **前端结构 28 / 0**（吃**剥掉注释之后**的源文）：S2a 是全仓扫描——四个头的 `setState` updater 里都不再写脏值；
+  S3a~S3g 是 v0.74~v0.77 那四层的回归（`runExclusive`、一份 `attempt()`、两头 `onFocusBack`、按路径认领、
+  账本每枚标签一份），S4a/S4b 钉表格头与 PDF 头没被顺手接上。**本轮先撞到两枚判据自身的坑**：① S2a 第一版把
+  `setTimeout(() => { … })` 认成 React 的 updater（文本同形而它不是 `setXxx`），于是定时那一路**合法**的 `markDirty`
+  被报成违例 ⇒ 加了 `NOT_AN_UPDATER = /^Timeout$/` 黑名单；② S2d「`renameTab` 仍把标签归到不脏」原来是拿整文件
+  找 `dirty: false` ⇒ **那是判据空转**（`openTab` 里也有一枚同名键，改名那一格就算不再归 false 也照样绿），
+  改成按 `renameTab:` 切块再查块内，而切片起点必须取**最后一枚**（`State` 接口在 `store.ts:32` 先声明了一次同名键，
+  取第一枚切到的是类型而不是实现，于是另立一枚 `S2d-renametab-slice-found` 守卫）——这一枚是变异 M7 抓出来的，不是产品
+- **变异检查 16 枚（14 枚 + 2 枚正控制）/ BAD 0 / 多打中 0**：M1 把那句原样放回 updater ⇒ 响 4 条
+  （S1a/S1b/S1g/S2a）、M2 把那道闸连同那句一起放回 ⇒ 6 条、M3 `edit()` 干脆不标脏 ⇒ 3 条、M4 定时成功不再清标签的脏、
+  M5 `dirtyRef` 复活、M6 拆掉 store 那层去重、M7 `renameTab` 不再归 `false`（**抓出 S2d 空转的那一手**）、
+  M8 文档头把标脏搬进自己的 updater ⇒ S2a/S2b、M9/M10 表格头与 PDF 头被照抄、M11~M13 拆 v0.77 的接线、
+  M14 把那句包进一道外层闸 ⇒ S1d；P0（什么都不改）与 P1（只改一处占位文本）必须全绿
+- **CDP dev 腿只吃形状**（14 通过 / 真失败 0 / 页面异常 0 条）：上面前置实测那五格就是这一腿的账，而**它的数字
+  一律不吃成产品指标**（v0.66 那条老规矩第四次兑现）——dev 的量具读的是"每枚按键换几次调用 / 有没有渲染阶段帧 /
+  React 报不报话"，这些在 release 上要么不存在要么换了形状
+- **本轮撞到三处量具坑，都不是产品**：① **时间线快照不能与落定锚同毫秒**——C3d/E3d 第一版在同一刻取 `landedAt`
+  与 `tl`，于是"落定之后 ● 归 0 首拍"永远找不到行而两臂同 FAIL；第二轮 29/1 时是那一行自己的窗口 dump 自证的
+  （`62103:1:` … `62463:1:` 之后那一枚 `62524:0:已自动保存…` 本来就存在，只是排在取快照之后）⇒ 加了
+  `rowsSince(landedAt, 900)`；与 v0.76「"某句该消失"要容许采样器自己那一拍」同族而方向相反——那一轮怕读早，
+  这一轮怕读在**同一刻**；② **5 秒粒度的文件轮询会把"落定"读晚**——`waitForLiteral` 每 5000ms 探一次盘，
+  `landedAt = pageNow()` 因此能比真写晚 5 秒，"● 归 0"与"「已自动保存」首拍"两格同时被推后 ⇒ 改 500ms 粒度，
+  且落定锚改成按**那一枚写自己的 `startTime + duration`**（`landedPage()`）而不是页内"现在"；③ 状态栏
+  `.editor-status` **本来就是两枚 span**（v0.73 那两层渲染），`X.stat()` 第一版只取 `querySelector` 的第一枚 ⇒
+  现在把全部 join 起来（这一枚在 dev 腿与 release 腿各撞一次）
+- **验证（五腿 + 编译）**：release A/B 真机 **30 / 真失败 0**（对照件＝本轮改动前当场存档的那支 0.78 exe）、
+  前端结构 **28 / 0**、变异检查 **16 枚 + 正控制 / BAD 0**、CDP dev **14 / 0、页面异常 0 条**，`cargo test --lib`
+  **97 通过 / 0 失败 / 11 ignored**（与 v0.63~v0.78 同一份基线——Rust 本轮一个字没动），+ tsc 与
+  `pnpm tauri build --no-bundle` 绿（openoffices v0.79.0）；五腿都在**版本号 bump 之后**跑（老规矩），
+  结构腿与变异腿在最终源文上复跑过一次（28 / 0 与 16 枚 BAD 0，与 bump 后那两份同数）
+- **本轮没动的，量出来记着**（已开进路线图）：**这一格在 release 上没有可观测面** ⇒ "渲染阶段写外部 store"这一类
+  缺陷从此只能由 dev 腿判（React DEV 告警 + 栈帧分类），A/B 无从对照；**那把阶段分类器仍是一把手工尺子**——
+  标记表由本轮实测里出现过的帧名拼出，React 换版本就要重校，而正控制只能证"这一版认得出"；
+  **每次按键都调 `markDirty` 仍是 O(标签数) 的 `getState()`**（本机量到 ≤0.1ms，而 20 枚标签的形状没量）；
+  **`setDeck` 的 updater 里仍有整片 `slides.map(s => ({ …s }))` 拷贝**（本轮只挪了一句，没量 updater 被双跑时的拷贝成本）；
+  另存为／导出 pptx 之后"再编辑 ● 该不该亮"仍未量（与 v0.78 同源）、多枚 `.opd` 同时脏时每枚各自的时钟与认领关系仍未量、
+  「已自动保存 X」有悬停而手动那句仍没有次数账、DocEditor 剩四枚裸 `setTimeout`、`SheetEditor.exportPdfTo` 内联那份
+  拼句公式、PDF 大件 ~1030ms 仍未归因、中件 164ms 与门值 200ms 只差 36ms、在途锁按 `tabId` 不按 `path`、
+  `SAVE_BUSY_MS` / `AUTO_BASE_MS` / `AUTO_MAX_MS` 是单机数、写侧前缀三家不统一、toast 体系照旧未建；
+  自动更新的应用内下载安装与 macOS 打包按指令继续等信号
+
 ## 性能（v0.3）
 
 
@@ -3312,7 +3391,15 @@ src/                  React 前端
   （focus @72094 → 探写 @[72094]，**Δ 0ms**，判据是"探写排在 30 秒下限之后"而不是枚数），同一臂量按路径认领
   （探写落定 72103ms 之后那句过期失败最长只挂 **4ms**＝一枚采样间隔），dev 腿的 D5 段同形另有 **11ms** 那一格；
   而"手存之后再编辑 ● 该不该亮"这一档也是 v0.78 的 ctrlA/expA 两臂第一次给出真机数字（拆闸前 ● 起不来、90 秒窗内写枚数 = 0、
-  晚打的 `_a2` 不在盘上；拆闸后 ● 回得来、写全表 `[452/5, 30461/6]`、`_a2` 真落盘）/ PdfViewer（pdfjs-dist 懒加载，连续多页视口虚拟渲染+Ctrl 缩放+TextLayer 文字选择+全文搜索+缩略图/大纲/标注侧栏+高亮便签与矩形·椭圆·直线·手绘形状（绘制/导入/写回 pdf-lib）+标注编辑（点选/拖移/改色/删除）+「页面」工作区旋转/删除/提取/合并/拆分；≥4MB 走分段读（lib/pdf-range.ts），卸载时 destroy openTask 并 abort transport；**v0.64 四个编辑器与首页的失败出口一律改走 `lib/fail-msg.ts`**——状态栏那一行由 `{status}` 直出换成 `statusText(status)` + `title={statusTip(status)}`（四个渲染点各一处，`PptEditor` 的加载占位有两处分身所以两处都换），原生对话框那一层的 `String(e)` 换成 `failDialog(e)`，账目位里的 `${e instanceof Error ? e.message : String(e)}` 换成 `failText(e)`；`PdfViewer` 除接线外还立了两条行为——三处后台补做（页尺寸／大纲／标注）由"只 `console.error`"改成**先过 `isTeardown` 那道门再占状态栏**（拆标签时的 `Transport destroyed` 不入账，否则每次快速关标签都冒一句凭空的失败），`pageOp` 的定时清除从 `finally` 移到成功那一路（失败那一句留着，三秒就抹等于让用户读不完也悬停不到原话）；**v0.65 加密 PDF 的密码闸门**——`openTask.onPassword` 装在 `await openTask.promise` **之前**（装晚了那份承诺已经拒绝，回调再挂也来不及），回调只做三件事：把 `updatePassword` 存进 `pwdUpdateRef`、把"第几回问"记进 `pwdAttemptRef`、亮面板（判据与文案一律走 `lib/pdf-password.ts`，组件里只负责亮与接线，句子一处都不写）；**闸门绝不自动投密码**（自动投等于替用户猜，结构腿 C2 判这一条）、空串不当密码（喂进去只换来一次重新提问）、取消时**先**记 `pwdCancelledRef` **再**把闸门按下去（错误内容分不出"用户取消"与"没给密码"，这一位只能界面自己留着），于是那一行不带"失败"也不挂原始信息；工具条的 ↻ 是**从第 1 回重新数起**并把取消标记一起清掉（不清的话重试成功后第一次真失败会被归成"用户自己取消的"）；`type=password` 且密码不回显、不在界面上；owner-only 那一件**不问密码**就能看（用户口令为空）而页面级操作当场报得出 pdf-lib 那一句；同一轮补的是一条规矩而不是一处补丁——**「这一趟已经作废」那道门必须打在写任何共享状态之前**，开发模式的双挂载下晚到的 `catch` 会抹掉还活着的那一趟刚亮起来的面板，pdf.js 从此等不到回话，表现是卡在「正在加载…」且没有任何错误（C17/C18 各钉住本轮撞到的两处写点，另外那三句账目仍在，本轮没有新的拆接线）；**v0.66 搜索这一趟改由界面自己记着"在扫"**——查询一变化就标 `scanning:{scanned:0,total}` 并把上一词的命中与激活位**在同一处**清掉（防抖那 200ms 里界面不许回到「无匹配」，也不许拿旧词的第 3 条说新词的事），扫页循环里按 `shouldPublish` 交进度（`setMatches` 与 `setFindStatus` 同交，一句里不许半新半旧），收尾那一句先过作废门再把 `scanning` 清掉；**v0.65 那条"门打在写任何共享状态之前"在这里再兑现一次**：`seq !== searchSeq.current || !aliveRef.current` 那道门排在 `await loadPageText(...)` **之后**、任何 `setState`/ref 写入**之前**（排在 await 之前拦不住晚到的那一趟，排在最后一句就晚了），`aliveRef` 在 setup 里置回 `true`，于是开发模式 `React.StrictMode` 的第二次挂载不被当成已卸载——真机量到换词 1.2s 起那一格的文本零变化（被作废的那趟没能把界面抹回旧样子）；句子一律走 `lib/pdf-search.ts`，组件里不留「无匹配」「正在搜索」的字面（B2/B10 判这一条，而 B10 吃的是剥掉注释之后的源文）；`textPages` 这枚 DEV 钩子由本轮的临时归因**转正为常备观测量**——"扫完全程"只能硬判缓存枚数，把判据建在那句文案上就等于建在实现上；**v0.68 只动两行**——加载那一路的 `await createRangeTransport(path)` 换成 `const src = (await takePdf(path)) ?? (await preparePdfSource(path))`（外壳已在开标签那一刻把那次决定连同要读的字节发出去了，这里只是取来用；取不到就自己发，**不假设外壳一定先跑**），随后 `getDocument` 按 `src.mode` 分支，于是这一层**不再自己判闸门**（V1/V2/V4 钉的就是这三件事）；另一行是那条注释改口（它还写着"大文件只喂文件头、小的整本读"的选法，而现在选法在 `preparePdfSource` 那一处）。次序上有一条诚实的代价：自备那一路的读现在排在 `if (disposed) return` **之前**（闸门单一持有的后果），而**"写共享状态之前那道门"的位置一个字没动**（V3，v0.65 那条规矩在这里继续成立——`rangeModeRef.current = src.mode === 'range'` 仍排在门之后）；**v0.70 Ctrl+S 那一路开始说话**——`registerSaver` 里那一个 `async` 函数从"只 `await writeAnnosTo(path)`"变成「撤上一句收尾 → 挂进度门 → 写 → 撤门 + `done.show([])`，catch 里 `setStatus(failStatus(e, '保存失败'))`」，句子与时钟一律在 `lib/save-status.ts`（A5/A6/A7 判这三句的次序与去处），而**三句挂在 saver 层不挂进 `writeAnnosTo`**（那一函数与工具条的 `pageOp` 共用，写进去就是两头发话：A8 + 变异 M5；`pageOp` 原有的「旋转…」与失败句一个字没动：A9 + M6）。改前的形状是 `writeAnnosTo` 从不 catch 而 `registry.drain` 的 `catch {}` 把抛错咽了下去 ⇒ **只读件按 Ctrl+S 之后屏上连一句失败都没有**，成功那一路也只有 `markDirty(false)` 而没有「已保存」——本轮补的就是这一格（release A/B 里 R1/R6e 判改前那支的静默，R6a~R6d 判改后这一路说出口的每句话））
+  晚打的 `_a2` 不在盘上；拆闸后 ● 回得来、写全表 `[452/5, 30461/6]`、`_a2` 真落盘）；**v0.79 只挪了一句的位置**——
+`edit()` 里那句 `markDirty(tab.id, true)` 从 `setDeck` 的 updater 体内提到 `setDeck(…)` 语句之后（dev 前置实测：改前一枚按键
+把 `markDirty` 换来 2 次调用而其中一枚跑在渲染阶段（`basicStateReducer ← updateReducerImpl ← Object.useState`）、React 为此
+在 DEV 报"渲染 PptEditor 时更新了 Workspace"；改后 1 次、栈是 `edit ← editSlide ← onChange ← executeDispatch`，告警 0 条），
+updater 里从此只剩 `fn(next)` 与 `return next`——**副作用不许住在 updater 里**，因为它被调几次、在哪个阶段被调由不得我们
+（eager state / 并发渲染 / StrictMode 三条路径都能动它）；判据侧的两枚量具账记在这里：`S2a` 全仓扫"有没有头往 updater 里写脏值"
+时 `setTimeout(() => { … })` 与 React 的 updater **文本同形**（要 `NOT_AN_UPDATER` 黑名单排除），而 `S2d`「`renameTab` 仍把标签归到不脏」
+一度是**判据空转**（整文件找 `dirty: false` 会被 `openTab` 里那枚同名键顶住 ⇒ 改成按 `renameTab:` 切块，起点取**最后一枚**，
+因为 `State` 接口在 `store.ts:32` 先声明了一次同名键）——这一枚由变异 M7 抓出）/ PdfViewer（pdfjs-dist 懒加载，连续多页视口虚拟渲染+Ctrl 缩放+TextLayer 文字选择+全文搜索+缩略图/大纲/标注侧栏+高亮便签与矩形·椭圆·直线·手绘形状（绘制/导入/写回 pdf-lib）+标注编辑（点选/拖移/改色/删除）+「页面」工作区旋转/删除/提取/合并/拆分；≥4MB 走分段读（lib/pdf-range.ts），卸载时 destroy openTask 并 abort transport；**v0.64 四个编辑器与首页的失败出口一律改走 `lib/fail-msg.ts`**——状态栏那一行由 `{status}` 直出换成 `statusText(status)` + `title={statusTip(status)}`（四个渲染点各一处，`PptEditor` 的加载占位有两处分身所以两处都换），原生对话框那一层的 `String(e)` 换成 `failDialog(e)`，账目位里的 `${e instanceof Error ? e.message : String(e)}` 换成 `failText(e)`；`PdfViewer` 除接线外还立了两条行为——三处后台补做（页尺寸／大纲／标注）由"只 `console.error`"改成**先过 `isTeardown` 那道门再占状态栏**（拆标签时的 `Transport destroyed` 不入账，否则每次快速关标签都冒一句凭空的失败），`pageOp` 的定时清除从 `finally` 移到成功那一路（失败那一句留着，三秒就抹等于让用户读不完也悬停不到原话）；**v0.65 加密 PDF 的密码闸门**——`openTask.onPassword` 装在 `await openTask.promise` **之前**（装晚了那份承诺已经拒绝，回调再挂也来不及），回调只做三件事：把 `updatePassword` 存进 `pwdUpdateRef`、把"第几回问"记进 `pwdAttemptRef`、亮面板（判据与文案一律走 `lib/pdf-password.ts`，组件里只负责亮与接线，句子一处都不写）；**闸门绝不自动投密码**（自动投等于替用户猜，结构腿 C2 判这一条）、空串不当密码（喂进去只换来一次重新提问）、取消时**先**记 `pwdCancelledRef` **再**把闸门按下去（错误内容分不出"用户取消"与"没给密码"，这一位只能界面自己留着），于是那一行不带"失败"也不挂原始信息；工具条的 ↻ 是**从第 1 回重新数起**并把取消标记一起清掉（不清的话重试成功后第一次真失败会被归成"用户自己取消的"）；`type=password` 且密码不回显、不在界面上；owner-only 那一件**不问密码**就能看（用户口令为空）而页面级操作当场报得出 pdf-lib 那一句；同一轮补的是一条规矩而不是一处补丁——**「这一趟已经作废」那道门必须打在写任何共享状态之前**，开发模式的双挂载下晚到的 `catch` 会抹掉还活着的那一趟刚亮起来的面板，pdf.js 从此等不到回话，表现是卡在「正在加载…」且没有任何错误（C17/C18 各钉住本轮撞到的两处写点，另外那三句账目仍在，本轮没有新的拆接线）；**v0.66 搜索这一趟改由界面自己记着"在扫"**——查询一变化就标 `scanning:{scanned:0,total}` 并把上一词的命中与激活位**在同一处**清掉（防抖那 200ms 里界面不许回到「无匹配」，也不许拿旧词的第 3 条说新词的事），扫页循环里按 `shouldPublish` 交进度（`setMatches` 与 `setFindStatus` 同交，一句里不许半新半旧），收尾那一句先过作废门再把 `scanning` 清掉；**v0.65 那条"门打在写任何共享状态之前"在这里再兑现一次**：`seq !== searchSeq.current || !aliveRef.current` 那道门排在 `await loadPageText(...)` **之后**、任何 `setState`/ref 写入**之前**（排在 await 之前拦不住晚到的那一趟，排在最后一句就晚了），`aliveRef` 在 setup 里置回 `true`，于是开发模式 `React.StrictMode` 的第二次挂载不被当成已卸载——真机量到换词 1.2s 起那一格的文本零变化（被作废的那趟没能把界面抹回旧样子）；句子一律走 `lib/pdf-search.ts`，组件里不留「无匹配」「正在搜索」的字面（B2/B10 判这一条，而 B10 吃的是剥掉注释之后的源文）；`textPages` 这枚 DEV 钩子由本轮的临时归因**转正为常备观测量**——"扫完全程"只能硬判缓存枚数，把判据建在那句文案上就等于建在实现上；**v0.68 只动两行**——加载那一路的 `await createRangeTransport(path)` 换成 `const src = (await takePdf(path)) ?? (await preparePdfSource(path))`（外壳已在开标签那一刻把那次决定连同要读的字节发出去了，这里只是取来用；取不到就自己发，**不假设外壳一定先跑**），随后 `getDocument` 按 `src.mode` 分支，于是这一层**不再自己判闸门**（V1/V2/V4 钉的就是这三件事）；另一行是那条注释改口（它还写着"大文件只喂文件头、小的整本读"的选法，而现在选法在 `preparePdfSource` 那一处）。次序上有一条诚实的代价：自备那一路的读现在排在 `if (disposed) return` **之前**（闸门单一持有的后果），而**"写共享状态之前那道门"的位置一个字没动**（V3，v0.65 那条规矩在这里继续成立——`rangeModeRef.current = src.mode === 'range'` 仍排在门之后）；**v0.70 Ctrl+S 那一路开始说话**——`registerSaver` 里那一个 `async` 函数从"只 `await writeAnnosTo(path)`"变成「撤上一句收尾 → 挂进度门 → 写 → 撤门 + `done.show([])`，catch 里 `setStatus(failStatus(e, '保存失败'))`」，句子与时钟一律在 `lib/save-status.ts`（A5/A6/A7 判这三句的次序与去处），而**三句挂在 saver 层不挂进 `writeAnnosTo`**（那一函数与工具条的 `pageOp` 共用，写进去就是两头发话：A8 + 变异 M5；`pageOp` 原有的「旋转…」与失败句一个字没动：A9 + M6）。改前的形状是 `writeAnnosTo` 从不 catch 而 `registry.drain` 的 `catch {}` 把抛错咽了下去 ⇒ **只读件按 Ctrl+S 之后屏上连一句失败都没有**，成功那一路也只有 `markDirty(false)` 而没有「已保存」——本轮补的就是这一格（release A/B 里 R1/R6e 判改前那支的静默，R6a~R6d 判改后这一路说出口的每句话））
 scripts/              copy-pdfjs-assets.mjs（dev/build 前复制 cmaps/标准字体到 public/pdfjs） /
                       updater-release.mjs（发版：开 createUpdaterArtifacts 本机建签名包 → 读回真 .sig 与产物 →
                       出带三平台键的 latest.json → 打印要上传的清单；私钥只走子进程环境变量，`pnpm release:updater`）
@@ -3368,6 +3455,16 @@ A/B 的 R0b 量到成功那句与 ● 同屏；只读件的失败改前**状态�
 实验件（0.77）**32945ms 且那全是"焦点回来"所花的时间**（focus @257554 ⇒ 写 @257554、Δ0ms，字面独立读盘确认真在、
 「已自动保存 10:07:05」在落定之后 13ms 上屏、● 归 0、那句过期失败落定之后 0 拍），而**两臂总写枚数 4 vs 4**（探写不加戏）
 演示文件流：`pptx → JSZip 解包 OOXML → Deck 模型 → 编辑器`；保存为 `.opd` JSON 或经 pptxgenjs 导出 pptx。**存盘那一段现在遇到失败会开口**（v0.72：`save()` 的 `catch` 换成 `setStatus(failStatus(e,'保存失败'))` 而原话留在悬停 `title`，改前只有一枚阻塞式 `#32770` 而状态栏全程空白；只读件那一路 ● 仍留 1，失败不许把账记成已存）；三枚裸 `setTimeout`（保存、导出 pptx、导出 PDF 的收尾）收进 `lib/save-status.ts` 的同一枚 `saveDoneTimer`，导出那两路各吃自己的 `base`（「已导出 pptx」「已导出 PDF」）而**不替标签记已存的账**；这一头按实测**不挂进度门**（`.opd` 三档 2/60/150 页整趟 5~14ms、`write_text_file` 自身 6~8ms、longtask 0 条 ⇒ 说了就是一闪的噪音）；**v0.74 补上了这一头原本没有的 30 秒定时自动保存**（全仓 grep `setInterval` 时这一头根本没有：只有 `DocEditor` 的 30 秒 + 60 秒快照 + `Presenter` 的 1 秒显示计时）——形状与文档那一头的 v0.73 一字对齐、整段包进 `runExclusive(tab.id, fn)` 与手存共享同一把锁，另加两处这一头独有：`deckRef`（effect 不吃 `deck` 本体，否则每次编辑重建定时器）与 `dirtyRef.current = false` 在定时成功那一路补一句（`edit()` 有个既有优化"只在第一次编辑时 `markDirty(true)`"而从来没被复位，手存那一路本轮没动，见路线图）——**⇒ v0.78 这一处独有接线只剩 `deckRef`：那道闸连同两份复位一起删除，去重归 `store.markDirty` 那一层**（量出来它买的东西是重复的而代价是"手存成功之后整条编辑链断电"，见 v0.78 那一节）；状态栏多一层 `{!status && autoSavedAt && <span>已自动保存 X</span>}`，非空失败句会挤掉过期成功宣称。**v0.75 这一头与文档那一头共吃同一份账**（新建 `lib/auto-save.ts`：退避延迟、连续失败次数、会话总账与那两句话一律走同一模块，两头各拿一份按标签持有的账本实例）——30 秒的 `setInterval` 同样换成自续 `setTimeout`、尾参由 `autoDelayMs(auto.fails)` 给（A18a/A18b + M10），失败那句带「第 N 次」与「X 秒后自动重试」，成功那句的悬停带会话账，手动 `save()` 成功后同样做两件事（归零退避 + 撤掉在途那一枚重挂，A25/A36 + M22/M24）；A28/A28b 那一族判据把"这套规矩不许只落在一家"钉住。**v0.76 这一头同样换成按路径的认领**（`saveFailRef: FailureClaim | null`、`staleFailureClaim(saveFailRef.current, p)`、手动 `save()` 的失败句登记它写的那个路径、成功清掉；P1a~P4d 十五枚判据吃的全是接线）。真机那两位数字——落定之后那句失败只活 **206ms**（dev 腿）、下一拍就上「已自动保存」——量的是 `.odoc` 那一头，`.opd` 的这一格本轮 A/B 与 dev 两腿都没跑，只有结构证据，没量到的不写成结论（**⇒ v0.78 补上了那一趟：`.opd` 只读件上落定之后过期失败最长挂 4ms（A/B expC）/ 11ms（dev D5 段）**）。**v0.77 同一头照做焦点探写**（`attempt()` 抽成一份、`onFocusBack` + `canProbe`、跑完走 `autoRescheduleRef` 重挂，F4a~F4g 七枚接线判据，含这一头独有的 `dirtyRef.current = false` 仍在成功里），而这一头的焦点探写**真机同样没跑过**——本轮 A/B 与 dev 两腿都还在 `.odoc` 上，于是 `.opd` 现在有两格只吃接线证据（v0.76 的按路径认领 + v0.77 的焦点探写），下一轮补那一趟时要把两格一起量掉。**⇒ v0.78 把这两格都量掉了**：expC 臂在 `.opd` 只读件上跑焦点探写（focus @72094 → 探写 @[72094]，Δ **0ms**，判据是"排在 30 秒下限之后"而不是枚数），同一臂量按路径撤句；而那一处独有的复位随整道闸删除，v0.77 的 F4e 与当时那枚 M17 一并作废（本轮编号重排后 M17 说的是 registry 那把锁），取而代之的是 A3a「不再有 `dirtyRef` 而 `s.markDirty(tab.id, false)` 仍在清」。
+
+**⇒ v0.79 这一头只剩一句的位置**：`edit()` 里那句 `markDirty(tab.id, true)` 不再待在 `setDeck` 的 updater 里面
+（改前一枚按键换来 **2 次**调用，其中那一枚的栈是 `basicStateReducer ← updateReducerImpl ← Object.useState`＝渲染阶段，
+React 为此在 DEV 报「Cannot update a component (Workspace) while rendering a different component (PptEditor)」；
+改后 **1 次**、整条栈到 `executeDispatch` 为止都在事件处理器里，告警 0 条），理由是 updater 按契约是纯函数、
+它被调几次在哪个阶段被调由不得我们，而"这一枚标签脏了"写的是**全局 store**。本轮 release A/B 读到的是**持平**
+（两臂的 ● / 定时落盘 / 手动 / 再编辑四格逐格相同，写自身 ctrl `[5.7, 7, 14.7]` vs exp `[7.1, 4, 6.2]`ms）——
+**这一格在 release 上没有可观测面，实验证据只能由 dev 腿给**（与 v0.77 那条"不脏就不写只有 release 能判"正好反过来），
+见 v0.79 那一节。
+
 PDF 文件流：查看 `pdf 磁盘 → 小于 4MB 整本 readBytes / 大于 4MB 经 file_len + read_range 分段喂给 pdf.js（首屏只取 64KB 文件头）→ pdfjs-dist（worker + canvas）；**这"首屏该怎么读"的一次决定连同要读的那一点字节，也在 shell 的 `openTab` 那一刻就出门**（v0.68：闸门由 `preparePdfSource` 单一持有，预取的因此不是整叠字节而是 `{mode:'range'|'bytes'}` 那两种形状之一；发布包 5 趟中位——改前每趟排在 PdfViewer 的 chunk 备好之后 17~24ms 才出门、改后每趟提前到它之前 4~10ms，首画 632→579／778→708／992→966ms，而那一次读自身耗时没动（10→9／40→39／3→4ms）⇒ 省的仍是排队；分段件的 `read_range` 枚数两头都是 92 ⇒ 这条通道不新增读，只是提前已有的那几枚）`；设了打开密码的那一档由界面上的密码面板拦住（v0.65：`openTask.onPassword` 装在 `await openTask.promise` 之前，闸门只把用户按键交回的那一串投进去，密码只留在这次会话的内存里、不写盘）；全文搜索 `逐页 getTextContent 的页文本缓存（loadPageText，跨查询共用——换一个词重扫只需 234ms，而第一次冷扫 700 页要 1.9~2.4s，钱在 pdf.js 的逐页往返上、每页的 toLowerCase+indexOf 全场只花 5ms，并行取页实测只省 1.3× 故不做）→ 串行扫全程、命中上限 500（撞到就说「500+」不说总数），而**"这一趟在不在扫"由界面自己记着**（v0.66：查询一变化就标 `scanning`，进度按 `shouldPublish` 的时间窗与新命中数交，「无匹配」只有扫完全程才说得出）；四档文案与那两条节流判据都在 lib/pdf-search.ts，Rust 不参与这一趟` ；标注 `选区高亮/便签/拖拽画的矩形·椭圆·直线·手绘 → 内存模型（rects[0] 包围盒 + polys 几何）→ Ctrl+S 时 pdf-lib 低层写 Annotation 字典回原文件`（**存盘那一段现在会说话**，v0.70：release 上 12/300/2300 页三档的整趟是 11/143~161/1071~1161ms，而 `write_file` 自身只有 4~95ms ⇒ 钱在 pdf-lib 的 load+save 而不是写盘那一步；同一枚 `SAVE_BUSY_MS=200` 的门只让大件那一档开口（进度句可看 940ms、中件 164ms 差一口气不闪），成功补上「已保存」、失败补上 `failStatus(e,'保存失败')` 而原话留在悬停里——改前三句都没有，因为 `writeAnnosTo` 从不 catch 而 `registry.drain` 的 `catch {}` 把抛错咽了下去；三句挂在 `registerSaver` 那一层不挂进与工具条共用的 `writeAnnosTo`，收尾时钟与表格头共用 `lib/save-status.ts` 那一份。另外两头按实测**不接**：文档整趟 ≤122ms、演示 ≤45ms，接了就是闪，而它们本来就各自说着「已保存（docx）」「已保存」（A12a/A12b 把"没接"钉成判据）**⇒ v0.71 改口：文档头量完并接了收尾时钟与失败句，就是不接进度门**（实测整趟 30~92ms），演示头照旧**⇒ v0.72 改口：演示头也接上了，同样是只接收尾时钟与失败句、不接进度门**（实测三档整趟 5~14ms））；四类编辑器的**存盘**那一路现在吃同一份收尾时钟）；文档导出 `@media print 排版（分栏/分页符/避免跨页折断）+ @page margin box 逐页页眉页脚页码 + 打印态纸面调色板（`color-scheme` 压回 light、主题色经变量换掉，v0.49）→ Rust export_pdf（PrintSettings 纸张与四边距；CSS `@page` 也真的说话，所以每条作业自己声明完整，见 v0.50）→ WebView2 PrintToPdf 落盘`；演示导出 `Deck → createRoot 离屏挂载 StaticSlide 分页 → 同上`；表格导出 `Univer 快照 → WorkbookPayload → lib/sheet-print-setup.ts 把那张「页面设置」翻成打印计划（纸面/四边距/缩放/打印区域/重复标题行列/手动分页符/列带/页眉页脚的 @page margin box）→ lib/sheet-print.ts 自绘 HTML 网格 → 同上（canvas 抓不到故走数据侧重排；计划同时喂 PrintToPdf 的 PrintSettings，两条通道同一组数，v0.51。**勾了「缩放到 N 页高」或「上下居中」时这份 HTML 先建后量再重建（v0.53）**——行高不在载荷里（默认行高由字体现算、声明过的只是下限、`zoom` 之后又不线性），只能离屏量真排版（`lib/sheet-print-measure.ts` + `pdfprint.measurePrintLayout`），`fitToPagesTallZoom` 按实测逐带贪心分页压出 1% 一档的缩放、`verticalCenterPadPx` 只在装得下的那一页给上留白，量稳了才把留白写回同一份 DOM 交导出）。**正文与页眉的底数吃同一层**（v0.59）：工作簿默认字体（`xl/styles.xml` 的 `cellXfs[0]→fonts`）一次读进载荷，`baseFontPt` 一处解析，页眉由 `@page` 的 margin box 乘出去、正文落在每张表 `<section>` 的 `--oof-print-base-size` 上被 `td` 的 `font-size` 吃掉，没说话时两处同落 11pt 那一档兜底）`；页面管理 `内存标注先写回 → pdf-lib 旋转/删除/提取/合并/拆分覆盖写回 → 重载并从 /Annots 重新导入标注（旋转页坐标按 /Rotate 经 pdf-geo.ts 换算）`。
 
 ## 开发
@@ -3830,12 +3927,29 @@ cargo check        # Rust 后端检查（在 src-tauri 下）
       同一臂量按路径撤句 ⇒ G5a 落定 72103ms 之后那句过期失败最长活 **4ms**（一枚采样间隔；改前那支 0.77 同形状量到 **8ms**，末次失败拍 30216/30217）；
       dev 腿 D5 段同形另有 **11ms**，且 D5a~d 里 focus 2 枚（StrictMode 双挂载）而探写只有 1 枚 ⇒ **dev 吃形状不吃枚数**；
       G4a `_c1` 真落盘、G4b/c 成功句 + 悬停会话账、G4d ● 归 0、G5b 页面异常 0 条）
-- [ ] **拆闸换来的按键成本没量**（v0.78 留的）：去重住在 `store.markDirty` 那一层，于是**每枚按键**都要过一遍
-      `getState()` 与脏值比较才得出"不触发订阅"；dev 的 D2a 只证行为（● 回得来）不证成本，A/B 两臂的量的是存盘那一段而不是打字那一段。
-      真要盘它先得有一枚"按键→状态栏"的打点，并且和下面那条一起判——updater 里的重复调用本身没有观测面
-- [ ] **`markDirty` 调在 `setDeck` 的 updater 里面**（v0.78 的形状债）：updater 按约定该是纯函数，而 `React.StrictMode`
-      下它会被双跑（本轮 dev 腿的另一处双挂载证据：写全表里 34608 与 36335 只差 **1727ms**，那是第二枚时钟）⇒
-      行为上有 store 的脏值去重兜住所以看不出来，但这一处把副作用放进了 updater；要搬出来得同时决定"哪一路拿到最新 `deck` 之外还保证标脏"
+- [x] **拆闸换来的按键成本没量**（v0.78 留的，**v0.79 量掉了**）：去重住在 `store.markDirty` 那一层，于是**每枚按键**都要过一遍
+      `getState()` 与脏值比较才得出"不触发订阅"；dev 的 D2a 只证行为（● 回得来）不证成本 ⇒ v0.79 的前置实测直接给 `markDirty`
+      包了一层壳去数：单次中位 **0.1ms** / 最大 0.3ms，已脏之后连打 4 枚合计 **0.400ms**（改后 4 次调用）／**0.900ms**（改前 8 次），
+      而这 4 枚按键带来的 store 通知 = **0 次**（去重成立）⇒ **"每次都标脏"这一条不贵，贵的是它当时被调了两遍**；
+      没量到的那部分另开成下面那条（20 枚标签的形状）
+- [x] **`markDirty` 调在 `setDeck` 的 updater 里面**（v0.78 的形状债，**v0.79 搬出来了**）：updater 按约定是纯函数，而它被跑几遍
+      由不得我们——dev 真机量到**一枚按键两遍**（一遍在 `dispatchSetState` 的 eager 路径、一遍在
+      `basicStateReducer ← updateReducerImpl ← updateReducer ← Object.useState` 的渲染阶段），React 为那第二遍直接报 DEV 告警
+      「Cannot update a component (Workspace) while rendering a different component (PptEditor)」⇒ 那句搬到 `setDeck(…)` 之后
+      （S1a~S1d 钉位置与 updater 纯度，M1/M2/M14 三枚变异分别钉"搬回里面""把那道闸连同那句一起搬回里面""在外面重新包一道闸"）；
+      而 v0.78 留的那一问（"搬出来得同时决定哪一路保证标脏"）答案是**不用决定**——取新快照与标脏本来就是两件事，
+      前者归 updater、后者归事件处理器
+- [ ] **这一格在 release 上没有可观测面**（v0.79 新开的一条判据纪律，不是缺陷）：那条告警是 React **DEV-only** ⇒
+      "渲染阶段写外部 store"这一类缺陷**只能由 dev 腿判**（告警 + 栈帧分类），release A/B 无从对照——本轮 A/B 读到的是"持平"，
+      而持平就是它的正确结论；下一轮凡是卖点落在 dev 独有观测面上的改动，都要像这样在 README 里明写"这一格只有 dev 能判"，
+      否则"跑了支真 exe 的 A/B"会被当成证据，而它什么也没判（与 v0.77「不脏就不写只有 release 能判」正好反向）
+- [ ] **栈帧分类器是一把手工尺子**（v0.79 撞的量具账）：标记表（`dispatchSetState|onChange|editSlide|…` 对
+      `updateReducerImpl|renderWithHooks|performUnitOfWork|…`）由本轮实测里出现过的帧名拼出，**React 换版本就要重校**；
+      正控制（`setDeck(d => …)` 按契约必然在渲染阶段）只能证"这一版认得出"而不能证"下一版还认得出"，
+      而它这一轮已经自毁过一次——第一版拿 `basicStateReducer` 当渲染标记，而两条路径上都有它
+- [ ] **每次按键过一遍 store：成本量了而规模没量**（v0.79 留的下一格）：≤0.1ms 是在 1 枚与 6 枚标签之下读出来的，
+      **20 枚标签同时挂着**的形状没量；同一轮另立的一条是 `setDeck` 的 updater 里那整片 `slides.map(s => ({ …s }))` 仍在
+      （本轮只挪了一句），它被跑两遍时拷两遍的成本也没量——真要判这一格先得有一枚"按键→状态栏"的打点
 - [ ] **本轮只在"一枚标签一枚文件"的形状上量**（多枚 `.opd` 同时脏时每枚各自的时钟、各自的认领关系仍未量）：
       与 v0.75~v0.77 那三条「N 枚标签各挂自己的时钟 / 下界按标签各自 / 认领关系没有变异钉」同源而同一条——
       expA/expC 两臂各只开一枚标签，而拆闸改的正是**每次编辑都标脏**这一条，标签数上去之后的写请求总量仍然没有上界

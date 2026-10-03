@@ -111,12 +111,15 @@ function PptEditor({ tab }: Props) {
     setDeck((d) => {
       const next: Deck = { ...d, slides: d.slides.map((s) => ({ ...s })) }
       fn(next)
-      // 每次都标脏，不再有"只在第一次标"那道闸：去重 store 的 markDirty 本来就做（脏值没变不触发订阅），
-      // 而那道闸**永远不会复位**（唯一复位在定时成功那一路，手动成功走 renameTab 清的是标签的 dirty 不是 ref）
-      // ⇒ v0.78 实测：手动存成功之后再打字，● 回不来、定时的写不再发、晚打的字面永远不落盘（数字在 README）
-      markDirty(tab.id, true)
       return next
     })
+    // 每次都标脏，不再有"只在第一次编辑时标脏"那道闸（去重本来就在 store 的 markDirty 里做，v0.78）
+    // 而这句一定不写在上面那个 updater 里面：v0.79 前置实测①，一枚按键里 updater 被跑两遍
+    // （一遍在 dispatchSetState 的 eager 路径、一遍在 updateReducer 处理更新队列时的渲染阶段，
+    //  栈是 basicStateReducer ← updateReducerImpl ← updateReducer ← useState），
+    // 写在里面 ⇒ React 为这次"渲染阶段写外部 store"直接报错：
+    // Cannot update a component (Workspace) while rendering a different component (PptEditor)
+    markDirty(tab.id, true)
   }
 
   const editSlide = (i: number, fn: (s: Slide) => void) =>
