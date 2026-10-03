@@ -213,6 +213,14 @@ function PdfViewer({ tab }: Props) {
   const [selAnno, setSelAnno] = useState<string | null>(null)
   const annosRef = useRef(annos)
   annosRef.current = annos
+  // 读侧的就绪账：内存里那份列表只有在这个 doc 上「整片读完并-publish 过」才是文件的视图；
+  // 之前（正在加载…、逐页扫描中、读到一半失败、reload 换出新 doc 之后）它只是用户在窗口里的增量。
+  // 记的是「哪一份 doc 已经读完」而不是「哪一份还在读」——初值为空，所以挂载后第一件事就是没读全。
+  // 它是**状态**而不是直接写 ref：那句 setAnnosRead 与合并那一句在同一批更新里 ⇒ 开门的那一刻内存里已经是整片，
+  // 而不会出现「账认了这份 doc、写回那一路读到的还是空片」的中间拍（实测差一枚 rAF ≈ 36ms）
+  const [annosRead, setAnnosRead] = useState<PDFDocumentProxy | null>(null)
+  const annosReadRef = useRef(annosRead)
+  annosReadRef.current = annosRead
   const toolRef = useRef(tool)
   toolRef.current = tool
   const selRef = useRef(selAnno)
@@ -522,13 +530,19 @@ function PdfViewer({ tab }: Props) {
           }
         }
       }
-      if (!cancelled) setAnnos(out)
+      if (!cancelled) {
+        // 收尾是「并」不是「替」：窗口内用户新画的那几枚已经在内存里，整片替换就把它们抹掉了
+        setAnnos((cur) => [...out, ...cur])
+        // 从这一刻起这本账才认这一份 doc（写回那一处比的就是这个对象）；与上面那一句同批提交 ⇒ 账开的时候内存已经是整片
+        setAnnosRead(doc)
+      }
     })().catch((e) => {
       // 标注导入是后台补做：拆除时的抛话不入账，其余要说——侧栏空着而不说为什么空，用户只能猜
       if (!cancelled) {
         console.error(e)
         if (!isTeardown(e)) setStatus(failStatus(e, '标注读取失败'))
       }
+      // 读到一半就失败 ⇒ 这本账**故意不记这一份 doc**（读到的不是整片）：写回继续被拒，直到重新打开这份文件
       cancelled = true
     })
     return () => {
@@ -1228,6 +1242,11 @@ function PdfViewer({ tab }: Props) {
   // —— 标注写回：pdf-lib 删旧自有注解（Highlight/Text/Square/…，留链接等）→ 按模型重加 → 覆盖原文件 ——
   // 页面操作（旋转/删除/合并）写盘前也要先把内存标注落进去，所以抽成函数给两处共用
   const writeAnnosTo = async (path: string) => {
+      // 就绪账记的是「哪一份 doc 已经整片读完」：doc 还没来、正在逐页扫、读到一半失败、reload 换出新 doc——
+      // 这几种在内存里都不是文件的视图，而这一趟是「整片清旧注解 + 按内存重加」，此刻写就是在覆盖文件
+      // 两条写通道（Ctrl+S 那一路与工具条的页面操作）都只认这一处：抛出去，各自现成的 catch 会说这一句
+      const d = docRef.current
+      if (!d || annosReadRef.current !== d) throw new Error('标注还没读全，这一趟没写文件（现在存会抹掉还没读进来的标注），等读全再存')
       const list = annosRef.current
       // pdf-lib 1.17 无高层标注 API：用 context 手建 /Annot 字典（Highlight/Text 标准注解，其他阅读器可见）
       const { PDFDocument, PDFName, PDFDict, PDFHexString } = await import('pdf-lib')
@@ -1523,6 +1542,8 @@ function PdfViewer({ tab }: Props) {
       textPages: () => pageTexts.current.size,
       perf: () => ({ ...renderStats.current, cached: [...bmpCache.current.keys()] }),
       rangeMode: () => rangeModeRef.current,
+      // 写回闸门那一句的取反：真机腿判「这一按该不该被拒」就吃这一枚（null doc 也算不许写）
+      annosWritable: () => docRef.current !== null && annosReadRef.current === docRef.current,
       annos: () =>
         annos.map((a) => ({
           kind: a.kind,
