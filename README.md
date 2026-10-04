@@ -158,9 +158,11 @@
 - **ODT 双向**：前端 `lib/odt.ts`（JSZip + DOMParser，零新依赖）实现 ProseMirror JSON ↔ ODT——
   导出覆盖标题(H1-H4)/粗斜下删/字色高亮等字符样式（`C1..` 去重）/对齐/有序无序列表/代码块/引用/
   表格合并/图片内嵌（`Pictures/`）/超链接/页眉页脚含 PAGE 页码域；导入按样式表反解析回 HTML 挂进编辑器
-- **范围限制**：ODS 读侧仍走 calamine 值通道（ODF 样式/合并暂不解析回 Univer，ODT 不含批注与目录域）；
+- **范围限制**：ODS 读侧仍走 calamine 值通道（ODF 样式/合并暂不解析回 Univer，ODT 不含目录域）；
   ODT 导出以应用自身能力子集为准，未覆盖脚注/锚定框架等
   （**v0.40 修订**：脚注/尾注这一档已经补上——ODF 1.2 内联写法导出、旧版 `text:note` 外壳也读得进，见 v0.40 一节）
+  （**v0.86 修订**：批注这一档也已补上——`office:annotation` 读写往返 + 打开自动开侧栏，见 v0.86 一节；
+  resolved 状态与目录域仍不往返）
 - **验证**：calamine（真实读侧实现）读回自写 ODS 值/布尔/稀疏/转义断言；zip 布局断言（mimetype 首条
   Stored）；CDP 冒烟全程走应用真实链路——打开夹具 ODS → Univer 改值 → 保存分流 → 解包断言 → 重开显新值；
   ODT 导出/导入/编辑器加载/原地写回（含图片）全链路；本机无 LibreOffice 且 WPS COM（KWPS）与 Word 一样
@@ -3764,6 +3766,53 @@ publish）是异步的** ⇒ 在两者之间按 Ctrl+S，内存此刻**不是文
   多枚 `.opd` 同时脏时每枚各自的时钟与认领关系等 v0.83 那批原样挂着；自动更新的源托管与 macOS 打包按指令
   继续等信号，**签名私钥无备份仍是最大单点风险**
 
+## ODT 的批注也往返了：读侧收得住，写侧写得出（v0.86）
+
+「继续完善文档功能」自选口径：`.odt` 的批注（office:annotation）此前两头都空着——带批注的 ODT 打开侧栏
+静默没账、界面上画的批注存进 `.odt` 一个不剩，两头都不说一句话。窄口径：只动 `src/lib/odt.ts`（+93 / −6）
+与 `DocEditor` 那条 `.odt` 开路的一行 `setCmOpen(true)`（+1），**Rust 一个字没动**。
+
+- **前置实测（tmp/x86/pre86，只量不改产品）四格**：① 打开带批注的夹具 ODT ⇒ `meta.comments` 为 null、
+  正文零锚点、**零告警**——静默丢是这一档的现状；② 批注正文被摊进了正文段落（读侧只认元素不认外壳那档）；
+  ③ 界面画一枚批注存盘 ⇒ `content.xml` 里 `office:annotation` 零枚——批注只住 `.odoc` 与 docx；④
+  `.odoc` 开路那句 `setCmOpen(true)` 原样在工作，`.odt` 开路没有这一句 ⇒ 侧栏也不自动开。
+- **写侧照抄 docx 那两条老规矩（v0.11 量过的教训原样适用）**：① **同一 cid 全局只一组区间**——
+  `usedAnn` Set 守卫开区间（同 id 多组 range 在 Word/LibreOffice 那头就是「文档损坏」那一档）；
+  ② **孤儿不写回**——`meta.comments` 里有、正文里没有锚 mark 的批注（原文被删那档）不进 `content.xml`，
+  与 docx 导出同一分寸。写出 ODF 1.2 形状：`<office:annotation office:name="oocN">` 内挂 `dc:creator`/
+  `dc:date` **子元素**与 `<text:p>` 正文（多行 `<text:line-break/>`），跨段区间用同名
+  `<office:annotation-end>` 收口；**块间独立开闭**——mark 不能跨块（docx-fidelity 那条），每个块出口先把
+  开着的那枚收掉（inline 段尾收口），读侧靠 endNames 配对还原。
+- **读侧三条**：① **endNames 预扫**——先把全文 `annotation-end` 的名字收成账再配对，不靠碰运气；
+  ② **有区间的走 openCids 位置栈，点批注（无 end）进 pointCids 锚在自己段落尾**；③ **annWrap**
+  在每个块出口把还开着的区间续挂一遍（跨段批注是 LibreOffice 的合法形状）。
+- **两条真缺陷是验证腿自己量出来的，不是提前知道的**：① 首跑 CDP 往返腿抛对象 ⇒ 逐格探到读侧把
+  `dc:creator`/`dc:date` 当**属性**取（`getAttributeNS`），而 ODF 1.2 里它们是 annotation 的**子元素**
+  ——修成按后代元素收（`namespaceURI` 认 purl.org/dc）；② 二趟往返腿炸「Namespace prefix dc on creator
+  is not defined」⇒ **写侧自己漏了 `xmlns:dc` 声明**——写出去的字节连自家读侧都不认，第三方更不会认；
+  两条都是「往返腿真的走两趟」才买得到的证据。
+- **验证（结构 + CDP 真机往返 + 编译，全部在版本号 bump 三处对齐之后跑）**：结构腿 **25/25**
+  （B0 自检 3 条绿——注释剥离器本轮升级，见量具坑①；S1 写侧一对开收助手 / S2 usedAnn 与段尾收口 /
+  S3 读侧三账 / S4 annWrap 四出口 / S5 meta 与 DocEditor 接线）；CDP dev 真机往返 **36/36、页面异常 0 条**
+  （R1 夹具三枚收全带 author/date、R2 正文零污染、R3 锚点 span 落位含点批注与跨段两枚、R4 无批注夹具负控制、
+  W1 写出字节逐格——annotation=2 枚（孤儿那枚不写）、annotation-end=2、无作者那枚恰好不带 `dc:creator`、
+  开收落在同一段、RT2 二趟往返稳定且无作者那枚保持空、U1 侧栏自动开「批注 3」三卡、U2 正文干净、
+  U3 页面异常账 0）；`cargo test --lib` **97 通过 / 0 失败 / 11 ignored**（基线原样）+ tsc exit 0 +
+  `pnpm tauri build --no-bundle` 绿（openoffices v0.86.0）。
+- **量具坑五处，都不是产品**：① 剥注释器的 `${` 帧**只 push 不 pop**——栈越长越深，模板正文里的引号被
+  开成假字符串态把注释漏出来（B0a 当场抓到）；修成帧带花括号计数、`}` 在计数归零时弹回 tpl；
+  ② S2e 假 FAIL——`<dc:creator>` 与 `</dc:creator>` 同在一行 ⇒ 计数=2 才对，判据按 openAnnEl 切片重标定；
+  ③ CDP 把页内异常序列化成 `{}`（v0.75 那条再兑现）⇒ 页内 try/catch 带 `{__throw, __stack}` 出来；
+  ④ `window.__oofErr` 在当前 App.tsx 里**不存在**——那是某一轮的临时探针、按惯例删了，页面异常账改由腿自己
+  `Runtime.enable` + `Runtime.exceptionThrown` 记；⑤ 腿里 `Runtime.enable` 那段插在 `seq` 声明之前 ⇒
+  ReferenceError 长得像产品挂，初始化挪到 send 定义之后。
+- **本轮没动的，量出来记着**（已开进路线图）：**LibreOffice/第三方真件未回归**（本机无 ODF 第三方应用，
+  v0.62 老规矩——往返证据全部来自自家读写两头互证）；**跨段批注写回收进首段、续挂从第二段开头**
+  （锚位语义没有第三方真机可对，有意记账）；**点批注读侧锚在段落尾**，原始锚位丢了；
+  **resolved 状态不往返**（ODF 1.2 的 annotation 没有这个通道，ODT 上它恒为未解决）；**目录节点仍不写
+  ODT**（范围限制那条的后一半原样挂着）；自动更新的源托管与 macOS 打包按指令继续等信号，
+  **签名私钥无备份仍是最大单点风险**
+
 ## 性能（v0.3）
 
 
@@ -3851,7 +3900,7 @@ src/                  React 前端
   lib/page-break-extension.ts TipTap pageBreak 原子块（`div[data-oo-pagebreak]`）+ insertPageBreak 命令 + Ctrl+Enter 快捷键
   lib/comment-extension.ts comment mark（cid 锚定批注）+ 加/删/定位/汇总工具
   lib/note-extension.ts 脚注/尾注的 `note` 内联原子节点（attrs kind/text，正文不摊进文档流）：`encodeNoteText`/`decodeNoteText` 管属性里的换行（XML/HTML 解析器会把属性值里的 LF 归一成空格），`notesOf`/`noteOrdinalOf`/`locateNote` 按文档顺序现算编号，命令 insertNote/setNoteText/deleteNote（只填 tr + 用给到的 dispatch，绝不自己 view.dispatch）
-  lib/odt.ts          ProseMirror JSON ↔ ODT（JSZip 打包导出 + DOMParser 导入，字符样式（字族/字号/字色/上下标 `style:text-position`，落在 content.xml 自动样式）/合并表/图片尺寸/页码域与总页数/page-layout 页面设置（纸张·四边距·style:columns 多栏）/分页符 fo:break-before/单元格自动样式 `fo:border-*`（宽度写 pt，读回走 `odfBorderCss` 保留 0.67px 这类细线不整数取整）+`fo:background-color`+`style:vertical-align`、表级 `fo:margin-left`、段落直接格式 `fo:margin-top/-bottom` + `fo:line-height`（倍数写 % + proportional、绝对值写 pt + fixed/minimum，两档在 ODF 里分得清而 CSS 分不清）+ `fo:background-color` + `fo:border-*`（宽度写 pt），读侧按名字跳过具名样式与 `office:styles` 里那批，以免把整篇默认摊成每段的直接格式；脚注/尾注写 ODF 1.2 内联 `text:footnote-reference` + 同 `text:id` 的 `text:footnote`（citation 写字面序号、段间 `text:line-break`、正文段挂 `FN` 自动样式），读侧三种外壳都收（新版两个元素名 + 旧版 `text:note`/`text:note-class`/`text:note-body`），正文表先扫全文建全表，故 id 不连续或正文排在引用之前也配得上；`draw:frame` 认三类内容（`draw:image` 位图 / `draw:text-box` 文本框展平为 `<br/>` 连成的行内文字 / `draw:object` 嵌入件——`Objects/objectN/content.xml` 里有 MathML 就线性化成文本，否则 v0.44 走 `lib/ole` 取内层内容：`<office:binary-data>` 内联 base64 与 `Objects/objN/` 目录两种形状都解，摊出的块级正文由 `tail()` 作段落兄弟块接回、单元格内压成行内文本），`content.xml` 解析失败时抛出说得出是哪份 XML（否则表现为"打开了一篇空白"），读侧统一产 `warnings`（同类聚合成「文案×N」）交状态栏显示）
+  lib/odt.ts          ProseMirror JSON ↔ ODT（JSZip 打包导出 + DOMParser 导入，字符样式（字族/字号/字色/上下标 `style:text-position`，落在 content.xml 自动样式）/合并表/图片尺寸/页码域与总页数/page-layout 页面设置（纸张·四边距·style:columns 多栏）/分页符 fo:break-before/单元格自动样式 `fo:border-*`（宽度写 pt，读回走 `odfBorderCss` 保留 0.67px 这类细线不整数取整）+`fo:background-color`+`style:vertical-align`、表级 `fo:margin-left`、段落直接格式 `fo:margin-top/-bottom` + `fo:line-height`（倍数写 % + proportional、绝对值写 pt + fixed/minimum，两档在 ODF 里分得清而 CSS 分不清）+ `fo:background-color` + `fo:border-*`（宽度写 pt），读侧按名字跳过具名样式与 `office:styles` 里那批，以免把整篇默认摊成每段的直接格式；脚注/尾注写 ODF 1.2 内联 `text:footnote-reference` + 同 `text:id` 的 `text:footnote`（citation 写字面序号、段间 `text:line-break`、正文段挂 `FN` 自动样式），读侧三种外壳都收（新版两个元素名 + 旧版 `text:note`/`text:note-class`/`text:note-body`），正文表先扫全文建全表，故 id 不连续或正文排在引用之前也配得上；`draw:frame` 认三类内容（`draw:image` 位图 / `draw:text-box` 文本框展平为 `<br/>` 连成的行内文字 / `draw:object` 嵌入件——`Objects/objectN/content.xml` 里有 MathML 就线性化成文本，否则 v0.44 走 `lib/ole` 取内层内容：`<office:binary-data>` 内联 base64 与 `Objects/objN/` 目录两种形状都解，摊出的块级正文由 `tail()` 作段落兄弟块接回、单元格内压成行内文本），`content.xml` 解析失败时抛出说得出是哪份 XML（否则表现为"打开了一篇空白"），读侧统一产 `warnings`（同类聚合成「文案×N」）交状态栏显示；**批注往返（v0.86）**：读侧把 `office:annotation` 收成 DocComment（`dc:creator`/`dc:date` 按**子元素**取——当属性取那一版是往返腿自己量出来的真缺陷；`annotation-end` 名字预扫配对、点批注锚在自己段落尾、annWrap 在每个块出口续挂还开着的跨段区间），写侧照 docx 那两条老规矩（`usedAnn` 同 cid 全局只一组区间、孤儿不写回），跨段区间同名 `office:annotation-end` 收口，`xmlns:dc` 声明在根 NS 上补齐——漏了它写出的字节连自家读侧都不认）
   lib/find-replace.ts 查找/替换 ProseMirror 插件：按文本块匹配存 state、装饰高亮、findNext/findPrev/replaceOne/replaceAll 命令（命中上限 FR_HIT_CAP=2000 截断并标 `N+`）
   lib/templates.ts    首页模板注册表与纯函数 seed：11 个模板（公文/会议纪要/周报 → ProseMirror JSON+meta，记账表/库存清单 → WorkbookPayload 含公式冻结，六套演示配色 → Deck）
   lib/ppt.ts          .opd 幻灯片数据模型（版式/主题/序列化）
@@ -4083,6 +4132,7 @@ cargo check        # Rust 后端检查（在 src-tauri 下）
 - [x] 表格：图表（VChart 渲染 PNG + Univer 社区浮动图片 + xlsx 原生图表往返，Excel 实机确认）
 - [x] 文档：页眉页脚（含 PAGE 页码域）与目录（原生 TOC 域）docx 往返，Word 实机回归
 - [x] 文档：批注（锚点标记 + 侧栏面板 + docx comments 往返）
+- [x] 文档：ODT 批注往返（office:annotation 读 + 写，docx 那两条老规矩照抄）
 - [x] PDF 查看（pdf.js）与文档导出（WebView2 PrintToPdf）
 - [x] PDF：表格/演示导出
 - [x] ODF（ods/odt）原生格式
@@ -4714,6 +4764,10 @@ cargo check        # Rust 后端检查（在 src-tauri 下）
 - [ ] **"一枚按键换几枚下载请求"这一格只有 dev 能判**：StrictMode 双订阅下的 D6（`1` 枚包体 REQ）在 release 上
       没有对应场景；另"未保存闸"在 release 上的可观测面只有状态栏那句话 + 一次性目录没被建出来（没有 dev 钩子
       可读 `dl.stage`）
+- [ ] **ODT 批注往返还有四档没对齐第三方**（v0.86 量出来记着的）：**LibreOffice/第三方真件未回归**（本机无
+      ODF 第三方应用，v0.62 老规矩——往返证据全部来自自家读写两头互证）；**跨段批注写回收进首段、续挂从
+      第二段开头**（锚位语义没有第三方真机可对，有意记账）；**点批注读侧锚在段落尾**，原始锚位丢了；
+      **resolved 状态不往返**（ODF 1.2 的 annotation 没有这个通道，ODT 上它恒为未解决）
 - [ ] macOS 打包（需签名/公证凭据）
 
 ## License

@@ -1,5 +1,6 @@
 // ODT（OpenDocument 文本）导出/导入：ProseMirror JSON ⇄ content.xml，零新依赖（JSZip + DOMParser）。
-// 范围：批注与目录节点不写 ODT；脚注/尾注走 ODF 1.2 的 text:footnote(REFERENCE) 内联写法；
+// 范围：批注走 ODF 1.2 的 office:annotation(…annotation-end) 位置配对往返（v0.86）；目录节点不写 ODT；
+// 脚注/尾注走 ODF 1.2 的 text:footnote(REFERENCE) 内联写法；
 // 图片以 dataURL 内嵌进 Pictures/；页眉页脚/页码走 master-page。
 
 import {
@@ -8,6 +9,7 @@ import {
   pageNumberParts,
   resolvePage,
   type DocMeta,
+  type DocComment,
   type PageMargin,
   type PageSetup,
   type PMNode,
@@ -156,7 +158,8 @@ const NS =
   'xmlns:xlink="http://www.w3.org/1999/xlink" ' +
   'xmlns:draw="urn:oasis:names:tc:opendocument:xmlns:drawing:1.0" ' +
   'xmlns:svg="urn:oasis:names:tc:opendocument:xmlns:svg-compatible:1.0" ' +
-  'xmlns:table="urn:oasis:names:tc:opendocument:xmlns:table:1.0"'
+  'xmlns:table="urn:oasis:names:tc:opendocument:xmlns:table:1.0" ' +
+  'xmlns:dc="http://purl.org/dc/elements/1.1/"'
 
 class OdtBuilder {
   charStyles = new Map<string, string>() // 样式键 JSON → 样式名
@@ -170,6 +173,10 @@ class OdtBuilder {
   private tableSeq = 0
   /** 脚注/尾注各自一套编号与 text:id 前缀（ODF 的 id 要引用与正文两处对上，编号按文档顺序现算） */
   private noteSeq: Record<'footnote' | 'endnote', number> = { footnote: 0, endnote: 0 }
+  /** 当前开着的批注（office:annotation…annotation-end 位置配对；cid 变了才关开，atom 节点不打断区间） */
+  private openAnn: number | null = null
+  /** 已写过区间的 cid：ODT 与 Word 同一条规则——同一 cid 全局只写一组 annotation，续挂段不再重锚 */
+  private usedAnn = new Set<number>()
 
   /**
    * 单元格直接格式（四边边框 + 底纹 + 竖排对齐）→ table-cell 家族自动样式。
@@ -408,10 +415,35 @@ class OdtBuilder {
     }
   }
 
+  /**
+   * 批注区间的开与收：正文/作者来自 meta.comments（author 进 dc:creator，多行正文换 text:line-break，
+   * 与脚注正文同一条规则）。ODF 靠 office:name 配对，写上它比只靠位置稳。
+   */
+  private openAnnEl(cid: number): string {
+    const c = this.meta?.comments?.find((x) => x.id === cid)
+    const creator = c?.author ? `<dc:creator>${esc(c.author)}</dc:creator>` : ''
+    const body = (c?.text ?? '').split('\n').map(esc).join('<text:line-break/>')
+    return `<office:annotation office:name="ooc${cid}">${creator}<text:p text:style-name="FN">${body}</text:p></office:annotation>`
+  }
+
+  private closeAnnEl(cid: number): string {
+    return `<office:annotation-end office:name="ooc${cid}"/>`
+  }
+
   inline(nodes: PMNode[]): string {
     let out = ''
     for (const n of nodes) {
       if (n.type === 'text') {
+        const cid = (n.marks ?? []).find((k) => k.type === 'comment')?.attrs?.cid as number | undefined
+        if (this.openAnn != null && (!cid || cid !== this.openAnn)) {
+          out += this.closeAnnEl(this.openAnn)
+          this.openAnn = null
+        }
+        if (typeof cid === 'number' && cid !== this.openAnn && !this.usedAnn.has(cid)) {
+          out += this.openAnnEl(cid)
+          this.usedAnn.add(cid)
+          this.openAnn = cid
+        }
         let inner = esc(n.text ?? '')
         const marks = n.marks ?? []
         const at = (t: string) => marks.find((k) => k.type === t)?.attrs
@@ -474,6 +506,10 @@ class OdtBuilder {
       } else if (n.content) {
         out += this.inline(n.content)
       }
+    }
+    if (this.openAnn != null) {
+      out += this.closeAnnEl(this.openAnn)
+      this.openAnn = null
     }
     return out
   }
@@ -799,6 +835,26 @@ export async function odtToHtml(bytes: Uint8Array): Promise<{ html: string; meta
   /** 与 docx 保真导入同一套边界账：同类只记一条，出口写成「文案×N」，显示在状态栏而不是静默丢 */
   const warnCount = new Map<string, number>()
   const warn = (m: string) => warnCount.set(m, (warnCount.get(m) ?? 0) + 1)
+
+  // 批注：文档顺序编号进 DocComment；openCids 记「已开未关」的区间（annotation-end 位置配对弹最后一枚，
+  // 跨段续挂——mark 不能跨块，下一段开头要补一枚 span，与 docx 保真导入同一条规则）。
+  // 点批注（没有配对 annotation-end 的）进 pointCids：只锚到本段段尾，不跨段续挂。
+  const comments: DocComment[] = []
+  const openCids: number[] = []
+  const pointCids: number[] = []
+  const endNames = new Set(
+    Array.from(cdoc.getElementsByTagName('*'))
+      .filter((x) => x.localName === 'annotation-end')
+      .map((x) => x.getAttribute('office:name') ?? ''),
+  )
+  // mark 不能跨块：本段渲染前后把仍开着的区间各补一枚 span（cid 留在 openCids，下一段再开）
+  const annWrap = (inner: string) => {
+    const pre = openCids.map((c) => `<span data-oo-comment="${c}">`).join('')
+    const post =
+      '</span>'.repeat(pointCids.length) + '</span>'.repeat(openCids.length)
+    pointCids.length = 0
+    return pre + inner + post
+  }
 
   const styles = new Map<string, Element>() // name → style:style / default-style
   const listStyles = new Map<string, boolean>() // name → 是否有序
@@ -1187,6 +1243,36 @@ export async function odtToHtml(bytes: Uint8Array): Promise<{ html: string; meta
           case 'a':
             out += `<a href="${escapeHtml(e.getAttribute('xlink:href') ?? '')}">${await renderInline(e)}</a>`
             break
+          case 'annotation': {
+            // 批注本体：收进 DocComment（作者/日期/正文），正文不摊进段落；区间从此处包 span
+            // 不收 e 的孩子——批注的 text:p 是内容不是正文，掉进 default 递归就会整段漏进文档（v0.86 前置实测量到的污染格）
+            const bodyPs = Array.from(e.getElementsByTagName('*')).filter((x) => x.localName === 'p' && x.namespaceURI?.includes('text'))
+            const text = bodyPs.length
+              ? bodyPs.map((p) => (p.textContent ?? '').replace(/\s+/g, ' ').trim()).filter(Boolean).join('\n')
+              : (e.textContent ?? '').replace(/\s+/g, ' ').trim()
+            const cid = comments.length + 1
+            // dc:creator / dc:date 是 annotation 的子元素（ODF 1.2），不是属性——按元素收
+            const dcEl = (name: string) =>
+              Array.from(e.getElementsByTagName('*')).find(
+                (x) => x.localName === name && (x.namespaceURI ?? '').includes('purl.org/dc'),
+              )?.textContent?.trim() || undefined
+            comments.push({
+              id: cid,
+              author: dcEl('creator'),
+              date: dcEl('date'),
+              text,
+            })
+            const name = e.getAttribute('office:name') ?? ''
+            if (name && !endNames.has(name)) pointCids.push(cid)
+            else openCids.push(cid)
+            out += `<span data-oo-comment="${cid}">`
+            break
+          }
+          case 'annotation-end': {
+            const cid = openCids.pop()
+            if (cid != null) out += '</span>'
+            break
+          }
           case 'frame': {
             // 一个 draw:frame 里装的是同类的一件东西：位图 / 文本框 / 嵌入对象（公式走这条）
             let src = ''
@@ -1281,7 +1367,7 @@ export async function odtToHtml(bytes: Uint8Array): Promise<{ html: string; meta
     for (const child of Array.from(el.children)) {
       if (['s', 'tab', 'line-break', 'span', 'a', 'frame'].includes(child.localName)) {
         // 容器里直接散落的行内容（list-item/table-cell 均可能）
-        out += `<p>${await renderInline(el)}</p>${tail()}`
+        out += `<p>${annWrap(await renderInline(el))}</p>${tail()}`
         return out
       }
       out += await renderBlock(child)
@@ -1295,7 +1381,7 @@ export async function odtToHtml(bytes: Uint8Array): Promise<{ html: string; meta
         const level = Math.min(4, Math.max(1, Number(el.getAttribute('text:outline-level') ?? 1)))
         const sn = el.getAttribute('text:style-name')
         // 派生样式（PSn）挂在 H1..H4 之下，对齐与缩进照旧从样式链上取
-        return `<h${level}${paraStyle(sn)}>${await renderInline(el)}</h${level}>${tail()}`
+        return `<h${level}${paraStyle(sn)}>${annWrap(await renderInline(el))}</h${level}>${tail()}`
       }
       case 'p': {
         const sn = el.getAttribute('text:style-name')
@@ -1309,8 +1395,8 @@ export async function odtToHtml(bytes: Uint8Array): Promise<{ html: string; meta
           return `<div data-oo-pagebreak="1"></div>`
         if (names.includes('PC')) return `<pre><code>${await renderInline(el)}</code></pre>${tail()}`
         if (names.includes('PQ'))
-          return `<blockquote><p${paraStyle(sn, 30)}>${await renderInline(el)}</p></blockquote>${tail()}`
-        return `<p${paraStyle(sn)}>${await renderInline(el)}</p>${tail()}`
+          return `<blockquote><p${paraStyle(sn, 30)}>${annWrap(await renderInline(el))}</p></blockquote>${tail()}`
+        return `<p${paraStyle(sn)}>${annWrap(await renderInline(el))}</p>${tail()}`
       }
       case 'list': {
         const ordered = listStyles.get(el.getAttribute('text:style-name') ?? '') ?? false
@@ -1359,6 +1445,7 @@ export async function odtToHtml(bytes: Uint8Array): Promise<{ html: string; meta
 
   // —— meta：styles.xml 的 master-page 头脚
   const meta: DocMeta = {}
+  if (comments.length) meta.comments = comments
   if (sdoc) {
     const master = Array.from(sdoc.getElementsByTagName('*')).find((x) => x.localName === 'master-page')
     const plain = (n: Element | null | undefined) => (n ? (n.textContent ?? '').replace(/\s+/g, ' ').trim() : '')

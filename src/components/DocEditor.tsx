@@ -396,6 +396,7 @@ function DocEditor({ tab }: Props) {
           const { html, meta: m, warnings } = await odtToHtml(bytes)
           if (!disposed) editor.commands.setContent(html, { emitUpdate: false })
           if (!disposed && Object.keys(m).length) setMeta(m)
+          if (!disposed && m.comments?.length) setCmOpen(true)
           // 与 docx 那条同一套边界账：文字类构件（文本框、公式）展平时在这里说清楚，不静默
           if (warnings.length)
             note = `ODT 导入：${warnings.length} 项未保留（${warnings[0]}${warnings.length > 1 ? '…' : ''}）`
