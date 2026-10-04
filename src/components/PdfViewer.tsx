@@ -484,6 +484,9 @@ function PdfViewer({ tab }: Props) {
     annosRunRef.current = run
     // 失败那句要能说「读到第几页」：页号在 catch 那一刻是知道的（实测坏 /Pages 树那一件停在第 4 页）
     let page = 0
+    // 重跑那几秒不能挂着上一趟的「读取失败」句装没事（实测 2300 页档冷趟重跑要秒级）：
+    // 在途期间先说一句进行中的话，成功/失败句到点替换它；首趟（announce=false）不说话，加载期有「正在加载…」顶着
+    if (announce) setStatus('正在重新导入标注…')
     ;(async () => {
       const out: PdfAnno[] = []
       for (let n = 1; n <= d.numPages && !run.cancelled; n++) {
