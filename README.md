@@ -3344,7 +3344,8 @@ publish）是异步的** ⇒ 在两者之间按 Ctrl+S，内存此刻**不是文
   `MEASURE P1 开账那一拍 {"t":48514,"n":0,"writable":true}` / 后一拍 `{"t":48550,"n":40}` ⇒ **中间那一拍约一枚
   rAF（36ms）里闸门是开的而写回读到的是空片**；最终版同一条判据（改名 `P1a`）读到开账那一拍就带 `n:40`；
   ③ **读到一半失败 ⇒ 故意不记账**（读到的不是整片；代价明说：这一档写回会被一直拒到重新打开这份文件，
-  **没有"重试导入"那一路**）；④ **没有任何一处销账**（S4 钉全仓零枚 `setAnnosRead(null)`——换 doc 时旧账自然不认
+  **没有"重试导入"那一路**——**v0.83 补的正是这一路**：闸门那一条纪律一个字没动，而"直到重新打开"那句已经不成立）；
+  ④ **没有任何一处销账**（S4 钉全仓零枚 `setAnnosRead(null)`——换 doc 时旧账自然不认
   新 doc，而销账等于把门开回 v0.80）；● 顺带把收尾从 `setAnnos(out)` 改成 `setAnnos((cur) => [...out, ...cur])`
   （ADD1b 那一格的正面兑现：窗口内画的那枚不再被终值替掉）
 - **release A/B 的账（两支真 exe × 3 趟 / 49 通过 / 真失败 0 / 显式 SKIP 0 / 页面异常每趟 0 条）**：对照件＝本轮
@@ -3403,9 +3404,12 @@ publish）是异步的** ⇒ 在两者之间按 Ctrl+S，内存此刻**不是文
   `useState<PDFDocumentProxy | null>(null)` 有 2 枚（174 行与 221 行），第一版锚点太短 ⇒
   `BAD M2/M3/M7 :: 变异没打上`；**这枚 `throw` 正是挡住假绿的那一手**（锚点没打上会被读成"这一枚没响"＝产品没事）
 - **本轮没动的，量出来记着**（已开进路线图）：**导入失败之后写回会被一直拒到重新打开**（没有"重试导入"那一路；
-  这是③那一格的代价，本轮选的是"宁可拒也不抹"而不是加一条重扫）；**拒绝期间用户这一趟的意图无法兑现**（画的那枚
-  仍在内存、● 仍挂着，而旋转/删除那一路直接失败且不排队——落定之后要不要自动补做没有判据）；
-  **`annosWritable` 是 DEV-only 观测量** ⇒ release 判"这一按该不该被拒"只能吃状态栏那句 + 盘上枚数；
+  这是③那一格的代价，本轮选的是"宁可拒也不抹"而不是加一条重扫——**v0.83 兑现的就是这条重扫，而"宁可拒也不抹"那条一个字没改）；**拒绝期间用户这一趟的意图无法兑现**（画的那枚
+  仍在内存、● 仍挂着，而旋转/删除那一路直接失败且不排队——落定之后要不要自动补做没有判据；**v0.83 明确不做这一条**，
+  理由与代价都写在 v0.83 那一节）；
+  **`annosWritable` 是 DEV-only 观测量** ⇒ release 判"这一按该不该被拒"只能吃状态栏那句 + 盘上枚数（**v0.83 起
+  "门开了"这一格在 release 上也看得见**——重试成功那一路说的是状态栏上那句「标注已读全：N 枚，现在可以存回文件了」，
+  而"该不该被拒"仍然只有那句拒绝 + 盘上枚数）；
   **release 只量了 pre-doc 那一档**、● 那一格在 release 上无从判（这一臂没有编辑动作）；
   **reload 换出新 doc 那一段本轮只由结构判据钉住**（S4 + M10）——dev 腿最终那一跑（`dev3.log` 26 条）没有 L 段，
   读到 `FAIL L0 {"读全":true,"内存":0}` 的是 ref 那一版（`dev.log`），所以这一格的形状证据属于"错法被量到"而不属于
@@ -3544,6 +3548,129 @@ publish）是异步的** ⇒ 在两者之间按 Ctrl+S，内存此刻**不是文
   多枚 .opd 同时脏时每枚各自的时钟与认领关系、「已自动保存 X」有悬停而手动那句仍没有次数账、DocEditor 剩四枚裸
   `setTimeout`、`SheetEditor.exportPdfTo` 内联那份拼句公式、在途锁按 `tabId` 不按 `path`、`SAVE_BUSY_MS` /
   `AUTO_BASE_MS` / `AUTO_MAX_MS` 是单机数、写侧前缀三家不统一、toast 体系照旧未建；macOS 打包按指令继续等信号
+
+## 那句「重试」真的按得下去：导入失败不再只能重开这份文件（v0.83）
+
+起点是 v0.81 收尾自己记下的两条代价：③「读到一半失败就故意不记账」换来的是**写回被一直拒到重新打开这份文件**，
+而这一头**没有"重试导入"那一路**——用户能做的只有关标签再开。本轮把它接成一句真话加一枚真把手，窄口径到**一个文件**
+（`src/components/PdfViewer.tsx`，+89 / −40）；**Rust 侧一个字没动**，v0.81 那本就绪账与那一道闸门的四条形状
+**一条都没改**（改的是"拒了之后有没有尽头"，不是"该不该拒"）。用户拍板三件事：**失败句把页号说出来**、
+**闸门关着时在侧栏「标注」页签放一枚真的「重试导入」把手**（点它重跑同一趟），以及**不做**排队补做、
+**不做**按页部分写回（两条各开进路线图并写明理由）。
+
+- **前置实测①（`tmp/x83/pre.out`，dev + 临时钩子，300 页 / 40 枚标注那件）先量"重跑买的是不是这一格"**：注入一次
+  导入失败之后 `partialOut:29`、`writable:false`、屏上是「标注读取失败: x83 injected import failure」；这一段时间里
+  用户**照样能画一枚**（`annos:1 / dots:true / 页签「标注 1」`），而 **Ctrl+S 被拒且盘上那 40 枚一动没动**
+  （`P5-disk {annos:40, sha:3298315c5c1694}`）、旋转那一路同样拒；**重跑那一趟之后 `writable:true / annos:40`
+  并且随后 Ctrl+S 真落盘**（P3/P4）⇒ 这一格要的不是第二道闸门，而是"再跑一次"这条通道
+- **前置实测②（`pre2.out`，12 页 / 3 枚那件）量的是重跑必须自带两道门**：Q4 第一次重跑 `annos:4`（文件 3 + 窗口内
+  用户 1）而 **Q6 第二次重跑变成 `annos:7`**（`highlight,highlight,note,note,rect,rect,rect`）⇒ **幂等门不立就会把
+  文件那几枚各收第二遍**；Q3 页面操作那一路说的是「旋转失败: 标注还没读全…」（共吃同一处闸门，没有自建第二道）；
+  Q7 走的是 reload：进失败态 → 画一枚 → reload → `annos:4 / writable:true`（**换 doc 之后旧账自然不认新 doc**，
+  这一头依然不需要销账）
+- **前置实测③（`pre3.out` / `pre3b.out`，**十二枚形状各坏的真件**）量的是"确定性坏结构开得了门吗"——答案是开不了**：
+  `/Annots` 不是数组（b3）、`/Annots` 是一枚 dict（b7）、`/AP` 悬空（b8）、`/AP` 是数字（b9）、`/Contents` 是 dict
+  （b10）、页自指 `/Parent`（b11）、缺 `/Subtype`（b4）、`/Rect` 越界或是字符串（b5/b6）、kid 悬空（b1）、非 dict
+  （b2）——**这些全部 `outcome:gated-open`**（pdf.js 逐页容错，读侧照样拿到 1~2 枚、`writable:true`、页面异常 0 条，
+  只有 worker 一句 `Warning: Annotation is missing the required /Subtype.`）⇒ **这一档根本没有失败态可重试**；
+  十二枚里只有 **b12**（`/Pages` 树里一枚 kid 指向错类型）真把读侧打到失败：
+  `标注读取失败: Page dictionary kid reference points to wrong type of object.`、`writable:false`，而 **pdf.js 数出
+  4 页、pdf-lib 只认 3 页**（这一枚分歧就是 b12 的身份，结构判据 D0b 钉的正是它）。所以这一格的收益**只属于瞬时性
+  失败**（网络盘抖一下、文件正被别的进程写），确定性坏结构按把手只会再说一次同一句拒绝
+- **前置实测④（`pre4.out`，b12 真件 + 真按键，**不靠 DEV 钩子也走得到失败态**）是给 release A/B 定尺子的**：
+  F2 那一刻侧栏整排 **9 枚按钮里没有「重试」也没有 reload**（②那一格的另一半），F3 用钩子硬重跑拿到的是**同一句
+  拒绝**（`sameSentence:true`），F4 失败态里画一枚 `annos:1 / 标注 1 / dots:true`，F5 Ctrl+S `writes:[]` 而盘上
+  `660dd6e20dbcb0` 一字没动，F6 旋转那一路同样拒，F7 关标签再开说的还是那一句，F8 同一把尺量好件 `{pages:12,
+  annos:3, writable:true}` ⇒ 本轮 release 的判据面由此定成**句子 + 把手 + 盘不动 + 好件没回归**这四格
+- **本轮唯一的架构决定：那一枚把手重跑的是同一趟 `readAnnos`，而不是第二份实现**，四条形状都不是可选的：
+  ● **抽成具名函数**（effect 里那整段搬进 `readAnnos(d, announce)`，effect 只剩 `if (doc) readAnnos(doc)` 一行——
+  两份实现会分叉：一处说读全了而另一处还在读；S1a/S1b/S1c 钉这个）；● **幂等门直接借 v0.81 那本就绪账**
+  （`if (annosReadRef.current === d) return`——按**身份**而不是布尔；②那格 `4 → 7` 就是它买的东西）；
+  ● **在途门按身份收放**（`annosRunRef = {doc, cancelled}`；收尾只收自己那一趟 `if (annosRunRef.current === run)`，
+  被 cleanup 作废的旧趟不许抹掉正在跑的新趟的账，否则下一次点击又双跑；effect 的 cleanup 按 `r.doc === doc` 置
+  `cancelled`）；● **成功那一句只在重试那一路说**（`if (announce)`——自动那一趟成功时界面本来没什么可宣布的；
+  而这一句挂在**状态栏**上，所以「闸门开了」这件事**从此在 release 上也看得见**，不必再只靠 DEV-only 那枚
+  `annosWritable`；M7 让自动那一路也说 ⇒ 响 S1c/S7c）。失败那句带上页号是因为**页号在 catch 那一刻是知道的**
+  （`let page = 0` 跟着循环走；实测 b12 停在第 4 页），而 `page` 仍为 0 时兜底成不带页号那一句（S4d/M4）
+- **没有做的两件事各有一条理由，不是遗漏**：**不做排队补做**——拒绝期间用户这一趟的意图仍然无法兑现，本轮只把
+  "等待有个尽头"做出来；落定之后自动补做那一刀需要"用户这一刻还想不想做"的判据，而没有（M16 造一条排队补做 ⇒
+  响 S10c）。**不做按页部分写回**——那要把就绪账从"整片"降到"逐页"，而 v0.81 那条「宁可拒也不抹」的前提就是整片，
+  按页写等于允许拿半片去覆盖全片
+- **release A/B 的账（两支真 exe × 坏件/好件两臂 / 42 通过 / 真失败 0 / 显式 SKIP 1）：对照件＝本轮改动前从 HEAD
+  当场构建的那支 0.82 exe**（保留原进程名）：● **坏件臂（b12）** 对照件 `标注读取失败: Page dictionary kid…`
+  **不带页号**（`ctrl-B3` 判的就是这一格缺口），实验件 `标注读取失败（读到第 4 页）: …`（`exp-B3/B4`：页号正是它
+  死在那一页）；两支都 `pageInfo:"/ 4"`、都拒绝写回且 `writes:[]`、盘上哈希 `660dd6e20dbcb0` 一字没动
+  （`ctrl-B10/B11`、`exp-B9`）⇒ **闸门那一半没有回归**；**把手是本轮买的东西**：对照件侧栏只有四枚页签
+  （`ctrl-B5 no-retry-handle`），实验件多一枚「↻ 重试导入标注」，能点、且悬停那句写清了"存盘与页面操作都会被拒
+  （现在写是在覆盖文件）"（`exp-B5/B6`）；● **那一枚显式 SKIP 是 `exp-B7 handle-re-ran-the-same-pass`**——判
+  "按下去真的又跑了一趟"要吃 `getPage` 的调用计数，而 release 上没有钩子；本轮把"能不能改吃 console"量过之后
+  放弃：**`ctrl-B4c` 与 `exp-B4c` 两臂 `kidTotal:0`**（pdf.js 那句失败是**返回值**而不是 console error，所以
+  "日志涨了几枚"这条代理根本不存在）⇒ 这一格写成 SKIP 而不是拿"把手在屏上"当证据（dev 臂 D1/D6 判的就是它）；
+  ● **好件臂（12 页 3 枚）两支逐格相同**：页签「标注 3」与列表 3 行相同、账已读全时**没有把手**（G3）、没有失败句
+  （G4）、写请求 1 枚 `[{"name":"write_file","s":2913,"d":8}]`、盘上 `{annos:3, pages:12}` 前后相同、「已保存」在
+  20ms 时间线上有 301 拍而首拍 ●=0、哈希 `31f01ad48f85f3 → 696fcba73bf57a` ⇒ **闸门与把手都没碰得着正常那一趟**；
+  ● 四格**分离形**判据全成立：**SEP1 页号 / SEP2 把手 / SEP3 坏件盘未动 / SEP4 正常件回归（ctrl 3/3 vs exp 3/3）**
+- **验证（五腿 + 编译）**：release A/B **42 / 0 / 1 SKIP**；前端结构 **51 / 0**（自带 B0 自检 7/7，吃**剥掉注释并
+  归一成 LF 之后**的源文）；变异检查 **19 枚（17 + 2 枚正控制）/ BAD 0 / 多打中 0 / 基线 struct=51/51**；CDP dev
+  真机 **34 / 0 / 0 SKIP（b12 臂 14 + transient 臂 20），两臂页面异常各 0 条**；`cargo test --lib` **97 通过 / 0 失败 /
+  11 ignored**（与 v0.63~v0.82 同一份基线——Rust 本轮一个字没动）+ `tsc` exit 0 + `pnpm tauri build --no-bundle` 绿
+  （openoffices v0.83.0）；五腿都在**版本号 bump（三处对齐）之后**跑
+- **结构那张表（51 条）钉住的是形状而不是读数**：S1a~S1d 抽成具名函数 / effect 里只剩一次调用 / cleanup 按身份作废；
+  S2a/S2b 幂等门排在登记之前；S3a~S3e 在途 ref 全仓**只有一枚**、带 `cancelled`、只有身份相等才收，而**收它是全仓
+  唯一的注销动作**；S4a~S4d 页号跟着循环、catch 里那句带页号、页号为 0 有兜底；S5a/S5b 失败那一路**仍然不给这本账
+  记账**（v0.81 那条纪律原样保住）而拒绝句仍走 `failStatus`；S6a~S6c 收尾仍是「并」不是「替」、记账排在合并之后、
+  两句都在作废门里；S7a~S7d `announce` 那道门 + 两句字面都在 + 自动那一路静默 + **成功那句是一句兑现得了的许诺**；
+  S8a~S8e 把手只挂在 `annosPending` 上、全仓一枚、用共用的 `btn()`、只在「标注」页签里、点它调的是同一个
+  `readAnnos(doc, true)`；S9a~S9c `annosPending` 只定义一次且**读状态而不是读 ref**（渲染期要跟着变；闸门那一边才读
+  ref）、第二本同名的账不许出现；S10a~S10c 两个调用点、**没有重试定时器**、**没有排队补做**；S11a~S11e 闸门仍只有
+  一句、排在取列表之前、比的是身份、全仓零枚销账（`S11d` 读到 0）；S12a~S12c `docProxy` 全仓一处且在 DEV 块内；
+  S13a~S13d 文档／表格／演示／`lib/pdf-pages` 四头没有这本账
+- **变异那张表（19 枚）**：M1 拆幂等门（响 2）、M2 拆在途门、M3 收账不看身份、M4 失败句去掉页号（响 2）、
+  M5 让失败也记账（响 2）、M6 收尾退回整片替换（响 2）、M7 自动那一路也说成功句（响 2）、M8 把手常驻（响 2）、
+  M9 把手自带 markup 不用共用 `btn()`、M10 `annosPending` 改读 ref、M11 闸门退化成"有没有 doc"、M12 加一处销账、
+  M13 做成自动重试定时器（响 4）、M14 把这套照抄进文档头、M15 让 `docProxy` 泄漏到 release（响 2）、M16 加一条
+  排队补做、M18 闸门排在登记之后；**P0（什么都不改）与 P1（只在注释里写一句假站点）必须全绿**
+- **CDP dev 真机那张表（34 条）里，两臂各买一格**：● **b12 臂（真件、确定性坏结构）买"release 那四格在 dev 上也对，
+  而且按下去不会说谎"**：D0 挂载唯一（`.editor-pane` 里带 toolbar 的头数 = 1，否则侧栏读数会指错对象）、D0b 夹具
+  身份 `{diskPages:3, hookPages:4}`（两把尺**必须**分歧）、D1 句子带页号、D2 门仍关着
+  （`writable:false / hasDoc:true / numPages:4 / docTag:<untagged>`——**有活 doc 而账不认它**，这就是"按身份记账"
+  的量）、D4 页签真的切到「标注」、D5 把手在且能点、**D6 按下去真的又跑了一趟（`calls 0→4`，恰为一趟 `getPage`——
+  这一格 dev 独有）**、D7 同一拍连按两下只跑一趟（`grew:4 ≤ numPages:4`）、D8~D12 按完之后仍然诚实（拒绝句不变、
+  门没开、`writes:[]`、盘上哈希没动、484 拍时间线里没有成功句、页面异常 0 条）；● **transient 臂（好件 + 腿自己注入
+  一次性的失败）买的是 release 无从判的那一整格**：T1 第一趟把账记上（页签「标注 3」）、T3 已记账时**没有把手**、
+  T4 没有失败句、T5 腿侧注入排在 reload 之前装好、**T6 注入的失败真的落在标注那趟**
+  （`标注读取失败（读到第 3 页）: … hits:3 thrown:1`）、T7 门在一份 12 页活 doc 上关着且**按身份**（`writable:false
+  hasDoc:true numPages:12 docTag:<untagged> tagged:doc0`）、T8b 页签又真的切回「标注」、T9 把手出现在失败态、
+  **D1 点它开得了门（`writable:true`，`click:"clicked-x2"`，`calls:[24,36]`＝两枚按键一趟）**、D2 那句成功话上屏
+  （`标注已读全：3 枚，现在可以存回文件了`）、D3 门开那一刻内存里就是整片（`annos:3` 与盘上枚数相同）、D4 连按两下
+  只多 12 次 `getPage`（正好一趟而不是两趟）、D5 成功之后把手自己不见了、E1~E4 门开了之后 Ctrl+S 真出门
+  （`[{"name":"write_file","s":8690,"d":10}]`）、盘上枚数与内存一致、"已保存"在 161 拍时间线上出现过、
+  哈希 `31f01ad48f85f3 → 696fcba73bf57a`。**dev 的数字一律不吃成产品指标**（v0.66 那条老规矩第八次兑现）：这一臂吃的是
+  "开得了门 / 只跑一趟 / 成功那句真上过屏 / 之后写得出去"这四条形状
+- **本轮撞到六处量具坑，都不是产品**：① **注入点选错通道就会拿到空失败态**——第一版把抛错装在 `doc.getPage` 的原型上，
+  而 `getPage` 在这一份组件里被三处共用（页尺寸那趟 / 渲染 / 标注扫描），实测那句是「页尺寸读取失败: …」而标注扫描
+  照样读全 ⇒ 于是三格 PASS 是**空断言**（`tr-D1` 在没有重试的情况下读到 `writable:true`、`tr-D4 grew:0`、
+  `click:"no-button"`）；换成把抛错装在 `page.getAnnotations`（grep 全仓**只有一个调用点**，就在 `readAnnos` 里）才量到
+  真东西，并把"判据先认得这一臂没跑出这个状态"写成 `ranPass` 在场门；② **夹具的两把尺本来就该分歧**——b12 上
+  pdf.js 数 4 页而 pdf-lib 认 3 页（这一枚 kid 悬空正是它坏的地方），按"必须相等"判就假 FAIL，判据应改成**断言这个
+  分歧**；同族第二处是在途门那一格的上界必须按 pdf.js 的 `numPages`（一趟正常扫描 4 次 `getPage` 会被 pdf-lib 的 3
+  判成"跑了两趟"）；③ **`need(name, present, check, detail)` 的第三槽塞了对象** ⇒ `check()` 抛错而明细序列化成
+  `null`（`FAIL tr-T5 :: null` 那种自相矛盾行）；④ **reload 会把侧栏页签退回「缩略图」** ⇒ 在错的页签上找把手是空
+  断言，判"把手存在"之前得先证页签真的切过去了（本轮为此新立 `tr-T8b`）；⑤ **dev 会话里"这一趟有没有重跑"只能靠
+  `getPage` 计数，而计数要先装探针再按下**（`patch()` 排在 `clickSideN` 之前，`calls:[0,4]` 才是同一趟的读数）；
+  ⑥ **9222 被这台机器的入站过滤挡死**（本机事实：按应用放行——node 可以而 Chromium/python 不行）⇒ 经用户同意临时加了
+  一条**只限 127.0.0.1** 的入站放行规则 `tmp-x83-cdp-loopback`，**收尾已按提权删除**（`BEFORE=1 AFTER=0`）
+- **本轮没动的，量出来记着**（已开进路线图）：**确定性坏结构的失败重跑开不了门**（③那十二枚里十一枚根本到不了
+  失败态，b12 那一档按把手只有"再说一次同一句拒绝" ⇒ 这一路的收益只属于瞬时性失败）；**拒绝期间用户这一趟的意图
+  仍然无法兑现**（本轮明写不做：落定之后要不要自动补做没有判据）；**按页部分写回不做**（那会拆掉「宁可拒也不抹」
+  的整片前提）；**release 上没有"重跑真的又跑了一趟"的可观测面**（console 面 `kidTotal:0` 已经量过 ⇒ 这一格从此
+  只能由 dev / 结构 / 变异判，卖点落在 dev 独有观测面时要明写这一条）；**只跑了 4 页与 12 页两枚件**（2300 页那一档
+  的失败重跑没有量过，而"重跑一趟的代价"恰好在那一档最大）；**`docProxy` 是量具唯一的注入口**（S12 钉住它不许泄漏到
+  release，代价是产品多一枚 DEV-only 出口）；**ctrl 与 exp 的侧栏落定时长差（~1.5s vs ~6.7s）仍未归因**（v0.81 那笔
+  账原样挂着）；另存为／导出 pptx 之后"再编辑 ● 该不该亮"、多枚 `.opd` 同时脏时每枚各自的时钟与认领关系、「已自动
+  保存 X」有悬停而手动那句仍没有次数账、DocEditor 剩四枚裸 `setTimeout`、`SheetEditor.exportPdfTo` 内联那份拼句
+  公式、在途锁按 `tabId` 不按 `path`、`SAVE_BUSY_MS` / `AUTO_BASE_MS` / `AUTO_MAX_MS` 是单机数、写侧前缀三家不统一、
+  toast 体系照旧未建；自动更新的源托管与 macOS 打包按指令继续等信号，**签名私钥无备份仍是最大单点风险**
 
 ## 性能（v0.3）
 
@@ -3737,7 +3864,7 @@ updater 里从此只剩 `fn(next)` 与 `return next`——**副作用不许住�
 （eager state / 并发渲染 / StrictMode 三条路径都能动它）；判据侧的两枚量具账记在这里：`S2a` 全仓扫"有没有头往 updater 里写脏值"
 时 `setTimeout(() => { … })` 与 React 的 updater **文本同形**（要 `NOT_AN_UPDATER` 黑名单排除），而 `S2d`「`renameTab` 仍把标签归到不脏」
 一度是**判据空转**（整文件找 `dirty: false` 会被 `openTab` 里那枚同名键顶住 ⇒ 改成按 `renameTab:` 切块，起点取**最后一枚**，
-因为 `State` 接口在 `store.ts:32` 先声明了一次同名键）——这一枚由变异 M7 抓出）/ PdfViewer（pdfjs-dist 懒加载，连续多页视口虚拟渲染+Ctrl 缩放+TextLayer 文字选择+全文搜索+缩略图/大纲/标注侧栏+高亮便签与矩形·椭圆·直线·手绘形状（绘制/导入/写回 pdf-lib）+标注编辑（点选/拖移/改色/删除）+「页面」工作区旋转/删除/提取/合并/拆分；≥4MB 走分段读（lib/pdf-range.ts），卸载时 destroy openTask 并 abort transport；**v0.64 四个编辑器与首页的失败出口一律改走 `lib/fail-msg.ts`**——状态栏那一行由 `{status}` 直出换成 `statusText(status)` + `title={statusTip(status)}`（四个渲染点各一处，`PptEditor` 的加载占位有两处分身所以两处都换），原生对话框那一层的 `String(e)` 换成 `failDialog(e)`，账目位里的 `${e instanceof Error ? e.message : String(e)}` 换成 `failText(e)`；`PdfViewer` 除接线外还立了两条行为——三处后台补做（页尺寸／大纲／标注）由"只 `console.error`"改成**先过 `isTeardown` 那道门再占状态栏**（拆标签时的 `Transport destroyed` 不入账，否则每次快速关标签都冒一句凭空的失败），`pageOp` 的定时清除从 `finally` 移到成功那一路（失败那一句留着，三秒就抹等于让用户读不完也悬停不到原话）；**v0.65 加密 PDF 的密码闸门**——`openTask.onPassword` 装在 `await openTask.promise` **之前**（装晚了那份承诺已经拒绝，回调再挂也来不及），回调只做三件事：把 `updatePassword` 存进 `pwdUpdateRef`、把"第几回问"记进 `pwdAttemptRef`、亮面板（判据与文案一律走 `lib/pdf-password.ts`，组件里只负责亮与接线，句子一处都不写）；**闸门绝不自动投密码**（自动投等于替用户猜，结构腿 C2 判这一条）、空串不当密码（喂进去只换来一次重新提问）、取消时**先**记 `pwdCancelledRef` **再**把闸门按下去（错误内容分不出"用户取消"与"没给密码"，这一位只能界面自己留着），于是那一行不带"失败"也不挂原始信息；工具条的 ↻ 是**从第 1 回重新数起**并把取消标记一起清掉（不清的话重试成功后第一次真失败会被归成"用户自己取消的"）；`type=password` 且密码不回显、不在界面上；owner-only 那一件**不问密码**就能看（用户口令为空）而页面级操作当场报得出 pdf-lib 那一句；同一轮补的是一条规矩而不是一处补丁——**「这一趟已经作废」那道门必须打在写任何共享状态之前**，开发模式的双挂载下晚到的 `catch` 会抹掉还活着的那一趟刚亮起来的面板，pdf.js 从此等不到回话，表现是卡在「正在加载…」且没有任何错误（C17/C18 各钉住本轮撞到的两处写点，另外那三句账目仍在，本轮没有新的拆接线）；**v0.66 搜索这一趟改由界面自己记着"在扫"**——查询一变化就标 `scanning:{scanned:0,total}` 并把上一词的命中与激活位**在同一处**清掉（防抖那 200ms 里界面不许回到「无匹配」，也不许拿旧词的第 3 条说新词的事），扫页循环里按 `shouldPublish` 交进度（`setMatches` 与 `setFindStatus` 同交，一句里不许半新半旧），收尾那一句先过作废门再把 `scanning` 清掉；**v0.65 那条"门打在写任何共享状态之前"在这里再兑现一次**：`seq !== searchSeq.current || !aliveRef.current` 那道门排在 `await loadPageText(...)` **之后**、任何 `setState`/ref 写入**之前**（排在 await 之前拦不住晚到的那一趟，排在最后一句就晚了），`aliveRef` 在 setup 里置回 `true`，于是开发模式 `React.StrictMode` 的第二次挂载不被当成已卸载——真机量到换词 1.2s 起那一格的文本零变化（被作废的那趟没能把界面抹回旧样子）；句子一律走 `lib/pdf-search.ts`，组件里不留「无匹配」「正在搜索」的字面（B2/B10 判这一条，而 B10 吃的是剥掉注释之后的源文）；`textPages` 这枚 DEV 钩子由本轮的临时归因**转正为常备观测量**——"扫完全程"只能硬判缓存枚数，把判据建在那句文案上就等于建在实现上；**v0.68 只动两行**——加载那一路的 `await createRangeTransport(path)` 换成 `const src = (await takePdf(path)) ?? (await preparePdfSource(path))`（外壳已在开标签那一刻把那次决定连同要读的字节发出去了，这里只是取来用；取不到就自己发，**不假设外壳一定先跑**），随后 `getDocument` 按 `src.mode` 分支，于是这一层**不再自己判闸门**（V1/V2/V4 钉的就是这三件事）；另一行是那条注释改口（它还写着"大文件只喂文件头、小的整本读"的选法，而现在选法在 `preparePdfSource` 那一处）。次序上有一条诚实的代价：自备那一路的读现在排在 `if (disposed) return` **之前**（闸门单一持有的后果），而**"写共享状态之前那道门"的位置一个字没动**（V3，v0.65 那条规矩在这里继续成立——`rangeModeRef.current = src.mode === 'range'` 仍排在门之后）；**v0.70 Ctrl+S 那一路开始说话**——`registerSaver` 里那一个 `async` 函数从"只 `await writeAnnosTo(path)`"变成「撤上一句收尾 → 挂进度门 → 写 → 撤门 + `done.show([])`，catch 里 `setStatus(failStatus(e, '保存失败'))`」，句子与时钟一律在 `lib/save-status.ts`（A5/A6/A7 判这三句的次序与去处），而**三句挂在 saver 层不挂进 `writeAnnosTo`**（那一函数与工具条的 `pageOp` 共用，写进去就是两头发话：A8 + 变异 M5；`pageOp` 原有的「旋转…」与失败句一个字没动：A9 + M6）。改前的形状是 `writeAnnosTo` 从不 catch 而 `registry.drain` 的 `catch {}` 把抛错咽了下去 ⇒ **只读件按 Ctrl+S 之后屏上连一句失败都没有**，成功那一路也只有 `markDirty(false)` 而没有「已保存」——本轮补的就是这一格（release A/B 里 R1/R6e 判改前那支的静默，R6a~R6d 判改后这一路说出口的每句话）**。**v0.80 只在这一头的两处 pdf-lib 调用上各加一个参数**——`writeAnnosTo` 里 `PDFDocument.load(bytes, { updateMetadata: false, parseSpeed: PDF_OBJECTS_PER_TICK })` 与 `pdoc.save({ addDefaultPage: false, objectsPerTick: PDF_OBJECTS_PER_TICK })`，两者都从 `../lib/pdf-ticks` 取而不在这层写字面量（S1a/S1c/M9 钉这一条）；这一层**没有**新增时钟、没有搬 worker、句子与三道门（撤收尾 → 挂进度门 → 撤门）一个字没动，只是它等的东西变短了：实测按键→写出门 1030ms → 148~172ms，于是那句 `SAVE_BUSY_MS=200` 的「正在保存…」在这件上不再有机会上屏（v0.70 那一节里"进度句可看 940ms"说的是它的**第一次也是唯一一次**兑现）；顺带量到一条**既有缺陷**并已开进路线图而**本轮未修**：标注读侧那一路（`setAnnos`，逐页扫 `/Annots`）还没扫完就按 Ctrl+S，写回去的那一份会把 40 枚注解**整片抹掉**而屏上照旧「已保存」（早退那一趟：按下时页龄 594 / 1447ms ⇒ 两支落盘都是 `annos: 0`、哈希同为 `ca72e8c365681d03`）——要的是"未就绪不许写"那道闸，与让出粒度不是同一件事；**v0.81 就是那道闸，而这本账的形状有三格都不是可选项**——① 它记「**哪一份 doc 已经整片读完**」而不是「哪一份在读」（`const [annosRead, setAnnosRead] = useState<PDFDocumentProxy | null>(null)` + 渲染期镜像 `annosReadRef`，闸门读镜像）：初值为空所以挂载后第一件事就是没读全，于是"doc 还没来 / 正在逐页扫 / 读到一半失败 / reload 换出新 doc"四种情形统一落在同一句拒绝里；记"在读"的那一版实测挡不住第一段（`pre5.log`：24 枚按下时布尔账是 `false` ⇒ 40→0）。② **它是状态而不是直接写 ref**：`setAnnosRead(doc)` 与合并那一句在同一批更新里 ⇒ 门开的那一刻内存已经是整片；直接写 ref 的那一版由 dev 腿自证 `FAIL Q3 … :: {"内存":0,"读全":true}` 与 `MEASURE P1 开账那一拍 {"t":48514,"n":0,"writable":true}` / 后一拍 `{"t":48550,"n":40}` ⇒ **中间约一枚 rAF（36ms）里闸门开着而写回读到空片**（S1a 钉 `useState`、S1e 钉镜像紧跟声明不许搬进 effect）。③ **闸门只有一处**（`writeAnnosTo` 函数头、`const list = annosRef.current` **之前**；`if (!d || annosReadRef.current !== d) throw new Error('标注还没读全，…')`），Ctrl+S 那一路与工具条的页面操作**都只共吃它**、由自己现成的 catch 说这一句（S2d 钉整句文案全前端一处，M12 钉"页面操作自己再立一道闸"是违例）。另外两条是同一本账的纪律：**读到一半失败故意不记账**（S5b；代价写进路线图——写回会被一直拒到重新打开，这一头没有"重试导入"那一路）、**全仓不许销账**（S4 零枚 `setAnnosRead(null)`；换 doc 时旧账自然不认新 doc，而销账等于把门开回 v0.80，M10 响）。收尾同时从整片替换改成 `setAnnos((cur) => [...out, ...cur])`（前置实测 ADD1b：`40` 而不是 `41`，终值会把用户在窗口里刚画的那枚替掉），S3a 钉"合并紧跟记账"、M11 钉"两句之间夹进别的语句＝拆成两批提交"也响；`annosWritable`（两半都判，`null` doc 也算不许写）是这一格的 DEV 取反面，release 上没有这一枚观测量
+因为 `State` 接口在 `store.ts:32` 先声明了一次同名键）——这一枚由变异 M7 抓出）/ PdfViewer（pdfjs-dist 懒加载，连续多页视口虚拟渲染+Ctrl 缩放+TextLayer 文字选择+全文搜索+缩略图/大纲/标注侧栏+高亮便签与矩形·椭圆·直线·手绘形状（绘制/导入/写回 pdf-lib）+标注编辑（点选/拖移/改色/删除）+「页面」工作区旋转/删除/提取/合并/拆分；≥4MB 走分段读（lib/pdf-range.ts），卸载时 destroy openTask 并 abort transport；**v0.64 四个编辑器与首页的失败出口一律改走 `lib/fail-msg.ts`**——状态栏那一行由 `{status}` 直出换成 `statusText(status)` + `title={statusTip(status)}`（四个渲染点各一处，`PptEditor` 的加载占位有两处分身所以两处都换），原生对话框那一层的 `String(e)` 换成 `failDialog(e)`，账目位里的 `${e instanceof Error ? e.message : String(e)}` 换成 `failText(e)`；`PdfViewer` 除接线外还立了两条行为——三处后台补做（页尺寸／大纲／标注）由"只 `console.error`"改成**先过 `isTeardown` 那道门再占状态栏**（拆标签时的 `Transport destroyed` 不入账，否则每次快速关标签都冒一句凭空的失败），`pageOp` 的定时清除从 `finally` 移到成功那一路（失败那一句留着，三秒就抹等于让用户读不完也悬停不到原话）；**v0.65 加密 PDF 的密码闸门**——`openTask.onPassword` 装在 `await openTask.promise` **之前**（装晚了那份承诺已经拒绝，回调再挂也来不及），回调只做三件事：把 `updatePassword` 存进 `pwdUpdateRef`、把"第几回问"记进 `pwdAttemptRef`、亮面板（判据与文案一律走 `lib/pdf-password.ts`，组件里只负责亮与接线，句子一处都不写）；**闸门绝不自动投密码**（自动投等于替用户猜，结构腿 C2 判这一条）、空串不当密码（喂进去只换来一次重新提问）、取消时**先**记 `pwdCancelledRef` **再**把闸门按下去（错误内容分不出"用户取消"与"没给密码"，这一位只能界面自己留着），于是那一行不带"失败"也不挂原始信息；工具条的 ↻ 是**从第 1 回重新数起**并把取消标记一起清掉（不清的话重试成功后第一次真失败会被归成"用户自己取消的"）；`type=password` 且密码不回显、不在界面上；owner-only 那一件**不问密码**就能看（用户口令为空）而页面级操作当场报得出 pdf-lib 那一句；同一轮补的是一条规矩而不是一处补丁——**「这一趟已经作废」那道门必须打在写任何共享状态之前**，开发模式的双挂载下晚到的 `catch` 会抹掉还活着的那一趟刚亮起来的面板，pdf.js 从此等不到回话，表现是卡在「正在加载…」且没有任何错误（C17/C18 各钉住本轮撞到的两处写点，另外那三句账目仍在，本轮没有新的拆接线）；**v0.66 搜索这一趟改由界面自己记着"在扫"**——查询一变化就标 `scanning:{scanned:0,total}` 并把上一词的命中与激活位**在同一处**清掉（防抖那 200ms 里界面不许回到「无匹配」，也不许拿旧词的第 3 条说新词的事），扫页循环里按 `shouldPublish` 交进度（`setMatches` 与 `setFindStatus` 同交，一句里不许半新半旧），收尾那一句先过作废门再把 `scanning` 清掉；**v0.65 那条"门打在写任何共享状态之前"在这里再兑现一次**：`seq !== searchSeq.current || !aliveRef.current` 那道门排在 `await loadPageText(...)` **之后**、任何 `setState`/ref 写入**之前**（排在 await 之前拦不住晚到的那一趟，排在最后一句就晚了），`aliveRef` 在 setup 里置回 `true`，于是开发模式 `React.StrictMode` 的第二次挂载不被当成已卸载——真机量到换词 1.2s 起那一格的文本零变化（被作废的那趟没能把界面抹回旧样子）；句子一律走 `lib/pdf-search.ts`，组件里不留「无匹配」「正在搜索」的字面（B2/B10 判这一条，而 B10 吃的是剥掉注释之后的源文）；`textPages` 这枚 DEV 钩子由本轮的临时归因**转正为常备观测量**——"扫完全程"只能硬判缓存枚数，把判据建在那句文案上就等于建在实现上；**v0.68 只动两行**——加载那一路的 `await createRangeTransport(path)` 换成 `const src = (await takePdf(path)) ?? (await preparePdfSource(path))`（外壳已在开标签那一刻把那次决定连同要读的字节发出去了，这里只是取来用；取不到就自己发，**不假设外壳一定先跑**），随后 `getDocument` 按 `src.mode` 分支，于是这一层**不再自己判闸门**（V1/V2/V4 钉的就是这三件事）；另一行是那条注释改口（它还写着"大文件只喂文件头、小的整本读"的选法，而现在选法在 `preparePdfSource` 那一处）。次序上有一条诚实的代价：自备那一路的读现在排在 `if (disposed) return` **之前**（闸门单一持有的后果），而**"写共享状态之前那道门"的位置一个字没动**（V3，v0.65 那条规矩在这里继续成立——`rangeModeRef.current = src.mode === 'range'` 仍排在门之后）；**v0.70 Ctrl+S 那一路开始说话**——`registerSaver` 里那一个 `async` 函数从"只 `await writeAnnosTo(path)`"变成「撤上一句收尾 → 挂进度门 → 写 → 撤门 + `done.show([])`，catch 里 `setStatus(failStatus(e, '保存失败'))`」，句子与时钟一律在 `lib/save-status.ts`（A5/A6/A7 判这三句的次序与去处），而**三句挂在 saver 层不挂进 `writeAnnosTo`**（那一函数与工具条的 `pageOp` 共用，写进去就是两头发话：A8 + 变异 M5；`pageOp` 原有的「旋转…」与失败句一个字没动：A9 + M6）。改前的形状是 `writeAnnosTo` 从不 catch 而 `registry.drain` 的 `catch {}` 把抛错咽了下去 ⇒ **只读件按 Ctrl+S 之后屏上连一句失败都没有**，成功那一路也只有 `markDirty(false)` 而没有「已保存」——本轮补的就是这一格（release A/B 里 R1/R6e 判改前那支的静默，R6a~R6d 判改后这一路说出口的每句话）**。**v0.80 只在这一头的两处 pdf-lib 调用上各加一个参数**——`writeAnnosTo` 里 `PDFDocument.load(bytes, { updateMetadata: false, parseSpeed: PDF_OBJECTS_PER_TICK })` 与 `pdoc.save({ addDefaultPage: false, objectsPerTick: PDF_OBJECTS_PER_TICK })`，两者都从 `../lib/pdf-ticks` 取而不在这层写字面量（S1a/S1c/M9 钉这一条）；这一层**没有**新增时钟、没有搬 worker、句子与三道门（撤收尾 → 挂进度门 → 撤门）一个字没动，只是它等的东西变短了：实测按键→写出门 1030ms → 148~172ms，于是那句 `SAVE_BUSY_MS=200` 的「正在保存…」在这件上不再有机会上屏（v0.70 那一节里"进度句可看 940ms"说的是它的**第一次也是唯一一次**兑现）；顺带量到一条**既有缺陷**并已开进路线图而**本轮未修**：标注读侧那一路（`setAnnos`，逐页扫 `/Annots`）还没扫完就按 Ctrl+S，写回去的那一份会把 40 枚注解**整片抹掉**而屏上照旧「已保存」（早退那一趟：按下时页龄 594 / 1447ms ⇒ 两支落盘都是 `annos: 0`、哈希同为 `ca72e8c365681d03`）——要的是"未就绪不许写"那道闸，与让出粒度不是同一件事；**v0.81 就是那道闸，而这本账的形状有三格都不是可选项**——① 它记「**哪一份 doc 已经整片读完**」而不是「哪一份在读」（`const [annosRead, setAnnosRead] = useState<PDFDocumentProxy | null>(null)` + 渲染期镜像 `annosReadRef`，闸门读镜像）：初值为空所以挂载后第一件事就是没读全，于是"doc 还没来 / 正在逐页扫 / 读到一半失败 / reload 换出新 doc"四种情形统一落在同一句拒绝里；记"在读"的那一版实测挡不住第一段（`pre5.log`：24 枚按下时布尔账是 `false` ⇒ 40→0）。② **它是状态而不是直接写 ref**：`setAnnosRead(doc)` 与合并那一句在同一批更新里 ⇒ 门开的那一刻内存已经是整片；直接写 ref 的那一版由 dev 腿自证 `FAIL Q3 … :: {"内存":0,"读全":true}` 与 `MEASURE P1 开账那一拍 {"t":48514,"n":0,"writable":true}` / 后一拍 `{"t":48550,"n":40}` ⇒ **中间约一枚 rAF（36ms）里闸门开着而写回读到空片**（S1a 钉 `useState`、S1e 钉镜像紧跟声明不许搬进 effect）。③ **闸门只有一处**（`writeAnnosTo` 函数头、`const list = annosRef.current` **之前**；`if (!d || annosReadRef.current !== d) throw new Error('标注还没读全，…')`），Ctrl+S 那一路与工具条的页面操作**都只共吃它**、由自己现成的 catch 说这一句（S2d 钉整句文案全前端一处，M12 钉"页面操作自己再立一道闸"是违例）。另外两条是同一本账的纪律：**读到一半失败故意不记账**（S5b；代价写进路线图——写回会被一直拒到重新打开，这一头没有"重试导入"那一路）、**全仓不许销账**（S4 零枚 `setAnnosRead(null)`；换 doc 时旧账自然不认新 doc，而销账等于把门开回 v0.80，M10 响）。收尾同时从整片替换改成 `setAnnos((cur) => [...out, ...cur])`（前置实测 ADD1b：`40` 而不是 `41`，终值会把用户在窗口里刚画的那枚替掉），S3a 钉"合并紧跟记账"、M11 钉"两句之间夹进别的语句＝拆成两批提交"也响；`annosWritable`（两半都判，`null` doc 也算不许写）是这一格的 DEV 取反面，release 上没有这一枚观测量；**v0.83 补的是那本账的代价而不是那道闸**——记账按身份、失败不记账、全仓不销账三条一个字没动（S5a/S11d 复钉），新增的是"拒绝之后这一头有把手"：逐页扫那一路从 effect 里提成具名 `readAnnos(d, announce)` 而不是第二份实现（effect 只剩 `if (doc) readAnnos(doc)`，两份实现会分叉；S1a~S1c 钉），幂等门 `annosReadRef.current === d` 直接借 v0.81 那本按身份记的账（不立它实测会把文件那几枚各收第二遍，pre2 的 `4 → 7`；M1 拆它就响），在途门 `annosRunRef = {doc, cancelled}` 收放都按身份、而**收它是全仓唯一的注销动作**（S3a~S3e；M2 拆在途门、M3 收账不看身份、M18 闸门排在登记之后就响）；把手「↻ 重试导入标注」只在 `sideTab === 'annos'` 且 `annosPending`（`doc !== null && annosRead !== doc`，读**状态**而不是 ref——渲染期要跟着变，闸门那一边才读 ref；M10）时出现、且只走共用的 `btn()` 不自己写一枚（S8a~S8e；M8 把手常驻、M9 自带 markup 就响），点它调的是同一个 `readAnnos(doc, true)`；失败那句带上页号（`读到第 N 页`——页号在 catch 那一刻本来就知道，`let page` 跟着循环走、页号为 0 兜底成不带页号那句；S4a~S4d/M4）；成功那句只在重试那一路说（`if (announce)`——自动那一路成功时界面本来没什么可宣布，M7/M13 钉它静默且不许长出定时器）——这一句挂在**状态栏** ⇒ 它是 **release 可见**的取反面，补的正是上一句 `annosWritable` 是 DEV-only 那一格；`docProxy`（DEV 块内、全仓一处）是量具的唯一注入口（S12a~S12c 钉它不许泄漏到 release）；**明写不做的两条**：不做排队补做（M16 响 S10c）、不做按页部分写回（那要拆掉「宁可拒也不抹」的整片前提）；**实测边界一条**：重跑只治**瞬时**失败——确定性坏结构那一件（b12：pdf.js 数 4 页而 pdf-lib 认 3 页）按多少趟把手门也不会开，这一头要的仍是"重新打开"，把手在那一刻只会再说一次同一句拒绝
 scripts/              copy-pdfjs-assets.mjs（dev/build 前复制 cmaps/标准字体到 public/pdfjs） /
                       updater-release.mjs（发版：开 createUpdaterArtifacts 本机建签名包 → 读回真 .sig 与产物 →
                       出带三平台键的 latest.json → 打印要上传的清单；私钥只走子进程环境变量，`pnpm release:updater`）
@@ -3811,7 +3938,7 @@ PDF 文件流：查看 `pdf 磁盘 → 小于 4MB 整本 readBytes / 大于 4MB 
 按下落盘枚数 ctrl `[0,0,0]` vs exp `[40,40,40]`（对照件那一刻内存是空片、文件被抹成 `annos:0`、哈希
 `2bde644fbf70e6 → 9bea7c532a843e`），实验件那一按**没改文件**而屏上说的是「保存失败: 标注还没读全…」；
 落定之后两支都把 40 枚写回、第二次落盘哈希同为 `bc482236284a04` ⇒ 正常那一路一个字没改坏。代价与余账写在路线图
-（导入失败后没有"重试导入"那一路；页面操作当场失败而不是排队等落定）））；四类编辑器的**存盘**那一路现在吃同一份收尾时钟）；文档导出 `@media print 排版（分栏/分页符/避免跨页折断）+ @page margin box 逐页页眉页脚页码 + 打印态纸面调色板（`color-scheme` 压回 light、主题色经变量换掉，v0.49）→ Rust export_pdf（PrintSettings 纸张与四边距；CSS `@page` 也真的说话，所以每条作业自己声明完整，见 v0.50）→ WebView2 PrintToPdf 落盘`；演示导出 `Deck → createRoot 离屏挂载 StaticSlide 分页 → 同上`；表格导出 `Univer 快照 → WorkbookPayload → lib/sheet-print-setup.ts 把那张「页面设置」翻成打印计划（纸面/四边距/缩放/打印区域/重复标题行列/手动分页符/列带/页眉页脚的 @page margin box）→ lib/sheet-print.ts 自绘 HTML 网格 → 同上（canvas 抓不到故走数据侧重排；计划同时喂 PrintToPdf 的 PrintSettings，两条通道同一组数，v0.51。**勾了「缩放到 N 页高」或「上下居中」时这份 HTML 先建后量再重建（v0.53）**——行高不在载荷里（默认行高由字体现算、声明过的只是下限、`zoom` 之后又不线性），只能离屏量真排版（`lib/sheet-print-measure.ts` + `pdfprint.measurePrintLayout`），`fitToPagesTallZoom` 按实测逐带贪心分页压出 1% 一档的缩放、`verticalCenterPadPx` 只在装得下的那一页给上留白，量稳了才把留白写回同一份 DOM 交导出）。**正文与页眉的底数吃同一层**（v0.59）：工作簿默认字体（`xl/styles.xml` 的 `cellXfs[0]→fonts`）一次读进载荷，`baseFontPt` 一处解析，页眉由 `@page` 的 margin box 乘出去、正文落在每张表 `<section>` 的 `--oof-print-base-size` 上被 `td` 的 `font-size` 吃掉，没说话时两处同落 11pt 那一档兜底）`；页面管理 `内存标注先写回 → pdf-lib 旋转/删除/提取/合并/拆分覆盖写回 → 重载并从 /Annots 重新导入标注（旋转页坐标按 /Rotate 经 pdf-geo.ts 换算）`。
+（导入失败后没有"重试导入"那一路；页面操作当场失败而不是排队等落定——**v0.83 改口**：前一条已补上（侧栏「标注」页签的「↻ 重试导入标注」把手重跑同一趟 `readAnnos`，闸门那四条形状一个字没动），后一条本轮明写不做、理由在 v0.83 那一节）））；四类编辑器的**存盘**那一路现在吃同一份收尾时钟）；文档导出 `@media print 排版（分栏/分页符/避免跨页折断）+ @page margin box 逐页页眉页脚页码 + 打印态纸面调色板（`color-scheme` 压回 light、主题色经变量换掉，v0.49）→ Rust export_pdf（PrintSettings 纸张与四边距；CSS `@page` 也真的说话，所以每条作业自己声明完整，见 v0.50）→ WebView2 PrintToPdf 落盘`；演示导出 `Deck → createRoot 离屏挂载 StaticSlide 分页 → 同上`；表格导出 `Univer 快照 → WorkbookPayload → lib/sheet-print-setup.ts 把那张「页面设置」翻成打印计划（纸面/四边距/缩放/打印区域/重复标题行列/手动分页符/列带/页眉页脚的 @page margin box）→ lib/sheet-print.ts 自绘 HTML 网格 → 同上（canvas 抓不到故走数据侧重排；计划同时喂 PrintToPdf 的 PrintSettings，两条通道同一组数，v0.51。**勾了「缩放到 N 页高」或「上下居中」时这份 HTML 先建后量再重建（v0.53）**——行高不在载荷里（默认行高由字体现算、声明过的只是下限、`zoom` 之后又不线性），只能离屏量真排版（`lib/sheet-print-measure.ts` + `pdfprint.measurePrintLayout`），`fitToPagesTallZoom` 按实测逐带贪心分页压出 1% 一档的缩放、`verticalCenterPadPx` 只在装得下的那一页给上留白，量稳了才把留白写回同一份 DOM 交导出）。**正文与页眉的底数吃同一层**（v0.59）：工作簿默认字体（`xl/styles.xml` 的 `cellXfs[0]→fonts`）一次读进载荷，`baseFontPt` 一处解析，页眉由 `@page` 的 margin box 乘出去、正文落在每张表 `<section>` 的 `--oof-print-base-size` 上被 `td` 的 `font-size` 吃掉，没说话时两处同落 11pt 那一档兜底）`；页面管理 `内存标注先写回 → pdf-lib 旋转/删除/提取/合并/拆分覆盖写回 → 重载并从 /Annots 重新导入标注（旋转页坐标按 /Rotate 经 pdf-geo.ts 换算）`。
 
 自动更新通道（v0.82 起是**三拍而不是检测层**）：`首页按下「检查更新」 → Rust 侧 reqwest 取清单 → `check`
 认出 `available` 并把那份 `Update` 对象带在状态里 → 按下「下载更新」 → `download(onProgress)` 把字节取进
@@ -4205,14 +4332,32 @@ cargo check        # Rust 后端检查（在 src-tauri 下）
       按下落盘枚数 ctrl `[0,0,0]` vs exp `[40,40,40]`，两支落定之后都把 40 枚写回且哈希同为 `bc482236284a04`）、
       前端结构 **26 / 0**（B0 自检 6/6）、变异 **17 枚 + 正控制 / BAD 0 / 多打中 0**、CDP dev **26 / 0、页面异常 0 条**、
       `cargo test --lib` **97 / 0 / 11**（Rust 一个字没动）
-- [ ] **导入失败之后写回一直被拒，直到重新打开这份文件**（v0.81 的实现**故意**留下的代价，不是回归）：读到一半抛错时
+- [x] **导入失败之后写回一直被拒，直到重新打开这份文件**（v0.81 的实现**故意**留下的代价，不是回归）：读到一半抛错时
       那本账**不认这一份 doc**（读到的不是整片，认了就是在允许抹），而这一头**没有"重试导入"那一路**——用户能做的只有
       关标签再开。要做的是给标注导入一条显式重扫（以及它该由谁触发：按钮、还是下一次 Ctrl+S 之前自动补一次）
+      ——**v0.83 已补**：侧栏「标注」页签的「↻ 重试导入标注」把手重跑同一趟 `readAnnos`（幂等门借那本按身份记的就绪账、
+      在途门按身份收放、成功那句挂在状态栏 ⇒ release 可见的取反面）；"该由谁触发"选了**用户按把手**而不是 Ctrl+S 之前
+      自动补（见下一条）；**重跑只治瞬时失败**——确定性坏结构按多少趟也开不了门（新开未勾项）
 - [ ] **闸门拒绝期间，用户这一趟的意图无法兑现**（v0.81 只做到"不抹"，没做到"不丢"）：Ctrl+S 那一路抛出去之后画的那枚
       仍在内存、● 仍挂着（dev R4 钉这一格），等待是合法的；而页面操作那一路（旋转/删除/提取/合并/拆分）当场失败
       （dev Q1/Q2：`rot:[0,0]` + 「旋转失败: 标注还没读全…」），**落定之后要不要自动补做那一刀没有判据**
+      ——**v0.83 明写不做排队补做**（变异 M16 钉住不许有），本轮只把"等待有个尽头"做出来（把手）；**按页部分写回也不做**
+      （那要把就绪账从整片降到逐页，等于拆掉「宁可拒也不抹」的前提）
 - [ ] **`annosWritable` 是 DEV-only 观测量** ⇒ "这一按该不该被拒"在 release 上只能由状态栏那句 + 盘上枚数判；
       本轮 release 因此**只量了 pre-doc 那一档**，而 ● 那一格在这一臂根本没有编辑动作（只写日志不判）
+      ——**v0.83 起"读全"那一档有了 release 可见的取反面**（重试成功那句「标注已读全：N 枚，现在可以存回文件了」挂在
+      状态栏）；"拒绝"那一档的观测面没变（失败句 + 盘上枚数）
+- [ ] **确定性坏结构的失败重跑开不了门**（v0.83 的实测边界）：十二枚坏形状里十一枚根本到不了失败态（pdf.js 逐页容错，
+      `outcome:gated-open`），唯一真失败的 b12（`/Pages` 树一枚 kid 指向错类型，pdf.js 数 4 页而 pdf-lib 认 3 页）
+      按多少趟把手也只有"再说一次同一句拒绝" ⇒ 重试的收益**只属于瞬时失败**（网络盘抖动、文件正被别的进程写），
+      坏结构那一头要的仍是"重新打开"
+- [ ] **release 上没有"重跑真的又跑了一趟"的可观测面**（v0.83 量死的缺口）：console 代理不存在（`ctrl-B4c`/`exp-B4c`
+      `kidTotal:0`——pdf.js 那句失败是**返回值**而不是 console error）⇒ 这一格从此只能由 dev（`getPage` 计数）/
+      结构 / 变异判；卖点落在 dev 独有观测面时要明写这一条（v0.79 那条纪律的又一次兑现）
+- [ ] **只跑了 4 页与 12 页两枚件**（v0.83）：2300 页那一档的失败重跑没有量过，而"重跑一趟的代价"恰好在那一档最大
+      （整趟逐页 `getPage` + `getAnnotations` 从头再来）
+- [ ] **`docProxy` 是量具唯一的注入口**（v0.83 的取舍而不是缺陷）：S12 钉住它只住在 DEV 块内、不许泄漏到 release
+      （M15 响），代价是产品为量具多一枚 DEV-only 出口
 - [ ] **reload 换出新 doc 那一段只由结构判据钉住**（S4 全仓无销账 + M10 换 doc 时销账要响）：dev 腿最终那一跑
       （`dev3.log` 26 条）**没有 L 段**，读到 `FAIL L0 {"读全":true,"内存":0}` 的是被推翻的那一版 ⇒ 这一格的形状证据
       属于"错法被量到"而不属于"最终版跑过"

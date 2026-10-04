@@ -221,6 +221,9 @@ function PdfViewer({ tab }: Props) {
   const [annosRead, setAnnosRead] = useState<PDFDocumentProxy | null>(null)
   const annosReadRef = useRef(annosRead)
   annosReadRef.current = annosRead
+  // 在途的那一趟：一枚把手可能被连着按，而两趟同时跑会把同一批注解各收一次进内存（实测 4 → 7）。
+  // 它记的是「这一份 doc 的读有没有人在跑 + 要不要收摊」，与上面那本就绪账是两件事（那本只认读完）
+  const annosRunRef = useRef<{ doc: PDFDocumentProxy; cancelled: boolean } | null>(null)
   const toolRef = useRef(tool)
   toolRef.current = tool
   const selRef = useRef(selAnno)
@@ -469,14 +472,24 @@ function PdfViewer({ tab }: Props) {
   }, [doc])
 
   // —— 标注读侧：导入既有 Highlight/Text 注解（PDF 左下原点 rect → 左上原点存储）——
-  useEffect(() => {
-    if (!doc) return
-    let cancelled = false
+  // 这一趟抽成一份具名函数而不是整段写在 effect 里：侧栏那枚「重试导入」要重跑的就是同一趟，
+  // 而不是第二份实现（两份会分叉——一处说读全了，另一处还在读）
+  const readAnnos = (d: PDFDocumentProxy, announce = false) => {
+    // 幂等门直接借 v0.81 那本就绪账：这一份 doc 已经整片读完 ⇒ 不再读第二遍；
+    // 在途的那一趟由 annosRunRef 认（连着按两下只跑一趟——两趟并跑会把同一批注解各收一次，实测 4 → 7）
+    if (annosReadRef.current === d) return
+    const running = annosRunRef.current
+    if (running && running.doc === d && !running.cancelled) return
+    const run = { doc: d, cancelled: false }
+    annosRunRef.current = run
+    // 失败那句要能说「读到第几页」：页号在 catch 那一刻是知道的（实测坏 /Pages 树那一件停在第 4 页）
+    let page = 0
     ;(async () => {
       const out: PdfAnno[] = []
-      for (let n = 1; n <= doc.numPages && !cancelled; n++) {
-        const p = await doc.getPage(n)
-        if (cancelled) return
+      for (let n = 1; n <= d.numPages && !run.cancelled; n++) {
+        page = n
+        const p = await d.getPage(n)
+        if (run.cancelled) return
         // /Rect 是"未旋转 + 左下原点"，内存统一存"显示空间（已旋转 + 左上原点）"，先按 rotation:0 拿基准尺寸
         const rot = normRot(p.rotate ?? 0)
         const vp0 = p.getViewport({ scale: 1, rotation: 0 })
@@ -530,24 +543,42 @@ function PdfViewer({ tab }: Props) {
           }
         }
       }
-      if (!cancelled) {
+      if (!run.cancelled) {
         // 收尾是「并」不是「替」：窗口内用户新画的那几枚已经在内存里，整片替换就把它们抹掉了
         setAnnos((cur) => [...out, ...cur])
         // 从这一刻起这本账才认这一份 doc（写回那一处比的就是这个对象）；与上面那一句同批提交 ⇒ 账开的时候内存已经是整片
-        setAnnosRead(doc)
+        setAnnosRead(d)
+        // 只有重试那一路说这一句（自动那一趟成功时界面本来就没什么可宣布的）。它是**状态栏**上的话，
+        // 所以「闸门开了」这件事从此在 release 上也看得见，不必再只靠 DEV-only 那枚 annosWritable
+        if (announce)
+          setStatus(
+            out.length
+              ? `标注已读全：${out.length} 枚，现在可以存回文件了`
+              : '标注已读全：这份文件里没有可导入的标注，现在可以存回文件了'
+          )
       }
     })().catch((e) => {
       // 标注导入是后台补做：拆除时的抛话不入账，其余要说——侧栏空着而不说为什么空，用户只能猜
-      if (!cancelled) {
+      if (!run.cancelled) {
         console.error(e)
-        if (!isTeardown(e)) setStatus(failStatus(e, '标注读取失败'))
+        if (!isTeardown(e)) setStatus(failStatus(e, page ? `标注读取失败（读到第 ${page} 页）` : '标注读取失败'))
       }
-      // 读到一半就失败 ⇒ 这本账**故意不记这一份 doc**（读到的不是整片）：写回继续被拒，直到重新打开这份文件
-      cancelled = true
+      // 读到一半就失败 ⇒ 这本账**故意不记这一份 doc**（读到的不是整片）：写回继续被拒，
+      // 而拒的时候侧栏有「重试导入」那一枚把手可按——这一句替代 v0.81 的「直到重新打开这份文件」
     })
+      .finally(() => {
+        // 只收回自己那一趟：被清理作废的旧趟不能把正在跑的新趟的账抹掉（否则下一次点击又会双跑）
+        if (annosRunRef.current === run) annosRunRef.current = null
+      })
+  }
+
+  useEffect(() => {
+    if (doc) readAnnos(doc)
     return () => {
-      cancelled = true
+      const r = annosRunRef.current
+      if (r && r.doc === doc) r.cancelled = true
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [doc])
 
   const pageEl = (n: number) =>
@@ -1544,6 +1575,10 @@ function PdfViewer({ tab }: Props) {
       rangeMode: () => rangeModeRef.current,
       // 写回闸门那一句的取反：真机腿判「这一按该不该被拒」就吃这一枚（null doc 也算不许写）
       annosWritable: () => docRef.current !== null && annosReadRef.current === docRef.current,
+      // 注入用（只有这一枚钩子是给腿而不是给界面的）：真机腿要造「读到第 N 页就失败、下一趟又能读全」
+      // 这一档——那需要碰这一份 doc 本身，而它在产品里没有任何别的出口。拿到它之后腿改它的 getPage，
+      // 于是失败可以只持续一趟，从而量到「重试真的开得了门」那一格（release 上没有这一档，只能由 dev 量）
+      docProxy: () => doc,
       annos: () =>
         annos.map((a) => ({
           kind: a.kind,
@@ -1727,6 +1762,9 @@ function PdfViewer({ tab }: Props) {
 
   const est = sizes[1] ?? { w: 595, h: 842 }
   const numPages = doc?.numPages ?? 0
+  // 闸门此刻关着（这一份 doc 还没整片读完）⇒ 写回会被拒，而侧栏要给用户一枚能办事的把手而不是让他猜。
+  // 吃的是**状态** annosRead 而不是那枚渲染期镜像：这里要的是「界面此刻承不承认已读全」
+  const annosPending = doc !== null && annosRead !== doc
 
   return (
     <div className="editor-pane">
@@ -1941,33 +1979,44 @@ function PdfViewer({ tab }: Props) {
                 </div>
               </div>
             ) : sideTab === 'annos' ? (
-              annos.length ? (
-                <div className="pdf-annos">
-                  {annos.map((a) => (
-                    <div key={a.id} className={`pdf-anno-item${selAnno === a.id ? ' sel' : ''}`}>
-                      <span className="pdf-anno-dot" style={{ background: a.color }} />
-                      <button
-                        className="pdf-anno-jump"
-                        title={isShape(a) ? SHAPE_LABEL[a.kind] : a.kind === 'note' ? (a.content ?? '') : (a.text ?? '')}
-                        onClick={() => {
-                          setTool('anno')
-                          setDrawTool(null)
-                          setSelAnno(a.id)
-                          gotoPage(a.page)
-                        }}
-                      >
-                        <span className="pdf-anno-page">P{a.page}</span>
-                        <span className="pdf-anno-sum">{isShape(a) ? SHAPE_LABEL[a.kind] : a.kind === 'note' ? a.content : a.text || '(高亮)'}</span>
-                      </button>
-                      <button className="pdf-anno-del" title="删除标注" onClick={() => removeAnno(a.id)}>
-                        ✕
-                      </button>
-                    </div>
-                  ))}
-                </div>
-              ) : (
-                <div className="pdf-outline-empty">选中文字后可加高亮或便签</div>
-              )
+              <>
+                {annosPending &&
+                  btn(
+                    '↻ 重试导入标注',
+                    () => {
+                      if (doc) readAnnos(doc, true)
+                    },
+                    false,
+                    '标注没读全的这段时间里存盘与页面操作都会被拒（现在写是在覆盖文件）。点这里重跑导入；正在读时按它不会另起一趟，已经读全了也不会重读'
+                  )}
+                {annos.length ? (
+                  <div className="pdf-annos">
+                    {annos.map((a) => (
+                      <div key={a.id} className={`pdf-anno-item${selAnno === a.id ? ' sel' : ''}`}>
+                        <span className="pdf-anno-dot" style={{ background: a.color }} />
+                        <button
+                          className="pdf-anno-jump"
+                          title={isShape(a) ? SHAPE_LABEL[a.kind] : a.kind === 'note' ? (a.content ?? '') : (a.text ?? '')}
+                          onClick={() => {
+                            setTool('anno')
+                            setDrawTool(null)
+                            setSelAnno(a.id)
+                            gotoPage(a.page)
+                          }}
+                        >
+                          <span className="pdf-anno-page">P{a.page}</span>
+                          <span className="pdf-anno-sum">{isShape(a) ? SHAPE_LABEL[a.kind] : a.kind === 'note' ? a.content : a.text || '(高亮)'}</span>
+                        </button>
+                        <button className="pdf-anno-del" title="删除标注" onClick={() => removeAnno(a.id)}>
+                          ✕
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <div className="pdf-outline-empty">选中文字后可加高亮或便签</div>
+                )}
+              </>
             ) : outline.length ? (
               <div className="pdf-outline">
                 {outline.map((o, i) => (
