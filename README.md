@@ -236,7 +236,8 @@
   同期修正异步确认框时序：`preventDefault()` 必须同步调用、用户同意后再自行 `destroy()`，
   否则"未保存确认"形同虚设
 - **后续发布项**：自动更新通道（v0.45 已出**检测层**：本机签名的清单 + 提示 + 跳下载页；应用内下载安装
-  仍待真实更新源托管决策）、macOS 打包
+  仍待真实更新源托管决策——**这句 v0.82 起改口**：下载与安装两拍已接线、闸立在「装」之前，而更新源托管
+  **仍未定**，所以端点继续是占位 URL）、macOS 打包
 
 ## 表格保真补全（v0.18）
 
@@ -3412,7 +3413,137 @@ publish）是异步的** ⇒ 在两者之间按 Ctrl+S，内存此刻**不是文
   只吃形状）；另存为／导出 pptx 之后"再编辑 ● 该不该亮"、多枚 `.opd` 同时脏时每枚各自的时钟与认领关系、「已自动
   保存 X」有悬停而手动那句仍没有次数账、DocEditor 剩四枚裸 `setTimeout`、`SheetEditor.exportPdfTo` 内联那份拼句
   公式、在途锁按 `tabId` 不按 `path`、`SAVE_BUSY_MS` / `AUTO_BASE_MS` / `AUTO_MAX_MS` 是单机数、写侧前缀三家不
-  统一、toast 体系照旧未建；自动更新的应用内下载安装与 macOS 打包按指令继续等信号
+  统一、toast 体系照旧未建；自动更新的应用内下载安装（v0.82 已兑现，见下一节）与 macOS 打包按指令继续等信号
+
+## 装那一步前面只问一句「还有几处没保存」：下载与安装分两拍，闸立在「装」之前（v0.82）
+
+起点是 v0.45 那一版的边界——只有检测层（`check` 一次、说一句话、给一枚「前往下载页」），权限也只给
+`updater:allow-check`。本轮把它接成**检测 + 下载 + 安装**三拍。用户拍板了两件事：**在真机上真跑一次「装」**
+（装进一次性目录、验完自行卸载），以及**更新源托管本轮不定**（`tauri.conf.json` 的端点继续是 GitHub releases
+占位 URL）。产品改动只有**三枚文件**：`src/lib/update.ts`（+102 行）、`src/components/Home.tsx`（+72 行）、
+`src-tauri/capabilities/default.json`（+2 枚权限）；**Rust 侧一个字没动**（`cargo test --lib` 与 v0.63~v0.81
+同一份基线），没有新增时钟、没有新增分层。
+
+- **前置实测①（`tmp/x82/leg1.out`，0.81 件 + 本地 http 源）先量"这一路原来能不能走"**：P1 首页那句
+  `版本 0.81.0`、P2 `check` 认得出 `available:true / 0.99.0 / current 0.81.0`（检测层本来就是通的）、
+  **P3 `download` 直接被拒**——`updater.download not allowed. Permissions associated with this command:
+  updater:allow-download, updater:default`，`ms=5`、**`events=0`** ⇒ 权限是这一路的真门，而拒得比网络还早
+  （五毫秒、一枚事件都没发出去，所以"下载失败了"绝不能被写成网络问题）；P4 `%TEMP` 快照
+  `before=1246 after=1246 freshInWindow=[]`（这一趟当然零落点，它顺手证明了这把尺认得出落点）；
+  P5 同版本 `available:false`（v0.45 那格去重仍成立）
+- **前置实测②（`leg2.out`，本轮注入件 + 三枚权限 + 真签名的 10 MiB 包）量的是"下载到底做了什么"**：
+  Q0 包体 `10485760` 字节、`GOOD_SHA=5560571d481f9992` 与 `BAD_SHA=c359c0a0db2b61f9`（同一把私钥的签名盖在
+  **另一份字节**上，这就是"被动过"那一档的夹具）；Q2 good 那趟 `ok` `468ms` `events=42`；
+  **Q3 `{finished:0, progressCount:41, chunkSum:10485760, chunkMin:8023, chunkMax:417792, gapMax:12, longCount:0}`**
+  ⇒ 逐枚 `Progress.chunkLength` **加起来正好等于包体大小**，所以字节数不必去读 `Finished`；
+  **Q5 `landed=[]`——`%TEMP` 里一个新落点都没有**；Q7 bad 那趟 `The signature verification failed`（`426ms`、
+  `events=43`）⇒ **验签是下完整个包之后才报的**，这一路必然已经花掉了流量；Q9 依旧 `landed=[]`
+- **前置实测③（`leg3.out`）把"这些字节住在哪儿"量成一格**：宿主工作集 **68.2 → 78.5 MiB（下载之后）→
+  68.4 MiB（`close()` 之后）** ⇒ 下载期内存在 Rust 侧、`close()` 就是把它放回去的那把手；同一趟
+  `finished:1 progressCount:32`——**与②那趟的 `0/41` 不一致**，所以**事件枚数与 `Finished` 是否出现都不能当判据**
+  （本轮只吃 `chunkSum` 等于包体这一条形状）；P5/P8 两次 `%TEMP` 快照 `freshCount=0`
+- **前置实测④（`leg4.out`）量的是闸读的那本账**：首页 `dirtyCount 0` → 进编辑器打一个字「闸」→ **`dirtyCount 1`
+  且 ● 上屏** → 回首页 `dirtyCount` 仍是 1 且 `home-visible true` ⇒ 那句拒绝能在首页读得到工作区的账，
+  不需要编辑器挂着
+- **前置实测⑤（`leg5.out`）是给判据定尺子的**：按下「检查更新」之前全窗按钮枚举 **33 枚**（模板画廊里九枚都叫
+  「新建」）⇒ 任何"这枚按钮在不在屏上"的判据都必须 scope 到 `.home-update`，整窗枚举会把画廊读成更新排
+- **本轮唯一的架构决定：闸立在「装」之前，不立在「下载」之前**，而这道题的四条形状都不是可选的：
+  ● **下载前面不立闸**——`download()` 只把字节取进 Rust 内存并验签、一个字节不写盘（②的 `landed=[]` 与③的
+  工作集涨落是同一件事的两面），给它立闸买不到任何东西，反而把"先看看这包多大"也一起挡了（M16 给下载也立一道
+  ⇒ 响 S3g）；● **装前面必须立闸**——Windows 的 `install()` 以 `std::process::exit(0)` 收尾，那一步之后界面
+  说什么都没人听见，所以那句拒绝必须排在调用**之前**而不是错误处理里（M1 把它搬到调用之后 ⇒ 响 S3a/S3b；
+  M2 整个拆掉 ⇒ 响 4 条；M3 让它永远放行 ⇒ 响 S3d/S3e）；● **第二道闸是「用户明确按下」而不是复选框**——
+  「装上并重启」只在 `dl.stage==='downloaded'` 之后出现（A3b/B3b 那格量的就是这个：两拍分得开）；
+  ● **不做假取消**——JS 侧没有 abort 通道，所以「下载中…」是**禁用**的那一枚按钮而不是"取消"，
+  界面不许诺兑现不了的事
+- **三枚权限而不是 `updater:default`**：`capabilities/default.json` 从 `+allow-check` 扩到
+  `+allow-check +allow-download +allow-install`（S5a/S5b；M5 少一枚 `allow-install` ⇒ 响 S5a，
+  M6 给成宽口径 `updater:default` ⇒ 响 S5a/S5b）；**同时不用一步到底的 `downloadAndInstall`**
+  （M4 ⇒ 响 S6a）——两拍分开是界面形状，也是"不可逆那一步要有第二次按下"的形状，交给一步到底的 API 就没了；
+  `install({restartAfterInstall:true})` 显式写出（它本是插件默认值，写出来才成为可被钉住的一格）
+- **端到端 A 臂（`e2e-A.log`，**真签名 + 真下载 + 脏账之下按「装上并重启」** / 26 通过 / 0 失败）**：
+  A2 认出新版本 0.99.0、**A3b 下载之前屏上没有「装上并重启」**、A5 在途那一拍只有「下载中…」、
+  A6 下好说的是 `已下载 9.7 MiB · 签名校验通过`、A7 第二拍入口这才出现、Ap 进度 **52 档**严格递增的整数百分比
+  `[1,2,3,5,…,100]`；然后是本轮要买的那一格——**Ag 按下之后的屏序是两枚**
+  `[err:""] → [err:"还有 1 处未保存改动，先保存再装（装上会立刻退出应用）"]`，A10b 那句里带着**枚数**「1 处」
+  （闸读的是真账不是有无），**A11 拒了之后「装上并重启」仍在**（保存之后可以再来一次，状态没被打回 idle）、
+  **A12 整排里没有「正在安装…」**（闸排在 install 之前而不是错误处理里）、**A13 30 秒后进程仍然活着**、
+  **A14 一次性目录根本没被建出来**（`injDir=false`）、A15 期间 `%TEMP` 零枚新的 updater 临时目录、
+  A16 生产目录逐格没动（2 行 vs 2 行）
+- **端到端 B 臂（`e2e-B.log`，**干净账之下真的按下去装** / 21 通过 / 0 失败）**：B9 那枚按下之后
+  **Bg 屏序第二排是「正在安装…」**，而 **B9b 那句「未保存改动」从头到尾一次都没上屏**（每排读到的都是空串
+  `["",""]`——干净账不拦，这是 A10 的负向配对）；**B10 客户端真的退出**（Δ=1868ms，此后界面说什么都没人听见，
+  这正是闸必须排在它之前的原因）、**B11 一次性目录里真的装出了 `openoffices.exe`**（Δ=0ms）、
+  **B12 装上那支的 `ProductVersion` = `0.99.0`**（装的是清单指的那一包，不是手边那支）、
+  B13 `restartAfterInstall` 真的把新版拉起来（pid=30536）、B14 卸载退出码 0、
+  **B15 一次性目录卸干净**（`gone=true 等=502ms`）、B16 `%LOCALAPPDATA%/OpenOffices` 全程 2 行 vs 2 行；
+  Bp 进度 61 档 `[0,1,3,…,100]` ⇒ **档位数量本身不判**（本机两臂 52 / 61 档，判的是"整数、单调、≥3 档"）
+- **release A/B 三臂（两支真 exe + 一支注入件 / CTRL 7 / EXP 7 / NET 11 = 25 通过 / 0 真失败 / 0 显式 SKIP）：
+  对照件＝本轮改动前从 HEAD 当场出的那支 0.81 exe**（`tmp/x82/ctrl081/`，保留原进程名）——
+  ● **https 那两臂买的是"检测层没回归"**：两支在同一把尺下说的都是诚实归因那句
+  「更新源没有返回发布清单…」（私有仓库的 Release 对匿名访问就是 404），**都没说成「已是最新版本」**
+  （失败与"没更新"必须分开，这是 v0.45 立的那条），C4/E4 ⇒ available 没到 ⇒ **「下载更新」「装上并重启」都不出门**
+  （新两拍不泄漏到走不通的源上），C5/E5 静置 10 秒那句没被后台任何东西改动（**不轮询这一格界面侧也证一次**）；
+  ● **"什么时候才联网"这一格只有本地源说得了**（请求是 Rust 侧 reqwest 发的，页面的 Resource Timing 与 CDP
+  都看不见），NET 臂用构建期 `-c` 注入 `http://127.0.0.1:8123` 的那支测试件跑：
+  **N1 启动 + 静置 12 秒，源上 `0` 枚请求**、N4 清单请求**恰好 1 枚**且排在按下之后
+  （`at=1791093690335`，`good/latest.json`）、**N5 按下「下载更新」之前包体 `0` 枚**、
+  N7 包体 REQ **1 枚**、到达时刻 `1791093690641`（晚 306ms）、N7b 那一枚确实按规格吐完（`200`、
+  `url===file`、`endsWith('-setup.exe')`）、**N8 整趟恰好 2 枚**（清单 1 + 包体 1，没有第三种请求）
+- **验证（五腿 + 编译）**：端到端两臂真机 **47 / 0**、release A/B **25 / 0 / 0 SKIP**、前端结构 **41 / 0**
+  （B0a~B0e 自检 5/5 + S1a~S10c + G1/G2，吃**剥掉注释并归一成 LF 之后**的源文：五枚导出各只在一处、
+  四支新的失败归因字面都在、`available` 那一支**带着 `Update` 对象**走（S2b/M13）、闸的位置与身份与唯一
+  （S3a~S3h）、三枚插件调用各只被调一次、三枚权限齐且**不给宽口径**（S5a/S5b）、**全仓没有
+  `downloadAndInstall`**（S6a）、没有 `restartAfterInstall:false`、**仓库配置里没有 `insecure` 且端点仍是 https
+  占位且没有密钥材料**（S7a/S7c）、只有 Home 引这一层（S8a）、整数百分比一次（S9a/S9d）、
+  同句跳过 setState（S10a）、「装上并重启」只在下好之后（S10b）、两拍两枚按键（S10c））、
+  变异检查 **19 枚（17 + 2 正控制）/ BAD 0 / 多打中 0 / 基线 struct=41/41**（M1~M17 逐一造"闸搬进调用后"
+  "闸拆掉""闸空转""一步到底 API""少一枚权限""给成 `updater:default`""仓库塞 insecure""私钥路径写进源文"
+  "启动就联网""进度不取整""界面节流拆掉""别的头照抄这道闸""available 不带 Update""去掉签名归因"
+  "去读 Finished 的 payload""下载前面也立闸""Home 自己再写一句拒绝文案"；P0 什么都不改、
+  P1 注释里写着判据的字面都必须响 0 条）、CDP dev **23 / 0、页面异常 0 条**、
+  `cargo test --lib` **97 通过 / 0 失败 / 11 ignored**（与 v0.63~v0.81 同一份基线——Rust 本轮一个字没动）
+  + tsc exit 0 与 `pnpm tauri build --no-bundle` 绿（openoffices v0.82.0）；五腿都在**版本号 bump（三处对齐）之后**跑
+- **dev 腿只吃形状**（v0.66 那条老规矩第七次兑现）：**D6 一枚「下载更新」在 StrictMode 双订阅下只换来 `1` 枚包体
+  REQ**（整趟源上 1 枚 ⇒ 没有把下载发两遍——这一格只有 dev 有，release 上没有双挂载这一档）；
+  D9 验签失败说的是**归因那一句**「更新包签名校验未通过：包体与清单里的签名不匹配（被动过、或不是发布那把私钥签的），
+  已在写盘之前拒绝」（不是"下载失败"、也不是静默），**D10 验签没过 ⇒「装上并重启」门都出得来不了**（排里回到
+  「下载更新」）、D11 进程仍然活着（拒绝是返回一句话，不是把应用带下去）、D12 bad 那趟包体**确实下过 1 枚**
+  （所以那句不是没下就瞎报）；D18 切走工作区再回来，`{那块:"版本 0.82.0检查更新",排:"检查更新"}` ⇒
+  **下载那一拍的状态确实丢了**（本轮记账的那条代价第一次量成形状）；D19 页面异常 0 条且**这本账整趟还在**。
+  dev 那枚 `已下载 10.0 MiB` 与端到端的 `9.7 MiB` 是**两份不同夹具**，不是回归
+- **本轮撞到八处量具坑，都不是产品**：① **`serve.log` 的 REQ 行是"请求到达"、GET 行是"响应写毕"**——限速下两者
+  差约 3 秒，所有排序型判据（"这一枚排在按下之后"）必须吃 REQ，否则会把"发出得晚"读成产品慢；
+  ② **`fx/mode.txt` 是一枚指针而不是目录**——`mode=bad` 时清单请求仍写 `good/latest.json`、由服务端转读
+  `bad/latest.json`，所以**按服务端文件前缀认包体**会把清单误认成包体，认包体只能按 URL 里带不带 `-setup.exe`；
+  ③ **N7b 第一版把"这条判据写下时那一档 mode=pkg"当成了产品前提**——good 模式下同一格读到真 `200` 却报 FAIL；
+  要判的是"那一枚包体按规格吐完了"，与 mode 无关；④ **`aux` 是 Windows 保留设备名**（`aux.ps1` 写不出来也
+  读不到）；⑤ **`aux82.ps1 -Mode kill` 的参数是 `-Path`，`-Id` 是静默空操作**（打印 `KILLED=` 空、进程全在）——
+  被 idle-kill 的 dev 树由此留下了继续占 1420 的 vite（v0.78 那笔账的同族，只是这次在 1420 那一头）；
+  ⑥ **CDP 对已经死掉的页面是 stall 而不是报错**；⑦ **React 的 setState 不在 `b.click()` 返回前 flush** ⇒
+  "按下之后那一排出没出这句话"必须吃页内 MutationObserver 的**序列** + `samples.length>=2` 的非空转守卫
+  （A10 / B9b / B9c 用的是同一把尺，两臂各当一次正控制）；⑧ **"文本一变就返回"的谓词第二次踩**——
+  第一拍抓到的是中间态「检查中…」（改判成"三种终态都算定"），另同一族的是 D19：`window.__oofErr ?? []`
+  在被整页重载抹掉时会读成"0 条异常"，那是**没有这本账**不是没有异常，所以加了 `<no-book>` 哨兵；
+  还有一条流程性的：长跑腿**必须 tee 到文件**——本轮 dev 腿第一次"看起来停在 D18"其实是显示截断，
+  复跑 `EXIT=0 / 23 PASS / RESULT 行在尾` 才敢报数（先证明量具跑完，再报结论）；**这笔账要如实记着：
+  release A/B 的 https 两臂（CTRL 7 / EXP 7）正是在学到这条之前跑的，它们的逐条判据只出在终端输出里、
+  没有落盘（`ab-net.log` 只有 NET 臂那 11 条），所以上面那两行的数字属于"当场读到"而不属于"日志可复核"；
+  这两臂判的都是句子与按键的可见形状（没有回归），复跑成本低，下一轮动这块时先重跑再说数**
+- **本轮没动的，量出来记着**（已开进路线图）：**Home 与 Workspace 互斥挂载 ⇒ 切走再回来，检查与下载两拍的状态
+  一起丢**（D18 量成形状；要不要把这份状态搬到 store 那一层没有判据）；**下载没有 abort 通道 ⇒ 不做假取消**
+  （在途只能等它自己结束或失败）；**装前那道闸只认脏账枚数**，不认"关闭脏标签时那条确认"的既有链路，而**没有
+  路径的新建脏标签也算一处**（有意宽口径——宁可多拦一次）；**`available` 那一档在仓库占位端点下真机根本到不了**
+  （全靠构建期 `-c` 注入 `http://127.0.0.1` + `dangerousInsecureTransportProtocol`，这两样只允许出现在测试件的
+  注入配置里，仓库配置零枚 = S7a/M7）；**更新源托管仍未定＝端点继续占位**；**签名私钥无备份＝最大单点风险**
+  （丢了就再也给不出更新；它只在 `~/.tauri`，不入仓、不进日志、不进 argv）；**真装只在一次性目录验过**，
+  生产目录全程未动；**整数百分比节流是本机 32~41 枚事件下量的**（慢网、更大的包没量，而两臂 52/61 档本身不判）；
+  **mac 侧 `install()` 的形状未量**（本轮全在 Windows，那一头是 `kill app + 替换 .app`，退出语义与 `exit(0)`
+  不同）；**"一枚按键换几枚下载请求"只有 dev 能判**；**release 上"未保存闸"的可观测面只有状态栏那句话 +
+  一次性目录没被建出来**（没有 dev 钩子可读 `dl.stage`）；另存为／导出 pptx 之后"再编辑 ● 该不该亮"、
+  多枚 .opd 同时脏时每枚各自的时钟与认领关系、「已自动保存 X」有悬停而手动那句仍没有次数账、DocEditor 剩四枚裸
+  `setTimeout`、`SheetEditor.exportPdfTo` 内联那份拼句公式、在途锁按 `tabId` 不按 `path`、`SAVE_BUSY_MS` /
+  `AUTO_BASE_MS` / `AUTO_MAX_MS` 是单机数、写侧前缀三家不统一、toast 体系照旧未建；macOS 打包按指令继续等信号
 
 ## 性能（v0.3）
 
@@ -3476,8 +3607,8 @@ src-tauri/            Rust 后端
   src/xlsx_chart.rs   zip + quick-xml 直读 chartN.xml + drawing 锚点，系列值按实时网格解析；has_charts 只做 zip 文件名嗅探
   src/ods.rs          ODS 双向：write_ods（async 外壳 + write_ods_sync，共用 xlsx 载荷 → ODF zip，样式/尺寸去重与合并、冻结 settings.xml、公式 of:= 换算）+ read_ods_styles（直解边框/对齐/换行/列宽行高/字族/隐藏 collapse/重复单元格/合并跨度/公式 + settings.xml 冻结）+ **ODF 规则只记账不硬读**（content.xml 里有 `table:database-range`/`table:content-validations`/`table:conditional-format` 就说得出"暂未读入"，自产物不许凭空记出一条账）；**v0.61 在这一趟里多认一处住址**：`ods_default_font_of(styles.xml)` 只从 `<style:default-style style:family="table-cell">` 那条的 `<style:text-properties>` 取字族与字号（`family="text"` 那支、具名 `<style:style style:name="Default">` 那一层、兄弟元素 `<style:table-cell-properties>` 上的字号都不算），`read_ods_styles` 的返回形状随之变成 `(fmts, Option<DefaultFont>)`；`odf_font_pt` 带 `pt` 后缀就按**磅字面直取**，只有真不是 pt 的那一档才走 `odf_len_to_px`（那一趟带取整）；这一层**不归一化**（抹掉文件明写的字族＝换字族，v0.57 那条），0／负数不在读点拦（由唯一消费点兜）；写侧新增 `default_style_xml`——载荷没说话就整层不写（不盖章），说了就落 `<style:default-style style:family="table-cell"><style:text-properties style:font-name=… fo:font-family=… fo:font-size="Npt"/>` 且排在具名 style 之前；ODF 靠样式继承链表达这一层，故 xlsx 那套 `seed_font`/「同一档不重复声明」在这里用不上；**v0.62 添 `read_ods_cell_side`（批注与超链接的双向）**：这两样在 ODF 里**都是格子的孩子**（xlsx 那头是四件独立部件 + rels），所以一趟 `content.xml` 扫描按表名收齐、交回同一枚 `xlsx_cell_side::SideRead`——`flush_table` 把每张表的账目并进 `out`；读侧的判据主体是"落不准就不硬派"：`covered-table-cell` 与 `number-columns-repeated ≠ 1` 的格说不准这两样属于谁 ⇒ 各记一条账而不猜列位，同一格第二条链接「只收第一条」，`href` 缺席／既不像 §9.2.1 的内部地址（`#表名.格`，`#` 与 `.#` 两种写法、`$` 绝对引用都认）又不带 RFC-3986 scheme ⇒「位置认不出来」而不是造一条点不开的死链，`dc:date`/`creator-initials` 由 `in_meta` 挡在正文外，空正文的气泡不收，表名 `unesc` 一次（与 calamine 那一头对得上才接得进 `by_sheet`），批注内层的 `text:a` 只贡献显示文字（不是格子链接）；写侧 `annotation_xml`（排在同格正文 `<text:p>` **之前**，ODF §9.1.4 的子元素定序——`office:display` 只在说 true 时落笔、`svg:width/height` 只在载荷给那味时写且**单位必带**（`px_to_odf_len`），没署过名就不写 `dc:creator`）+ `text_p_xml`（有链接时外套 `<text:a xlink:type="simple">`，`office:title` ＝悬停提示）+ `odf_href`（载荷的 `location`"表名!A1"折成 `#表名.格`，没说表名用本表补）+ `odf_table_ref`（含空格/点/单引号的表名裹 `'…'`、`''` 是引号本身）+ `used_namespaces`（`dc`/`svg`/`xlink` **按需声明**，载荷没用到的命名空间不进根元素）；`note_at`/`link_at`/`side_at` 三个取样点让"只有批注没有值"的格子也长得出（`row_used` 与 `max_row` 都算上这两味）；**v0.63 给这一头补上回写账目通道**——`write_ods`/`write_ods_sync` 的返回从 `Result<(), Error>` 变成 `Result<Vec<String>, Error>`（与 `write_xlsx_sync` 同一条契约，`fs.ts` 的 `writeOds` 随之回 `string[]`），`ods_side_accounts` 说的就是这一趟**摆不下**的那几枚（批注没正文／落在被盖住的格上、链接两头都没目标／落在被盖住的格上、同格多于一枚的"只写了第一条"并报实际条数），顺序是先批注后链接、各按载荷条目序、重复那两枚记在最后；判据**只有一批**（`note_writable`/`link_writable`/`cell_covered` 合成 `note_written`/`link_written`），格子渲染、`used_namespaces`、`ods_side_accounts` 三处共读，于是"报的账"、"字节里少掉的那几枚"与"命名空间声明"是同一批而不是各写各的；`bubble_dim` 是本轮新立的一条——尺寸说 0／负数／NaN 时 `px_to_odf_len` 写不出成立的 `svg:length`，**那一味不写，`xmlns:svg` 也跟着不声明**（为一条根本不落笔的属性盖命名空间就是白盖章）；同一轮由规格腿量清楚了两件事：`covered-table-cell` 里塞批注/正文/链接**文法全放行**（那三条"未写入"的账依据是规格正文的语义＋我们读侧的归因分寸，不是 RelaxNG），而**同一格第二枚 `office:annotation` 是文法逼的**（`table-table-cell-content` 只给一枚 optional）、两条链接只是约定；"链接挂在数字格上会把该格读回成文本"这条代价与桥有关、与格式无关，v0.62 钉成断言、本轮照旧
   src/pdf.rs          export_pdf 命令：with_webview → WebView2 PrintToPdf（四边距英寸四元组 + 纸张宽高/朝向，cfg windows）；**纸张换算是唯一的**：`page_box(w,h)` 把"想要的纸面尺寸"折成 PrintSettings 的"竖版边长 + Orientation"（v0.50，宽>高才转横向，等边不算横向），背景/页眉页脚/四边距/纸宽纸高/方向五步设置失败**一律原样报出**（静默退默认＝"导出成功但纸不对"）；file_len + read_range（raw IPC 返回 Vec<u8>，async + spawn_blocking，供大 PDF 分段读）
-  src/lib.rs          OPEN_EXTS 与 argv 文件过滤纯函数、take_startup_files 命令、single-instance 文件转发；插件链只注册 updater 的 check 能力（前端仅授 `updater:allow-check`，下载与安装没接线）
-  capabilities/       dialog + fs 权限与路径作用域 + updater:allow-check（只给检查，下载/安装未接线）
+  src/lib.rs          OPEN_EXTS 与 argv 文件过滤纯函数、take_startup_files 命令、single-instance 文件转发；插件链只注册 updater 的 check 能力（前端仅授 `updater:allow-check`，下载与安装没接线——**v0.82 改口：这一行代码一个字没动，`.plugin(tauri_plugin_updater::Builder::new().build())` 注册的是插件本体，接线接的是 capabilities 那头的三枚权限，Rust 侧本轮零改动**）
+  capabilities/       dialog + fs 权限与路径作用域 + updater 的**三枚**权限（`allow-check` / `allow-download` / `allow-install`，v0.82 起；**故意不给宽口径 `updater:default`**——它会把"删掉某一枚以测试"这种变异变成静默通过，而这三枚的差别正是这一路的权限边界）
 src/                  React 前端
   store.ts            标签页 / 最近文件 / 主题（zustand）；`openTab` 里有**两行**按 `tab.path && tab.kind === …` gating 的预取（`prefetchWorkbook` 管表格、`prefetchPdf` 管 PDF；v0.67 起是表格那一头，v0.68 把 PDF 那一头接上同一层：读件请求在开标签那一刻就出门，而不是等编辑器挂载），`closeTab` 里有两行对称的撤账（`dropWorkbook`/`dropPdf`，关掉的是那枚还没人取的标签就撤掉在途的账，**撤账跟着标签的格式走**）；两处都只调用 `lib/open-prefetch.ts` 而不内联那份字典，也不在这一层碰读侧实现（判据 S1–S5）
   App.tsx             全局快捷键、拖拽打开、文件关联打开（启动 argv + 单实例转发）、关闭确认、懒加载路由；dev 钩子另加 `__oofFail(cmd, args)`（v0.64：原样发起一次命令调用并把失败时用户会看到的那串话交回，冒烟据此问"写侧真失败怎么说"而不必经过我们自己的读侧）
@@ -3535,9 +3666,17 @@ src/                  React 前端
   lib/open.ts         路径→标签 打开 / 带确认关闭
   lib/open-prefetch.ts 开标签那一刻就把表格的读件 IPC 发出去（v0.67，纯模块、零 React 零 DOM，所以 Node 可直测）：`prefetchWorkbook(path)` 发一次并留在途字典、`takeWorkbook(path)` **取走即失效**（载荷是几 MB 的对象图，留着就是第二份账而编辑器只要它一次；拿不到就交回 null 让挂载点自己发，**不假设外壳一定先跑**）、`dropWorkbook(path)` 给 `closeTab` 撤账（别让一叠没人要的字节挂在图上）；`keyOf` 按「反斜杠→正斜杠 + 忽略大小写」归一（Windows 的路径写法不止一种，argv 与文件对话框给的分隔符不同，不归一就会让 prefetch 命中不了）；`p.catch(() => {})` **只挡 unhandled rejection 不吞失败**——原样的 rejection 留给真正的读者，由它按 v0.64 那一层说人话（真机冒烟 S6/S7/S8 判的就是这条通道没把归因绕过去）；注释里留着那条把串行归因说死的实测：**发出 `invoke` 后立刻占住主线程 200ms，那次请求在 Resource Timing 里的起点仍是发出那一刻** ⇒ 串行不是 WebView2 的脾气，是发得太晚；只服务表格这一头（PDF 读字节后还要按区间补读，先把整叠字节取回来正好与那条闸门相反；文档/演示慢的是随后的解析而不是读）**⇒ v0.68 改口：现在是两条通道、三条规矩只写一处**——`put/take/drop` 泛化成 `<T>`，`workbooks`／`pdfs` 各一张表，本轮新增的是调用点而不是第四第五道规矩；PDF 这一头预取的不是整叠字节而是 `preparePdfSource` 那**一次决定**（所以那条"与闸门相反"的顾虑由闸门自己持有而不由这一层猜），表格那头省的是排队的大头（首开 1550→1300ms 一档）而 PDF 这头按发布包 5 趟中位只省 26~70ms（首屏真读的只有 64KB 或几 MB 整本的那一次），另有一条实测留给下一轮：`read_range` 的**累计**耗时在改后涨到 3~4 倍而枚数不变（92/92）、末次出门更早 ⇒ 那是并行度上去了不是活变多；文档/演示照旧不进这一路
   lib/sync.ts         最近文件端到端加密同步（WebCrypto PBKDF2-SHA256 → AES-256-GCM，.oosync 信封）
-  lib/update.ts       自动更新的**检测层**（v0.45）：`checkForUpdate()` 动态导入 updater 插件走一次 `check`，任何失败都收敛成 `{state:'failed'}` 不往外抛（抛出去的表现就是"点了没反应"）；`describeError` 按插件 error.rs 的真实字面把"源上没清单/没配端点/非 https/缺本平台条目/签名/base64/日期/连不上"归成中文，认不出的一律原样带出不编原因；`infoOf` 从 `rawJson` 里取自定义字段 `download_page`，只认 http(s) 才给按钮
+  lib/update.ts       自动更新的**检测 + 下载 + 安装三拍**（v0.45 出检测层，v0.82 出后两拍；这一层是**唯一持有这条链路的文件**，只有 Home 引它）：`checkForUpdate()` 动态导入 updater 插件走一次 `check`，任何失败都收敛成 `{state:'failed'}` 不往外抛（抛出去的表现就是"点了没反应"）；`describeError` 按插件 error.rs 的真实字面把"源上没清单/没配端点/非 https/缺本平台条目/签名/base64/日期/连不上"归成中文，**下载与安装那四支（`signature verification failed` / `not allowed. permissions associated` / `download request failed` / `called before`）是 v0.82 实测来的字面**，认不出的一律原样带出不编原因；`infoOf` 从 `rawJson` 里取自定义字段 `download_page`，只认 http(s) 才给按钮；**`available` 那一支必须带着 `Update` 对象走**（S2b/M13——不带它就下不动，而这是这一路最容易悄悄断的一格）；`progressLine(received, total|null)` 的节流单位是**整数百分比**（实测一趟 32~41 枚分块事件，同句原样返回 ⇒ 界面那头的 `setState` 自己退出；没有包体大小时说的是「已下载 X MiB（更新源未给出包体大小）」而不是猜一个百分数）；`downloadUpdate` 逐枚累加 `Progress.chunkLength`（实测其和**正好等于**包体大小）、**不碰 `Finished` 的 payload**（那一枚在两趟里分别给出 0 与 1 枚 `Finished`，所以事件枚数与它是否出现都不作判据）；`installBlock(dirtyCount)` 是「装」前面那道闸的**唯一一句话**、返回 null 才许往下走，它是纯函数而不是内联 if——这句话必须排在 `install()` **之前**（Windows 那一拍以 `std::process::exit(0)` 收尾，进了里面再报错就没人听见）；`installUpdate` 显式写出 `restartAfterInstall:true`（成功在 Windows 上不返回，所以 `{state:'launched'}` 记的是"命令发出去了"而不是"界面还在"）；`closeUpdate` 是重新检查前放内存的那把手（实测宿主工作集 68→78→68 MiB）
   lib/fail-msg.ts     用户可见失败的**唯一**归因处（v0.64，纯函数、零 DOM、Node 直测）：`describeFailure` 走一张按"具体在前"排的 12 条判据表（第三方库专属词形 → `os error N` 通用尾巴；**v0.65 补的是 pdf-lib 那一档**——`is encrypted`/`EncryptedPDFError` 说的是"标注与页面管理这层走 pdf-lib，而它不解密 ⇒ 只能看、不能在这里改"，与 pdf.js 那一档"设了口令"分得清清楚楚，后者跟着改口成「刚在密码面板上按了取消，或这一趟没能问到密码」并告诉用户 ↻ 会再问一次——从前那句只能说"没有输密码的地方"，现在真的问过了），`probeOf` 把 `Error` 的 `name` 也拼进匹配串并整串转小写（pdf.js 那类只靠 `name` 分类的档才有得匹配、大写 EOCD 与大写不命中是同一条判据的两面）；三种出法按去处分——`failText`（只出一句中文，给状态栏里那些本就很窄的账目位）、`failDialog`（中文一句 + `（原始信息：…）`，归因没命中时**不重复**原话，同一段话出现两次只会让人以为有两个不同的原因）、`failStatus`（可见那一行是 `prefix: 中文`，换行后挂原话）；`statusText`/`statusTip` 是那枚字符串的两把拆刀，于是"悬停能看原话"不必再多一份状态、也就多不出"文字说 A 而悬停出 B"的分叉；`failRaw` 只给原话（`isTeardown` 用它分辨"关标签拆掉的 transport"与"文件真读不出"）；判据表里每一条命中的都是**真机上量出来的原串**而不是"通常长这样"，表头的注释记着两条实测结论（本机 Windows 那一层已经是中文 ⇒ 真正看不懂的只有第三方库那几档；**路径过长报的是 `os error 3`** 而不是专门的"文件名太长"⇒ 那一句话必须把"太长"也带上）；`known` 那一位的用处是"干净文案一条都不归因"——没有失败就不许造句子，结构腿 D 段判的就是这一条；**v0.73 只多一处调用点而没多一条判据**——`.odoc` 那 30 秒自动保存的 `prefix` 是「自动保存失败」而不是「保存失败」（A1a 钉前缀、M4 钉"不许退回空 catch"），归因表一个字没改：只读那一档的原串（`failed to open file at path: …` + `os error 5`）v0.64 就在表里了，这一轮只是那条中文第一次说给"没有按下任何键"的用户听（定时器自己写盘、自己失败）
-  components/         Home（最近文件 + 从模板新建画廊 + 版本号与"检查更新"） / Workspace / SheetEditor（保存按 .xlsx/.ods/.csv 三分流，打开时把读到的规则经门面放回界面并把两侧账目显示在状态栏；**「页面设置」面板（v0.52）**——纸张/方向、六条边距（毫米）、缩放与"缩放到 N 页宽"、六个开关、打印区域与重复标题行列（可「用当前选区」「用选区首行/首列」按门面选区给）、手动分页符（按 Excel 的 `brk@id` 说法：这一行/列自己起新页）、页眉页脚三框 + 六枚格式码 + 奇/偶/首页三版 + **两枚缺省开着的开关（「页眉页脚随文档缩放」「与页边距对齐」，v0.55：勾着＝写 `null` 不声明、取消＝写 `false`，旁注一次说清哪一档我们照 Excel 乘了字号、哪一档两边差一圈）**；「确定」写进 `printRef` 侧通道、「清除这张表的设置」把它整个删掉、面板里的错把确定灰掉，做不到的那几条以账目形式随草稿说在面板上（v0.53 改了语气：页高档与居中已经接线，只剩起始页码真做不到；v0.54 之后偶数页那一版也不再是账——它真的印在偶数页上，面板这几句全部转述 `hfAndPageNumberNotes` 那一份文案）；**导出这一侧多了一段实测循环（v0.53）**——计划里勾了「缩放到 N 页高」或「上下居中」的表才走：建一次 → `measurePrintLayout` 离屏量 → `planSheetFit` 压档/算留白 → 带 `zooms` 重建，最多五趟，定档后把居中留白写回**同一份 DOM** 再交导出；账目分两头记（"压到 27%"那句要说在压它的那一趟、每张表占一格由后趟覆盖前趟，居中的账反过来只在最终缩放那份实测上算数）；DEV 门面钩子随这轮加 `printSet(表名, 载荷|null)`（落笔处＝面板「确定」那一行）与 `printHtml(zooms)`（把**将要上纸的那份 HTML**交出去，让脚本自己挂起来量真实布局）；**v0.57 工作簿默认字体走第三枚侧通道 `defaultFontRef`**（不放 Univer 快照——`IWorkbookData.defaultStyle` 在 core 里零读取、引擎兜回硬编码 Arial 11，而 `wb.save().defaultFont` 实测恒为 `null`）：加载时挂上 `dump.defaultFont`、换标签复位、在 `payloadWithCharts` 那一枚漏斗里回贴，于是存盘与导出 PDF 共吃一份而界面渲染不说谎；**v0.59 只把 DEV 钩子摊宽**（生产行为一个字没动）：`printHtml()` 的返回值多三枚——`defaultFont`（侧通道里那一层本体，冒烟据此分辨"文件说的"与"我们兜的"）、每张计划里的 `basePx`（计划算出的正文底数）、`baseVars`（那份 HTML 里所有 `--oof-print-base-size:<px>` 的含值列表，按张核）；**v0.60 添第四枚侧通道 `sheetFormatRef`**（按表名持有 `SheetFormat`，与前三枚同一脾气：加载时从 `sheets[].sheetFormat` 挂上、换标签复位、改名随 `migrateSheetName` 一起迁、在 `payloadWithCharts` 的漏斗里回贴，且 `if (f && !sheet.sheetFormat)`——快照自己说出来的那一张永远赢）；这一枚与 `defaultFontRef` 方向相反：`IWorksheetData.defaultRowHeight` 在 Univer 里是**活口**（喂了就界面认、而 Excel 根本不认它），所以这里**只收不放**——不喂编辑器也不喂纸面，只为存盘时原样落回；DEV 钩子 `printPlan()` 因此多一枚 `sheetFormats`，冒烟据此问得出"这一层交回了什么"，而结构测试那头的钉是"五个消费点里 `sheetFormat` 出现零次"；**v0.62 只撤两行**——`hasSide` 那枚判定与「ODS 暂不含批注与超链接」那句账目，因为 `.ods` 这两样现在真读得回也写得出，而另三句 ODS 账（图表／三类规则／页面设置）与 CSV 那句照旧立着（结构腿判的就是"撤干净了且只撤了这一句"）；**v0.63 只动两行**——`.ods` 那一路的 `await writeOds(...)` 改成 `writeNotes.push(...(await writeOds(path, payload)))`，于是写侧的账与 xlsx 那头走同一条汇合（`[...lost, ...writeNotes]` → 状态栏 `已保存（第一条，另有 N 条说明）`），另一行是把注释里的例子换成"规则摆不进 OOXML、批注落在被盖住的格上"；拼句的公式、`lost` 那三句 ODS 账与 CSV 那句一个字没动（本轮没有新桥：`sheet-cell-side.ts` 的取与放早就是格式无关的）；**v0.67 只动两行**——挂载点那一句 `readXlsx(tab.path)` 换成 `takeWorkbook(tab.path) ?? readXlsx(tab.path)`（这一趟的 IPC 早在外壳开标签那一刻就发出去了，这里只是把它取来用；取不到——不是从路径开的、或已被别处取走——才自己发一次，**不假设外壳一定先跑**），另一行是那条注释改口（它还写着 v0.35 的"先把 IPC 发出去，实例同时在造"，而现在发得比挂载更早）；dev 下 `React.StrictMode` 的双挂载会让第一趟消费掉 prefetch 而第二趟走自备那一路，于是**开发模式开一次表格标签读到两次件**（真机 S5 量到 `read_xlsx` 的条目 2→4）——这是 dev 独占的形状不是缺陷，判据钉的是"取在前、发在后"那个 `??` 顺序而不是"只发一次"，反过来为 dev 好看而阻塞第二趟就是拿生产行为换开发控制台；**v0.69 存盘那一段开始说话**——`busy.arm()` 排在 `wb.save()` **之前**（那是同步块的头，门晚一纳秒都量不到它）、`await pickSaveFile` 之前 `busy.cancel()` 之后取完路径再 `busy.arm()`（另存为挑路径可以挂几分钟，那句「正在保存…」留着就是说谎）、`setStatus(saveDoneText(notes))` 排在把成功交回那一路而 `finally` 里再撤一次门、失败那一句走 `failStatus(e, '保存失败')` **把「正在保存…」原地换掉**（不清就等于让用户以为还在写盘，原话照旧留在悬停里）；收尾那句的清除定时器 `doneClearRef` 挂在存盘最开头，于是同一个标签补跑的那一趟会**先把上一趟的「已保存」撤掉**（不撤的话第二趟还在写而屏上已经写着"已保存"，那是这一轮最像成功的错）；接线只有 `busy` 那三行与 `saveTab` 那两行，句子与时钟一律在 `lib/save-status.ts` / DocEditor（页面设置含分栏/页码格式、分页参考线、分页符、表格与图片上下文工具条、粘贴成图、查找替换面板、字体族·字号、缩进工具条与 Ctrl+]/[、上下标 X²/X₂、表格上下文条的底纹色与竖排对齐（上/中/下）、脚注/尾注（工具栏插入 + 文末分区编辑与定位/删除，打印时文本框换静态块）、版本历史·自动保存、模板 seed、状态栏字数节流；打开 .docx 保真导入优先、mammoth 兜底，保存按 .odoc/.odt/.docx 各自格式原地落盘；**v0.71 把这一头分成两层**——
+  components/         Home（最近文件 + 从模板新建画廊 + 版本号与"检查更新"；**v0.82 在这一头多了 `dl` 那台四态机**
+                      `idle/downloading/downloaded/installing` 与**两拍两枚按键**——「下载更新」在 `idle`、
+                      「装上并重启」**只在 `downloaded`**（S10b：入口的出现本身就是第二道闸），在途那一枚是
+                      **禁用**的「下载中…」而不是"取消"（JS 侧没有 abort 通道，不许诺兑现不了的事）；
+                      拒绝那句走 `dl.note` 而不是内联文案（S3h/M17：Home 里不许自己再写一句，否则那句话有两份），
+                      闸读的是 `useApp.getState().tabs.filter((t) => t.dirty).length`（前置实测④：回首页仍读得到
+                      工作区的脏账，不需要编辑器挂着）；重新检查先 `closeUpdate(上一份)` 再问（把下载占的内存还回去）；
+                      **代价记着**：Home 与 Workspace 互斥挂载 ⇒ 切走再回来 `update`/`dl` 两份 state 一起丢，
+                      已下好的那 10 MiB 白下（dev 腿 D18 量成形状） / Workspace / SheetEditor（保存按 .xlsx/.ods/.csv 三分流，打开时把读到的规则经门面放回界面并把两侧账目显示在状态栏；**「页面设置」面板（v0.52）**——纸张/方向、六条边距（毫米）、缩放与"缩放到 N 页宽"、六个开关、打印区域与重复标题行列（可「用当前选区」「用选区首行/首列」按门面选区给）、手动分页符（按 Excel 的 `brk@id` 说法：这一行/列自己起新页）、页眉页脚三框 + 六枚格式码 + 奇/偶/首页三版 + **两枚缺省开着的开关（「页眉页脚随文档缩放」「与页边距对齐」，v0.55：勾着＝写 `null` 不声明、取消＝写 `false`，旁注一次说清哪一档我们照 Excel 乘了字号、哪一档两边差一圈）**；「确定」写进 `printRef` 侧通道、「清除这张表的设置」把它整个删掉、面板里的错把确定灰掉，做不到的那几条以账目形式随草稿说在面板上（v0.53 改了语气：页高档与居中已经接线，只剩起始页码真做不到；v0.54 之后偶数页那一版也不再是账——它真的印在偶数页上，面板这几句全部转述 `hfAndPageNumberNotes` 那一份文案）；**导出这一侧多了一段实测循环（v0.53）**——计划里勾了「缩放到 N 页高」或「上下居中」的表才走：建一次 → `measurePrintLayout` 离屏量 → `planSheetFit` 压档/算留白 → 带 `zooms` 重建，最多五趟，定档后把居中留白写回**同一份 DOM** 再交导出；账目分两头记（"压到 27%"那句要说在压它的那一趟、每张表占一格由后趟覆盖前趟，居中的账反过来只在最终缩放那份实测上算数）；DEV 门面钩子随这轮加 `printSet(表名, 载荷|null)`（落笔处＝面板「确定」那一行）与 `printHtml(zooms)`（把**将要上纸的那份 HTML**交出去，让脚本自己挂起来量真实布局）；**v0.57 工作簿默认字体走第三枚侧通道 `defaultFontRef`**（不放 Univer 快照——`IWorkbookData.defaultStyle` 在 core 里零读取、引擎兜回硬编码 Arial 11，而 `wb.save().defaultFont` 实测恒为 `null`）：加载时挂上 `dump.defaultFont`、换标签复位、在 `payloadWithCharts` 那一枚漏斗里回贴，于是存盘与导出 PDF 共吃一份而界面渲染不说谎；**v0.59 只把 DEV 钩子摊宽**（生产行为一个字没动）：`printHtml()` 的返回值多三枚——`defaultFont`（侧通道里那一层本体，冒烟据此分辨"文件说的"与"我们兜的"）、每张计划里的 `basePx`（计划算出的正文底数）、`baseVars`（那份 HTML 里所有 `--oof-print-base-size:<px>` 的含值列表，按张核）；**v0.60 添第四枚侧通道 `sheetFormatRef`**（按表名持有 `SheetFormat`，与前三枚同一脾气：加载时从 `sheets[].sheetFormat` 挂上、换标签复位、改名随 `migrateSheetName` 一起迁、在 `payloadWithCharts` 的漏斗里回贴，且 `if (f && !sheet.sheetFormat)`——快照自己说出来的那一张永远赢）；这一枚与 `defaultFontRef` 方向相反：`IWorksheetData.defaultRowHeight` 在 Univer 里是**活口**（喂了就界面认、而 Excel 根本不认它），所以这里**只收不放**——不喂编辑器也不喂纸面，只为存盘时原样落回；DEV 钩子 `printPlan()` 因此多一枚 `sheetFormats`，冒烟据此问得出"这一层交回了什么"，而结构测试那头的钉是"五个消费点里 `sheetFormat` 出现零次"；**v0.62 只撤两行**——`hasSide` 那枚判定与「ODS 暂不含批注与超链接」那句账目，因为 `.ods` 这两样现在真读得回也写得出，而另三句 ODS 账（图表／三类规则／页面设置）与 CSV 那句照旧立着（结构腿判的就是"撤干净了且只撤了这一句"）；**v0.63 只动两行**——`.ods` 那一路的 `await writeOds(...)` 改成 `writeNotes.push(...(await writeOds(path, payload)))`，于是写侧的账与 xlsx 那头走同一条汇合（`[...lost, ...writeNotes]` → 状态栏 `已保存（第一条，另有 N 条说明）`），另一行是把注释里的例子换成"规则摆不进 OOXML、批注落在被盖住的格上"；拼句的公式、`lost` 那三句 ODS 账与 CSV 那句一个字没动（本轮没有新桥：`sheet-cell-side.ts` 的取与放早就是格式无关的）；**v0.67 只动两行**——挂载点那一句 `readXlsx(tab.path)` 换成 `takeWorkbook(tab.path) ?? readXlsx(tab.path)`（这一趟的 IPC 早在外壳开标签那一刻就发出去了，这里只是把它取来用；取不到——不是从路径开的、或已被别处取走——才自己发一次，**不假设外壳一定先跑**），另一行是那条注释改口（它还写着 v0.35 的"先把 IPC 发出去，实例同时在造"，而现在发得比挂载更早）；dev 下 `React.StrictMode` 的双挂载会让第一趟消费掉 prefetch 而第二趟走自备那一路，于是**开发模式开一次表格标签读到两次件**（真机 S5 量到 `read_xlsx` 的条目 2→4）——这是 dev 独占的形状不是缺陷，判据钉的是"取在前、发在后"那个 `??` 顺序而不是"只发一次"，反过来为 dev 好看而阻塞第二趟就是拿生产行为换开发控制台；**v0.69 存盘那一段开始说话**——`busy.arm()` 排在 `wb.save()` **之前**（那是同步块的头，门晚一纳秒都量不到它）、`await pickSaveFile` 之前 `busy.cancel()` 之后取完路径再 `busy.arm()`（另存为挑路径可以挂几分钟，那句「正在保存…」留着就是说谎）、`setStatus(saveDoneText(notes))` 排在把成功交回那一路而 `finally` 里再撤一次门、失败那一句走 `failStatus(e, '保存失败')` **把「正在保存…」原地换掉**（不清就等于让用户以为还在写盘，原话照旧留在悬停里）；收尾那句的清除定时器 `doneClearRef` 挂在存盘最开头，于是同一个标签补跑的那一趟会**先把上一趟的「已保存」撤掉**（不撤的话第二趟还在写而屏上已经写着"已保存"，那是这一轮最像成功的错）；接线只有 `busy` 那三行与 `saveTab` 那两行，句子与时钟一律在 `lib/save-status.ts` / DocEditor（页面设置含分栏/页码格式、分页参考线、分页符、表格与图片上下文工具条、粘贴成图、查找替换面板、字体族·字号、缩进工具条与 Ctrl+]/[、上下标 X²/X₂、表格上下文条的底纹色与竖排对齐（上/中/下）、脚注/尾注（工具栏插入 + 文末分区编辑与定位/删除，打印时文本框换静态块）、版本历史·自动保存、模板 seed、状态栏字数节流；打开 .docx 保真导入优先、mammoth 兜底，保存按 .odoc/.odt/.docx 各自格式原地落盘；**v0.71 把这一头分成两层**——
   **写手** `writeDocxTo`/`writeOdtTo`（只 `prosemirrorTo*Bytes` → `writeBytes` → `markRecent`，不碰 store、不发句子，
   DEV 冒烟钩子指向它们，判据 D7c/D7d 钉"写手自己不说那句话、不替标签记账"）与**动作** `saveOdoc`/`exportAs`
   （各自决定说什么、记不记账、失败走哪张面孔）：改前的形状是句子挂在写手身上，于是**文件真写进去了、说了「已保存（docx）」、
@@ -3674,6 +3813,19 @@ PDF 文件流：查看 `pdf 磁盘 → 小于 4MB 整本 readBytes / 大于 4MB 
 落定之后两支都把 40 枚写回、第二次落盘哈希同为 `bc482236284a04` ⇒ 正常那一路一个字没改坏。代价与余账写在路线图
 （导入失败后没有"重试导入"那一路；页面操作当场失败而不是排队等落定）））；四类编辑器的**存盘**那一路现在吃同一份收尾时钟）；文档导出 `@media print 排版（分栏/分页符/避免跨页折断）+ @page margin box 逐页页眉页脚页码 + 打印态纸面调色板（`color-scheme` 压回 light、主题色经变量换掉，v0.49）→ Rust export_pdf（PrintSettings 纸张与四边距；CSS `@page` 也真的说话，所以每条作业自己声明完整，见 v0.50）→ WebView2 PrintToPdf 落盘`；演示导出 `Deck → createRoot 离屏挂载 StaticSlide 分页 → 同上`；表格导出 `Univer 快照 → WorkbookPayload → lib/sheet-print-setup.ts 把那张「页面设置」翻成打印计划（纸面/四边距/缩放/打印区域/重复标题行列/手动分页符/列带/页眉页脚的 @page margin box）→ lib/sheet-print.ts 自绘 HTML 网格 → 同上（canvas 抓不到故走数据侧重排；计划同时喂 PrintToPdf 的 PrintSettings，两条通道同一组数，v0.51。**勾了「缩放到 N 页高」或「上下居中」时这份 HTML 先建后量再重建（v0.53）**——行高不在载荷里（默认行高由字体现算、声明过的只是下限、`zoom` 之后又不线性），只能离屏量真排版（`lib/sheet-print-measure.ts` + `pdfprint.measurePrintLayout`），`fitToPagesTallZoom` 按实测逐带贪心分页压出 1% 一档的缩放、`verticalCenterPadPx` 只在装得下的那一页给上留白，量稳了才把留白写回同一份 DOM 交导出）。**正文与页眉的底数吃同一层**（v0.59）：工作簿默认字体（`xl/styles.xml` 的 `cellXfs[0]→fonts`）一次读进载荷，`baseFontPt` 一处解析，页眉由 `@page` 的 margin box 乘出去、正文落在每张表 `<section>` 的 `--oof-print-base-size` 上被 `td` 的 `font-size` 吃掉，没说话时两处同落 11pt 那一档兜底）`；页面管理 `内存标注先写回 → pdf-lib 旋转/删除/提取/合并/拆分覆盖写回 → 重载并从 /Annots 重新导入标注（旋转页坐标按 /Rotate 经 pdf-geo.ts 换算）`。
 
+自动更新通道（v0.82 起是**三拍而不是检测层**）：`首页按下「检查更新」 → Rust 侧 reqwest 取清单 → `check`
+认出 `available` 并把那份 `Update` 对象带在状态里 → 按下「下载更新」 → `download(onProgress)` 把字节取进
+**Rust 侧内存**并**在那里验签**（实测 `%TEMP` 零枚新落点、宿主工作集 68→78→68 MiB，`Progress.chunkLength`
+逐枚累加正好等于包体大小）→ 下好了这才亮出「装上并重启」 → **两道闸**（① `installBlock(dirtyCount)`：未保存
+账不为 0 就返回一句话；② 这一枚按键本身就是"用户明确按下"，没有默认、没有超时）→ `install({restartAfterInstall:true})`，
+而 Windows 那一拍以 `std::process::exit(0)` 收尾**。这条链路的三个结构性事实决定了它的形状：**闸只能立在调用之前**
+（进了 `install()` 再说拒绝就没人听见），**下载前面不需要闸**（它不写盘、不改应用，立闸只会挡掉"先看看多大"），
+**"什么时候才联网"在页面上无从观测**（请求是 Rust 发的，Resource Timing 与 CDP 都看不见 ⇒ 只能由本地源带
+Node 毫秒戳的访问日志判，而 `dangerousInsecureTransportProtocol` 只允许出现在构建期注入给测试件的那份配置里，
+仓库配置永远说 https）。这一层不轮询、不做假取消（JS 侧无 abort），句子与时序全部在 `lib/update.ts` 一处，
+`Home` 只做亮与接线；Rust 侧本轮一个字没动（`.plugin(tauri_plugin_updater::Builder…)` 从 v0.45 起就是插件本体注册，
+扩的是 capabilities 那三枚权限）。
+
 ## 开发
 
 ```bash
@@ -3751,6 +3903,16 @@ cargo check        # Rust 后端检查（在 src-tauri 下）
 - [x] 自动更新通道（**检测层**，v0.45）：本机 Ed25519 密钥对签发的清单 + `check` 一次拿版本/说明/日期，
       有新版本就提示并**用浏览器打开下载页**；失败一律归成中文一句（源上没清单/非 https/缺本平台条目/签名不合…），
       认不出来的原样带出不编原因；不做应用内下载与安装，所以不需要先定更新源托管在哪
+      （**这句 v0.82 起改口**：应用内下载与安装已经接成两拍、闸立在「装」之前，而**更新源托管仍未定**——
+      本轮要的只是"源上真有一份签名清单时这条路走得通"，那由构建期注入的本地 http 源验，不依赖托管决策）
+- [x] 自动更新通道（**下载 + 安装层**，v0.82）：`check` 认出 `available` 之后由用户分两拍走——**下载**
+      （字节进 Rust 侧内存、按清单验签，实测 `%TEMP` 零枚新落点、宿主工作集 68→78→68 MiB，所以这一拍前面
+      **不立闸**）与**装上并重启**（Windows 那一拍以 `std::process::exit(0)` 收尾，所以那句"还有 N 处未保存改动"
+      **必须排在调用之前**；第二道闸就是"用户明确按下"这一枚——按钮只在下载完成后出现）；进度按**整数百分比**
+      刷（一趟 32~41 枚分块事件，同句原样返回 ⇒ `setState` 自己退出）；三枚权限
+      `allow-check/download/install` 而**不给宽口径 `updater:default`**、**不用一步到底的 `downloadAndInstall`**、
+      **不做启动后台轮询**、**不做假取消**（JS 侧无 abort）；真机端到端跑过一次真装：一次性目录装出
+      `ProductVersion=0.99.0` 的那支、`restartAfterInstall` 真把它拉起、随后自卸（生产目录全程逐格未动）
 - [x] 导出保真：**暗色主题的纸面与屏幕脱钩**（漏色有两条独立的路——`color-scheme:dark` 让浏览器把**画布底色**
       涂深而被 PrintToPdf 抓走（这条连 `background:#fff !important` 都压不住），以及主题色以 `var()`/字面量落在
       真元素上；治法是"屏幕色必须先穿过一枚 CSS 变量"+ 一段排在暗色段之后的 `@media print` 调色板，
@@ -4285,8 +4447,25 @@ cargo check        # Rust 后端检查（在 src-tauri 下）
 - [ ] **失败提示仍寄生在状态栏那一枚字符串上**：本轮的"一条字符串带两行"是**取舍**不是终局——四类编辑器各有
       自己的 `status` 生命周期，"三秒清除还是留着"的分歧本轮只在 `PdfViewer` 的 `pageOp` 改了一处，其余仍各自定时；
       独立的 toast／通知层（可复制原话、可停留）没建
-- [ ] 自动更新：应用内**下载并安装**（要先决策：真实更新源托管在哪、`updater:allow-download`+`allow-install` 权限、
-      以及"装完自动重启"的取舍——见 v0.45 一节末尾的接线清单）
+- [ ] **自动更新：`Home` 与 `Workspace` 互斥挂载 ⇒ 切走再回来，检查与下载两拍的状态一起丢**（v0.82 的 D18
+      第一次把它量成形状：`{那块:"版本 0.82.0检查更新",排:"检查更新"}`——已经下好的 10 MiB 白下了，得从
+      「检查更新」重走。要不要把这份状态搬到 store 那一层没有判据，本轮只记账不修）
+- [ ] **装前那道闸只认脏账枚数**：`tabs.filter((t) => t.dirty).length` 读的是同一本账，而"关闭脏标签时那条确认"
+      是另一条既有链路，两者没打通；**没有路径的新建脏标签也算一处**（有意宽口径——宁可多拦一次，代价是用户
+      可能不明白一张空草稿凭什么拦他）
+- [ ] **`available` 那一档在仓库占位端点下真机根本到不了**：私有仓库的 Release 对匿名访问就是 404，所以
+      "下载/安装"两拍的所有真机证据都来自**构建期注入**的本地 http 源（`-c` 喂端点 +
+      `dangerousInsecureTransportProtocol`，只允许出现在测试件上，仓库配置零枚 = S7a/M7）。
+      **更新源托管仍未定＝端点继续占位**；**签名私钥无备份＝最大单点风险**（丢了就再也给不出更新，
+      只在 `~/.tauri`，不入仓、不进日志、不进 argv）
+- [ ] **真装只在一次性目录里验过**：`%LOCALAPPDATA%/OpenOffices`（已装正式版）2 行 vs 2 行逐格相同、全程未动，
+      所以"装在用户真实安装上会怎样"（UAC、正在运行的另一份、快捷方式）本轮没有证据
+- [ ] **整数百分比节流是本机 32~41 枚事件下量的**：慢网、更大的包没量（端到端两臂的档位 52 / 61 只当形状看，
+      数量本身不判）；**mac 侧 `install()` 的形状未量**（那一头是"杀掉 app 再替换 `.app`"，退出语义与 Windows
+      的 `exit(0)` 不同，闸的位置要不要跟着变没有判据）
+- [ ] **"一枚按键换几枚下载请求"这一格只有 dev 能判**：StrictMode 双订阅下的 D6（`1` 枚包体 REQ）在 release 上
+      没有对应场景；另"未保存闸"在 release 上的可观测面只有状态栏那句话 + 一次性目录没被建出来（没有 dev 钩子
+      可读 `dl.stage`）
 - [ ] macOS 打包（需签名/公证凭据）
 
 ## License

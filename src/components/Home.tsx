@@ -8,7 +8,14 @@ import { encryptRecents, decryptRecents } from '../lib/sync'
 import { openPath } from '../lib/open'
 import { failText } from '../lib/fail-msg'
 import { TEMPLATES } from '../lib/templates'
-import { checkForUpdate, type UpdateState } from '../lib/update'
+import {
+  checkForUpdate,
+  closeUpdate,
+  downloadUpdate,
+  installBlock,
+  installUpdate,
+  type UpdateState,
+} from '../lib/update'
 
 const KIND_META: Record<DocKind, { label: string; icon: string; cls: string; desc: string; sample: string }> = {
   doc: { label: '文档', icon: '文', cls: 'kind-doc', desc: '富文本写作 · docx 导入导出', sample: '未命名文档' },
@@ -42,6 +49,12 @@ export default function Home() {
   const [syncStatus, setSyncStatus] = useState('')
   const [version, setVersion] = useState('')
   const [update, setUpdate] = useState<UpdateState | null>(null)
+  // 下载/安装这一拍的账：一句进度 + 一句拒绝或失败 + 走到哪一步（只有 available 之后才有人看它）
+  const [dl, setDl] = useState<{ stage: 'idle' | 'downloading' | 'downloaded' | 'installing'; line: string; note: string }>({
+    stage: 'idle',
+    line: '',
+    note: '',
+  })
 
   useEffect(() => {
     // 版本号取自安装包本身（不是构建时常量）：用户要确认的是"我装的这一个"新不新
@@ -51,8 +64,38 @@ export default function Home() {
   }, [])
 
   const runUpdateCheck = async () => {
+    // 上一份下载可能还挂在 Rust 侧内存里（实测一枚 10 MiB 包让工作集涨 10 MiB，close 才还回去）
+    if (update?.state === 'available') void closeUpdate(update.update)
     setUpdate({ state: 'checking' })
+    setDl({ stage: 'idle', line: '', note: '' })
     setUpdate(await checkForUpdate())
+  }
+
+  const runDownload = async () => {
+    if (update?.state !== 'available') return
+    setDl({ stage: 'downloading', line: '下载中…', note: '' })
+    const r = await downloadUpdate(update.update, (line) =>
+      // 整数百分比不变时这句话原样返回，setState 因此自己退出：一趟 32~39 枚分块只刷十几次
+      setDl((s) => (s.stage === 'downloading' && s.line === line ? s : { ...s, line }))
+    )
+    if (r.state === 'downloaded') {
+      setDl({ stage: 'downloaded', line: `已下载 ${(r.bytes / 1048576).toFixed(1)} MiB · 签名校验通过`, note: '' })
+      return
+    }
+    setDl({ stage: 'idle', line: '', note: r.message })
+  }
+
+  const runInstall = async () => {
+    if (update?.state !== 'available') return
+    const blocked = installBlock(useApp.getState().tabs.filter((t) => t.dirty).length)
+    if (blocked) {
+      setDl((s) => ({ ...s, note: blocked }))
+      return
+    }
+    setDl((s) => ({ ...s, stage: 'installing', note: '' }))
+    const r = await installUpdate(update.update)
+    // Windows 上成功的那一路不会回到这里（装完直接退出）；能回来的只有失败
+    if (r.state === 'failed') setDl((s) => ({ ...s, stage: 'downloaded', note: r.message }))
   }
 
   const exportSync = async () => {
@@ -137,6 +180,33 @@ export default function Home() {
                 ) : (
                   // 清单没写 download_page 时不猜地址：宁可不给按钮，也不给一个拼出来的 URL
                   <span className="update-status">该版本未提供下载页地址</span>
+                )}
+                {/* 两拍各一枚按键：下载不下完可以随时放着，装才是不可逆的那一步 ⇒「装上并重启」只在下好之后出现 */}
+                {dl.stage === 'idle' && (
+                  <button className="link-btn" onClick={() => void runDownload()}>
+                    下载更新
+                  </button>
+                )}
+                {dl.stage === 'downloading' && (
+                  <button className="link-btn" disabled>
+                    下载中…
+                  </button>
+                )}
+                {dl.stage === 'downloaded' && (
+                  <button className="link-btn" onClick={() => void runInstall()}>
+                    装上并重启
+                  </button>
+                )}
+                {dl.stage === 'installing' && (
+                  <button className="link-btn" disabled>
+                    正在安装…
+                  </button>
+                )}
+                {dl.line && <span className="update-status">{dl.line}</span>}
+                {dl.note && (
+                  <span className="update-status error" title={dl.note}>
+                    {dl.note}
+                  </span>
                 )}
               </>
             )}

@@ -1,10 +1,13 @@
-// 自动更新的**检测层**：问一次更新源，把结果说清楚，然后停在这里。
+// 自动更新的**检测层 + 下载安装层**：问一次更新源，把结果说清楚，再由用户决定下不下载、装不装。
 //
 // 两条刻意的边界：
-// ① 不下载、不安装。前端只拿到 `updater:allow-check` 这一条权限（见 capabilities/default.json），
-//    插件的 download/install 命令根本调不到；更新源在哪还没定（README 路线图），装更没意义。
-//    将来接应用内更新时要做三件事：加 `updater:allow-download` + `allow-install`、把端点换成正式源、
-//    在装完之前别再暴露"检查更新"以外的按钮。
+// ① 下载与安装分开两拍，而闸只立在「装」之前（v0.82 起）。
+//    为什么下载前面不立闸：`download()` 只把字节取进 Rust 侧内存并按清单验签，一个字都不往盘上写、
+//    也不改应用（实测：下载前后 %TEMP% 零枚新落点，宿主工作集涨约一个包体的量、close 之后回到原值）；
+//    而 `install()` 在 Windows 上以 `std::process::exit(0)` 收尾，那一步之后界面说什么都没人听见——
+//    所以「还有未保存改动就不许装」这句话必须排在调用之前，而不是排在错误处理里。
+//    前端权限相应从 `updater:allow-check` 扩到 `+allow-download +allow-install`（capabilities/default.json）。
+//    v0.45 那一版写的是「不下载、不安装，只给 allow-check」，这条边界在 v0.82 收窄为「装之前必闸」。
 // ② 不做启动时后台轮询。首页写着"数据不出本机"，那联网就只能由用户点这一下发起。
 //
 // 错误文案不是装饰：插件对"404""清单坏了""没配端点"给的分别是一句英文，用户看到英文原始报错
@@ -12,7 +15,7 @@
 // 否则私有仓库/未上传这些真实状态会被"暂无更新"掩盖成"更新功能坏了也没人知道"。
 
 import { getVersion } from '@tauri-apps/api/app'
-import type { Update } from '@tauri-apps/plugin-updater'
+import type { DownloadEvent, Update } from '@tauri-apps/plugin-updater'
 
 export type UpdateInfo = {
   version: string
@@ -26,7 +29,7 @@ export type UpdateInfo = {
 
 export type CheckResult =
   | { state: 'latest'; current: string }
-  | { state: 'available'; current: string; info: UpdateInfo }
+  | { state: 'available'; current: string; info: UpdateInfo; update: Update }
   | { state: 'failed'; message: string }
 
 /** 界面拿的是这个：检查结果之外还要能表达"正在问"（并入同一判别式联合，narrowing 才不会失效） */
@@ -68,6 +71,13 @@ export function describeError(e: unknown): string {
   if (l.includes('signed for version')) return '清单指向的更新包与签名里的版本不一致，已按防篡改策略拒绝'
   if (l.includes('could not be decoded')) return '清单里的签名不是合法 base64（应为 `.sig` 文件的原文）'
   if (l.includes('pub_date')) return '清单的 pub_date 不是 RFC3339 时间'
+  // 下面四条来自下载与安装这两拍（v0.82 实测字面），不是更新源的错，是我们自己走错了步骤或被拒
+  if (l.includes('signature verification failed'))
+    return '更新包签名校验未通过：包体与清单里的签名不匹配（被动过、或不是发布那把私钥签的），已在写盘之前拒绝'
+  if (l.includes('not allowed. permissions associated'))
+    return '这一步没有权限：capabilities 里缺 `updater:allow-download` 或 `updater:allow-install`'
+  if (l.includes('download request failed')) return `更新源没有返回更新包：${oneLine(s, 140)}`
+  if (l.includes('called before')) return '操作顺序错误：还没下载就发起安装，已拒绝'
   if (l.includes('authentication')) return '更新源要求凭据，匿名访问被拒'
   if (l.includes('timed out') || l.includes('timeout')) return `检查更新超时：${oneLine(s, 120)}`
   // reqwest 的连接类失败字面很杂（DNS、拒连、代理…），共同点是"没到源"
@@ -99,8 +109,84 @@ export async function checkForUpdate(timeoutMs = 15000): Promise<CheckResult> {
     const current = await getVersion()
     const u = await check({ timeout: timeoutMs })
     if (!u) return { state: 'latest', current }
-    return { state: 'available', current, info: infoOf(u) }
+    return { state: 'available', current, info: infoOf(u), update: u }
   } catch (e) {
     return { state: 'failed', message: describeError(e) }
+  }
+}
+
+/**
+ * 一句进度。百分比是这一路的节流单位：同一条原样返回，界面据此决定要不要 setState。
+ * 单位取整数的原因不是好看——实测一趟 32~39 枚 Progress 事件（两次同尺寸同源的包枚数就不同），
+ * 而"每枚事件刷一次界面"既没有信息也没有必要。
+ */
+export function progressLine(received: number, total: number | null): string {
+  if (!total) return `已下载 ${(received / 1048576).toFixed(1)} MiB（更新源未给出包体大小）`
+  return `下载中 ${Math.min(100, Math.floor((received / total) * 100))}%`
+}
+
+export type DownloadResult =
+  | { state: 'downloaded'; bytes: number }
+  | { state: 'failed'; message: string }
+
+/**
+ * 下载那一拍：字节进 Rust 侧内存、验签也在那里做，一个字节都不往盘上写（实测 %TEMP% 零枚新落点），
+ * 所以这一路前面没有闸。累计字节由 Progress 逐枚累加，包体大小只在 Started 给一次；
+ * Finished 的 payload 是 null（实测：读它的 data 会当场抛，所以这里根本不碰它）。
+ */
+export async function downloadUpdate(
+  update: Update,
+  onProgress?: (line: string, received: number, total: number | null) => void,
+  timeoutMs = 120000
+): Promise<DownloadResult> {
+  let received = 0
+  let total: number | null = null
+  try {
+    await update.download(
+      (e: DownloadEvent) => {
+        if (e.event === 'Started' && typeof e.data.contentLength === 'number') total = e.data.contentLength
+        if (e.event === 'Progress') received += e.data.chunkLength
+        onProgress?.(progressLine(received, total), received, total)
+      },
+      { timeout: timeoutMs }
+    )
+    return { state: 'downloaded', bytes: received }
+  } catch (e) {
+    return { state: 'failed', message: describeError(e) }
+  }
+}
+
+/**
+ * 「装」前面那道闸的唯一一句话：返回 null 才许往下走。
+ * 它是纯函数而不是内联 if——这句话必须排在 `install()` **之前**，因为 Windows 那一拍以
+ * `std::process::exit(0)` 收尾，进了里面再报错就没有人能听见了。
+ */
+export function installBlock(dirtyCount: number): string | null {
+  if (dirtyCount > 0) return `还有 ${dirtyCount} 处未保存改动，先保存再装（装上会立刻退出应用）`
+  return null
+}
+
+export type InstallResult = { state: 'launched' } | { state: 'failed'; message: string }
+
+/**
+ * 装那一拍。成功在 Windows 上不会返回（装完直接 exit），所以 `{state:'launched'}` 这一支
+ * 记录的是"命令发出去了"，而不是"界面还在"。restartAfterInstall 显式写出：它是插件默认值，
+ * 而这一路要的正是"装完就重启"，写出来也让它成为可被变异的一格。
+ */
+export async function installUpdate(update: Update): Promise<InstallResult> {
+  try {
+    await update.install({ restartAfterInstall: true })
+    return { state: 'launched' }
+  } catch (e) {
+    return { state: 'failed', message: describeError(e) }
+  }
+}
+
+/** 重新检查之前释放上一份下载：实测宿主工作集 68→78→68 MiB，close() 就是那把放回去的手 */
+export async function closeUpdate(update: Update): Promise<void> {
+  try {
+    await update.close()
+  } catch {
+    // 连点两次检查时上一份可能已经关过：这句话没有需要告诉用户的事，但它不能变成一记未处理的 rejection
   }
 }

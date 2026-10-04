@@ -55,7 +55,8 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())
-        // 只注册插件本身：应用侧只用到 check（前端仅授予 updater:allow-check），下载与安装没接线
+        // 只注册插件本体：check/download/install 三枚命令都由前端经 capabilities 的三权限分别授出（v0.82），
+        // 而"装"前面那道闸在 Home 那一侧——Windows 的 install 以 exit(0) 收尾，拒绝必须排在调用之前
         .plugin(tauri_plugin_updater::Builder::new().build())
         .manage(StartupFiles(Mutex::new(initial)))
         .invoke_handler(tauri::generate_handler![
