@@ -224,6 +224,8 @@ function PdfViewer({ tab }: Props) {
   // 在途的那一趟：一枚把手可能被连着按，而两趟同时跑会把同一批注解各收一次进内存（实测 4 → 7）。
   // 它记的是「这一份 doc 的读有没有人在跑 + 要不要收摊」，与上面那本就绪账是两件事（那本只认读完）
   const annosRunRef = useRef<{ doc: PDFDocumentProxy; cancelled: boolean } | null>(null)
+  // 在途那一趟的**渲染期**形状（ref 不触发重渲染）：重试把手在重跑期间要真禁用，而不是「按了只是静默 no-op」
+  const [annosScanning, setAnnosScanning] = useState(false)
   const toolRef = useRef(tool)
   toolRef.current = tool
   const selRef = useRef(selAnno)
@@ -482,6 +484,8 @@ function PdfViewer({ tab }: Props) {
     if (running && running.doc === d && !running.cancelled) return
     const run = { doc: d, cancelled: false }
     annosRunRef.current = run
+    // 置真不问 announce：首趟时把手还没渲染（annosPending 为 false），置了也无妨
+    setAnnosScanning(true)
     // 失败那句要能说「读到第几页」：页号在 catch 那一刻是知道的（实测坏 /Pages 树那一件停在第 4 页）
     let page = 0
     // 重跑那几秒不能挂着上一趟的「读取失败」句装没事（实测 2300 页档冷趟重跑要秒级）：
@@ -570,8 +574,12 @@ function PdfViewer({ tab }: Props) {
       // 而拒的时候侧栏有「重试导入」那一枚把手可按——这一句替代 v0.81 的「直到重新打开这份文件」
     })
       .finally(() => {
-        // 只收回自己那一趟：被清理作废的旧趟不能把正在跑的新趟的账抹掉（否则下一次点击又会双跑）
-        if (annosRunRef.current === run) annosRunRef.current = null
+        // 只收回自己那一趟：被清理作废的旧趟不能把正在跑的新趟的账抹掉（否则下一次点击又会双跑）。
+        // 清把手也吃同一枚卫兵——旧趟被换掉之后不得把新趟的「在途」抹回 false
+        if (annosRunRef.current === run) {
+          annosRunRef.current = null
+          setAnnosScanning(false)
+        }
       })
   }
 
@@ -1989,7 +1997,7 @@ function PdfViewer({ tab }: Props) {
                     () => {
                       if (doc) readAnnos(doc, true)
                     },
-                    false,
+                    annosScanning,
                     '标注没读全的这段时间里存盘与页面操作都会被拒（现在写是在覆盖文件）。点这里重跑导入；正在读时按它不会另起一趟，已经读全了也不会重读'
                   )}
                 {annos.length ? (
