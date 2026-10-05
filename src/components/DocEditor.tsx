@@ -42,7 +42,18 @@ import type { DocxImport } from '../lib/docx-fidelity'
 import { Toc } from '../lib/toc-extension'
 import { PageBreak } from '../lib/page-break-extension'
 import { Indent } from '../lib/indent-extension'
-import { CellStyle, IndentTableView } from '../lib/cell-style'
+import {
+  BORDER_STYLES,
+  BORDER_WIDTH_PT,
+  CELL_EDGES,
+  CellStyle,
+  EDGE_LABEL,
+  IndentTableView,
+  bdAttr,
+  borderCss,
+  borderParts,
+  type CellEdge,
+} from '../lib/cell-style'
 import { ParagraphStyle, ruleOf, type LineRule } from '../lib/paragraph-style'
 import { FindReplace, frPluginKey, activeIndexOf } from '../lib/find-replace'
 import { docTemplate } from '../lib/templates'
@@ -113,6 +124,8 @@ function DocEditor({ tab }: Props) {
   const [cmOpen, setCmOpen] = useState(false)
   const [draft, setDraft] = useState<{ cid: number; text: string } | null>(null)
   const [noteDraft, setNoteDraft] = useState<{ kind: NoteKind; text: string } | null>(null)
+  // 边框的待用档位（线型/磅/颜色）：点哪条边才把它写下去，所以这一份不进文档、只是工具条上的"笔"
+  const [bdSel, setBdSel] = useState({ style: 'solid', pt: 0.5, hex: '#000000' })
   const [, setTick] = useState(0)
   const [frOpen, setFrOpen] = useState(false)
   const [frQ, setFrQ] = useState('')
@@ -921,6 +934,77 @@ function DocEditor({ tab }: Props) {
     </button>
   )
 
+  const paraBorders = (edges: readonly CellEdge[], value: string | null) =>
+    editor.chain().focus().setParaBorders(edges, value).run()
+  const cellBorders = (edges: readonly CellEdge[], value: string | null) =>
+    editor.chain().focus().setCellBorder(edges, value).run()
+
+  /**
+   * 边框那一行：先选线型/粗细/颜色，再点要加的边（点已着边的边＝取消这一边）。
+   * 段落与单元格共用这一排，差别只在单元格多一枚「压掉」——表格自带一圈表级边框，
+   * 要显式写成 'none'（导出 w:val="nil"）才盖得住，段落的边框在读侧已经摊进这一段名下。
+   */
+  const bdRow = (
+    cur: (edge: CellEdge) => string | null,
+    write: (edges: readonly CellEdge[], value: string | null) => void,
+    suppress: boolean,
+  ) => {
+    const css = borderCss(bdSel.style, bdSel.pt, bdSel.hex)
+    // 「着边」只看得到真线：'none' 是压掉，再点一次应当是把边框加上而不是清成未声明
+    const on = (edge: CellEdge) => borderParts(cur(edge)) !== null
+    const box = CELL_EDGES.every(on)
+    return (
+      <>
+        <span className="tb-sep" />
+        <select
+          className="tb-select"
+          value={bdSel.style}
+          title="边框线型：先选它，再点要加的边"
+          onChange={(e) => setBdSel({ ...bdSel, style: e.target.value })}
+        >
+          {BORDER_STYLES.map((o) => (
+            <option key={o.css} value={o.css}>
+              {o.label}
+            </option>
+          ))}
+        </select>
+        <select
+          className="tb-select"
+          value={String(bdSel.pt)}
+          title="边框粗细（磅，Word 边框对话框的那几档）"
+          onChange={(e) => setBdSel({ ...bdSel, pt: Number(e.target.value) })}
+        >
+          {BORDER_WIDTH_PT.map((p) => (
+            <option key={p} value={String(p)}>
+              {p} 磅
+            </option>
+          ))}
+        </select>
+        <label className="tb-color" title="边框颜色">
+          颜色
+          <input type="color" value={bdSel.hex} onChange={(e) => setBdSel({ ...bdSel, hex: e.target.value })} />
+        </label>
+        {CELL_EDGES.map((edge) =>
+          btn(
+            EDGE_LABEL[edge],
+            () => write([edge], on(edge) ? null : css),
+            on(edge),
+            `${on(edge) ? '取消' : '加上'}${EDGE_LABEL[edge]}的边框（线型/粗细/颜色按左边选的来）`,
+          ),
+        )}
+        {btn(
+          '四周',
+          () => write(CELL_EDGES, box ? null : css),
+          box,
+          box ? '四条边的边框一次取消' : '四条边一起加上边框',
+        )}
+        {btn('清除', () => write(CELL_EDGES, null), false, '四条边都不再声明：段落回到无边，单元格落回表级边框或应用网格线')}
+        {suppress &&
+          btn('压掉', () => write(CELL_EDGES, 'none'), false, '四条边显式写「无」（导出 w:val="nil"）：盖掉表格自带的那圈边框')}
+      </>
+    )
+  }
+
   return (
     <div className="editor-pane">
       <div className="editor-toolbar">
@@ -1191,6 +1275,7 @@ function DocEditor({ tab }: Props) {
                   </label>
                 ))}
                 {btn('无间距', () => sides(null, null), false, '清掉段前段后，回到样式默认')}
+                {bdRow((edge) => (pa[bdAttr(edge)] as string | null) ?? null, paraBorders, false)}
                 <span className="tb-sep" />
                 <label className="tb-color" title="段落底纹（Word 的段落「字符底纹/底纹」，导出 docx/odt 带走）">
                   段落底纹
@@ -1237,6 +1322,7 @@ function DocEditor({ tab }: Props) {
                 {btn('顶端', () => editor.chain().focus().setCellVAlign(va === 'top' ? null : 'top').run(), va === 'top', '内容靠单元格上沿')}
                 {btn('垂直居中', () => editor.chain().focus().setCellVAlign(va === 'middle' ? null : 'middle').run(), va === 'middle', '内容在单元格内垂直居中')}
                 {btn('底部', () => editor.chain().focus().setCellVAlign(va === 'bottom' ? null : 'bottom').run(), va === 'bottom', '内容靠单元格下沿')}
+                {bdRow((edge) => (ca[bdAttr(edge)] as string | null) ?? null, cellBorders, true)}
               </>
             )
           })()}

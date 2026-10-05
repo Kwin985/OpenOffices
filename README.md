@@ -730,7 +730,8 @@
   读侧进 `lib/docx-fidelity.ts`，schema 落在 `lib/cell-style.ts`，写侧三条链路（.odoc JSON / docx / odt）各自回得去
 - **边框只存一种形状**：规范串 `"<px>px <线型> <#rrggbb>"`，并区分**三态**——`null` 是原文件没声明（不写内联样式，
   落回应用自己的网格线）、`'none'` 是原文件显式去掉了这条边、有值才是真边框。省掉"CSS 一套、OOXML 一套"的双表示，
-  往返只经一次换算
+  往返只经一次换算（**v0.88 才接上界面**：这一层从 schema 到 docx/odt 字节一直全通，缺的只是能改它的那一排按钮——
+  同一轮还修掉两处静默：表头格上 `&&` 短路造成的整条 no-op，与 `dashSmallGap` 一类 Word 线型读成实线）
 - **单位换算钉死在一处**：OOXML 的 `w:sz` 是 **1/8 磅**（`eighthsToPx = sz/8×4/3`、`pxToEighths = px×6`），
   ODF 侧宽度写 **pt**（px×0.75 是精确换算，故 1px 边框回来还是 1px）；
   ODT 读边**不走整数取整的 `len2px`**——0.5pt 细线是 0.67px，整数量化会把它抬成 1px，而边框宽度正是往返要保的那个量，
@@ -782,12 +783,14 @@
   用 `if (v)` 会把 0 静默变成"没声明"；同一条纪律在 `ownedPx()`（docx 写侧）与单元格边框三态里已经立过
 - **单位各钉一处**：ODF 段间距与绝对行距写 **pt**（px↔pt 是精确换算，`cm` 写第三位小数会磨掉零点几 px，
   缩进仍写 cm），读回走新的 `lenPx()`（保留两位小数），旧的整数取整 `len2px` 只留给缩进/边距；
-  段落边框宽度仍是 1/8 磅制的 `w:sz`（0.67px ↔ sz4 ↔ 0.5pt）
+  段落边框宽度仍是 1/8 磅制的 `w:sz`（0.67px ↔ sz4 ↔ 0.5pt；**v0.88 的界面就接在这一层上**——`.doc-para-bar` 那一排四边、
+  按磅显示、九档磅值 × `borderCss` 换算只写一处，「清除」写 `null` 收回未声明；第五边 `w:between` 与 `w:space` 仍未接）
 - **UI**：段落上下文条 `.doc-para-bar`——行距下拉（单倍/1.15/1.5/2 + 固定值/最小值 + 自定义 `x倍数`）、
   段前段后两个数字框与「无间距」、底纹取色与「无底纹」；**界面按「磅」显示、属性里存 CSS px**（pt×4/3），
   不让用户换算。`TextStyleKit` 的 `lineHeight` 必须关掉：那是它给段落挂的**同名**属性，
   与这里记 OOXML 行距的 `lineHeight` 撞名字，两边只能留一个
-- **主动记 warnings 的边界**：段落边框离字的 `w:space`（>1 磅时告警，schema 里没有 padding 这一层）、
+- **主动记 warnings 的边界**：段落边框离字的 `w:space`（>1 磅时告警，schema 里没有 padding 这一层；**这一条告警到 v0.88 仍没有到达面**——这台机器的
+  Word 报 `Border.Space` property not found，而它自己写出的件恒为 `w:space="0"`，构造不出触发它的那一档，只能手造件）、
   按「行」计的段前段后（只有 `w:beforeLines`/`w:afterLines` 时按 19px/行估算并说明是估的）
 - **坑**：① **PowerShell 的假绿断言**——`Ok((cond), "msg")` 位置传参时 `(cond, "msg")` 被绑成**一个数组参数**，
   `$c` 恒真、`$msg` 恒空（表现是一屏 PASS 却没有文字），须 `param([bool]$c, [string]$m)` 显形参；
@@ -3912,6 +3915,88 @@ publish）是异步的** ⇒ 在两者之间按 Ctrl+S，内存此刻**不是文
   文档这一头**——表格 / 演示的"读没读全"仍没有这本账；自动更新的源托管与 macOS 打包按指令继续等信号，签名私钥已加密备份
   并演练 7/7（见上一节），**私钥本体在本机仍是单点**。
 
+## 边框这一层终于有把手了：段落一排、单元格一排，顺手拆掉两处静默（v0.88）
+
+「继续对标 WPS 完善文档处理」自选口径：v0.38/v0.39 早就把边框的**读与写**接齐了（schema、docx、odt 三链路），
+而**界面上一个字都改不了**——改前全仓 `.tsx` 里 `bd*` 零命中（本轮之后唯一的 `.tsx` 使用者就是 `DocEditor.tsx`）。窄口径（Rust 一个字没动）：
+`src/lib/cell-style.ts` +74 / −12、`src/components/DocEditor.tsx` +87 / −1、`src/lib/paragraph-style.ts` +9 / −1。
+
+- **前置实测四格（tmp/x88，真件真字节，只量没改产品）**：① **读侧通道是通的但有两处静默丢档**——`w:val="single" w:sz="4"` →
+  `0.67px solid`、`sz="8"` → `1.33px`、`auto` 色 → `#000000`、`w:val="nil"` → `"none"`，上屏计算样式 `0.666667px/solid/rgb(0,0,255)`，
+  三态在 attrs 里分得开；**缺陷一（无声）**：Word 虚线对话框实际写的是 `dashSmallGap`，另有 `dotDotDash`、`dashDotStroked`、
+  `thinThick*`、`thickThin*`、`threeDEngrave` 全不在 `CSS_BORDER_STYLE` 里（`dotDash` 会被小写归一命中，`dashSmallGap` 命不中）
+  ⇒ Word 里的虚线导进来显示成**实线**、再导出也是实线，而 `notes: []`，用户一个字都看不到；**缺陷二**：Word 段落边框有
+  第五边 `w:between`，读侧没有这一枚 ⇒ PSINGLE5 与 PSINGLE4 的 attrs 逐字相同，静默丢；`Border.Space` 在这台机器的 Word 上
+  报 property not found ⇒ 读侧那条「间距未保留」告警**没有到达面**；② **写侧也是通的**——导出字节里 `<w:pBdr>` / `<w:tcBorders>` /
+  `w:tblBorders`（含 insideH/insideV）形状正确，`none` 写成 `w:val="nil"`，ODT 写 `fo:border-top="0.5pt solid #0000ff"`；
+  我们从不写 `w:space`（Word 每次写 `w:space="0"`，形状差但无害）；③ **缺的那一层就是界面**——程序化
+  `setParagraphStyle({bdTop:'1px dashed #00ff00'})` 与 `updateAttributes('tableCell',{bdTop:…})` 一路都走得通（attrs 落地、
+  DOM 画出虚线、docx 带 `w:val="dashed"`、ODT 带磅值）：通道早就齐了，**用户没有把手**；④ **跨产品**——真 Word 打开我们的
+  往返件无修复提示，Word 自己的 single/0.5pt/蓝色两边往返两轮不丢，重新导入自家产物 attrs 与首趟逐字相同（无漂移）；
+  两处小账：我们写的 `dashed` 在 Word 读成 DashLargeGap(4) 而 Word 对话框写 dashSmallGap(3)、表级边框会被摊进每一枚单元格
+  （2 枚 tcBorders → 6 枚，字节膨胀外观相同）；**纸上有没有边框从来没正面量过**。
+- **本轮唯一的架构决定（跟着数据走）：给这一层补界面入口，并顺手修读侧那一档真实丢档**——段落四边（`.doc-para-bar`）与
+  单元格四边（`.doc-table-bar`）共用**同一排**（`bdRow(cur, write, suppress)`：先选线型/磅/颜色，再点要加的边，点已着边的边＝
+  取消这一边），四条形状都不是可选的：① **三态各有出口**——「清除」写 `null`（回到未声明）而「压掉」写 `'none'`
+  （导出 `w:val="nil"`）且只在单元格那一路出现，因为表格自带一圈表级边框，不显式压就盖不掉（Word 只读腿后来从第三方那头
+  证实了这一格：未声明的边 Word 照样从 `w:tblBorders` 解出线来）；② **界面按磅、属性存 px**，换算只写一处
+  （`BORDER_WIDTH_PT` 那九档 × `borderCss` / `eighthsToPx` / `pxToEighths`），0.5 磅 → 0.67px → `w:sz="4"` 与 Word 自己
+  写下的字节同形；③ **「着边」只认真线**（`borderParts(cur(edge)) !== null`）——`'none'` 不算着边，在它上面再点一次是
+  把边框加上而不是清成未声明；④ 一次调用**一条事务**（「四周」点一下只撤销一次）。读侧同批补 `CSS_BORDER_STYLE` 缺的
+  Word token（`dashSmallGap`/`dashLargeGap`/`dotDotDash`/`dashDotStroked` → `dashed`），因为「UI 里选虚线写 dashed」和
+  「Word 导进来的虚线读成实线」是同一枚通道的两头不一致。
+- **另一处真缺陷是写命令时才发现的**：单元格三条命令走的是
+  `updateAttributes('tableCell',…) && updateAttributes('tableHeader',…)`，表头格上第一型返回 false 就整条短路 ⇒
+  **边框/底纹/竖排对齐在表头格上全是静默 no-op**（v0.38 起一直如此），普通格上又因第二型 false 把链上这一步记成失败；
+  改成 `[两型].some(Boolean)`（段落那一头 v0.39 早就是这个形状）。字节腿 B4/B5 判的就是它：表头格的上边现在真的进得了
+  `w:tcBorders`（`dashed` / `sz=12` / `336699`）。
+- **验证（腿 + 编译，全部在版本号 bump 三处对齐之后跑）**：结构+变异合并一腿
+  **`RESULT struct total=27 pass=27 fail=0 mutants=16 bad=0 extra=0 b0=3/3`**（吃剥掉注释并归一 LF 的源文；B0 自检 3 条——
+  中文注释短语剥后消失、字符串字面量内容活下来、模板内插 `${edge}`/`${v}` 不被花括号帧吞掉；CS1~CS10 / PS1~PS5 / DE1~DE12；
+  M1 退回 `&&` 短路响 CS1+CS2、M2 只试 tableCell、M3 去 `dashsmallgap`、M4 `nil` 不再压成 none、M5 `borderCss` 不做磅→px、
+  M6 段落不走 `edgeAttrs`、M7「压掉」写 `null`、M8 去 `suppress` 门、M9 表格传 false、M10 css 吃死值、M11 color 换成文本框、
+  M12 着边判定吃原始串、M13 默认磅改 6、M14「四周」不再切换；两枚正控制 P0 原样、P1 把 `&&` 旧形状藏进注释——判据不认注释）；
+  CDP dev 真机 **40 / 0、页面异常 0 条**（A0/B0 一次**真按键**把光标放进正文、段落那一排自己出现；B1~B10 段落那一排含
+  「清除」收回未声明与悬停改口；C1/C2 包 `view.dispatch` 数 docChanged ⇒ 一次点击只推一枚改文档的事务；D1~D7 单元格那一排
+  （suppress 那一路多一枚「压掉」、`none` 不算着边、三态各有出口、源件写着 none 的那条边读成未着边、在它上面点「上边」是加
+  而不是清）；E1~E3 表头格（点「表头行」真变 `tableHeader` 节点、「清除」与「上边」与「底纹」全部落得下去）；
+  F1~F6 导出态字面 + 脏账 ● + 夹具盘上未动）；字节腿（python 独立解 zip 部件，不吃自家解析）**13 / 0**（B1/B2 段落上边
+  `single sz=6 ff0000`＝0.75 磅红、B3「清除」之后整个 `<w:pBdr>` 不再出现、B4/B5/B5b 表头格上边进字节而其余三条经清除
+  整条不在字节上、B6 四条 `w:val="nil"`、B7 点一条边只换那一条、B8 表级 `w:tblBorders` 原样没被顺手改、B9 逐边不变、
+  B10 部件齐全）；**Word 16.0 只读腿**（`EXIT=0`，80 行 `EDGE` 读数，只读打开 + `Close($false)` 不落盘）四条最硬的对应：
+  夹具 P0 四边全 `style0` → 我们写的件里 e1=`style1 width6 color255`（实线 0.75 磅红，Word 的 `LineWidth` 枚举本就按
+  1/8 磅给数 ⇒ 与 `w:sz="6"` 对上）；夹具 PSINGLE4 四边 `style1` → 件里四边全 `style0`（**「清除」在 Word 那头真读成无边**）；
+  表头格 c11 上边 Word 报 `style4 width12 color10053171`（＝虚线 1.5 磅 #336699，本轮修的那一枚 no-op 从第三方那头也认账）；
+  未声明的边 Word 从表级 `w:tblBorders` 解出线来（c11 其余三条字节上不存在而 Word 照报 `style1`）。
+  `cargo test --lib` **97 通过 / 0 失败 / 11 ignored**（Rust 本轮一个字没动）+ tsc exit 0 +
+  `pnpm tauri build --no-bundle` 绿（openoffices v0.88.0）。
+- **量具坑七处，都不是产品**：① **合成的 `new MouseEvent('mousedown')` 放不下 ProseMirror 的光标**（`detail:0` ⇒ PM 不把它
+  当成一次点击），第一版整条腿判的是"程序化 put 之后的光标"，B0 自检当场 FAIL；改用 CDP `Input.dispatchMouseEvent`
+  的 mousePressed/mouseReleased 一对（`isTrusted: true`）才有"点进正文那一排才出现"的到达面——这是 v0.87 那条真按键结论
+  在鼠标那一头的续篇；② **`btn()` 的 `key` 是 `label + title`** ⇒ 悬停那句一改口（「加上」↔「取消」）React 就重挂载，
+  手里那个 DOM 节点已脱离文档，读它的 `className` 读到的是按下**之前**的样子（B3 假 FAIL）——按下之后必须重新查一次，
+  这是「尺子瞎不是产品哑」同族教训第六次兑现；③ **夹具本来就给那一行写了四条边**（`0.67px solid #000000`）⇒ 不先按
+  「清除」收回未声明，点「上边」吃的是**取消**那一支，量不到"写得进去"（E2 假 FAIL，修法是新立 E1b 单独判「清除」也落得下去）；
+  ④⑤ **两处期望值是我猜的**：字节腿 B7 以为夹具里 c12 其余三条也是 `nil`（实际是 `single sz=4 000000`）、B9c 以为件里
+  有 5 枚 `dashSmallGap`（量出来是 4 枚段落边降档、导出件里 6 枚 `dashed`＝4 降档 + 2 枚 UI 新写）——**判据里的数字必须由
+  同一趟量出来**，两处都改成先测再写；⑥ 这台机器的 `python3` 是商店占位桩（exit 49、无输出），字节腿走 `python`（3.14.2），
+  而控制台按 GBK 解码会把中文判据名打成乱码 ⇒ `PYTHONIOENCODING=utf-8` 并读 tee 下来的日志；⑦ **段落上的第五边在 COM
+  这头没有到达面**（`Borders.Item(5)` 对段落抛「集合要求的成员不存在」，单元格才有 e5）；另外 `Get-NetTCPConnection`
+  报 9222 无监听而 `curl /json/version` 拿得到版本号——端口型判据别只吃一枚尺。
+- **本轮没动的，量出来记着**（已开进路线图）：① `w:between` 第五边仍未接（本轮由字节腿当场数出代价：**7 枚段落丢掉这一边**）；
+  ② 我们写的 `dashed` 在 Word 读成另一档虚线（件里 `style3` → 件外 `style4`），异形线型（`thinThick*`/`threeD*`）CSS 表达不了、
+  一律静默降为实线且明写不做界面；③ **`w:val="nil"` 在 Word 的 `Borders.Item` 上不是一致读成"无线"**（我们写死的四边 nil，
+  Word 报 e1=`style1`、e2/e3=`style0`、e4=`style1`），本轮**未归因**（COM 的解析路径与"单元格边框一律比 OOXML 字面"那条老规矩
+  v0.38 并存），只记不作结论；④ `w:space` 无到达面；⑤ 样式级 `w:pBdr` 摊平后「清除」在第三方件里可能压不掉样式带来的边
+  （未量）；⑥ **本轮没有 release A/B**——到得上的证据来自 dev 真机 + 字节 + Word 三头，"界面上那一排在 release 上也长这样"
+  只有形状推断；⑦ 纸面（导出 PDF）上有没有边框仍未正面量；⑧ 表级边框摊进每枚单元格的字节膨胀（2→6 枚）没动。
+- **收尾**：README 新增本节 + 文件清单 `lib/cell-style.ts` / `lib/paragraph-style.ts` / `DocEditor` 三条补 v0.88 段 +
+  架构那一层三处就地括号改口（v0.38「边框只存一种形状」补界面入口与两处静默的修法、v0.39「段落边框宽度仍是 1/8 磅制」
+  接上界面那一排、v0.39「主动记 warnings 的边界」把 `w:space` 那条改成「仍没有到达面」）+ 路线图新立本轮已建的那条
+  （`- [x]` 边框的界面入口）并新开上述八枚未勾项，版本 0.88.0（package.json / tauri.conf.json / Cargo.toml 三处对齐），
+  tmp/x88 的夹具、dev 腿、字节腿、Word 腿与结构+变异腿按惯例删除（全程未碰已装正式版）；自动更新的源托管与 macOS 打包
+  按指令继续等信号，签名私钥已加密备份并演练 7/7，**私钥本体在本机仍是单点**。
+
 ## 性能（v0.3）
 
 
@@ -3992,8 +4077,8 @@ src/                  React 前端
   lib/ole.ts          OLE 嵌入对象的**内容**提取（v0.44）：`unwrapEmbed` 拆容器（现代形状=部件本身就是原生文件；老形状=复合文档里的流 `\x01Ole10Native`），`oleNativePayload` 按实测字段布局走一遍、走不通再按"哪枚 DWORD 能把数据吃到接近结尾"扫兜底（数据不贴着流末尾，按流长反推必错）；`classifyEmbed` 先魔数后文件名，`embedHtml(content, depth)` 分派 docx（递归 `docxToHtmlFidelity`，depth≥2 停）/ xlsx（只要值，`r="C5"` 定位、空列不挤位）/ CSV（首行嗅探分隔符 + RFC4180 引号）/ txt（空行分段，UTF-8 出替换符换 GBK 重试），取不出的一律给带真名与大小的 `note`；上限 24MB / 200 行 × 40 列 × 4 表 / 64KB × 200 段，**截断写进告警不静默少给**；`inlineFlatten` 把块级正文压成行内（单元格放不下第二层表）
   lib/docx-fidelity.ts OOXML → HTML 保真导入器（v0.37）：run 级 rPr（粗斜/删除线/下划线/字色/高亮/字族/字号/上下标 `w:vertAlign`）、段落 pPr（jc/`w:ind` 左右与首行悬挂四种缩进写法/pStyle 样式链）、numPr+numbering.xml → 有序无序与 ilvl 层级（**跳档按 numId 折基准层**，不凭空补中间层）、表格 gridSpan/vMerge + tblGrid 列宽 + 单元格四边 `w:tcBorders`（含 val=nil 的显式去边）/底纹 `w:shd fill`/竖排 `w:vAlign`/表级 `w:tblInd`、段落 `w:spacing`（行距两档 + 段前后，含按行的 `w:*Lines` 估算）/`w:shd` 底纹/`w:pBdr` 四边、脚注与尾注引用（`w:footnoteReference`/`w:endnoteReference` 按 `w:id` 配 `word/footnotes.xml`·`endnotes.xml` 正文，跳过 separator/continuationSeparator，正文缺失记告警且不留空标记）、图片 rels→dataURL、内外超链接、分页符、批注三态锚点、域代码文字不外泄、**域编号重算**（v0.43：`fldChar` begin/separate/end 三道门接 `docx-fields` 的 `FieldEngine`——`SEQ` 现算并压掉缓存、`REF` 无缓存按书签段落文本兜底（书签表渲染前预扫）、算不了的沿缓存且无缓存记边界、`fldSimple` 同路、被跳过的分支不占号）、`w:object` 嵌入对象（v0.43 预览是 EMF/WMF 解不开时留一行可见占位，ProgID + rels 反查的部件文件名；**v0.44 先走 `lib/ole` 取内容**——取到就把内层正文接为段落兄弟块（格内改压行内）且不再叠占位，取不到才留占位）、文本框 `w:txbxContent`（`wps:txbx` 与旧式 `v:textbox`）展平为段落、OMML 公式线性化、`mc:AlternateContent` 只取 Choice（空则退 Fallback，避免同一份正文翻倍）、drawing 锚点经 rels 找图示/图表部件（v0.42，部件缺失与关系缺失各记一条告警）；认不出就抛错或 blocks=0，调用方回退 mammoth
   lib/docx-fields.ts 域重算引擎（v0.43，零依赖、纯 Node 可直测）：`parseInstr` 拆 `命令 参数 \开关`（**开关 token 原样保留大小写**——Word 就按它决定结果形态）、`seqText` 按 `\* ROMAN`/`roman`/`ALPHABETIC`/`alphabetic`/`Alpha` 出对应形态、`FieldEngine`（`from(doc)` 渲染前扫全篇建书签表（只排 `_GoBack`，`_Ref…`/`_Toc…` 必须留）+ `seqValue` 跟着文档顺序走 + `refText` 兜底段落文本）、`recomputable`（只有带 label 的 SEQ 现算）、`fieldLabel`/`paraText`（域代码与已删文字不算正文）
-  lib/cell-style.ts   单元格样式扩展（v0.38）：tableCell/tableHeader 的 bdTop/bdRight/bdBottom/bdLeft + background + vAlign、table 的 marginLeft 全局属性（只声明属性不改内容模型）；边框统一规范串 `"0.67px solid #8899aa"`，三态 null 未声明/'none' 显式去边/有值；`inlineBorder()` 读 CSSOM longhand（shorthand 对 none 返回空串）、`IndentTableView` 子类补 marginLeft（resizable 的节点视图不传 HTMLAttributes）、`eighthsToPx`/`pxToEighths` 管 1/8 磅换算、命令 setCellBackground/setCellVAlign
-  lib/paragraph-style.ts 段落排版扩展（v0.39）：paragraph/heading 的 lineHeight/lineRule/spaceBefore/spaceAfter/background/bdTop..bdLeft 全局属性，一组属性拼**一条** style（多条各写一份会互相盖掉）；`ooxmlLine`/`lineToOoxml`/`ruleOf` 管 1/240 行与二十分之一磅两套语义，"最小值"档 CSS 表达不了就修行内自定义属性 `--oof-lr` 带回；命令 setParagraphStyle/setLineSpacing/setSpaceAround/setParaBackground
+  lib/cell-style.ts   单元格样式扩展（v0.38）：tableCell/tableHeader 的 bdTop/bdRight/bdBottom/bdLeft + background + vAlign、table 的 marginLeft 全局属性（只声明属性不改内容模型）；边框统一规范串 `"0.67px solid #8899aa"`，三态 null 未声明/'none' 显式去边/有值；`inlineBorder()` 读 CSSOM longhand（shorthand 对 none 返回空串）、`IndentTableView` 子类补 marginLeft（resizable 的节点视图不传 HTMLAttributes）、`eighthsToPx`/`pxToEighths` 管 1/8 磅换算、命令 setCellBackground/setCellVAlign；**v0.88 拆掉两处静默**——① `CSS_BORDER_STYLE` 补上 Word「虚线」对话框实际写出的那几档 token（`dashSmallGap`/`dashLargeGap`/`dotDotDash`/`dashDotStroked` → `dashed`；原先只有 `dotDash` 会被小写归一命中，`dashSmallGap` 命不中 ⇒ Word 里的虚线导进来显示成实线、再导出也是实线且零告警），② 表头格那枚 no-op：`setCell` 原来是 `updateAttributes('tableCell',…) && updateAttributes('tableHeader',…)`，表头行上第一型返回 false 就整条短路 ⇒ **边框/底纹/竖排对齐在表头格上从 v0.38 起全是静默失败**，改成 `[两型].some(Boolean)`（段落那一头 v0.39 早就是这个形状）；同轮新出界面用的四味：`bdAttr`（边名 → 属性名）、`edgeAttrs`（若干条边 → 一份 patch）、`BORDER_STYLES`/`BORDER_WIDTH_PT`/`borderCss`（磅 → 规范串，换算只写这一处）与 `EDGE_LABEL`
+  lib/paragraph-style.ts 段落排版扩展（v0.39）：paragraph/heading 的 lineHeight/lineRule/spaceBefore/spaceAfter/background/bdTop..bdLeft 全局属性，一组属性拼**一条** style（多条各写一份会互相盖掉）；`ooxmlLine`/`lineToOoxml`/`ruleOf` 管 1/240 行与二十分之一磅两套语义，"最小值"档 CSS 表达不了就修行内自定义属性 `--oof-lr` 带回；命令 setParagraphStyle/setLineSpacing/setSpaceAround/setParaBackground；**v0.88 多一条 `setParaBorders(edges, value)`**（走 `edgeAttrs`，与单元格共用那一份「边名 → 属性名」的换算），段落这一头界面只给「清除」（写 `null` 收回未声明）不给「压掉」（`'none'`）——读侧早把样式链那层 `w:pBdr` 合并进段落自己名下（docx-fidelity 的 `effPPr`），编辑器里没有「一条样式边框等着被盖」这一层，而实测 Word 去掉段落某条边时也是干脆不写那一枚
   lib/indent-extension.ts 段落全局属性 indentLeft/indentFirst（32px 一档、上限 320px）+ setIndent/indent/outdent 命令 + Ctrl+] / Ctrl+[ + 悬挂缩进感知的出退格
   lib/toc-extension.ts TipTap 目录原子节点：按标题实时汇总、点击跳转
   lib/page-break-extension.ts TipTap pageBreak 原子块（`div[data-oo-pagebreak]`）+ insertPageBreak 命令 + Ctrl+Enter 快捷键
@@ -4044,7 +4129,7 @@ src/                  React 前端
                       闸读的是 `useApp.getState().tabs.filter((t) => t.dirty).length`（前置实测④：回首页仍读得到
                       工作区的脏账，不需要编辑器挂着）；重新检查先 `closeUpdate(上一份)` 再问（把下载占的内存还回去）；
                       **代价记着**：Home 与 Workspace 互斥挂载 ⇒ 切走再回来 `update`/`dl` 两份 state 一起丢，
-                      已下好的那 10 MiB 白下（dev 腿 D18 量成形状） / Workspace / SheetEditor（保存按 .xlsx/.ods/.csv 三分流，打开时把读到的规则经门面放回界面并把两侧账目显示在状态栏；**「页面设置」面板（v0.52）**——纸张/方向、六条边距（毫米）、缩放与"缩放到 N 页宽"、六个开关、打印区域与重复标题行列（可「用当前选区」「用选区首行/首列」按门面选区给）、手动分页符（按 Excel 的 `brk@id` 说法：这一行/列自己起新页）、页眉页脚三框 + 六枚格式码 + 奇/偶/首页三版 + **两枚缺省开着的开关（「页眉页脚随文档缩放」「与页边距对齐」，v0.55：勾着＝写 `null` 不声明、取消＝写 `false`，旁注一次说清哪一档我们照 Excel 乘了字号、哪一档两边差一圈）**；「确定」写进 `printRef` 侧通道、「清除这张表的设置」把它整个删掉、面板里的错把确定灰掉，做不到的那几条以账目形式随草稿说在面板上（v0.53 改了语气：页高档与居中已经接线，只剩起始页码真做不到；v0.54 之后偶数页那一版也不再是账——它真的印在偶数页上，面板这几句全部转述 `hfAndPageNumberNotes` 那一份文案）；**导出这一侧多了一段实测循环（v0.53）**——计划里勾了「缩放到 N 页高」或「上下居中」的表才走：建一次 → `measurePrintLayout` 离屏量 → `planSheetFit` 压档/算留白 → 带 `zooms` 重建，最多五趟，定档后把居中留白写回**同一份 DOM** 再交导出；账目分两头记（"压到 27%"那句要说在压它的那一趟、每张表占一格由后趟覆盖前趟，居中的账反过来只在最终缩放那份实测上算数）；DEV 门面钩子随这轮加 `printSet(表名, 载荷|null)`（落笔处＝面板「确定」那一行）与 `printHtml(zooms)`（把**将要上纸的那份 HTML**交出去，让脚本自己挂起来量真实布局）；**v0.57 工作簿默认字体走第三枚侧通道 `defaultFontRef`**（不放 Univer 快照——`IWorkbookData.defaultStyle` 在 core 里零读取、引擎兜回硬编码 Arial 11，而 `wb.save().defaultFont` 实测恒为 `null`）：加载时挂上 `dump.defaultFont`、换标签复位、在 `payloadWithCharts` 那一枚漏斗里回贴，于是存盘与导出 PDF 共吃一份而界面渲染不说谎；**v0.59 只把 DEV 钩子摊宽**（生产行为一个字没动）：`printHtml()` 的返回值多三枚——`defaultFont`（侧通道里那一层本体，冒烟据此分辨"文件说的"与"我们兜的"）、每张计划里的 `basePx`（计划算出的正文底数）、`baseVars`（那份 HTML 里所有 `--oof-print-base-size:<px>` 的含值列表，按张核）；**v0.60 添第四枚侧通道 `sheetFormatRef`**（按表名持有 `SheetFormat`，与前三枚同一脾气：加载时从 `sheets[].sheetFormat` 挂上、换标签复位、改名随 `migrateSheetName` 一起迁、在 `payloadWithCharts` 的漏斗里回贴，且 `if (f && !sheet.sheetFormat)`——快照自己说出来的那一张永远赢）；这一枚与 `defaultFontRef` 方向相反：`IWorksheetData.defaultRowHeight` 在 Univer 里是**活口**（喂了就界面认、而 Excel 根本不认它），所以这里**只收不放**——不喂编辑器也不喂纸面，只为存盘时原样落回；DEV 钩子 `printPlan()` 因此多一枚 `sheetFormats`，冒烟据此问得出"这一层交回了什么"，而结构测试那头的钉是"五个消费点里 `sheetFormat` 出现零次"；**v0.62 只撤两行**——`hasSide` 那枚判定与「ODS 暂不含批注与超链接」那句账目，因为 `.ods` 这两样现在真读得回也写得出，而另三句 ODS 账（图表／三类规则／页面设置）与 CSV 那句照旧立着（结构腿判的就是"撤干净了且只撤了这一句"）；**v0.63 只动两行**——`.ods` 那一路的 `await writeOds(...)` 改成 `writeNotes.push(...(await writeOds(path, payload)))`，于是写侧的账与 xlsx 那头走同一条汇合（`[...lost, ...writeNotes]` → 状态栏 `已保存（第一条，另有 N 条说明）`），另一行是把注释里的例子换成"规则摆不进 OOXML、批注落在被盖住的格上"；拼句的公式、`lost` 那三句 ODS 账与 CSV 那句一个字没动（本轮没有新桥：`sheet-cell-side.ts` 的取与放早就是格式无关的）；**v0.67 只动两行**——挂载点那一句 `readXlsx(tab.path)` 换成 `takeWorkbook(tab.path) ?? readXlsx(tab.path)`（这一趟的 IPC 早在外壳开标签那一刻就发出去了，这里只是把它取来用；取不到——不是从路径开的、或已被别处取走——才自己发一次，**不假设外壳一定先跑**），另一行是那条注释改口（它还写着 v0.35 的"先把 IPC 发出去，实例同时在造"，而现在发得比挂载更早）；dev 下 `React.StrictMode` 的双挂载会让第一趟消费掉 prefetch 而第二趟走自备那一路，于是**开发模式开一次表格标签读到两次件**（真机 S5 量到 `read_xlsx` 的条目 2→4）——这是 dev 独占的形状不是缺陷，判据钉的是"取在前、发在后"那个 `??` 顺序而不是"只发一次"，反过来为 dev 好看而阻塞第二趟就是拿生产行为换开发控制台；**v0.69 存盘那一段开始说话**——`busy.arm()` 排在 `wb.save()` **之前**（那是同步块的头，门晚一纳秒都量不到它）、`await pickSaveFile` 之前 `busy.cancel()` 之后取完路径再 `busy.arm()`（另存为挑路径可以挂几分钟，那句「正在保存…」留着就是说谎）、`setStatus(saveDoneText(notes))` 排在把成功交回那一路而 `finally` 里再撤一次门、失败那一句走 `failStatus(e, '保存失败')` **把「正在保存…」原地换掉**（不清就等于让用户以为还在写盘，原话照旧留在悬停里）；收尾那句的清除定时器 `doneClearRef` 挂在存盘最开头，于是同一个标签补跑的那一趟会**先把上一趟的「已保存」撤掉**（不撤的话第二趟还在写而屏上已经写着"已保存"，那是这一轮最像成功的错）；接线只有 `busy` 那三行与 `saveTab` 那两行，句子与时钟一律在 `lib/save-status.ts` / DocEditor（页面设置含分栏/页码格式、分页参考线、分页符、表格与图片上下文工具条、粘贴成图、查找替换面板、字体族·字号、缩进工具条与 Ctrl+]/[、上下标 X²/X₂、表格上下文条的底纹色与竖排对齐（上/中/下）、脚注/尾注（工具栏插入 + 文末分区编辑与定位/删除，打印时文本框换静态块）、版本历史·自动保存、模板 seed、状态栏字数节流；打开 .docx 保真导入优先、mammoth 兜底，保存按 .odoc/.odt/.docx 各自格式原地落盘；**v0.71 把这一头分成两层**——
+                      已下好的那 10 MiB 白下（dev 腿 D18 量成形状） / Workspace / SheetEditor（保存按 .xlsx/.ods/.csv 三分流，打开时把读到的规则经门面放回界面并把两侧账目显示在状态栏；**「页面设置」面板（v0.52）**——纸张/方向、六条边距（毫米）、缩放与"缩放到 N 页宽"、六个开关、打印区域与重复标题行列（可「用当前选区」「用选区首行/首列」按门面选区给）、手动分页符（按 Excel 的 `brk@id` 说法：这一行/列自己起新页）、页眉页脚三框 + 六枚格式码 + 奇/偶/首页三版 + **两枚缺省开着的开关（「页眉页脚随文档缩放」「与页边距对齐」，v0.55：勾着＝写 `null` 不声明、取消＝写 `false`，旁注一次说清哪一档我们照 Excel 乘了字号、哪一档两边差一圈）**；「确定」写进 `printRef` 侧通道、「清除这张表的设置」把它整个删掉、面板里的错把确定灰掉，做不到的那几条以账目形式随草稿说在面板上（v0.53 改了语气：页高档与居中已经接线，只剩起始页码真做不到；v0.54 之后偶数页那一版也不再是账——它真的印在偶数页上，面板这几句全部转述 `hfAndPageNumberNotes` 那一份文案）；**导出这一侧多了一段实测循环（v0.53）**——计划里勾了「缩放到 N 页高」或「上下居中」的表才走：建一次 → `measurePrintLayout` 离屏量 → `planSheetFit` 压档/算留白 → 带 `zooms` 重建，最多五趟，定档后把居中留白写回**同一份 DOM** 再交导出；账目分两头记（"压到 27%"那句要说在压它的那一趟、每张表占一格由后趟覆盖前趟，居中的账反过来只在最终缩放那份实测上算数）；DEV 门面钩子随这轮加 `printSet(表名, 载荷|null)`（落笔处＝面板「确定」那一行）与 `printHtml(zooms)`（把**将要上纸的那份 HTML**交出去，让脚本自己挂起来量真实布局）；**v0.57 工作簿默认字体走第三枚侧通道 `defaultFontRef`**（不放 Univer 快照——`IWorkbookData.defaultStyle` 在 core 里零读取、引擎兜回硬编码 Arial 11，而 `wb.save().defaultFont` 实测恒为 `null`）：加载时挂上 `dump.defaultFont`、换标签复位、在 `payloadWithCharts` 那一枚漏斗里回贴，于是存盘与导出 PDF 共吃一份而界面渲染不说谎；**v0.59 只把 DEV 钩子摊宽**（生产行为一个字没动）：`printHtml()` 的返回值多三枚——`defaultFont`（侧通道里那一层本体，冒烟据此分辨"文件说的"与"我们兜的"）、每张计划里的 `basePx`（计划算出的正文底数）、`baseVars`（那份 HTML 里所有 `--oof-print-base-size:<px>` 的含值列表，按张核）；**v0.60 添第四枚侧通道 `sheetFormatRef`**（按表名持有 `SheetFormat`，与前三枚同一脾气：加载时从 `sheets[].sheetFormat` 挂上、换标签复位、改名随 `migrateSheetName` 一起迁、在 `payloadWithCharts` 的漏斗里回贴，且 `if (f && !sheet.sheetFormat)`——快照自己说出来的那一张永远赢）；这一枚与 `defaultFontRef` 方向相反：`IWorksheetData.defaultRowHeight` 在 Univer 里是**活口**（喂了就界面认、而 Excel 根本不认它），所以这里**只收不放**——不喂编辑器也不喂纸面，只为存盘时原样落回；DEV 钩子 `printPlan()` 因此多一枚 `sheetFormats`，冒烟据此问得出"这一层交回了什么"，而结构测试那头的钉是"五个消费点里 `sheetFormat` 出现零次"；**v0.62 只撤两行**——`hasSide` 那枚判定与「ODS 暂不含批注与超链接」那句账目，因为 `.ods` 这两样现在真读得回也写得出，而另三句 ODS 账（图表／三类规则／页面设置）与 CSV 那句照旧立着（结构腿判的就是"撤干净了且只撤了这一句"）；**v0.63 只动两行**——`.ods` 那一路的 `await writeOds(...)` 改成 `writeNotes.push(...(await writeOds(path, payload)))`，于是写侧的账与 xlsx 那头走同一条汇合（`[...lost, ...writeNotes]` → 状态栏 `已保存（第一条，另有 N 条说明）`），另一行是把注释里的例子换成"规则摆不进 OOXML、批注落在被盖住的格上"；拼句的公式、`lost` 那三句 ODS 账与 CSV 那句一个字没动（本轮没有新桥：`sheet-cell-side.ts` 的取与放早就是格式无关的）；**v0.67 只动两行**——挂载点那一句 `readXlsx(tab.path)` 换成 `takeWorkbook(tab.path) ?? readXlsx(tab.path)`（这一趟的 IPC 早在外壳开标签那一刻就发出去了，这里只是把它取来用；取不到——不是从路径开的、或已被别处取走——才自己发一次，**不假设外壳一定先跑**），另一行是那条注释改口（它还写着 v0.35 的"先把 IPC 发出去，实例同时在造"，而现在发得比挂载更早）；dev 下 `React.StrictMode` 的双挂载会让第一趟消费掉 prefetch 而第二趟走自备那一路，于是**开发模式开一次表格标签读到两次件**（真机 S5 量到 `read_xlsx` 的条目 2→4）——这是 dev 独占的形状不是缺陷，判据钉的是"取在前、发在后"那个 `??` 顺序而不是"只发一次"，反过来为 dev 好看而阻塞第二趟就是拿生产行为换开发控制台；**v0.69 存盘那一段开始说话**——`busy.arm()` 排在 `wb.save()` **之前**（那是同步块的头，门晚一纳秒都量不到它）、`await pickSaveFile` 之前 `busy.cancel()` 之后取完路径再 `busy.arm()`（另存为挑路径可以挂几分钟，那句「正在保存…」留着就是说谎）、`setStatus(saveDoneText(notes))` 排在把成功交回那一路而 `finally` 里再撤一次门、失败那一句走 `failStatus(e, '保存失败')` **把「正在保存…」原地换掉**（不清就等于让用户以为还在写盘，原话照旧留在悬停里）；收尾那句的清除定时器 `doneClearRef` 挂在存盘最开头，于是同一个标签补跑的那一趟会**先把上一趟的「已保存」撤掉**（不撤的话第二趟还在写而屏上已经写着"已保存"，那是这一轮最像成功的错）；接线只有 `busy` 那三行与 `saveTab` 那两行，句子与时钟一律在 `lib/save-status.ts` / DocEditor（页面设置含分栏/页码格式、分页参考线、分页符、表格与图片上下文工具条、粘贴成图、查找替换面板、字体族·字号、缩进工具条与 Ctrl+]/[、上下标 X²/X₂、表格上下文条的底纹色与竖排对齐（上/中/下）、脚注/尾注（工具栏插入 + 文末分区编辑与定位/删除，打印时文本框换静态块）、版本历史·自动保存、模板 seed、状态栏字数节流；**v0.88 给边框这一层建了界面上的把手**（此前读与写两条链路自 v0.38/v0.39 就齐着，而全仓 `.tsx` 里 `bd*` 零命中＝用户一个字都改不了）——段落四边（`.doc-para-bar`）与单元格四边（`.doc-table-bar`）共用同一排 `bdRow(cur, write, suppress)`：先选线型/磅/颜色，再点要加的边，点已着边的边＝取消这一边；「着边」只认真线（`borderParts(…) !== null`，`'none'` 不算），「清除」写 `null` 而单元格那一路（`suppress=true`）多一枚「压掉」写 `'none'`（表格自带一圈表级边框，不显式压就盖不掉），一次「四周」只推一枚改文档的事务；打开 .docx 保真导入优先、mammoth 兜底，保存按 .odoc/.odt/.docx 各自格式原地落盘；**v0.71 把这一头分成两层**——
   **写手** `writeDocxTo`/`writeOdtTo`（只 `prosemirrorTo*Bytes` → `writeBytes` → `markRecent`，不碰 store、不发句子，
   DEV 冒烟钩子指向它们，判据 D7c/D7d 钉"写手自己不说那句话、不替标签记账"）与**动作** `saveOdoc`/`exportAs`
   （各自决定说什么、记不记账、失败走哪张面孔）：改前的形状是句子挂在写手身上，于是**文件真写进去了、说了「已保存（docx）」、
@@ -4909,6 +4994,35 @@ cargo check        # Rust 后端检查（在 src-tauri 下）
       （`gen-fx.mjs` 首版就是这形状，于是分批那一路从头到尾没被量到过）
 - [ ] **分批喂与读全闸门只做在文档这一头**：表格 / 演示的"读没读全"仍没有这本账，它们的写出口也没有闸
       （Univer 快照与 `Deck` 是一次性到位的形状，是否需要同样的闸门要先量出"读到一半"这一档在那两头存不存在）
+- [x] **文档：边框这一层在界面上没有把手**（读与写自 v0.38/v0.39 就全通，而全仓 `.tsx` 里 `bd*` 零命中 ⇒ 用户一个字
+      都改不了）——**v0.88 已建**：段落四边（`.doc-para-bar`）与单元格四边（`.doc-table-bar`）共用同一排 `bdRow`
+      （先选线型/磅/颜色，再点要加的边，点已着边的边＝取消这一边，一次「四周」只推一枚改文档的事务），三态各有出口
+      （「清除」写 `null` 收回未声明；「压掉」写 `'none'` 落 `w:val="nil"`，只在单元格那一路出现，因为表级边框不显式压
+      就盖不掉——Word 只读腿从第三方那头证实了未声明的边照样解出线来）；界面按磅显示、属性存 px，换算只写 `borderCss`
+      一处（0.5 磅 → 0.67px → `w:sz="4"`，与 Word 自己写下的字节同形）。同轮修掉两处静默：**表头格上 `&&` 短路的整条
+      no-op**（v0.38 起边框/底纹/竖排对齐在表头格上全都写不进去，普通格上又被第二型 false 记成失败），与
+      **Word 虚线 `dashSmallGap` 一族读成实线**（`CSS_BORDER_STYLE` 补 `dashSmallGap`/`dashLargeGap`/`dotDotDash`/
+      `dashDotStroked` → `dashed`）
+- [ ] **段落的第五边 `w:between` 仍未接**（v0.88 由字节腿当场数出代价：往返件里 **7 枚段落丢掉这一边**）：读侧没有这一枚
+      ⇒ PSINGLE5 与 PSINGLE4 的 attrs 逐字相同且零告警，写侧也没有出口；COM 那头 `Borders.Item(5)` 对段落抛
+      「集合要求的成员不存在」（单元格才有 e5）⇒ 这一格只能由 OOXML 字面判
+- [ ] **异形线型一律静默降档**（v0.88）：我们写的 `dashed` 在 Word 读成另一档虚线（件里 `style3` → 件外 `style4`，
+      Word 对话框写 `dashSmallGap`(3) 而 `dashed` 对回 `DashLargeGap`(4)），`thinThick*` / `thickThin*` / `threeD*`
+      在 CSS 里没有对应表达 ⇒ `CSS_BORDER_STYLE` 认不出的按 solid 兜底，**明写不做界面**（四档线型之外不扩张）
+- [ ] **`w:val="nil"` 在 Word 的 `Borders.Item` 上读不成一致**（v0.88 Word 只读腿：我们写死的四条 nil，报 e1=`style1`、
+      e2/e3=`style0`、e4=`style1`）：本轮**未归因**，且与 v0.38 那条「单元格边框的保真一律比 OOXML 字面、COM 只留外框」
+      的老规矩并存 ⇒ 判据仍以字节为准，这一格只记读数不作结论
+- [ ] **`w:space`（边框离字）没有到达面**：这台机器的 Word 报 `Border.Space` property not found，而它自己写出的件恒为
+      `w:space="0"`（我们从不写这一枚）⇒ v0.39 那条「间距未保留」告警到 v0.88 仍只能由手造件判
+- [ ] **样式级 `w:pBdr` 摊平后「清除」可能压不掉**（未量）：读侧早把样式链那层合并进段落自己名下（docx-fidelity 的
+      `effPPr`），编辑器里没有「一条样式边框等着被盖」这一层，所以界面只给「清除」不给「压掉」；第三方件里由样式带来的
+      边在「清除」之后 Word 那头还在不在，本轮没有判据
+- [ ] **v0.88 没有 release A/B**：到得了「重跑那一拍」的注入缝是 DEV-only 的，而本轮买的是界面那一排——它在 release 上
+      长同样的形状（同一个组件、同一份 CSS）却**只有形状推断**（v0.83 那条同族未勾项原样挂着）
+- [ ] **纸上有没有边框从来没正面量**（v0.88 前置实测明记的一条）：本轮的证据全在屏幕 DOM、docx/odt 字节与 Word 只读
+      三头，"边框进不进导出 PDF"没有判据（v0.49 那条「屏幕上的颜色先穿过 CSS 变量」管的是主题色，边框是内容自己
+      声明的，照规矩该上纸而没人量过）
+- [ ] **表级边框摊进每一枚单元格**（2 枚 `w:tcBorders` → 6 枚，外观相同而字节膨胀）：v0.88 前置实测记下的形状，没动
 - [ ] macOS 打包（需签名/公证凭据）
 
 ## License

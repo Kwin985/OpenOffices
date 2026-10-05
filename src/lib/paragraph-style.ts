@@ -1,5 +1,5 @@
 import { Extension, type CommandProps, type Editor } from '@tiptap/core'
-import { CELL_EDGES, bdAttr, inlineBorder, rgb2hex, type CellEdge } from './cell-style'
+import { CELL_EDGES, bdAttr, edgeAttrs, inlineBorder, rgb2hex, type CellEdge } from './cell-style'
 
 /**
  * 段落的排版属性：行距、段前段后、底纹与四边边框。
@@ -109,6 +109,13 @@ declare module '@tiptap/core' {
       setLineSpacing: (value: number | null, rule?: LineRule) => ReturnType
       /** 段前段后（CSS px）；传 null 清除 */
       setSpaceAround: (before: number | null, after: number | null) => ReturnType
+      /**
+       * 若干条边的边框：规范串加上，`null` 回到未声明。
+       * 段落这一头界面只给「清除」不给「压掉」：读侧把样式链那层 pPr 合并进了段落自己名下
+       * （docx-fidelity 的 effPPr），编辑器里没有「一条样式边框等着被盖」这一层；
+       * 实测 Word 去掉段落某条边时也是干脆不写那一枚。
+       */
+      setParaBorders: (edges: readonly CellEdge[], value: string | null) => ReturnType
     }
   }
 }
@@ -193,6 +200,7 @@ export const ParagraphStyle = Extension.create({
       setLineSpacing: (value, rule) =>
         set({ lineHeight: value, lineRule: value === null ? null : (rule ?? 'auto') }),
       setSpaceAround: (before, after) => set({ spaceBefore: before, spaceAfter: after }),
+      setParaBorders: (edges, value) => set(edgeAttrs(edges, value)),
     }
   },
 })

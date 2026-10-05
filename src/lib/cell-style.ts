@@ -1,4 +1,5 @@
 import { Extension } from '@tiptap/core'
+import type { CommandProps } from '@tiptap/core'
 import { TableView } from '@tiptap/extension-table'
 import type { Node } from '@tiptap/pm/model'
 import type { EditorView } from '@tiptap/pm/view'
@@ -31,6 +32,11 @@ export const CSS_BORDER_STYLE: Record<string, string> = {
   dashed: 'dashed',
   dotdash: 'dashed',
   dashdot: 'dashed',
+  // Word 的「虚线」对话框档位实际写的是 dashSmallGap，点划线族同理——不列进来会静默读成实线
+  dashsmallgap: 'dashed',
+  dashlargegap: 'dashed',
+  dotdotdash: 'dashed',
+  dashdotstroked: 'dashed',
   triple: 'double',
   wave: 'solid',
   inset: 'inset',
@@ -82,9 +88,56 @@ export function borderParts(v: string | null | undefined): BorderSide | null {
 export const CELL_EDGES = ['top', 'right', 'bottom', 'left'] as const
 export type CellEdge = (typeof CELL_EDGES)[number]
 
+/** 边的属性名是 schema 里那几个字面量，收成联合类型好让属性补丁不必整体断言 */
+const BD_ATTR: Record<CellEdge, 'bdTop' | 'bdRight' | 'bdBottom' | 'bdLeft'> = {
+  top: 'bdTop',
+  right: 'bdRight',
+  bottom: 'bdBottom',
+  left: 'bdLeft',
+}
+
 /** 单元格上存的边属性名：bdTop / bdRight / bdBottom / bdLeft */
-export function bdAttr(edge: CellEdge): string {
-  return `bd${edge[0].toUpperCase()}${edge.slice(1)}`
+export function bdAttr(edge: CellEdge): 'bdTop' | 'bdRight' | 'bdBottom' | 'bdLeft' {
+  return BD_ATTR[edge]
+}
+
+/** 四条边的属性补丁：段落的 bd* 与单元格的 bd* 同名，两家的命令共用这一处 */
+export type BorderPatch = Partial<Record<'bdTop' | 'bdRight' | 'bdBottom' | 'bdLeft', string | null>>
+
+export function edgeAttrs(edges: readonly CellEdge[], value: string | null): BorderPatch {
+  return Object.fromEntries(edges.map((e) => [bdAttr(e), value])) as BorderPatch
+}
+
+/** 单元格节点上的样式补丁：底纹、竖排对齐、四条边——三枚命令共用一个写入形状 */
+export type CellPatch = Partial<
+  Record<'background' | 'vAlign' | 'bdTop' | 'bdRight' | 'bdBottom' | 'bdLeft', string | null>
+>
+
+/** 边的界面文案（顺序跟 CELL_EDGES 走，工具条上就按这个顺序排） */
+export const EDGE_LABEL: Record<CellEdge, string> = { top: '上边', right: '右边', bottom: '下边', left: '左边' }
+
+/** 界面上可选的线型：只列 CSS 真表达得了的那四档，异形线型（thinThick 之类）这里给不了 */
+export const BORDER_STYLES: { css: string; label: string }[] = [
+  { css: 'solid', label: '实线' },
+  { css: 'dashed', label: '虚线' },
+  { css: 'dotted', label: '点线' },
+  { css: 'double', label: '双线' },
+]
+
+/**
+ * Word 边框对话框的磅值梯子。界面按磅给、属性里存 CSS px，而这九档往返是稳定的：
+ * 0.5 磅 → 0.67px → `w:sz="4"` → 0.67px，与 Word 自己写下的字节同形。
+ */
+export const BORDER_WIDTH_PT = [0.25, 0.5, 0.75, 1, 1.5, 2.25, 3, 4.5, 6]
+
+/**
+ * 界面三件（线型/磅/颜色）→ 规范边框串。
+ * 线型只从 BORDER_STYLES 来、颜色只从 `<input type=color>` 来（必为 `#rrggbb`），
+ * 所以拼出去的就是规范串本体，不再走 cssBorder 归一——那条路会给 null，
+ * 而 null 在这套三态里是「清除这一边」，不能让一次「加边框」点下去变成清东西。
+ */
+export function borderCss(style: string, pt: number, hex: string): string {
+  return `${round2(pt * (4 / 3))}px ${style} ${hex}`
 }
 
 /** OOXML `w:sz`（1/8 磅）→ CSS 像素 */
@@ -112,6 +165,11 @@ declare module '@tiptap/core' {
       setCellBackground: (color: string | null) => ReturnType
       /** 给选中的单元格设竖排对齐（top/middle/bottom）；传 null 清除 */
       setCellVAlign: (align: string | null) => ReturnType
+      /**
+       * 给选中的单元格把若干条边一起设成同一个值：规范串加边框，`'none'` 压掉表级边框，
+       * `null` 回到未声明。一次调用一条事务——「四周」点一下应该只撤销一次。
+       */
+      setCellBorder: (edges: readonly CellEdge[], value: string | null) => ReturnType
     }
   }
 }
@@ -196,17 +254,21 @@ export const CellStyle = Extension.create({
   },
 
   addCommands() {
+    /**
+     * 表头行是与普通格并列的一种节点，命令必须两型都试、谁在场就落谁身上。
+     * 旧的 `updateAttributes('tableCell',…) && updateAttributes('tableHeader',…)` 实测（v0.88）
+     * 在表头格上因为第一型返回 false 而短路 ⇒ 整条静默 no-op（边框/底纹/竖排对齐都写不进去），
+     * 在普通格上又因为第二型返回 false 而把链上这一步记成失败。段落那一头早就用 `.some(Boolean)`。
+     */
+    const setCell =
+      (attrs: CellPatch) =>
+      ({ commands }: CommandProps): boolean =>
+        [commands.updateAttributes('tableCell', attrs), commands.updateAttributes('tableHeader', attrs)].some(Boolean)
+
     return {
-      setCellBackground:
-        (color: string | null) =>
-        ({ commands }) =>
-          commands.updateAttributes('tableCell', { background: color }) &&
-          commands.updateAttributes('tableHeader', { background: color }),
-      setCellVAlign:
-        (align: string | null) =>
-        ({ commands }) =>
-          commands.updateAttributes('tableCell', { vAlign: align }) &&
-          commands.updateAttributes('tableHeader', { vAlign: align }),
+      setCellBackground: (color: string | null) => setCell({ background: color }),
+      setCellVAlign: (align: string | null) => setCell({ vAlign: align }),
+      setCellBorder: (edges: readonly CellEdge[], value: string | null) => setCell(edgeAttrs(edges, value)),
     }
   },
 })
