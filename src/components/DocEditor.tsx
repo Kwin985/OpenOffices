@@ -47,6 +47,7 @@ import { ParagraphStyle, ruleOf, type LineRule } from '../lib/paragraph-style'
 import { FindReplace, frPluginKey, activeIndexOf } from '../lib/find-replace'
 import { docTemplate } from '../lib/templates'
 import { odtToHtml, prosemirrorToOdtBytes } from '../lib/odt'
+import { planFeed, runFeed, type FeedSource } from '../lib/doc-feed'
 import { registerSaver, runExclusive } from '../lib/registry'
 import { failDialog, failStatus, statusText, statusTip } from '../lib/fail-msg'
 import { saveDoneTimer } from '../lib/save-status'
@@ -227,6 +228,10 @@ function DocEditor({ tab }: Props) {
       counts: () => counts,
       notes: () => notesOf(editor),
       insertNote: (kind: NoteKind, text: string) => editor.commands.insertNote(kind, text),
+      // v0.87 分批喂那一路的三格可观测量：读全账、可编辑位、窗口内的程序化改动能不能活过批次
+      whole: () => docIsWhole(),
+      editable: () => editor.isEditable,
+      dispatchEdit: () => editor.commands.insertContentAt(1, '探针'),
     }
     const byTab = (w.__oofDocCtlByTab as Record<string, typeof ctl> | undefined) ?? {}
     byTab[tab.id] = ctl
@@ -346,9 +351,52 @@ function DocEditor({ tab }: Props) {
     }
   }, [editor])
 
+  // —— 分批喂那一路的"读全"账（v0.87）——
+  // 形状照 v0.81 那四条规矩：按**这一趟载入的身份**记而不是布尔、持有在 ref 里、失败不记账、全仓不销账。
+  // 为什么这格必须是闸门：28029 块的件分批喂要吃 1097ms，其间屏上已经有半份文档，
+  // 而 Ctrl+S / 导出 / 自动保存读的是 editor.getJSON() ⇒ 拿到的就是那半份，写出去直接覆盖盘上的全文
+  // （改前不是没有这一格——改前是"一次跳到位"，所以没有中间态；引入分批就等于引入中间态，闸门是它的对价）。
+  // 失败那一路同一条通道买的东西：载入失败的件今天也能按 Ctrl+S，把半份（其实是空份）写回原文件。
+  interface LoadRun {
+    started: number
+  }
+  const loadRunRef = useRef<LoadRun | null>(null)
+  const loadReadRef = useRef<LoadRun | null>(null)
+  // 谁把 editable 关掉的：只许由同一趟放开（被作废的旧趟不许把活着一趟的输入闸打开）
+  const editableRunRef = useRef<LoadRun | null>(null)
+
+  // 只有当前这趟载入被记过账才算读全；refs 都为 null（editor 还没建好）时判"没读全"，宁可拒也不抹
+  const docIsWhole = () => loadRunRef.current !== null && loadReadRef.current === loadRunRef.current
+  const refuseUnread = () => {
+    if (docIsWhole()) return false
+    setStatus('文档还没读全（正在读取或读取失败），现在存出去的是半份文档')
+    return true
+  }
+  const releaseEditable = (run: LoadRun) => {
+    if (editableRunRef.current === run) {
+      editableRunRef.current = null
+      editor?.setEditable(true, false)
+    }
+  }
+
   useEffect(() => {
     if (!editor) return
     let disposed = false
+    const run: LoadRun = { started: Date.now() }
+    loadRunRef.current = run
+    // 一处出口决定两件事：这份内容够不够大要分批，以及分批时先把输入闸关上。
+    // 单片那一路原样保留今天的形状（连 emitUpdate 的默认值都不动），闸门也就不碰它。
+    const applyContent = async (src: FeedSource, hint?: number) => {
+      const plan = planFeed(src, hint)
+      if (!plan) {
+        editor.commands.setContent(src.kind === 'html' ? src.html : src.doc, { emitUpdate: src.emitUpdate })
+        return
+      }
+      // 认领按"最后走进分批的那一趟"算：被作废的旧趟不许在活着一趟还在喂的时候把闸放开
+      editableRunRef.current = run
+      editor.setEditable(false, false)
+      await runFeed(editor, plan, src, () => disposed || loadRunRef.current !== run)
+    }
     ;(async () => {
       if (!tab.path) {
         if (tab.template) {
@@ -357,6 +405,7 @@ function DocEditor({ tab }: Props) {
           setMeta(t.meta)
           markDirty(tab.id, false)
         }
+        loadReadRef.current = run
         setStatus('')
         return
       }
@@ -378,7 +427,7 @@ function DocEditor({ tab }: Props) {
           }
           if (!disposed) {
             if (fid) {
-              editor.commands.setContent(fid.html)
+              await applyContent({ kind: 'html', html: fid.html, emitUpdate: true }, fid.blocks)
               setMeta(fid.comments.length ? { ...m, comments: fid.comments } : m)
               if (fid.comments.length) setCmOpen(true)
               if (fid.warnings.length)
@@ -386,7 +435,7 @@ function DocEditor({ tab }: Props) {
             } else {
               const baseHtml = await docxToHtml(bytes)
               const { html, comments } = await docxToCommentHtml(bytes, baseHtml)
-              editor.commands.setContent(html)
+              await applyContent({ kind: 'html', html, emitUpdate: true })
               setMeta(comments.length ? { ...m, comments } : m)
               if (comments.length) setCmOpen(true)
             }
@@ -394,7 +443,7 @@ function DocEditor({ tab }: Props) {
         } else if (tab.path.toLowerCase().endsWith('.odt')) {
           const bytes = await readBytes(tab.path)
           const { html, meta: m, warnings } = await odtToHtml(bytes)
-          if (!disposed) editor.commands.setContent(html, { emitUpdate: false })
+          if (!disposed) await applyContent({ kind: 'html', html, emitUpdate: false })
           if (!disposed && Object.keys(m).length) setMeta(m)
           if (!disposed && m.comments?.length) setCmOpen(true)
           // 与 docx 那条同一套边界账：文字类构件（文本框、公式）展平时在这里说清楚，不静默
@@ -404,16 +453,24 @@ function DocEditor({ tab }: Props) {
           const text = await readText(tab.path)
           const parsed = JSON.parse(text) as { content?: PMNode; meta?: DocMeta }
           if (!disposed) {
-            editor.commands.setContent(parsed.content ?? { type: 'doc', content: [] })
+            const doc = parsed.content ?? { type: 'doc', content: [] }
+            await applyContent({ kind: 'json', doc, emitUpdate: true }, (doc.content ?? []).length)
             setMeta(parsed.meta ?? {})
             if (parsed.meta?.comments?.length) setCmOpen(true)
           }
         }
-        if (!disposed) setStatus(note)
-        markDirty(tab.id, false)
+        // 记"读全"的账只发给当前这一趟：被作废的旧趟（StrictMode 双挂载 / 换件）不许替新趟开门，
+        // 而失败那一趟根本走不到这里（catch 不记账）
+        if (!disposed && loadRunRef.current === run) {
+          setStatus(note)
+          markDirty(tab.id, false)
+          loadReadRef.current = run
+        }
       } catch (e) {
         console.error(e)
         setStatus(failStatus(e, '加载失败'))
+      } finally {
+        releaseEditable(run)
       }
     })()
     return () => {
@@ -439,6 +496,9 @@ function DocEditor({ tab }: Props) {
 
   const saveOdoc = async (asNew: boolean) => {
     if (!editor) return
+    // 读全闸门（v0.87）：分批喂的中间态与载入失败那一路都还没有"这份文档是完整的"的账，
+    // 而这一趟读的是 editor.getJSON() ⇒ 不拦就是拿半份（或空份）覆盖盘上的全文
+    if (refuseUnread()) return
     const cur = tab.path
     // .odt / .docx 标签的 Ctrl+S 原地按各自格式导出，不能把 JSON 存档写进 Office 扩展名
     const inPlace = !asNew && cur && /\.(odt|docx)$/i.test(cur) ? cur : ''
@@ -490,6 +550,7 @@ function DocEditor({ tab }: Props) {
   // 所以这一路说「已导出 X」且不清 ● —— 与演示头的「已导出 pptx」同一个说法（v0.71 之前它说的是「已保存（docx）」）
   const exportAs = async (ext: 'docx' | 'odt') => {
     if (!editor) return
+    if (refuseUnread()) return
     const path = await pickSaveFile(
       (tab.path ? baseName(tab.path).replace(/\.[^.]+$/, '') : '未命名文档') + `.${ext}`,
       [ext],
@@ -519,6 +580,7 @@ function DocEditor({ tab }: Props) {
   }
 
   const exportPdf = async () => {
+    if (refuseUnread()) return
     try {
       const path = await pickSaveFile(
         (tab.path ? baseName(tab.path).replace(/\.[^.]+$/, '') : '未命名文档') + '.pdf',
@@ -628,6 +690,9 @@ function DocEditor({ tab }: Props) {
   // —— 自动保存与版本历史（会话内）：内容有变化才入栈，最多 20 份 ——
   const pushHist = (note: string) => {
     if (!editor) return
+    // 快照吃的是同一份 getJSON()：读全之前存进来的快照就是一张半份文档的照片，
+    // 而历史面板会把它当"某一时刻的真件"供人恢复（v0.87；60 秒那一枚定时自动走这里）
+    if (!docIsWhole()) return
     const json = JSON.stringify(editor.getJSON())
     const metaJson = JSON.stringify(meta)
     setHist((h) => {
@@ -665,6 +730,9 @@ function DocEditor({ tab }: Props) {
     let timer: number | undefined
     // 这一路真正敲一次门的动作：定时那一枚与焦点探写共用同一份，区别只在"什么时候被允许跑"
     const attempt = async () => {
+      // 读全闸门（v0.87，静默版）：这一路没有用户按下那一下要回应，说句子只会变成噪音；
+      // 而它读的同样是 getJSON()——载入失败/还在分批喂的中间态放行的话，每 30 秒就覆盖一次盘上的全文
+      if (!docIsWhole()) return
       const s = useApp.getState()
       if (!s.tabs.some((t) => t.id === tab.id && t.dirty)) return
       // v0.74 实测（三趟全重现）：这一路改前直接调 writeText、绕过 registry 的在途锁，
@@ -735,6 +803,8 @@ function DocEditor({ tab }: Props) {
 
   const restoreHist = (h: { json: string; metaJson: string; note: string }) => {
     if (!editor) return
+    // 快照恢复是整片 setContent：读全之前放行等于拿一份不知道缺了哪里的旧快照盖掉正在读的那份
+    if (refuseUnread()) return
     pushHist('恢复前')
     editor.commands.setContent(JSON.parse(h.json), { emitUpdate: false })
     setMeta(JSON.parse(h.metaJson) as DocMeta)

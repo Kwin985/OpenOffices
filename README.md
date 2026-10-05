@@ -3847,6 +3847,71 @@ publish）是异步的** ⇒ 在两者之间按 Ctrl+S，内存此刻**不是文
   改口成"已备份"并新开上述四枚未勾项；现场三枚钥哈希与清单逐字相同、仓库零沾染、明文临时残留 0 枚、
   全程未碰已装正式版。
 
+## 大件不再一口气喂进编辑器：阈值分批喂 + 文档读全闸门（v0.87）
+
+「继续对齐 WPS，完善文档处理功能与性能」自选口径：文档这一头的**打开链路从来没分段量过**（v0.34~v0.36 量的是
+表格首开与 PDF，v0.66~v0.68 量的是 PDF/表格的 IPC）。窄口径：新增 `src/lib/doc-feed.ts`（137 行，纯函数 + 喂料
+通道）+ `DocEditor.tsx` 接线（+76 / −6），**Rust 一个字没动**。
+
+- **前置实测（tmp/x87，只量不改产品；dev 打点 + release 真机 10ms 采样）五批**：① 分段构成（legA，8 件）——瓶颈在
+  **最后一口气**：`.odoc` 的 `setContent` 139.6ms（5000 块）/ 300.7ms（24000 块），而同件的读件 16.8 / 55.5ms、
+  `JSON.parse` 0.8 / 4.2ms、docx 的保真导入 5ms；② 现象（legB dev + legD/legD-small release）——**fx1000.docx 打开时
+  主线程空档 964ms、单枚最长同步块 555ms**、正文首现 1097ms；fx1000.odoc 417/255/483；fx250.odt 188/108/225；
+  **而小件（71 / 1869 / 5000 块）空档 ≤92ms、长任务 ≤53ms**——5000 块这一档本来就谈不上"卡"，5056 块的 `.odt`
+  已经要 188ms ⇒ 阈值 **5000** 是量出来的分界，不是拍的；③ 通道候选（legC2，15 形状逐节点对参照）——**增量追加这条路走不通**：
+  只有纯 `paragraph` 那 2 枚与整片 `setContent` 相同，heading / bulletList / orderedList / table / blockquote / codeBlock
+  一律**多出一枚空段**（PM 的 `appendTransaction` 在容器后面补可编辑段落），块数从 5840 变 5841；④ 通道裁决（legC5，8 枚 mini
+  + 四件 A/B）——A1（追加 + 边界撤填充）在 fx250.docx / fx1000.docx 上**仍然 diverged**（第一处不同 `at=1612`），撤填充补不了
+  那一档；**C2（JS 侧累加 `Fragment`、从不读活文档，每批整片换回）四件全部逐节点相同**，且把最长同步块拆小（fx1000.docx
+  796ms → 批间 156ms，正文首现 1072ms → 30ms）；⑤ 批次大小（legC6，400/1500/4000 三档 × 三件）——整趟代价三档基本持平
+  （fx1000.docx 全量上屏 1155 / 1100 / 1115ms）⇒ 4000 与"首屏 12 块另走一档"。
+- **本轮唯一的架构决定（跟着数据走）：阈值分批喂 + 文档读全闸门，只对大件生效**，四条形状：① `planFeed` 只在
+  `hint > FEED_THRESHOLD(5000)` 时给计划（html 侧先按串长廉价预筛、再有一道"顶层裸文本就不切"的安全闸；json 侧数
+  `doc.content`），阈值以下**原样走今天的单片 `setContent`**，一条已量过的路径都没碰；② 喂料通道只吃实测唯一等价的 C2——
+  批批 `tr.replaceWith(0, doc.content.size, acc)` + `addToHistory:false`，非末批 `preventUpdate:true`（末批才 emitUpdate），
+  首屏两帧 rAF、批间 `setTimeout 0` 让出主线程，`stopped()` 按**这一趟的身份**取消；③ **读全闸门**沿用 v0.81 那本账的四条形状
+  （按身份记、持有在 ref、失败不记账、全仓不销账）——六个写出口里四条说话（`saveOdoc` / 另存为 / 导出 PDF / 历史回滚）两条
+  静默（快照、`.odoc` 定时自动保存）；④ 喂料窗口内把编辑器 `editable` 关掉，释放只认自己那一趟（`finally` + 身份卫兵）。
+- **闸门买到的那一格在 release 上是真缺陷**（A3）：0.86 上打开 fx1000.docx（741615 B），在块数还是空种子 `1` 的那一拍按下
+  **真** Ctrl+S（`isTrusted: true`）⇒ 写请求真的出门（`plugin:fs|write_file@121+7`），盘上那 741615 B 的件被换成
+  **8563 B**，而状态栏说的是「已保存」。0.87 同一拍：写 IPC `[]`、盘上哈希一字没动、拒存那句上屏 15 拍（A4/A5），
+  对照件同一拍既没有拒存句也没有那句话之外的任何东西（A6）。
+- **release A/B 的账**（`legE-judge` **total=16 pass=16 fail=0 skip=1**；对照件＝改动前从 HEAD 当场构建的 0.86 exe，保留原进程名）：
+  大件三枚逐件都被拆小——采样空档 fx250.odt 210→155 / fx1000.odoc 499→158 / fx1000.docx 951→283，最长同步块 odoc 335→157、
+  docx 572→269（**odt 110→118 按"持平"记而不写成收益**——这件只有 5056 块，对照件本来最长才 110ms，谈不上冻结）；
+  正文首现 249→86 / 572→86 / 1106→**344**；过阈的件真的分批（块数出现过的值：对照件每件三枚 `-1,1,全量`，实验件四到八枚
+  `-1,1,12,8012,…`）；代价按判据吃了——**全量上屏 ≤ 对照件 ×1.2**（odt 249→241、odoc 572→507、docx 1106→1290＝1.17×）；
+  阈值以下三枚件两臂形状逐格相同（`-1,1,71` / `-1,1,1869` / `-1,1,5000`，空档 20→15 / 63→61 / 49→85ms）⇒ 没回归；
+  两臂页面异常各 0 条、夹具哈希前后逐字相同；**A16 写成显式 SKIP**（见下述未勾项①）。
+- **CDP dev 真机腿 6 段 / 页面异常 0 条**（`RESULT legF runs=6 … exceptions=0`，只吃形状）：A 大件形状（顶层块 24000、
+  模型值 8 种、`editable` 关 7 拍首 155ms、whole 假 12 拍 / 真首拍 983ms）；B 闸门两拍（喂料中按真键 ⇒ 拒存句 4 拍、
+  写 0 枚、盘未动；读全之后**同一路**按下 ⇒ 写 1 枚 `write_text_file`、已存句 150 拍、哈希 `7f17…→0ad3…`）；
+  C 喂料窗口里的程序化改动（量成未勾项③那格）；D 小件 5000 块（模型值三枚、`editable` 关 **0** 拍、whole 真首拍 141ms、
+  拒存 0 拍 ⇒ 阈值以下这条路一步没走）；E 坏件（截半的 `.odoc` ⇒ `JSON.parse` 必抛：拒存句 144 拍、写 0 枚、whole 永不真、
+  盘未动，而**重试把手 0 枚**＝未勾项②）；F 喂料中关标签再重开（24000 块读全、写 0 枚 ⇒ 被作废那趟没留下半个字节的假成功）。
+- **验证（腿 + 编译，全部在版本号 bump 三处对齐之后跑）**：结构腿 **28/28**（B0 自检 3/3；F1~F13 阈值与通道形状、
+  E1~E15 闸门六出口与 DEV 钩子三格，E13 钉"旧形状没复活"、E8 钉"catch 里零枚 loadReadRef"）；变异腿 **25 枚（P0/P1 两枚
+  正控制 + M1~M23）/ BAD 0 / 多打中 0 / 基线 struct=28/28**（M5 累加退化成每批覆盖、M6 整片换回改成就地插入、M13 失败也记账
+  响 E6+E8、M16 读全账退化成布尔、M20 `.odoc` 分支退回裸 `setContent` 响三枚）；release A/B 16/0 + 1 SKIP；dev 真机 6 段
+  0 异常；`cargo test --lib` **97 通过 / 0 失败 / 11 ignored**（Rust 本轮一个字没动）+ tsc exit 0 +
+  `pnpm tauri build --no-bundle` 绿（openoffices v0.87.0）。
+- **量具坑四处，都不是产品**：① **`.odoc` 夹具不 representative**——`gen-fx.mjs` 把 `.odoc` 写成 `{content: 节点数组}`，
+  而产品写的是 `{app,kind,version,content:<整枚 doc 节点>,meta}`；数组形状下 `planFeed` 的 json 分支拿不到 hint
+  （`doc.content` 是 undefined ⇒ 0）⇒ **分批那一路从来没被量到**（是 exp 臂的 fx1000.odoc 与 ctrl 逐格相同才暴露）。
+  修法 `fix-odoc.mjs` 只重包外层、节点文字一字不改（块数仍 5000 / 24000），然后**两臂都重跑**，修前那批 odoc 读数一律不当证据；
+  ② 腿自己的解构默认值 `settle(name, { timeoutMs = 90_000 })` 单参调用直接 TypeError——第一跑只跑到 WARM 就 THREW，
+  这是腿不是产品（补 `= {}`）；③ **release 的 exe 里 grep 中文字面必然 0 命中**（前端资源压缩内嵌）⇒ 判两支 exe 不同
+  只能靠哈希与真机行为；④ `Input.dispatchKeyEvent` 在 release 上给的是 `isTrusted: true` 的**真按键** ⇒ "没读全就按 Ctrl+S"
+  这一格第一次有了到达面（A1 两臂各一枚，按下时块数都还是 `1`＝比的确实是"拦不拦"而不是"读到哪了"）。
+- **本轮没动的，量出来记着**（已开进路线图）：① **阈值以下（≤5000 块）的件在载入窗口内按 Ctrl+S 会不会被拒——这一格本轮没量**
+  （A16 显式 SKIP；闸门判的是读全账、与阈值无关，但小件那一路的拒存形状没人量过）；② **载入失败那一路只有拒绝、没有重试把手**
+  （v0.83 那枚把手只长在 PDF 那一头，文档头没建，dev E 段把手 0 枚）；③ **喂料窗口内工具栏/程序化改动会被下一批整片覆盖**
+  （`editable:false` 只挡用户输入、不挡 `view.dispatch`；dev C 段量成了形状）；④ **阈值只在 5000 / 5056 这一点量过**，
+  2000~5000 区间没扫；⑤ **解析侧那枚长任务没拆**（fid / odt / `JSON.parse` 仍是一口气，本轮只拆了"喂"这一段）；
+  ⑥ 非产品形状的 `.odoc`（`{content:[节点数组]}`）走单片那一路、本轮没加兼容（我们不产出这种件）；⑦ **分批喂与闸门只做在
+  文档这一头**——表格 / 演示的"读没读全"仍没有这本账；自动更新的源托管与 macOS 打包按指令继续等信号，签名私钥已加密备份
+  并演练 7/7（见上一节），**私钥本体在本机仍是单点**。
+
 ## 性能（v0.3）
 
 
@@ -3936,6 +4001,7 @@ src/                  React 前端
   lib/note-extension.ts 脚注/尾注的 `note` 内联原子节点（attrs kind/text，正文不摊进文档流）：`encodeNoteText`/`decodeNoteText` 管属性里的换行（XML/HTML 解析器会把属性值里的 LF 归一成空格），`notesOf`/`noteOrdinalOf`/`locateNote` 按文档顺序现算编号，命令 insertNote/setNoteText/deleteNote（只填 tr + 用给到的 dispatch，绝不自己 view.dispatch）
   lib/odt.ts          ProseMirror JSON ↔ ODT（JSZip 打包导出 + DOMParser 导入，字符样式（字族/字号/字色/上下标 `style:text-position`，落在 content.xml 自动样式）/合并表/图片尺寸/页码域与总页数/page-layout 页面设置（纸张·四边距·style:columns 多栏）/分页符 fo:break-before/单元格自动样式 `fo:border-*`（宽度写 pt，读回走 `odfBorderCss` 保留 0.67px 这类细线不整数取整）+`fo:background-color`+`style:vertical-align`、表级 `fo:margin-left`、段落直接格式 `fo:margin-top/-bottom` + `fo:line-height`（倍数写 % + proportional、绝对值写 pt + fixed/minimum，两档在 ODF 里分得清而 CSS 分不清）+ `fo:background-color` + `fo:border-*`（宽度写 pt），读侧按名字跳过具名样式与 `office:styles` 里那批，以免把整篇默认摊成每段的直接格式；脚注/尾注写 ODF 1.2 内联 `text:footnote-reference` + 同 `text:id` 的 `text:footnote`（citation 写字面序号、段间 `text:line-break`、正文段挂 `FN` 自动样式），读侧三种外壳都收（新版两个元素名 + 旧版 `text:note`/`text:note-class`/`text:note-body`），正文表先扫全文建全表，故 id 不连续或正文排在引用之前也配得上；`draw:frame` 认三类内容（`draw:image` 位图 / `draw:text-box` 文本框展平为 `<br/>` 连成的行内文字 / `draw:object` 嵌入件——`Objects/objectN/content.xml` 里有 MathML 就线性化成文本，否则 v0.44 走 `lib/ole` 取内层内容：`<office:binary-data>` 内联 base64 与 `Objects/objN/` 目录两种形状都解，摊出的块级正文由 `tail()` 作段落兄弟块接回、单元格内压成行内文本），`content.xml` 解析失败时抛出说得出是哪份 XML（否则表现为"打开了一篇空白"），读侧统一产 `warnings`（同类聚合成「文案×N」）交状态栏显示；**批注往返（v0.86）**：读侧把 `office:annotation` 收成 DocComment（`dc:creator`/`dc:date` 按**子元素**取——当属性取那一版是往返腿自己量出来的真缺陷；`annotation-end` 名字预扫配对、点批注锚在自己段落尾、annWrap 在每个块出口续挂还开着的跨段区间），写侧照 docx 那两条老规矩（`usedAnn` 同 cid 全局只一组区间、孤儿不写回），跨段区间同名 `office:annotation-end` 收口，`xmlns:dc` 声明在根 NS 上补齐——漏了它写出的字节连自家读侧都不认）
   lib/find-replace.ts 查找/替换 ProseMirror 插件：按文本块匹配存 state、装饰高亮、findNext/findPrev/replaceOne/replaceAll 命令（命中上限 FR_HIT_CAP=2000 截断并标 `N+`）
+  lib/doc-feed.ts     大件"喂进编辑器"这一段的阈值与通道（v0.87，137 行，纯函数 + 一条 dispatch 通道）：三枚常数 `FEED_THRESHOLD=5000` / `FEED_FIRST=12` / `FEED_BATCH=4000` 都由 release 真机量出来——5000 块那件采样空档 ≤92ms 而 5056 块那件已要 188ms（分界），400/1500/4000 三档整趟代价持平（取 4000）；`planFeed(src, hint?)` 两型输入（html 先按串长廉价预筛、再过一道"顶层裸文本就不切"的安全闸、最后用 `DOMParser` 数顶层子节点；json 直接数 `doc.content`），**hint ≤ 阈值返回 null ⇒ 调用方原样走今天的单片 `setContent`**；`runFeed(editor, plan, src, stopped)` 只吃实测唯一与整片逐节点相同的那条通道（C2）——JS 侧累加 `Fragment`（从不读活文档）、每批 `tr.replaceWith(0, doc.content.size, acc)` + `addToHistory:false`、非末批 `preventUpdate:true`（末批才 emitUpdate）、首屏两帧 rAF、批间 `setTimeout 0` 让出主线程、`stopped()` 按**这一趟的身份**取消；**为什么不能增量追加**（legC2 十五形状 + legC5 四件 A/B 逐节点对参照）：PM 的 `appendTransaction` 会在容器块之后补一枚可编辑空段，heading / bulletList / orderedList / table / blockquote / codeBlock 六类全不等（块数 5840→5841），"追加 + 边界撤填充"也补不回来
   lib/templates.ts    首页模板注册表与纯函数 seed：11 个模板（公文/会议纪要/周报 → ProseMirror JSON+meta，记账表/库存清单 → WorkbookPayload 含公式冻结，六套演示配色 → Deck）
   lib/ppt.ts          .opd 幻灯片数据模型（版式/主题/序列化）
   lib/pdfprint.ts     打印覆盖层：挂 DOM → 注入打印样式 → export_pdf → 清理；`@media print` 里给 `html,body` 兜白底黑字（v0.47：外壳的 `body{background:var(--bg)}` 曾把整页铺成屏幕的浅灰蓝，三种导出都中招；元素自己声明的颜色不受影响）；**每条作业把自己那份 `@page` 说全**（v0.50：`ownPageRule()` 输出 `size` + 四边 `margin` + 十六个 margin box 复位，`printMarginsInches()` 让 CSS 与 PrintSettings 吃同一组数）——PrintToPdf 会认 CSS `@page size`，而文档标签的 `#oo-page-rule` 常驻 `head`，不禁掉别人的说法就会被"上一次打印"污染（实测：导完文档再导演示得到竖版纸 540×960、幻灯片只占 0.34）；**v0.53 加 `measurePrintLayout(overlay, read)`**——覆盖层在屏幕上被 `#oof-print-host{display:none}` 藏着、量出来全是 0，于是另开一个离屏量尺容器（同一套正文样式，只是不带 `@media print`/`@page`，那组规则改的是可见性、分页与纸面而不改任何一行的高），量完即摘，被量的那份 DOM 仍旧原封不动交给导出那条腿
@@ -4050,6 +4116,16 @@ scripts/              copy-pdfjs-assets.mjs（dev/build 前复制 cmaps/标准�
 文档文件流：`docx → lib/docx-fidelity.ts 直读 OOXML（w:rPr/w:pPr 直接格式 + numbering 层级 + 表格合并 + 图片 + 批注 + sectPr 页面设置）→ HTML/元数据 → TipTap`，
 保真导入器抛错或拆不出块时回退 `mammoth 正文 + zip 直读页眉页脚/批注/sectPr`（v0.37）；`.odt` 走 `lib/odt.ts` 双向；
 保存按标签扩展名分流——新建文档存 `.odoc` JSON（含 meta）、`.odt` 与 `.docx` 标签各自格式原地写回（导出走 docx/odt 链路）。
+**读进编辑器这一段（v0.87）**：四分支（保真 docx / mammoth docx / odt / odoc）都经同一出口 `applyContent`，
+块数超过 5000 的件走 `lib/doc-feed.ts` 的分批喂（首屏 12 块、之后每批 4000 块、通道是"JS 侧累加 `Fragment` + 每批整片换回"这一条
+唯一与整片 `setContent` 逐节点相同的形状），阈值以下**原样走单片 `setContent` 一步没变**；配套的是**文档读全闸门**
+（沿用 v0.81 那本按身份记、失败不记、全仓不销的账）——没读全时四个有话的写出口（`saveOdoc` / 另存为 / 导出 PDF / 历史回滚）
+一起拒并说那句「文档还没读全…」，两处静默出口（自动快照、`.odoc` 定时自动保存）同吃这一判据，喂料窗口内 `editable` 关掉。
+release A/B 买到的两格：大件主线程空档 fx1000.docx 951→283ms、正文首现 1106→344ms（代价全量上屏 1.17×，门 ≤1.2×），
+以及"没读全就按 Ctrl+S"在 0.86 上是**真缺陷**（块数还是空种子 1 的一拍，真按键 `isTrusted:true` ⇒ 741615 B 的件被换成
+8563 B 而状态栏说「已保存」），0.87 同一拍写请求 0 枚、盘上一字没动。**没做而记着的**：载入失败那一路只有拒绝没有重试把手
+（把手只长在 PDF 那头）、喂料窗口内的程序化/工具栏改动会被下一批整片覆盖（`editable:false` 不挡 `view.dispatch`）、
+阈值以下在载入窗口内按 Ctrl+S 会不会被拒这一格没量（A16 显式 SKIP）、解析侧那口气（fid / odt / `JSON.parse`）没拆。
 **这一头的存盘现在按层说话**（v0.71：Rust 一个字没动）——写手只写字节（`writeDocxTo`/`writeOdtTo`），动作负责句子与账
 （原地保存成功后 `renameTab` 记 `dirty:false` 再说「已保存」；改前是"文件写了、话说「已保存（docx）」、● 还挂着"，
 A/B 的 R0b 量到成功那句与 ● 同屏；只读件的失败改前**状态栏全程 [null]**、只有一枚阻塞式 `#32770`，现在走
@@ -4808,6 +4884,31 @@ cargo check        # Rust 后端检查（在 src-tauri 下）
       ODF 第三方应用，v0.62 老规矩——往返证据全部来自自家读写两头互证）；**跨段批注写回收进首段、续挂从
       第二段开头**（锚位语义没有第三方真机可对，有意记账）；**点批注读侧锚在段落尾**，原始锚位丢了；
       **resolved 状态不往返**（ODF 1.2 的 annotation 没有这个通道，ODT 上它恒为未解决）
+- [x] **文档这一头也有 v0.81 那一格：没读全就按 Ctrl+S，写出去的是半份文档**（v0.87 由 release A/B **量到并修掉**）：
+      4572 那一格当年只在 PDF 的标注上立了闸，文档这一头从未有这本账——而 A1 臂在 0.86 上按一枚 `isTrusted: true` 的
+      真按键，**741615 B 的件被换成 8563 B**（按下那一刻块数还是空种子的 `1`，屏上照旧「已保存」）。修的形状与
+      v0.81 那四条一致：按**身份**记「哪一份 doc 已经读全」、持有在 ref、**失败不记账**、全仓不销账；六个写出口里
+      四条说话（`saveOdoc` / 另存为 / 导出 PDF / 历史回滚）两条静默（自动快照、`.odoc` 定时自动保存）。
+      同轮把大件「一口气喂进编辑器」拆成阈值分批喂（块数超过 5000 才分批，以下单片一步没变）
+- [ ] **阈值以下（≤5000 块）的件在载入窗口内按 Ctrl+S 会不会被拒——这一格本轮没量**（A16 显式 SKIP）：闸门判的是
+      读全账、与阈值无关，形状上小件同样该被拒（`editable` 与喂料无关的那本账仍在），但**拒存的读数只在 24000 块
+      那一档量过**；下一轮要判的是「小件的载入窗口」而不是再改一次闸门
+- [ ] **载入失败那一路只有拒绝、没有重试把手**（v0.83 那枚把手只长在 PDF 那头）：dev E 段量的是截半 `.odoc` ⇒
+      拒存句 144 拍、写 0 枚、`whole()` 永不翻真而**侧栏把手 0 枚**＝用户能做的只有关标签再开。文档这一头的
+      "重跑"要吃的是整趟载入（读件 + 解析 + 喂料），比 PDF 那次重扫重，且**幂等门怎么搭没判据**
+- [ ] **喂料窗口内的工具栏/程序化改动会被下一批整片覆盖**（dev C 段量成形状）：`editable: false` 只挡用户输入，
+      **不挡 `view.dispatch`** ⇒ 那段窗口里程序化插进去的「探针」在下一批 `replaceWith` 出口消失。本轮的取舍是
+      "拒掉写盘"（数据不丢）而不是"拒掉改动"（改动本来就丢），要补齐得给这一窗口的编辑另一条通道
+- [ ] **阈值 5000 只在 5000 / 5056 这一点量过**：2000~5000 区间没扫，而夹在中间的那一档正是"单片喂已经能感觉到、
+      分批又买不到多少"的灰区；下一轮若要改这个常数，判据应该是那一段的**最长同步块**而不是墙钟
+- [ ] **解析侧那枚长任务没拆**：fid / odt / `JSON.parse` 仍是一口气（本轮只拆了"喂"这一段），所以小件的
+      最长同步块仍在解析上而不是编辑器上；真要拆得动 worker 或 Rust 那一层，而 4516 那条"文档/演示仍在挂载点才发"
+      的重新量也挂在这一头
+- [ ] **非产品形状的 `.odoc` 走单片那一路**：外部产的 `{content: [节点数组]}` 在 `planFeed` 的 json 分支拿不到
+      块数 hint ⇒ 落回单片 `setContent`（本轮没加兼容，我们自己不产出这种件）；这一格在夹具上真撞过一次
+      （`gen-fx.mjs` 首版就是这形状，于是分批那一路从头到尾没被量到过）
+- [ ] **分批喂与读全闸门只做在文档这一头**：表格 / 演示的"读没读全"仍没有这本账，它们的写出口也没有闸
+      （Univer 快照与 `Deck` 是一次性到位的形状，是否需要同样的闸门要先量出"读到一半"这一档在那两头存不存在）
 - [ ] macOS 打包（需签名/公证凭据）
 
 ## License
