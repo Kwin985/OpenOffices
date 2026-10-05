@@ -163,6 +163,9 @@
   （**v0.40 修订**：脚注/尾注这一档已经补上——ODF 1.2 内联写法导出、旧版 `text:note` 外壳也读得进，见 v0.40 一节）
   （**v0.86 修订**：批注这一档也已补上——`office:annotation` 读写往返 + 打开自动开侧栏，见 v0.86 一节；
   resolved 状态与目录域仍不往返）
+  （**v0.89 记账**：ODT 的**列宽两头都不往返**——写侧零枚 `table:table-column`、读侧不解析 `style:column`/`table:style`
+  那一层的宽度；本轮明写不开：本机无 ODF 第三方应用、ODF 1.2 RelaxNG 三个源全 404 ⇒ 写出的形状无人可裁，
+  见 v0.89 一节）
 - **验证**：calamine（真实读侧实现）读回自写 ODS 值/布尔/稀疏/转义断言；zip 布局断言（mimetype 首条
   Stored）；CDP 冒烟全程走应用真实链路——打开夹具 ODS → Univer 改值 → 保存分流 → 解包断言 → 重开显新值；
   ODT 导出/导入/编辑器加载/原地写回（含图片）全链路；本机无 LibreOffice 且 WPS COM（KWPS）与 Word 一样
@@ -463,7 +466,8 @@
   （`pointer-events:none` 零侵入），ResizeObserver 量文档高度 → 状态栏"约 N 页"
 - **表格上下文工具条**：光标在表内浮出——前后插行/列、删行/列、合并拆分
   （`mergeOrSplit`）、表头行切换、删除表格；导出补 `colspan/rowspan` →
-  docx `gridSpan/vMerge` 与 odt `covered-table-cell`
+  docx `gridSpan/vMerge` 与 odt `covered-table-cell`（**v0.89 起这一条通道也真写列宽**：`w:tblGrid` 真宽 + 逐格 `w:tcW` +
+  `w:tblLayout fixed`，而此前导出件里的 `w:gridCol w="100"` 是 docx 库的默认假网格；ODT 那一头的列宽两头都还不往返）
 - **图片增强**：剪贴板粘贴图片直接转 base64 插入（`handlePaste`）；选中图片浮出工具条——
   宽度按版心 25/50/75/100%（按当前显示比例换算 height）、居中（display:block+auto margin
   自定义 align 属性）、恢复原尺寸；宽度随 docx ImageRun/odt draw:frame 导出往返
@@ -691,7 +695,8 @@
 - **覆盖**：run 级 `w:rPr`（粗斜/删除线/下划线/字色/高亮 `w:highlight` 与 `w:shd`/字族（拉丁+中文拆两档）/字号半点换算）、
   段落 `w:pPr`（jc 对齐、`w:ind` 的 left/firstLine/hangingChars/firstLine/hanging、pStyle 样式链继承）、
   `w:numPr` + `word/numbering.xml` 的 numFmt → 有序/无序与 ilvl 层级、表格 `gridSpan`/`vMerge`（continue 记账在
-  restart 的同一批网格列上，rowspan 数完所有行才出 HTML）+ `tblGrid` 列宽、`w:drawing`/`v:imagedata` 图片（rels → data URL）、
+  restart 的同一批网格列上，rowspan 数完所有行才出 HTML）+ `tblGrid` 列宽（**读侧从这一版就把这份账收全并摊成逐格
+  `colwidth`——跨列格记「所覆盖的各列」而不是合起来的宽，而写侧一直没写回去，直到 v0.89**）、`w:drawing`/`v:imagedata` 图片（rels → data URL）、
   超链接（外部 `r:id` 与内部 `w:anchor`）、`w:br type="page"` → pageBreak 节点、批注 `commentRangeStart/End` 三态锚点、
   上标下标（v0.38 起真还原成 `<sup>/<sub>`）、`fldSimple`/`fldChar` 的**域代码文字不外泄**（结果段才渲染）、TOC 内容控件跳过
 - **缩进进 schema**（`lib/indent-extension.ts`）：`indentLeft`/`indentFirst` 作为段落级全局属性（32px 一档、上限 320px），
@@ -3997,6 +4002,91 @@ publish）是异步的** ⇒ 在两者之间按 Ctrl+S，内存此刻**不是文
   tmp/x88 的夹具、dev 腿、字节腿、Word 腿与结构+变异腿按惯例删除（全程未碰已装正式版）；自动更新的源托管与 macOS 打包
   按指令继续等信号，签名私钥已加密备份并演练 7/7，**私钥本体在本机仍是单点**。
 
+## 表格的列宽第一次真的写进 docx：真网格、逐格账、固定布局（v0.89）
+
+「继续对标 WPS 完善文档处理」自选口径：列宽这一层**读侧从 v0.19/v0.30 起就一直是全的**（`w:tblGrid` 的逐列宽 →
+每格 `colwidth` 数组），缺的是**写侧一个字都没写**——导出的 docx 里 `w:tblW` 恒为 `pct 100%`、`w:gridCol` 恒为
+docx 库默认的 `w="100"`（twip，≈6.7px），`w:tcW` 与 `w:tblLayout` 零枚。窄口径（Rust 一个字没动）：`src/lib/docx.ts` +92 / −12。
+
+- **前置实测六格（tmp/x89，真件真字节，只量没改产品）**：① 导入首趟模型逐格 `colwidth` 收下真值——fixed 件每格
+  [120]/[160]/[240]（两行都有）、auto 件 [133]/[333]、span 件首行 [100][200][100] 而次行跨两列那格是 **[100,200]**
+  （跨列格记「所覆盖的各列」而不是记合起来的宽 ⇒ 这是 `gridPxOf` 摊平的依据）；② 屏上 `<col>` 与模型逐枚一致 ⇒
+  读侧通道确实通（cellsPx 按网格比例排 138.39/184.52/276.79）；③ 三枚导出件一律 `w:tblW pct 100%` + `w:gridCol w="100"` +
+  `w:tcW` 零枚 + `w:tblLayout` 零枚 ⇒ **宽度这份账在写侧根本不存在**，而那枚 100 twip 是库的默认值不是我们的账；
+  ④ **二趟漂移**：把自家导出件再导入，`colwidth` 全变 [7]（100 twip 折成 px）、屏上 `<col>` 25px ⇒ 模型揣着一枚
+  荒谬但"真实"的宽度继续往下传，下一趟存盘就把它当宽度写；⑤ Word 16.0 只读腿（磅）：夹具 90/120/180（prefType=3 固定宽）
+  ↔ 我们的导出件 **150.3/150.25/150.25**（prefType=2 百分比）——三列被压成三等分，span 夹具的 75/150/75 同样塌成
+  150.3/150.25/150.25；⑥ 界面「插入表格」新建的 2×3 每格 `colwidth` 是 null、屏上 `<col>` 空 ⇒「没有宽度账」那一档
+  **真实存在**，而它现在正被写成那枚 100 twip 假网格。另两格门面：TipTap v3 命令里**没有 `setColumnWidth`**
+  （只有 `addColumnBefore` 一族）而 cell schema 有 `colwidth` ⇒ 精确设宽要自己写命令，本轮不做；本机无 ODF 第三方应用
+  且 ODF 1.2 RelaxNG 三个源全 404 ⇒ **ODT 列宽写侧无人可裁，本轮不开**（ODT 导出件里 `table:table-column` 实测零枚，两头都缺）。
+- **本轮口径（由以上实测选出）**：docx 写侧把列宽这份账写全（`w:tblGrid`/`w:gridCol` 真宽 + 逐格 `w:tcW` +
+  `w:tblLayout fixed` + `w:tblW` 绝对值），没有宽度账时按版心等分写真网格、不再盖 100 twip 的默认假网格。
+- **本轮唯一的架构决定：宽度账「有就写全、没有就等分」，而这两档在字节上是刻意分开的两种形状**——四条形状都不是可选的：
+  ① **认账只认整表齐的账**（`gridPxOf(rows)`：行 0 非空、每格 `colwidth` 必须是数组**且长度等于该格 colspan**、
+  枚枚 `> 0`、每一行的 colspan 之和必须等于摊平出来的网格列数）；任一道门不合 ⇒ 整表按「无宽度账」处理，而
+  **五个出口一律 `return null`、绝不 `return []`**（拿空数组去写网格等于伪造一份"有账"）。理由是 `w:gridCol` 的枚数
+  必须和单元格的跨度对得上，对不上的件在 Word 那头是**损坏件**档而不是"宽度不准"档；
+  ② **有账的表声明固定布局**——表级 `{width: {size: totalTw, type: DXA}, layout: FIXED}`（`w:tblW` 写真绝对值而不是
+  百分比，绝对值 = 网格之和，两边不自相矛盾才够 `fixed` 的语义）、`columnWidths: gridTw` 写真网格，
+  逐格 `w:tcW` = **所跨那几枚网格列之和**（`gridTw.slice(gc, gc + cs)`），网格游标 `gc` **只为真格子前进**
+  （`if (isCell) gc += cs`：行里的非 cell 孩子不占网格位）；
+  ③ **没账的表不谎称固定宽**——表级仍是 `{size: 100, type: PERCENTAGE}`、**不声明 `fixed`**、**不逐格盖 `w:tcW`**，
+  只有 `w:gridCol` 改由版心等分（`equalGridPx`：版心 twips → px → `floor(÷ 列数)`，保底 1）。这一档买的是
+  "别再写 6.7px 那种荒谬值"，不是"替用户决定宽度"——布局那一头仍交给 Word 自动排；
+  ④ **版心从导出入口算一次并穿下去**（`prosemirrorToDocxBytes` 先算 `contentTw` = 页宽 − 左右边距 − `colGap × (栏数 − 1)`
+  再按栏数分，作为 `blocksOf` 的第 4 参一路穿过四处递归，形参带 `CONTENT_TWIPS_FALLBACK` 兜底 = A4 + 默认边距算出而非硬编码数）：
+  表在列表项里、在嵌套列表里、在单元格里的话，等分用的都该是它真实可用的那一层宽度而不是一个常量。
+  单位仍只有一处换算（模型存 px，`PX_TWIP = 15`）——**px 存整数 ⇒ 导出必然带 ±0.25 磅级漂移**，字节腿按 ±15 twip、
+  Word 腿按 ±0.5 磅判这一档而不是要求逐字节相等。
+- **验证（腿 + 编译，全部在版本号 bump 三处对齐之后在最终源文上复跑）**：结构+变异合并一腿
+  **`RESULT struct=21/21 mutants=16 bad=0 b0=3/3 exit=0`**（吃剥掉注释并归一 LF 的源文；B0 自检三条——行注释里的锚点
+  剥后不再存在、代码里的锚点仍在、**含 `"` 与 `'` 的两枚正则字面量原样活着**；S0a~S19：认账四道门 + 出口全 null +
+  fixed/百分比两档各只一枚 + `columnWidths` 一枚 + px→twips 保底 1 + 逐格所跨之和 + 游标只认真格子 + 等分算法 +
+  版心由 A4 算出 + 四处递归全穿 + 多栏扣栏距按栏数分 + v0.30/v0.38 表格通道原样 + **S19 记 ODT 写侧本轮没开**；
+  16 枚变异各响该响的那条——M1 无账也拿库默认→S7、M2 fixed 退 autofit→S5、M3/M4/M5 拆三道认账门→S1/S2/S3、
+  M6 逐格只拿首列→S9、M7 游标对所有孩子前进→S10、M8 无账也盖 tcW→S11、M9 等分忘 px 换算→S12、M10 版心写死 210→S13、
+  M11/M12 递归与入口不穿版心→S15、M13/M14 多栏不扣栏距/不分栏数→S16、M15 表格缩进回归面→S17、M16 声称 ODT 已做→S19；
+  两枚正控制 P0 原样 / **P1 注释陷阱**埋进注释的四条锚点剥后一律不算命中）；CDP dev 真机 **21 / 0、页面异常 0 条**
+  （四臂 × 五判：三枚夹具臂 D1 模型行 0 收下夹具列宽、D2 屏上 `<col>` 与列数等长、D3 导出落盘、**D4 二趟不再退化成
+  7px 假宽**、D5 二趟屏上与模型一致；无账臂 notblwidth D4 二趟拿到的是等分真宽（px 读数 [209,209,209]）；
+  tblspan D6 行 1 首格跨两列且摊平成三枚网格列）；独立字节腿（zipfile + 正则直解 `word/document.xml`，不吃自家读侧）
+  **23 / 0**（A2 网格 = 1800/2400/3600、A3 六格逐格 tcW = 所跨网格列之和、A4 一律 dxa、A5 表级绝对值 = 网格和、
+  A6 fixed；B1 auto 件两列 ±15 twip 内、B2 声明 fixed；C1~C3 跨度件（1500/3000/1500 + `gridSpan=2` + 次行 4500/1500）；
+  D1~D4 无账件 = 三列等分 ~3135（绝不是 100）且**不盖 tcW / 仍百分比 / 不声明 fixed**；E×4 三趟网格逐枚相同；
+  F×4 单元格正文不丢）；Word 16.0 只读腿 **20 / 0 + 2 条 NOTE 记账**（W1 导出件列宽 = 夹具的 90/120/180、
+  W2 「塌成三等分」那一缺陷形状不再出现、W3 逐格与列宽一致、W5/W6/W7 跨度件逐格与夹具相同（首行 75/150/75、
+  跨两列那格 225）、W8/W9 无账件 prefType=2 百分比且列宽等分而非 6.7 磅假宽、W10 重开件与夹具逐枚相同、
+  W11 无账件重开一趟列宽不变；NOTE：重开后的无账件 prefType 2→3、含合并格的表 Word 的 `Columns` 集合一律抛
+  COMException（夹具与导出同尺同读数））；`cargo test --lib` **97 passed / 0 failed / 11 ignored**（Rust 本轮一个字没动）
+  + `pnpm exec tsc --noEmit` exit 0 + `pnpm tauri build --no-bundle` 绿（openoffices v0.89.0）。
+- **本轮撞到的量具坑六处，都不是产品**：① **注释陷阱又种在剥之后的源文上**（`run(TRAP + d0)` 里 d0 已剥 ⇒ 陷阱字面
+  被当代码数到，P1 假 FAIL 报「多出来=[S5,S7,S15,S18]」）——v0.84 记过的原样再犯一次，修法必须是 `readRaw()` +
+  `stripComments(TRAP + raw)`；② **剥注释器不认正则字面量**：`docx.ts:177` 的 `/PAGE(\s|\*|"|'|<)/` 里那对引号开出
+  一枚假字符串态，把后面一整段 JSDoc 留在"剥后源文"里（B0a FAIL）⇒ 加正则起点判定（前一枚非空吐出字符 + 关键字前瞻，
+  带字符类/转义/遇换行弃守/吃尾部 flags），并把 B0c 加宽成断言两枚正则都原样活着；③ **判据回调的参数顺序**——S19 声明成
+  `(o)` 而调度器喂的是 `(docxSource, odtSource)`，于是它一直在 docx 文件里找 `table:table-column`（恒 0）：**基线那条 PASS
+  是空断言，只有变异腿（M16）把它抓出来**——"判据作用在错的文件上也能绿"这一族的第一次兑现；④ 数递归调用点那条正则
+  `blocksOf\([^)]*contentTw\)` 跨不过 `slice(1)`，而入口变量名是 `contentTw`、形参名是 `contentTwips`，多行定义还会自匹配
+  ⇒ 改 `blocksOf\((?:[^()\n]|\([^()\n]*\))*contentTw` 再加一枚全仓出现枚数上界；⑤ **变异的期望清单要按判据实际量的东西写**：
+  M3/M4/M5 各坏一道认账门，而 S4 量的是 `return null` 的**枚数**（那三枚变异一枚不改）⇒ 期望里带着 S4 就是「该响未响」假 FAIL；
+  ⑥ dev 腿的阈值单位混过一次（无账臂 D4 断 `v > 300` 而实际读数是 px 的 [209,209,209] ⇒ 腿自己的 FAIL 长得像产品的）。
+- **本轮没动的，量出来记着**（已开进路线图）：① **ODT 的列宽两头都不往返**（写侧零枚 `table:table-column`、读侧不解析
+  `table:style`/`table-column`），明写不开——本机无 ODF 应用且规格源全 404 ⇒ 无人可裁；② **界面上没有精确设宽的把手**
+  （TipTap 无 `setColumnWidth`），本轮只保证「已有的账不丢」，用户仍然拖不出"这一列 90px"；③ 读侧仍只吃 `w:gridCol`，
+  **不读 `w:tblLayout` / `w:tcW` / `w:tblCellMar` / `w:trHeight`** ⇒ 第三方件里 `tcW` 与 `gridCol` 打架时以谁为准未量；
+  ④ **无账的表存—重开一趟之后就变成"有账"**（等分那份真网格被读回收下 ⇒ 下一趟按固定宽写，Word 那头 prefType 2→3），
+  这是本轮带来的形状改变，等分账本身三趟逐枚稳定；⑤ 嵌套表的版心是按最外层算的近似（不扣外层单元格的边距）；
+  ⑥ px 存整数的 ±0.25 磅级漂移是模型层的，不在本轮口径内；⑦ **本轮没有 release A/B**——纯写侧字节改动，证据来自
+  字节 + Word 只读 + dev 三头，"界面上看到的列宽与导出的件一致"由 dev 判；⑧ 含合并格的表在 Word COM 上 `Columns`
+  集合直接抛 ⇒ 跨度那一档只能按 `Rows(1).Cells` 量（夹具与导出同尺同读数，不构成差异判据）。
+- **收尾**：README 新增本节 + 架构两处就地括号改口（v0.37「覆盖」那条的 `tblGrid` 列宽补上「读侧一直全、写侧到 v0.89
+  才写」+ v0.30 表格通道那条补上列宽写侧）+ 文件清单 `lib/docx.ts` 条目补 v0.89 段 + ODF「范围限制」明写列宽两头都不往返
+  + 路线图新立本轮已建的那条（`- [x]` docx 表格列宽真往返）并新开上述八枚未勾项，版本 0.89.0（package.json /
+  tauri.conf.json / Cargo.toml 三处对齐），tmp/x89 的夹具、前置实测腿、dev 腿、字节腿、Word 腿与结构+变异腿按惯例删除
+  （收摊后 1420/9222 无监听、`target/debug/openoffices.exe` 零枚残留，全程未碰已装正式版）；自动更新的源托管与
+  macOS 打包按指令继续等信号，签名私钥已加密备份并演练 7/7，**私钥本体在本机仍是单点**。
+
 ## 性能（v0.3）
 
 
@@ -4070,7 +4160,7 @@ src/                  React 前端
   lib/sheet-rules.ts  三类规则的前端桥（v0.46）：`extractRules` 从工作簿快照的 `resources` 里按表取规则（Univer 三个插件各写各的 JSON，条件格式按快照原序交回=高优先级在前），`applySheetRules` 经门面放回界面（**条件格式倒着插**，因为这一版门面按插入顺序的倒序吐规则；builder 无 `setRanges`，作用区在 `build()` 之后挂产物），`buildDataValidation` 只建门面表达得出的四类 + custom；归一化（`normColor` 收 rgb/#、`normDateValue` 收 ISO、`listOf` 拆 JSON 数组串与区域引用、`neg === pos` 的负色丢掉）与 `aggregateNotes`（同类收成"文案×N"）都在这，`textLength`/`time`/`any` 这类摆不进模型的退成边界账而不是硬建一条；**v0.64 那三句"没能还原"后面的原串改走 `lib/fail-msg.ts` 的 `failText`**（账目本来就上状态栏，原话只该有一份出处）
   lib/sheet-cell-side.ts 批注与超链接的前端桥（v0.48，纯函数、零 DOM、Node 直测）：`extractCellSide` 从 `resources` 的 `SHEET_NOTE_PLUGIN` 按表取批注、从每格 `p.body.customRanges`（`rangeType` 只认 HYPERLINK）取链接，`noteResourceOf` 反向建 resources（实测裸写即可被门面读回，所以**不发消息不走门面**），`richTextOf`/`richTextBox` 负责"链接格吃的是 p 不是 v"这一层，`univerUrlOf`/`locationOfUniverUrl` 在 OOXML 的 `Sheet2!A1` 与 Univer 的 `#gid=<表 id>&range=` 之间换算（`quoteSheetName`：含空格或长得像单元格引用的表名要加单引号、`''` 是引号本身），`restampCellSide` 存盘前按格子把 Univer 模型装不下的 `author`/`tip` 回贴（**只在缺的时候贴**，界面上新写的那一枚不冒用别人的署名），装不下的形状退成边界账而不是挑个像样的凑数
   lib/chart.ts        ChartPayload → VChart spec → 离屏 canvas PNG dataURL（动态导入分包）
-  lib/docx.ts         docx 导入导出（ProseMirror JSON ↔ docx，字色/字族/字号/高亮/页眉页脚/TOC 域/批注/页面设置 sectPr（纸张·四边距·w:cols 栏数栏距）/页码格式（PAGE·NUMPAGES）/分页符/表格合并映射（首行行级 tableHeader、列表 numbering.config 真编号）、单元格四边 `w:tcBorders`（**显式去边写 `w:val="nil"`**——none 压不住表级默认边框）、`w:shd` 底纹、`w:vAlign` 竖排、`w:tblInd` 表缩进、`w:vertAlign` 上下标、段落 `w:spacing`（行距 + 段前段后，**只写声明过的**）/`w:shd`/`w:pBdr`、脚注与尾注（`footnotes`/`endnotes` 记录 + 正文各带自动编号 `<w:footnoteRef/>`、多段拆多个 `w:p`、部件与 rels 注册））；文本节点兼容顶层 text 与 attrs.text；字节经 Packer.toBase64String + atob 取（toBuffer 走 jszip 的 nodebuffer 通道，浏览器里没有 Buffer））
+  lib/docx.ts         docx 导入导出（ProseMirror JSON ↔ docx，字色/字族/字号/高亮/页眉页脚/TOC 域/批注/页面设置 sectPr（纸张·四边距·w:cols 栏数栏距）/页码格式（PAGE·NUMPAGES）/分页符/表格合并映射（首行行级 tableHeader、列表 numbering.config 真编号）、单元格四边 `w:tcBorders`（**显式去边写 `w:val="nil"`**——none 压不住表级默认边框）、`w:shd` 底纹、`w:vAlign` 竖排、`w:tblInd` 表缩进、`w:vertAlign` 上下标、段落 `w:spacing`（行距 + 段前段后，**只写声明过的**）/`w:shd`/`w:pBdr`、脚注与尾注（`footnotes`/`endnotes` 记录 + 正文各带自动编号 `<w:footnoteRef/>`、多段拆多个 `w:p`、部件与 rels 注册）、**表格列宽（v0.89）**：`gridPxOf(rows)` 把行 0 各格的 `colwidth`（按 colspan 展开的数组）摊成逐网格列，四道认账门（行 0 非空 / 数组长度必须等于该格 colspan / 枚枚 >0 / 每行 colspan 之和等于网格列数）任一不合 ⇒ 整表按「无宽度账」处理且**五个出口全返 null 不返空数组**；有账时表级写 `{w:tblW 绝对值 = 网格和, w:tblLayout fixed}` + `columnWidths` 真网格 + 逐格 `w:tcW` = 所跨网格列之和（网格游标 `if (isCell) gc += cs` 只认真格子），无账时只把 `w:gridCol` 按版心等分写真值（`equalGridPx`：px→twips 那条唯一换算的逆用，保底 1）而**表级仍 100% 百分比、不声明 fixed、不盖逐格 tcW**——这一档买的是「别再写 docx 库默认的 `w:gridCol w="100"` 那枚 6.7px 假网格」（它读回来是一枚荒谬但真实的 [7]px 并被下一趟当宽度存下去），不是替用户决定布局；版心由导出入口算一次（页宽 − 左右边距 − `colGap×(栏数−1)` 再按栏数分）并经 `blocksOf` 第 4 参穿过四处递归，形参兜底 `CONTENT_TWIPS_FALLBACK` 由 A4 + 默认边距算出而非硬编码）；文本节点兼容顶层 text 与 attrs.text；字节经 Packer.toBase64String + atob 取（toBuffer 走 jszip 的 nodebuffer 通道，浏览器里没有 Buffer））
   lib/ooxml.ts        迷你 OOXML XML 解析器（零依赖、不碰 DOM）：parseXml/find/findDesc/all/allL/attr/attrL/val/valNum/textOf + decodeEnt 实体表——让 docx 读侧能在 Node 里直测
   lib/ooxml-graphics.ts 图形部件读侧（v0.42，零依赖、不碰 DOM 所以 Node 侧可直测）：`smartArtToHtml(dataXml, inCell)` 解 DiagramML dataModel 的 ptLst/cxnLst（parOf 建树 + srcOrd 定序、空节点下钻、首次认父挡回边、`a:fld` 域编号不采）→ 嵌套 `bulletList`（格内改段落 `margin-left` 表层级）；`chartToHtml(chartSpaceXml, inCell)` 解 ChartML 缓存值（下钻找系列、`strRef`/`numRef` 中间层、`c:pt/@idx` 空洞留格、`multiLvlStrRef` 各级拼一格、轴标题不当图表标题）→ 标题段 + 数据表，无缓存只取标题；两者都返 `{html, kept}` 让调用方按"真取回多少"说告警
   lib/cfb.ts          复合文档（OLE 2 / MS-C 容器）读侧（v0.44，零依赖、不碰 DOM）：`isCfb` 认魔数、`openCfb(bytes)` 走 DIFAT（109 直槽 + 链）→ FAT（扇区编号即下标）→ 128 字节目录项的红黑树（left/right 兄弟 + child 指孩子根，`assigned` 兼防环），小于 4096 的流从根存储链装的迷你流按 64 字节迷你扇区拼；扇区 512/4096、v3/v4 都认，**结构不合返回 null 不抛**（坏件要"少部分内容照出"而不是整篇打不开），截断的件按 `floor(len/sec)-1` 收边界、v4 高 32 位非零的流只报名字不去碰
@@ -5023,6 +5113,34 @@ cargo check        # Rust 后端检查（在 src-tauri 下）
       三头，"边框进不进导出 PDF"没有判据（v0.49 那条「屏幕上的颜色先穿过 CSS 变量」管的是主题色，边框是内容自己
       声明的，照规矩该上纸而没人量过）
 - [ ] **表级边框摊进每一枚单元格**（2 枚 `w:tcBorders` → 6 枚，外观相同而字节膨胀）：v0.88 前置实测记下的形状，没动
+- [x] **文档：docx 的表格列宽写了个假网格**（导出件 `w:tblW` 恒 `pct 100%`、`w:gridCol` 恒库默认的 `w="100"`、`w:tcW` 与
+      `w:tblLayout` 零枚 ⇒ Word 把 90/120/180 磅压成三等分 150.3/150.25/150.25，而这份件再导入时模型揣着 [7]px 的荒谬值
+      继续往下传）——**v0.89 已建**：`gridPxOf` 把行 0 各格 `colwidth`（按 colspan 展开）摊成逐网格列并立四道认账门
+      （行 0 非空 / 数组长度等于 colspan / 枚枚 >0 / 每行 colspan 之和等于网格列数），**任一不合整表按「无宽度账」处理且
+      出口全返 null 不返空数组**（`w:gridCol` 枚数与跨度对不上是 Word 的损坏件档，不是"宽度不准"档）；有账时写
+      `w:tblW` 绝对值（= 网格和）+ `w:tblLayout fixed` + 真 `columnWidths` + 逐格 `w:tcW` = 所跨网格列之和（游标
+      `if (isCell) gc += cs` 只认真格子），无账时**只把网格按版心等分写真值**而表级仍 100% 百分比、不声明 fixed、
+      不盖逐格 tcW（买的是"别写 6.7px 那种荒谬值"，不是替用户决定布局）；版心由导出入口算一次（页宽 − 左右边距 −
+      `colGap×(栏数−1)` 再按栏数分）并穿到每一层递归，兜底由 A4 + 默认边距算出而非硬编码
+- [ ] **ODT 的列宽两头都不往返**（v0.89 明写不开）：写侧 `content.xml` 零枚 `table:table-column`（前置实测数出来的），
+      读侧也不解析 `style:column`/`table:style` 那一层的宽度；理由是**无人可裁**——本机无 ODF 第三方应用，而 ODF 1.2
+      RelaxNG 的三个源全 404 ⇒ 写出的形状只有自家两头互证。这一档在 docx 那头已补（v0.89），ODT 缺的是同一层的另一半
+- [ ] **界面上没有精确设列宽的把手**：TipTap v3 命令里没有 `setColumnWidth`（只有 `addColumnBefore` 一族）而 cell schema
+      有 `colwidth` ⇒ 用户仍然拖不出"这一列 90px"；v0.89 只保证**已有的账不丢**（读进来多少写回去多少），新建表那一头走等分
+- [ ] **读侧只吃 `w:gridCol`，不读 `w:tblLayout` / `w:tcW` / `w:tblCellMar` / `w:trHeight`**：第三方件里 `w:tcW` 与
+      `w:gridCol` 打架时以谁为准**未量**（我们自己的件两边自洽，判据买不到这一格）；单元格边距与行高两头都没有通道
+- [ ] **无账的表存—重开一趟之后变成"有账"**（v0.89 带来的形状改变）：等分那份真网格被读侧收下 ⇒ 下一趟按固定宽写，
+      Word 只读腿实测 re2-notblwidth 的 `PreferredWidthType` 2（百分比）→ 3（固定）。等分账本身三趟逐枚稳定（字节腿 E×4
+      + W11），但"表级布局档跨一趟会换"这一格只记读数未作取舍；要维持百分比那一档就得把"这表原本没有账"另记一笔
+- [ ] **嵌套表的版心是按最外层算的近似**：`blocksOf` 穿下去的是所在层的版心宽，不扣外层单元格的边距与所属列宽 ⇒
+      格内表的等分比实际可用宽度宽一些（本轮未量这一档的真件）
+- [ ] **px 存整数的 ±0.25 磅级导出漂移**：模型 `colwidth` 是 px 整数（`PX_TWIP = 15`），夹具的 2000/5000 twip 折算成
+      px 再写回必然差几 twip ⇒ 字节腿按 ±15 twip、Word 腿按 ±0.5 磅判；真要消掉得把宽度账改成 twips 层存储（牵读侧与
+      prosemirror-tables 的 `colwidth` 语义，不在本轮口径内）
+- [ ] **v0.89 没有 release A/B**：纯写侧字节改动，证据来自独立字节腿 + Word 16.0 只读腿 + dev 真机三头；
+      "界面上看到的列宽与导出的件一致"由 dev 臂 D2/D5 判，release 上没有另立可观测面
+- [ ] **含合并格的表在 Word COM 上量不到列**：`Tables(i).Columns` 集合对这类表一律抛 COMException（夹具与导出件同尺
+      同读数，v0.89 Word 腿 NOTE）⇒ 跨度那一档只能退回 `Rows(1).Cells` 逐格读，"整表列宽"这一格在第三方那头没有判据
 - [ ] macOS 打包（需签名/公证凭据）
 
 ## License

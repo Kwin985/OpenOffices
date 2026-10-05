@@ -24,6 +24,7 @@ import {
   ShadingType,
   Table,
   TableCell,
+  TableLayoutType,
   TableOfContents,
   TableRow,
   TextRun,
@@ -701,7 +702,58 @@ const ORDERED_LEVELS = [0, 1, 2].map((level) => ({
   style: { paragraph: { indent: { left: 720 * (level + 1), hanging: 360 } } },
 }))
 
-function blocksOf(nodes: PMNode[], depth = 0, dt: DocTrack = newDocTrack()): (Paragraph | Table | TableOfContents)[] {
+/** 行内的单元格（TipTap 用 tableHeader 表示表头行那一格的类型） */
+function cellsOf(row: PMNode): PMNode[] {
+  return (row.content ?? []).filter((c) => c.type === 'tableCell' || c.type === 'tableHeader')
+}
+
+function colspanOf(cell: PMNode): number {
+  return Number(cell.attrs?.colspan ?? 1) || 1
+}
+
+/**
+ * 表的逐网格列宽（px）：行 0 各格的 colwidth 是按 colspan 展开的数组，摊平成逐网格列。
+ * 任一格没有这份账、数组长度对不上 colspan、或某行的 colspan 之和与网格列数不等 ⇒ 整表按「无宽度账」处理
+ * （w:gridCol 的枚数必须和单元格的跨度对得上，否则写出的件在 Word 那头是损坏件档）
+ */
+function gridPxOf(rows: PMNode[]): number[] | null {
+  if (rows.length === 0) return null
+  const first = cellsOf(rows[0])
+  if (first.length === 0) return null
+  const grid: number[] = []
+  for (const c of first) {
+    const cw = c.attrs?.colwidth
+    if (!Array.isArray(cw) || cw.length !== colspanOf(c)) return null
+    for (const w of cw) {
+      const px = num(w)
+      if (!(px > 0)) return null
+      grid.push(px)
+    }
+  }
+  for (const r of rows) {
+    if (cellsOf(r).reduce((s, c) => s + colspanOf(c), 0) !== grid.length) return null
+  }
+  return grid
+}
+
+/** 版心宽度（twips）兜底：A4 + 默认边距，调用方没给页面设置时按它等分 */
+const CONTENT_TWIPS_FALLBACK = Math.round(
+  (PAGE_SIZES_MM.A4[0] - DEFAULT_PAGE_MARGIN.left - DEFAULT_PAGE_MARGIN.right) * MM_TWIPS,
+)
+
+/** 没有宽度账的表按版心等分写真网格：docx 库缺 columnWidths 会落 w:gridCol w="100" 的默认假网格（≈ 6.7px），
+ *  那份假网格读回来会变成一个真实但荒谬的列宽 */
+function equalGridPx(cols: number, contentTwips: number): number[] {
+  const px = Math.max(1, Math.floor(contentTwips / PX_TWIP / cols))
+  return Array.from({ length: cols }, () => px)
+}
+
+function blocksOf(
+  nodes: PMNode[],
+  depth = 0,
+  dt: DocTrack = newDocTrack(),
+  contentTwips = CONTENT_TWIPS_FALLBACK,
+): (Paragraph | Table | TableOfContents)[] {
   const out: (Paragraph | Table | TableOfContents)[] = []
   for (const node of nodes) {
     if (node.type === 'bulletList' || node.type === 'orderedList') {
@@ -720,8 +772,8 @@ function blocksOf(nodes: PMNode[], depth = 0, dt: DocTrack = newDocTrack()): (Pa
             ...paraFormatOf(main),
           }),
         )
-        out.push(...blocksOf(blocks.slice(1), depth, dt))
-        out.push(...blocksOf(nested, depth + 1, dt))
+        out.push(...blocksOf(blocks.slice(1), depth, dt, contentTwips))
+        out.push(...blocksOf(nested, depth + 1, dt, contentTwips))
       }
       continue
     }
@@ -790,31 +842,51 @@ function blocksOf(nodes: PMNode[], depth = 0, dt: DocTrack = newDocTrack()): (Pa
     if (node.type === 'table') {
       const rows = (node.content ?? []).filter((r) => r.type === 'tableRow')
       if (rows.length === 0) continue
+      // 列宽这份账：有账的表按账写真网格并声明 fixed 布局（逐格 w:tcW + 表级绝对 w:tblW），
+      // 没账的表按版心等分写真网格但仍交给 Word 自动布局；两条都不再落库默认的 100 twip 假网格
+      const gridPx = gridPxOf(rows)
+      const cols = Math.max(
+        1,
+        ...rows.map((r) => cellsOf(r).reduce((s, c) => s + colspanOf(c), 0)),
+      )
+      const gridTw = (gridPx ?? equalGridPx(cols, contentTwips)).map((px) =>
+        Math.max(1, Math.round(px * PX_TWIP)),
+      )
+      const totalTw = gridTw.reduce((s, w) => s + w, 0)
       out.push(
         new Table({
-          width: { size: 100, type: WidthType.PERCENTAGE },
+          ...(gridPx
+            ? { width: { size: totalTw, type: WidthType.DXA }, layout: TableLayoutType.FIXED }
+            : { width: { size: 100, type: WidthType.PERCENTAGE } }),
+          columnWidths: gridTw,
           // w:tblInd 是表离版心左边距的距离（twips），由导入侧的 marginLeft 属性记着
           ...(num(node.attrs?.marginLeft) > 0
             ? { indent: { size: Math.round(num(node.attrs?.marginLeft) * PX_TWIP), type: WidthType.DXA } }
             : {}),
           rows: rows.map(
-            (r) =>
-              new TableRow({
+            (r) => {
+              // 逐格的 w:tcW 吃掉它跨的那几枚网格列；gc 随行内格子前进（Array.map 是顺序的）
+              let gc = 0
+              return new TableRow({
                 // 表头行由行级 w:trPr/w:tblHeader 记账（TipTap 用 th 单元格类型表示）。
                 // 只在命中时给属性：写成 tableHeader:false 会落 <w:tblHeader w:val="false"/>，
                 // 而读侧按"有没有这个元素"判断，伪标记会把正文行错认成表头。
                 ...(r.content ?? []).some((c) => c.type === 'tableHeader') ? { tableHeader: true } : {},
                 children: (r.content ?? []).map((cell) => {
                   // TipTap 合并语义 colspan/rowspan → gridSpan + vMerge（docx 库内部展开 restart/continue）
-                  const cs = Number(cell.attrs?.colspan ?? 1) || 1
+                  const cs = colspanOf(cell)
                   const rs = Number(cell.attrs?.rowspan ?? 1) || 1
+                  const isCell = cell.type === 'tableCell' || cell.type === 'tableHeader'
+                  const cellTw = isCell ? gridTw.slice(gc, gc + cs).reduce((s, w) => s + w, 0) : 0
+                  if (isCell) gc += cs
                   const borders = bordersOf(cell.attrs)
                   const bg = shadingOf(cell.attrs?.background)
                   const va = cell.attrs?.vAlign
                   // 一格多段要一段一个 w:p：早先图省事把所有子节点并成一个段落，
                   // 于是格内的第二行起既没有换行也没有自己的缩进/对齐（读回来整格糊成一行）
-                  const cellBlocks = blocksOf(cell.content ?? [], 0, dt)
+                  const cellBlocks = blocksOf(cell.content ?? [], 0, dt, contentTwips)
                   return new TableCell({
+                    ...(gridPx && isCell && cellTw > 0 ? { width: { size: cellTw, type: WidthType.DXA } } : {}),
                     ...(cs > 1 ? { columnSpan: cs } : {}),
                     ...(rs > 1 ? { rowSpan: rs } : {}),
                     ...(borders ? { borders } : {}),
@@ -826,7 +898,8 @@ function blocksOf(nodes: PMNode[], depth = 0, dt: DocTrack = newDocTrack()): (Pa
                     children: cellBlocks.length ? cellBlocks : [new Paragraph({ children: [] })],
                   })
                 }),
-              }),
+              })
+            },
           ),
         }),
       )
@@ -846,6 +919,15 @@ function blocksOf(nodes: PMNode[], depth = 0, dt: DocTrack = newDocTrack()): (Pa
 
 export async function prosemirrorToDocxBytes(json: PMNode, meta?: DocMeta): Promise<Uint8Array> {
   const dt = newDocTrack()
+  const pg = resolvePage(meta?.page)
+  const twips = (mm: number) => Math.round(mm * MM_TWIPS)
+  // 版心宽度（twips）：页宽减左右边距，多栏时再扣栏间距按栏数分——没有宽度账的表按它等分写真网格
+  const contentTw = Math.max(
+    1,
+    Math.floor(
+      (twips(pg.w) - twips(pg.margin.left) - twips(pg.margin.right) - twips(pg.colGap) * (pg.cols - 1)) / pg.cols,
+    ),
+  )
   const section: {
     children: (Paragraph | Table | TableOfContents)[]
     properties?: {
@@ -854,10 +936,8 @@ export async function prosemirrorToDocxBytes(json: PMNode, meta?: DocMeta): Prom
     }
     headers?: { default: Header }
     footers?: { default: Footer }
-  } = { children: blocksOf(json.content ?? [], 0, dt) }
+  } = { children: blocksOf(json.content ?? [], 0, dt, contentTw) }
   {
-    const pg = resolvePage(meta?.page)
-    const twips = (mm: number) => Math.round(mm * MM_TWIPS)
     // docx 库按"竖版宽高 + orientation"理解 size（landscape 时自行交换写盘），故传排序后的尺寸
     section.properties = {
       page: {
