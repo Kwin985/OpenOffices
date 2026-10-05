@@ -1414,6 +1414,39 @@ button {
   }
   th { background: var(--bg); }
 }
+/* 列宽把手：拖列边界改宽度这件事一直是通的（库只认 pluginState.activeHandle，不认指针是否压在把手上），
+   但产品此前一条样式都没给 .column-resize-handle —— 实测装饰的 rect 高 0，看得见表格却找不到那条缝 */
+.doc-content table td,
+.doc-content table th {
+  position: relative;
+}
+.doc-content .column-resize-handle {
+  position: absolute;
+  right: -3px;
+  top: 0;
+  bottom: 0;
+  width: 6px;
+  cursor: col-resize;
+  z-index: 2;
+}
+.doc-content .column-resize-handle::after {
+  content: '';
+  position: absolute;
+  left: 2px;
+  top: 0;
+  bottom: 0;
+  width: 2px;
+  background: var(--accent);
+  opacity: 0;
+}
+.doc-content .column-resize-handle:hover::after { opacity: .65; }
+/* 拖拽中被拖那一列的格子由节点装饰盖上 column-resize-dragging；用 outline 不用 background，
+   免得压掉单元格自己那份底纹（v0.38 那层是内联样式） */
+.doc-content td.column-resize-dragging,
+.doc-content th.column-resize-dragging {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
 .doc-content p.is-editor-empty:first-child::before {
   content: attr(data-placeholder);
   color: #adb5bd;
@@ -2231,6 +2264,11 @@ button {
   .doc-content blockquote,
   .doc-content .doc-toc {
     break-inside: avoid;
+  }
+
+  /* 把手是编辑态的把手，不上纸 */
+  .doc-content .column-resize-handle {
+    display: none;
   }
 
   .doc-content p {

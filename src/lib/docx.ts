@@ -713,27 +713,45 @@ function colspanOf(cell: PMNode): number {
 
 /**
  * 表的逐网格列宽（px）：行 0 各格的 colwidth 是按 colspan 展开的数组，摊平成逐网格列。
- * 任一格没有这份账、数组长度对不上 colspan、或某行的 colspan 之和与网格列数不等 ⇒ 整表按「无宽度账」处理
- * （w:gridCol 的枚数必须和单元格的跨度对得上，否则写出的件在 Word 那头是损坏件档）
+ * 四道认账门里只松「每一格都得带账」那一道——**部分账按剩余版心等分补平**：
+ * 界面上拖一次只写被拖那一列（prosemirror-tables 的 updateColumnWidth 形状，实测 after=[248]|null|null），
+ * 要求整表齐账等于把用户拖出来的那一枚宽度在导出时整表作废（屏上有、字节里没有、Word 里也没有）。
+ * 另外三道形状门一道不松：数组长度必须等于该格 colspan、账必须是正数（0 = 该列没账，是库自己的约定）、
+ * 每行的 colspan 之和必须等于摊平出的网格列数——gridCol 枚数与跨度对不上在 Word 那头是损坏件档。
+ * 一枚账都没有 ⇒ null（整表按「无宽度账」处理：版心等分 + 百分比表宽 + 不声明 fixed）
  */
-function gridPxOf(rows: PMNode[]): number[] | null {
+function gridPxOf(rows: PMNode[], contentTwips: number): number[] | null {
   if (rows.length === 0) return null
   const first = cellsOf(rows[0])
   if (first.length === 0) return null
-  const grid: number[] = []
+  const cols = first.reduce((s, c) => s + colspanOf(c), 0)
+  if (cols === 0) return null
+  for (const r of rows) {
+    if (cellsOf(r).reduce((s, c) => s + colspanOf(c), 0) !== cols) return null
+  }
+  const laid: (number | null)[] = []
   for (const c of first) {
     const cw = c.attrs?.colwidth
+    if (cw == null) {
+      for (let i = 0; i < colspanOf(c); i++) laid.push(null)
+      continue
+    }
     if (!Array.isArray(cw) || cw.length !== colspanOf(c)) return null
     for (const w of cw) {
       const px = num(w)
-      if (!(px > 0)) return null
-      grid.push(px)
+      if (px === 0) laid.push(null)
+      else if (px > 0) laid.push(px)
+      else return null
     }
   }
-  for (const r of rows) {
-    if (cellsOf(r).reduce((s, c) => s + colspanOf(c), 0) !== grid.length) return null
-  }
-  return grid
+  const known = laid.filter((x): x is number => x != null)
+  if (known.length === 0) return null
+  const rest = cols - known.length
+  if (rest === 0) return known
+  // 没带账的列分走剩下的版心：这一档在屏上就是浏览器的算法（实测 colsAfter 248/188.7/188.7）
+  const contentPx = Math.floor(contentTwips / PX_TWIP)
+  const fill = Math.max(1, Math.floor((contentPx - known.reduce((s, w) => s + w, 0)) / rest))
+  return laid.map((px) => px ?? fill)
 }
 
 /** 版心宽度（twips）兜底：A4 + 默认边距，调用方没给页面设置时按它等分 */
@@ -842,13 +860,14 @@ function blocksOf(
     if (node.type === 'table') {
       const rows = (node.content ?? []).filter((r) => r.type === 'tableRow')
       if (rows.length === 0) continue
-      // 列宽这份账：有账的表按账写真网格并声明 fixed 布局（逐格 w:tcW + 表级绝对 w:tblW），
-      // 没账的表按版心等分写真网格但仍交给 Word 自动布局；两条都不再落库默认的 100 twip 假网格
-      const gridPx = gridPxOf(rows)
+      // 列宽这份账：带账的表（整表齐账或只有一列带账）按账写真网格并声明 fixed 布局
+      // （逐格 w:tcW + 表级绝对 w:tblW），没带账的表按版心等分写真网格但仍交给 Word 自动布局；
+      // 两条都不再落库默认的 100 twip 假网格
       const cols = Math.max(
         1,
         ...rows.map((r) => cellsOf(r).reduce((s, c) => s + colspanOf(c), 0)),
       )
+      const gridPx = gridPxOf(rows, contentTwips)
       const gridTw = (gridPx ?? equalGridPx(cols, contentTwips)).map((px) =>
         Math.max(1, Math.round(px * PX_TWIP)),
       )
