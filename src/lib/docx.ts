@@ -128,6 +128,26 @@ export function resolvePage(p?: PageSetup): {
   return { w, h, margin: { ...DEFAULT_PAGE_MARGIN, ...p?.margin }, cols, colGap: p?.colGap ?? DEFAULT_COL_GAP }
 }
 
+type ResolvedPage = ReturnType<typeof resolvePage>
+
+/**
+ * 版心宽度（twips）：页宽减左右边距，多栏时再扣栏间距按栏数分。
+ * 这是「一张表到底有多宽」的唯一一处算法——docx 写侧的等分与界面上的精确列宽都吃它，
+ * 两边各算一份迟早会分叉（屏上 1:1、字节里另一套）。
+ */
+export function contentTwipsOf(pg: ResolvedPage): number {
+  const tw = (mm: number) => Math.round(mm * MM_TWIPS)
+  return Math.max(
+    1,
+    Math.floor((tw(pg.w) - tw(pg.margin.left) - tw(pg.margin.right) - tw(pg.colGap) * (pg.cols - 1)) / pg.cols),
+  )
+}
+
+/** 版心宽度（px 整数，与写侧 gridTw 的 px↔twips 同一处换算） */
+export function contentPxOf(pg: ResolvedPage): number {
+  return Math.floor(contentTwipsOf(pg) / PX_TWIP)
+}
+
 // 页眉页脚设置 + 批注列表 + 页面设置：随 .odoc meta 存储，导出写入 OOXML
 export interface DocMeta {
   headerText?: string
@@ -711,26 +731,69 @@ function colspanOf(cell: PMNode): number {
   return Number(cell.attrs?.colspan ?? 1) || 1
 }
 
+function rowspanOf(cell: PMNode): number {
+  return Number(cell.attrs?.rowspan ?? 1) || 1
+}
+
+function isCellNode(cell: PMNode): boolean {
+  return cell.type === 'tableCell' || cell.type === 'tableHeader'
+}
+
+/**
+ * 按网格走一遍表：给出列数与每行每枚真格子的**网格起始列**。
+ * 竖跨（rowspan）会在下面那一行压掉一枚格子——TipTap 模型里那一行真的少一个子节点，
+ * 而网格上那几枚列仍被上面那格占着。早先「每行 colspan 之和等于列数」那道门只数行内自己的格子，
+ * 于是含竖跨的表整表判成形状不合、宽度账整表作废（屏上有、字节里没有、Word 里也没有）。
+ * 现在按占位走：行宽对不上、跨越出界、格子互相压住 ⇒ null（调用方一律按「没有宽度账」处理）。
+ */
+function gridShapeOf(rows: PMNode[]): { cols: number; starts: number[][] } | null {
+  if (rows.length === 0) return null
+  const first = cellsOf(rows[0])
+  if (first.length === 0) return null
+  const cols = first.reduce((s, c) => s + colspanOf(c), 0)
+  if (cols === 0) return null
+  const taken: boolean[][] = rows.map(() => new Array<boolean>(cols).fill(false))
+  const starts: number[][] = []
+  for (let r = 0; r < rows.length; r++) {
+    const rowStarts: number[] = []
+    let gc = 0
+    for (const c of cellsOf(rows[r])) {
+      while (gc < cols && taken[r][gc]) gc += 1
+      const cs = colspanOf(c)
+      const rs = rowspanOf(c)
+      if (gc + cs > cols || r + rs > rows.length) return null
+      for (let k = 0; k < rs; k++) {
+        for (let i = 0; i < cs; i++) {
+          if (taken[r + k][gc + i]) return null
+          taken[r + k][gc + i] = true
+        }
+      }
+      rowStarts.push(gc)
+      gc += cs
+    }
+    while (gc < cols && taken[r][gc]) gc += 1
+    if (gc !== cols) return null
+    starts.push(rowStarts)
+  }
+  return { cols, starts }
+}
+
 /**
  * 表的逐网格列宽（px）：行 0 各格的 colwidth 是按 colspan 展开的数组，摊平成逐网格列。
  * 四道认账门里只松「每一格都得带账」那一道——**部分账按剩余版心等分补平**：
  * 界面上拖一次只写被拖那一列（prosemirror-tables 的 updateColumnWidth 形状，实测 after=[248]|null|null），
  * 要求整表齐账等于把用户拖出来的那一枚宽度在导出时整表作废（屏上有、字节里没有、Word 里也没有）。
  * 另外三道形状门一道不松：数组长度必须等于该格 colspan、账必须是正数（0 = 该列没账，是库自己的约定）、
- * 每行的 colspan 之和必须等于摊平出的网格列数——gridCol 枚数与跨度对不上在 Word 那头是损坏件档。
+ * 每行在网格上的占位必须等于摊平出的网格列数（竖跨压掉的格子算占位，见 gridShapeOf）——
+ * gridCol 枚数与跨度对不上在 Word 那头是损坏件档。
  * 一枚账都没有 ⇒ null（整表按「无宽度账」处理：版心等分 + 百分比表宽 + 不声明 fixed）
  */
 function gridPxOf(rows: PMNode[], contentTwips: number): number[] | null {
-  if (rows.length === 0) return null
-  const first = cellsOf(rows[0])
-  if (first.length === 0) return null
-  const cols = first.reduce((s, c) => s + colspanOf(c), 0)
-  if (cols === 0) return null
-  for (const r of rows) {
-    if (cellsOf(r).reduce((s, c) => s + colspanOf(c), 0) !== cols) return null
-  }
+  const shape = gridShapeOf(rows)
+  if (!shape) return null
+  const cols = shape.cols
   const laid: (number | null)[] = []
-  for (const c of first) {
+  for (const c of cellsOf(rows[0])) {
     const cw = c.attrs?.colwidth
     if (cw == null) {
       for (let i = 0; i < colspanOf(c); i++) laid.push(null)
@@ -863,10 +926,8 @@ function blocksOf(
       // 列宽这份账：带账的表（整表齐账或只有一列带账）按账写真网格并声明 fixed 布局
       // （逐格 w:tcW + 表级绝对 w:tblW），没带账的表按版心等分写真网格但仍交给 Word 自动布局；
       // 两条都不再落库默认的 100 twip 假网格
-      const cols = Math.max(
-        1,
-        ...rows.map((r) => cellsOf(r).reduce((s, c) => s + colspanOf(c), 0)),
-      )
+      const shape = gridShapeOf(rows)
+      const cols = shape?.cols ?? Math.max(1, ...rows.map((r) => cellsOf(r).reduce((s, c) => s + colspanOf(c), 0)))
       const gridPx = gridPxOf(rows, contentTwips)
       const gridTw = (gridPx ?? equalGridPx(cols, contentTwips)).map((px) =>
         Math.max(1, Math.round(px * PX_TWIP)),
@@ -882,10 +943,11 @@ function blocksOf(
           ...(num(node.attrs?.marginLeft) > 0
             ? { indent: { size: Math.round(num(node.attrs?.marginLeft) * PX_TWIP), type: WidthType.DXA } }
             : {}),
-          rows: rows.map(
-            (r) => {
-              // 逐格的 w:tcW 吃掉它跨的那几枚网格列；gc 随行内格子前进（Array.map 是顺序的）
+          rows: rows.map((r, ri) => {
+              // 逐格的 w:tcW 吃掉它跨的那几枚网格列；网格游标按 shape 给的真格子起始列走，
+              // 被上面竖跨压掉的那几枚列不能省（不省就会把整行往左错一枚，键进去的账落错格子）
               let gc = 0
+              let ck = 0
               return new TableRow({
                 // 表头行由行级 w:trPr/w:tblHeader 记账（TipTap 用 th 单元格类型表示）。
                 // 只在命中时给属性：写成 tableHeader:false 会落 <w:tblHeader w:val="false"/>，
@@ -894,10 +956,11 @@ function blocksOf(
                 children: (r.content ?? []).map((cell) => {
                   // TipTap 合并语义 colspan/rowspan → gridSpan + vMerge（docx 库内部展开 restart/continue）
                   const cs = colspanOf(cell)
-                  const rs = Number(cell.attrs?.rowspan ?? 1) || 1
-                  const isCell = cell.type === 'tableCell' || cell.type === 'tableHeader'
-                  const cellTw = isCell ? gridTw.slice(gc, gc + cs).reduce((s, w) => s + w, 0) : 0
-                  if (isCell) gc += cs
+                  const rs = rowspanOf(cell)
+                  const isCell = isCellNode(cell)
+                  const start = isCell && shape ? (shape.starts[ri][ck++] ?? gc) : gc
+                  const cellTw = isCell ? gridTw.slice(start, start + cs).reduce((s, w) => s + w, 0) : 0
+                  if (isCell) gc = start + cs
                   const borders = bordersOf(cell.attrs)
                   const bg = shadingOf(cell.attrs?.background)
                   const va = cell.attrs?.vAlign
@@ -940,13 +1003,8 @@ export async function prosemirrorToDocxBytes(json: PMNode, meta?: DocMeta): Prom
   const dt = newDocTrack()
   const pg = resolvePage(meta?.page)
   const twips = (mm: number) => Math.round(mm * MM_TWIPS)
-  // 版心宽度（twips）：页宽减左右边距，多栏时再扣栏间距按栏数分——没有宽度账的表按它等分写真网格
-  const contentTw = Math.max(
-    1,
-    Math.floor(
-      (twips(pg.w) - twips(pg.margin.left) - twips(pg.margin.right) - twips(pg.colGap) * (pg.cols - 1)) / pg.cols,
-    ),
-  )
+  // 版心宽度：与界面上的精确列宽同一个算法（contentTwipsOf），没有宽度账的表按它等分写真网格
+  const contentTw = contentTwipsOf(pg)
   const section: {
     children: (Paragraph | Table | TableOfContents)[]
     properties?: {

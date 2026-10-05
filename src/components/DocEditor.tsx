@@ -22,6 +22,7 @@ import {
   prosemirrorToDocxBytes,
   pageNumberParts,
   resolvePage,
+  contentPxOf,
   MM_PX,
   PAGE_NUMBER_FORMATS,
   type DocComment,
@@ -55,6 +56,7 @@ import {
   type CellEdge,
 } from '../lib/cell-style'
 import { ParagraphStyle, ruleOf, type LineRule } from '../lib/paragraph-style'
+import { TableWidth, caretColumn, tableTargetPx } from '../lib/table-width'
 import { FindReplace, frPluginKey, activeIndexOf } from '../lib/find-replace'
 import { docTemplate } from '../lib/templates'
 import { odtToHtml, prosemirrorToOdtBytes } from '../lib/odt'
@@ -175,6 +177,8 @@ function DocEditor({ tab }: Props) {
       Subscript,
       // 表格/单元格的边框、底纹、竖排对齐与表格缩进：保真导入落在这些属性上
       CellStyle,
+      // 精确列宽那一枚命令（setGridColumnWidth）：一次写遍整表，账由 redistribute 算
+      TableWidth,
       // 段落行距/段前后/底纹/四边：docx 的 w:spacing、w:shd、w:pBdr 读进来就靠这一层接住
       ParagraphStyle,
       Highlight.configure({ multicolor: true }),
@@ -1302,6 +1306,42 @@ function DocEditor({ tab }: Props) {
           <span className="tb-sep" />
           {btn('合并', () => editor.chain().focus().mergeOrSplit().run(), false, '框选多格合并；点在已合并格上则拆分')}
           {btn('表头行', () => editor.chain().focus().toggleHeaderRow().run(), editor.isActive('tableHeader'))}
+          <span className="tb-sep" />
+          {(() => {
+            // 光标所在那一列的精确宽度：可用宽 = 版心扣掉表级缩进（与 docx 写侧同一个数）
+            const target = tableTargetPx(editor.state, contentPxOf(eff))
+            const cur = target ? caretColumn(editor.state, target) : null
+            if (!cur || !target) return null
+            const commit = (raw: string) => {
+              const px = Number.parseInt(raw, 10)
+              if (!Number.isFinite(px) || px < 1) return
+              editor.chain().focus().setGridColumnWidth(px, target).run()
+            }
+            return (
+              <label
+                className="doc-hf-field"
+                key={`colw-${cur.col}-${cur.px}`}
+                title={`这一列的宽度（px）：其余列按现有的账重排剩下的 ${target}px，导出 docx 就是这份网格`}
+              >
+                列宽
+                <input
+                  className="tb-input doc-num"
+                  type="number"
+                  min={1}
+                  max={target}
+                  defaultValue={cur.px}
+                  onBlur={(e) => commit(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key !== 'Enter') return
+                    e.preventDefault()
+                    commit((e.target as HTMLInputElement).value)
+                    ;(e.target as HTMLInputElement).blur()
+                  }}
+                />
+                px
+              </label>
+            )
+          })()}
           <span className="tb-sep" />
           {(() => {
             // 光标所在格可能是 tableHeader（表头行），两种类型的属性都要读一遍
