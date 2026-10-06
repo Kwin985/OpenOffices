@@ -474,7 +474,9 @@
   都没有，实测装饰 rect 高 0）；**v0.91 把「每行 colspan 之和等于列数」那道门改成按占位走**（`gridShapeOf`：被竖跨
   压掉的格子算占位而不算缺格），此前含竖跨的表整表判成形状不合、宽度账整表作废；**v0.92 起屏上也吃这一份账**
   （`accountTotalPx`：整表每列都带账 ⇒ `table.style.width = Σpx`，与 docx 的 `w:tblW`（网格和）同一形状，键入的 90px
-  在屏上就是 89.94；没账或部分账仍走版心比例那一档，逐格宽度与导出字节都不变）
+  在屏上就是 89.94；没账或部分账仍走版心比例那一档，逐格宽度与导出字节都不变）；**v0.93 起纸面也吃这一份账**
+  （`@media print` 里 `.doc-content{overflow:hidden}`：内容比版心宽时不再让 Blink 把**整页**按比例缩小，而是把超出的
+  那一段裁在版心右沿——实测 900px 的表纸上 scale 从 0.6981 回到 1.0004，前两列按 300px 真尺寸上纸、第三列被裁）
 - **图片增强**：剪贴板粘贴图片直接转 base64 插入（`handlePaste`）；选中图片浮出工具条——
   宽度按版心 25/50/75/100%（按当前显示比例换算 height）、居中（display:block+auto margin
   自定义 align 属性）、恢复原尺寸；宽度随 docx ImageRun/odt draw:frame 导出往返
@@ -761,7 +763,8 @@
   `columnResizing` 节点视图生成，它 `new View(node, min, view)` **不传 HTMLAttributes**，`renderHTML` 里的
   `margin-left` 永远落不了地；`IndentTableView` 子类在构造与 `update()` 里自己套 `marginLeft`（并同步
   `width: calc(100% - Npx)`，否则满宽版心会被顶出页面；**v0.92 起这一枚 `calc` 只在"没账或部分账"那一档盖**——整表每列
-  都带账时表宽就是那份账的绝对像素和 `accountTotalPx`，缩进不再靠 `calc` 收右边，见 v0.92 一节）；
+  都带账时表宽就是那份账的绝对像素和 `accountTotalPx`，缩进不再靠 `calc` 收右边，见 v0.92 一节；**v0.93 纸面腿第一次
+  在纸上量到这一枚**——`indent` 臂的表左沿 = 版心左沿 83 + 缩进 40 = 122.98px，缩进真的上纸）；
   ③ Word 里"显式去掉的边框"照样画出来——`w:val="none"` 在 Word 语义里**压不住表级默认边框**（它当"没指定"，
   继续吃 `w:tblBorders` 的 insideV，导出再开变成 0.5pt 实线），只有 **`w:val="nil"`** 才是真去掉；
   导出侧改 `BorderStyle.NIL`，导入侧 `CSS_BORDER_STYLE` 加 `nil → none`
@@ -4405,6 +4408,92 @@ docx 库默认的 `w="100"`（twip，≈6.7px），`w:tcW` 与 `w:tblLayout` 零
   com.openoffices.app 的 msedgewebview2 0 支、WINWORD 0 支，按显式 PID 收宿主而不是按进程名乱杀，全程未碰已装正式版）；
   自动更新的源托管与 macOS 打包按指令继续等信号，签名私钥已加密备份并演练 7/7，**私钥本体在本机仍是单点**。
 
+## 纸面那一头第一次被正面量：超宽表不再把整页拖小（v0.93）
+
+窄口径：`src/index.css` +5（`@media print` 里 `.doc-content` 那一条补一句 `overflow: hidden`，与 v0.50 那句
+`min-height:0 !important` 同住一条规则），**Rust 一个字没动、docx 写侧一个字节没动**。还的是 v0.92 收尾时自己记下的
+那条未勾项——「纸面那一头没量」，以及 v0.88 的同族「纸上有没有边框从来没正面量」。
+
+- **前置实测**（tmp/x93，dev 真机 + 真导出 + Word 自己导的 PDF，只量不改产品）：九臂（`none`/`narrow`/`exact`/
+  `single`/`indent`/`partial`/`over`/`longtall`/`borders`/`columns`，另加 `wide-tall`）逐枚导出 PDF 再用几何腿读回
+  `scale` / 表左沿 / 逐枚列边界 / 单元格标位。**只有一臂出问题**：`over`（模型 [300,300,300]，Σ=900）在纸上
+  `scalePx=0.6981` = 627/899——Blink 打印遇到比版心宽的内容时**把整页按比例缩小**去迁就那一枚超宽件，三列 300px
+  在纸上被压成 209 一档（`colEdges` 83/292.23/500.77/710.01、`tableWidthPx` 627.01），代价是**整篇正文字号跟着缩**
+  （文本矩阵 `a` 从 11.24pt 掉到 7.85pt，屏幕上 15px 的正文纸上只有 10.5px）；其余八臂 `scale` 一律 1.0004（版心
+  没被撑破就不缩），且屏上那一份账 1:1 上纸（`narrow` 纸上 pitch 119.94/159.93/238.88 而模型 120/160/240、
+  `single` 88.96 而模型 90、`exact` 89.96/266.87/267.87、`indent` 左沿 122.98 = 版心左沿 83 + 缩进 40）。
+  **注入五枚候选裁决住哪一层**：`.doc-content{overflow:hidden}` 与 `.doc-page{overflow:hidden}` 都把 `scale` 拉回
+  1.0004（表纸上 `colEdges` 83/382.86/681.72，即前两列按 300px 真尺寸、第三列起点在纸上而墨不画），而
+  `.doc-cols{overflow:hidden}` 与 `.doc-content table{max-width:none}` **完全不管用**（仍 0.6981）。
+  **第三方对照走 Word 16.0 自己导出的 PDF**：同一件 Word 报逐列 225 磅 ×3（`pref=3` 固定宽）而纸宽只有 595.32pt、
+  左右边距各 62.35pt ⇒ 表按真尺寸排、第三列起点 512.5pt 而它自身 225pt 越出纸边**被纸裁掉**——不缩表、不缩字号，
+  这一条与 v0.92「屏上不夹取」的裁决同源。另三档第一次有纸面读数：`borders` 臂纸上 4 枚红段落边 + 6 枚蓝格上边 +
+  1 块黄底纹真的上纸（v0.88 那条"边框进不进导出 PDF"至此有判据），而**纸上零枚带 dash 的路径**（边框被铺成实心
+  矩形 `fill`、`dash` 全为 null ⇒ 屏幕上的 `1.5px dashed #ff0000` 到纸上成实线）；`longtall`（22 行 × 520px）
+  纸上是四页而**第 1、2 页 0 枚格标**、表从第 3 页才起（`break-inside:avoid` 把整张表推后）；`wide-tall`
+  （1500px 宽 + 22 行）同理第 1 页 0 枚。
+- **本轮唯一的架构决定（跟着纸面走）**：版心是纸上的硬边界，四条形状都不是可选的——① **裁而不缩**：超出版心的那一段
+  在纸上不存在，而不是替整页决定字号（"同一篇文档因为一枚超宽表就换正文字号"正是 Word 从不做的事）；② **收口住
+  `.doc-content` 而不是 `.doc-page`**：两枚都能修住 `scale`（实测逐枚同读数 598.72），选只管正文那一层的——
+  `.doc-page` 还牵着页眉页脚与分页参考线，收它会管住不属于本次问题的东西；③ **只在 `@media print` 生效**：屏幕上
+  v0.92 刚立的"超宽如实撑出"那一档一个字没动（`over` 臂屏上仍是 inline 900px 而 `clientWidth` 626，dev 腿 D7 判住）；
+  ④ **被裁的那一列本轮不另加提示**（既不在界面上说、也不在纸上打标记），明写成未勾项而不是偷偷做一半。
+  写侧一头刻意不碰：**十臂导出件的 `word/document.xml` 与改前逐字节相同**（字节腿 W0 判），这一轮买的是纸面不是字节。
+- **验证**（四腿 + 编译，全部在版本号 bump 三处对齐之后在最终源文上复跑）：纸面判据腿 RESULT paper pass=35 fail=0
+  （P1 改前 0.6981 留档 / P2 改后 1.0004 / P3 纸上列间距 = 模型 300px（pitch 299.86/298.86）/ P4 表左沿 = 版心左沿 83 /
+  P5+P6 第三列被裁而前两列完整 / **P7 产品自带规则那一份 ≡ 改前注入那一份**（598.72/598.72 逐枚同读数）/ P8+ 其余
+  九臂五头（scale·页数·左沿·列沿·文字位）与改前逐枚同 = 没超宽的表纸面一点没动 / P16 无账那一档纸上仍是版心三等分
+  208.9/207.9/208.9 / P16b 部分账 247.88/188.91/188.91（248 那枚按真尺寸）/ P17 表级缩进上纸 / P18-P19 长表四页且
+  22 行全上纸（收口没在后续页吃行）/ P20-P22 超宽又超高 1500px 三页不缩、纸上列宽 499.76 ≈ 模型 500 / P23 边框与
+  底纹上纸 + NOTE 虚线档（带 dash 的键 = []）/ P24-P25 超宽件首末段正文在纸上而第三列文字不在（只裁表不裁字）/
+  P26 七臂逐枚格标全在 / P27 墨停在版心右沿以内（maxRight 709.2 < 版心右沿 710 < 纸宽 793.28，纸的右白边不画）/
+  P28 Word 的超宽表真尺寸上纸并被纸边裁掉 + NOTE 两头的裁位不同）；CSS 结构+变异合并一腿 RESULT css struct=10/10
+  b0=4/4 mutants=11 bad=0 extra=0 trap=ok（吃剥掉注释并归一 LF 的源文；CSS1 print 内那条收口真在、CSS2 print 之外
+  零枚（屏幕不受管）、CSS3 `min-height:0 !important` 没被顺手改、CSS4 值确是 `hidden`、CSS5 `.doc-content` 恰一枚而
+  `.doc-page` 没被加上 overflow、CSS6 `break-inside:avoid` 五枚选择器齐、CSS7 把手不上纸、CSS8 `.doc-page` 的
+  width/padding 仍带 important、CSS9 print 里没有第二处宽口径 overflow、CSS10 `.ppt-print-page{overflow:hidden}`
+  先例仍在；M1~M11 各响该响的那条，含 M1「整条声明删掉」正是本轮改前的形状、M9「print 之外也加一枚」；
+  B0 自检四条 + P1 注释陷阱（print 内外各埋一枚假声明，十枚判据须与基线同判）+ P2 反陷阱（真删锚点自带 `throw` 守卫））；
+  独立字节腿（zipfile + 正则直解 `word/document.xml`，不吃自家读侧）RESULT bytes pass=41 fail=0（W0 十臂与改前
+  **逐字节相同** = 写侧没碰，W0z 记 `docProps/core.xml` 每次导出都重写 ⇒ 整件哈希必然 DIFF、不能当"没动写侧"的证据；
+  Y1~Y16 九臂账形状（`w:tblW`/`w:tblInd`/`w:tblLayout`/`w:gridCol`/`w:tcW`/`gridSpan`）未回归、Y17 逐格正文不丢、
+  Y18 部件齐全）；CDP dev 真机腿 RESULT dev pass=45 bad=0、pageerr=0（D0b **产品自带**那条 print 收口在活页面上恰一枚
+  且值为 hidden（`.doc-content { overflow: hidden; min-height: 0px !important; }`，不吃注入件）；D1~D3 齐账臂 inline =
+  Σpx、rect 与模型 1:1（±0.6）、`<col>` 逐枚模型 px；D4 `none`/`partial` 两臂 inline `(empty)` 而 rect ≈ 版心 =
+  没账那一档一点没动；D6 `indent` 520px + `marginLeft` 40px；D7 `over` rect 900 > `clientWidth` 626（屏上仍如实撑出）；
+  D5 十一臂 PDF+docx 双双落盘 > 1200B；NOTE 屏上 `.doc-content` `clientWidth` 626 而纸面板心 627px）；
+  Word 16.0 只读腿本轮**没有重跑**（字节腿证明写侧逐字节未变 ⇒ 磅值一头的证据仍是 v0.92 那批 + 本轮 Word 自己导出的
+  那九份 PDF）；`pnpm exec tsc --noEmit` exit 0 + `cargo test --lib` 97 passed / 0 failed / 11 ignored（Rust 本轮
+  一个字没动）+ `pnpm tauri build --no-bundle` 绿（openoffices v0.93.0，5m16s）。纸面判据腿在 bump 后吃 dev 腿新落盘的
+  那一批（`dev93-*.pdf`）整腿复跑，仍是 35/0。
+- **本轮撞到八处量具坑，都不是产品**：① **bump 之前那批纸面件不属于最终源文**——bump 会重启 app，纸面判据必须吃
+  bump 之后重新导出的那份 PDF，本轮把判据腿的"改后"前缀做成参数（`POST_PREFIX=dev93`）而不是重跑生成腿（省一整趟
+  真导出）；② `.doc-editor` 这枚选择符**产品里根本不存在**（`grep -rn "doc-editor" src/` → 0 命中），dev 腿照前置
+  实测那份写法就整臂 TypeError，屏上口径要问 `tbl.closest('.doc-content')`；③ **整件 docx 的哈希永远 DIFF**
+  （`docProps/core.xml` 每次导出重写），"写侧没动"只能比 `word/document.xml` 逐字节；④ CSS 判据那条"不许有第二处
+  宽口径 overflow"撞上 app 外壳本来就有的 `html, body, #root{overflow:hidden}` ⇒ 判据 scope 进 print 块，屏上那一档
+  另记 NOTE（屏幕溢出是 v0.92 刚立的"如实撑出"，不该被自家判据判成违例）；⑤ **正控制第一版什么都没测到**——在同一枚
+  规则里复制一份声明，规则枚数与值判定都不变，改成把假锚点埋进 print 内外的注释里；⑥ **变异期望按判据实际量的东西写**
+  ——M1 删掉声明同时打掉值判定（CSS4）与枚数判定（CSS5），期望只写 CSS1 就报「多响」；⑦ perl 就地改 JS 把正则里的
+  `\\/` 吞成 `\/`（写出不闭合的字面量，一整条腿 SyntaxError）⇒ 跨语言批量改锚点一律落成 `.pl`/`.ps1` 文件再执行、
+  改完 `node --check`；⑧ 屏上 626 与纸面 627 那枚 1px 口径差会在纸面腿上伪装成"裁位差 1px" ⇒ 判据一律带 ±1px。
+- **本轮没动、量出来记着**（已开进路线图）：① 超宽表被裁掉的那一列**在纸面上没有任何提示**（用户不知道少印了一列，
+  Word 那一头至少还在屏上把表画出纸外）；② 两头的**裁位不同**——自家裁在版心右沿（710px = 532.5pt，纸的右白边不画）
+  而 Word 裁在纸边（595.32pt）；③ **纸面把虚线降成实线**（`borders` 臂纸上零枚带 dash 的路径，边框被铺成实心矩形）；
+  ④ **超高表被 `break-inside:avoid` 整张推到后面一页**（`longtall` 第 1、2 页 0 枚格标、`wide-tall` 第 1 页 0 枚）⇒
+  表前面那段正文与表被隔开、首近空白；⑤ 部分账那一档纸面仍是比例（247.88/188.91/188.91）；⑥ **本轮没有 release A/B**
+  （改的是 `@media print` 那一条，dev 与 release 走同一份 CSS，但纸面证据只在 dev 一头）；⑦ v0.92 那几项原样挂着
+  （NodeView 与 `renderHTML` 两口径、被跨列格盖住的后续列没有独立把手、拖拽混单位、`fixTables` 公开通道 no-op、
+  ODT 两头不往返、读侧只吃 `w:gridCol`、`w:between` 第五边、嵌套表版心按最外层近似、px 存整数的 ±0.25 磅漂移、
+  等分补平算法住两处、626 与 627 那枚 1px 口径差）。
+- **收尾**：README 新增本节 + 文件清单 `index.css` 条目补这一枚 print 收口 + 架构两处就地改口（v0.30 表格通道那条补
+  「v0.93 起纸面也吃这一份账」、v0.38「表格缩进在屏幕和 PDF 上完全不生效」那条补上纸面第一次量到的读数）+ 路线图
+  勾掉「纸面那一头没量」与「纸上有没有边框从来没正面量」、把「键入值超出版心时整表不夹取」的纸面那一半结掉，
+  版本 0.93.0（package.json / tauri.conf.json / Cargo.toml 三处对齐），tmp/x93 的夹具、纸面腿、CSS 结构+变异腿、
+  dev 腿、字节腿与几何量具按惯例删除（收摊后 1420/9222 无监听、openoffices.exe 0 支、com.openoffices.app 的
+  msedgewebview2 0 支、WINWORD 0 支，按显式 PID 收宿主而不是按进程名乱杀，全程未碰已装正式版）；
+  自动更新的源托管与 macOS 打包按指令继续等信号，签名私钥已加密备份并演练 7/7，**私钥本体在本机仍是单点**。
+
 ## 性能（v0.3）
 
 
@@ -4472,7 +4561,7 @@ src-tauri/            Rust 后端
 src/                  React 前端
   store.ts            标签页 / 最近文件 / 主题（zustand）；`openTab` 里有**两行**按 `tab.path && tab.kind === …` gating 的预取（`prefetchWorkbook` 管表格、`prefetchPdf` 管 PDF；v0.67 起是表格那一头，v0.68 把 PDF 那一头接上同一层：读件请求在开标签那一刻就出门，而不是等编辑器挂载），`closeTab` 里有两行对称的撤账（`dropWorkbook`/`dropPdf`，关掉的是那枚还没人取的标签就撤掉在途的账，**撤账跟着标签的格式走**）；两处都只调用 `lib/open-prefetch.ts` 而不内联那份字典，也不在这一层碰读侧实现（判据 S1–S5）
   App.tsx             全局快捷键、拖拽打开、文件关联打开（启动 argv + 单实例转发）、关闭确认、懒加载路由；dev 钩子另加 `__oofFail(cmd, args)`（v0.64：原样发起一次命令调用并把失败时用户会看到的那串话交回，冒烟据此问"写侧真失败怎么说"而不必经过我们自己的读侧）
-  index.css           外壳样式、两套主题，以及**纸面与屏幕主题的断钩处**（v0.49）：屏幕上的颜色一律先落进 CSS 变量（`--bg/--panel/--text/--text-2/--border/--accent/--code-bg/--quote-bg`），`@media print` 里一段同时命中 `:root` 与 `:root[data-theme='dark']` 的规则把 `color-scheme` 压回 `light` 并重声明整套纸面调色板（**段必须排在暗色段之后**，同特异度靠源序说话），顺手清掉屏幕辅助（`.fr-hit`/`.fr-active` 的查找命中高亮）；内容自己声明的字面色（段落底纹、单元格底色、幻灯片背景）不经过这条规则，所以照旧上纸；v0.50 又在这里补了 `.doc-content{min-height:0 !important}`——屏幕上那 900px 是打字辅助，矮纸（横向/A5）的可印高度不足它，正文尾巴会被顶成凭空多出的空白一页；**表格的网格线从无条件改为 `.sheet-print-grid` 一类**（v0.51：`printOptions@gridLines` 是打印设置里的一勾，而 Excel 的默认是"没勾就不印"），并新增 `.sheet-print-heading`/`.sheet-print-corner`（行列标题）与 `.sheet-print-band{break-inside:auto}`（一个列带一张表，带内可被分页切开，带与带之间由 `.sheet-print-break` 隔开）；v0.52 再添「页面设置」面板那一份（`.print-pop` 的分组 fieldset、毫米边距格、开关格、分页符 chip，以及 `.print-pop-errs` 与 `.print-pop-notes` 两本账的分色，`--danger` 同时进暗色 token 与 `@media print` 的纸面调色板——面板自己也可能被印出来，规矩照 v0.49 那条「屏幕上的颜色必须先穿过一枚 CSS 变量」）；**v0.59 换掉了 `.sheet-print-table td` 那一整档行盒**：`font-size` 从写死的 `11px` 改成 `var(--oof-print-base-size, 14.67px)`（底数由每张表 `<section>` 上那枚自定义属性说话，括号里那档只是"文件那一层没交代"时的兜底，与 `baseFontPt` 同一个数），`padding` 上下归零、`line-height` 从 1.45 收到 1.25、**`height:18px` 不再写**——底数一动，旧的固定行高就成了多出来的一截（接上文件而仍用旧行盒时 11pt 那份每行 24.98px、被挤成两页），而 1em 的方框又装不住下行墨（td 是 `overflow:hidden`，`line-height:1.0` 那一档在纸上把 p/g/y 那几笔切掉），1.25 × 底数正好落回 Excel 那一档（11pt ⇒ 13.75pt vs Excel 报的 14；14pt ⇒ 17.5 = Excel 报的 17.5）。**这一档行盒是 `PRINT_ROW_BIAS_PX` 的标定条件**：再动 `line-height`/`padding`/把 `height` 写回来，那枚偏置必须重跑实测；**v0.90 在这一层给列宽把手补齐了样式**（`.column-resize-handle` 这一族此前产品里一条 CSS 都没有，`grep -rn "column-resize" src/` → 0 命中，实测装饰 rect 是 `width 188 / height 0` 而拖拽功能一直是通的）：`table td/th{position:relative}` 一枚 containing block + 把手 `position:absolute; right:-3px; top:0; bottom:0; width:6px; cursor:col-resize`，常态靠 `::after{opacity:0}` 不刷存在感、悬停才 `.65`（不占额外宽度），拖拽中的那一列用 `outline:2px solid var(--accent); outline-offset:-2px` 而**不用 `background`**（v0.38 那层单元格底纹是内联样式，背景会把它压掉），`@media print` 里 `.column-resize-handle{display:none}`——编辑态的把手不上纸；全部选择符住 `.doc-content` 口径内，且**不给这一版根本不产出的 `.column-resize-proxy` 写样式**
+  index.css           外壳样式、两套主题，以及**纸面与屏幕主题的断钩处**（v0.49）：屏幕上的颜色一律先落进 CSS 变量（`--bg/--panel/--text/--text-2/--border/--accent/--code-bg/--quote-bg`），`@media print` 里一段同时命中 `:root` 与 `:root[data-theme='dark']` 的规则把 `color-scheme` 压回 `light` 并重声明整套纸面调色板（**段必须排在暗色段之后**，同特异度靠源序说话），顺手清掉屏幕辅助（`.fr-hit`/`.fr-active` 的查找命中高亮）；内容自己声明的字面色（段落底纹、单元格底色、幻灯片背景）不经过这条规则，所以照旧上纸；v0.50 又在这里补了 `.doc-content{min-height:0 !important}`——屏幕上那 900px 是打字辅助，矮纸（横向/A5）的可印高度不足它，正文尾巴会被顶成凭空多出的空白一页；**表格的网格线从无条件改为 `.sheet-print-grid` 一类**（v0.51：`printOptions@gridLines` 是打印设置里的一勾，而 Excel 的默认是"没勾就不印"），并新增 `.sheet-print-heading`/`.sheet-print-corner`（行列标题）与 `.sheet-print-band{break-inside:auto}`（一个列带一张表，带内可被分页切开，带与带之间由 `.sheet-print-break` 隔开）；v0.52 再添「页面设置」面板那一份（`.print-pop` 的分组 fieldset、毫米边距格、开关格、分页符 chip，以及 `.print-pop-errs` 与 `.print-pop-notes` 两本账的分色，`--danger` 同时进暗色 token 与 `@media print` 的纸面调色板——面板自己也可能被印出来，规矩照 v0.49 那条「屏幕上的颜色必须先穿过一枚 CSS 变量」）；**v0.59 换掉了 `.sheet-print-table td` 那一整档行盒**：`font-size` 从写死的 `11px` 改成 `var(--oof-print-base-size, 14.67px)`（底数由每张表 `<section>` 上那枚自定义属性说话，括号里那档只是"文件那一层没交代"时的兜底，与 `baseFontPt` 同一个数），`padding` 上下归零、`line-height` 从 1.45 收到 1.25、**`height:18px` 不再写**——底数一动，旧的固定行高就成了多出来的一截（接上文件而仍用旧行盒时 11pt 那份每行 24.98px、被挤成两页），而 1em 的方框又装不住下行墨（td 是 `overflow:hidden`，`line-height:1.0` 那一档在纸上把 p/g/y 那几笔切掉），1.25 × 底数正好落回 Excel 那一档（11pt ⇒ 13.75pt vs Excel 报的 14；14pt ⇒ 17.5 = Excel 报的 17.5）。**这一档行盒是 `PRINT_ROW_BIAS_PX` 的标定条件**：再动 `line-height`/`padding`/把 `height` 写回来，那枚偏置必须重跑实测；**v0.90 在这一层给列宽把手补齐了样式**（`.column-resize-handle` 这一族此前产品里一条 CSS 都没有，`grep -rn "column-resize" src/` → 0 命中，实测装饰 rect 是 `width 188 / height 0` 而拖拽功能一直是通的）：`table td/th{position:relative}` 一枚 containing block + 把手 `position:absolute; right:-3px; top:0; bottom:0; width:6px; cursor:col-resize`，常态靠 `::after{opacity:0}` 不刷存在感、悬停才 `.65`（不占额外宽度），拖拽中的那一列用 `outline:2px solid var(--accent); outline-offset:-2px` 而**不用 `background`**（v0.38 那层单元格底纹是内联样式，背景会把它压掉），`@media print` 里 `.column-resize-handle{display:none}`——编辑态的把手不上纸；全部选择符住 `.doc-content` 口径内，且**不给这一版根本不产出的 `.column-resize-proxy` 写样式**；**v0.93 在这一层的 `.doc-content` 那条 print 规则里补了 `overflow: hidden`**（与 v0.50 那句 `min-height:0 !important` 同住一条规则）——版心是纸上的硬边界：内容比版心宽时 Blink 打印会把**整页**按比例缩小去迁就那一枚超宽件（实测 900px 的表 ⇒ `scale` 0.6981 = 627/899，正文 15px 在纸上只有 10.5px），而 Word 从不替整页决定字号（它的表按真尺寸排、超出纸外的部分被纸裁掉）；注入五枚候选里只有 `.doc-content` 与 `.doc-page` 这两条能修住 `scale`，选前者因为它只管正文那一层、不牵页眉页脚与分页参考线，且**只在 `@media print` 生效**（屏幕上 v0.92 刚立的"超宽如实撑出"那一档一个字没动）
   lib/univer.ts       Univer 实例工厂（公式 worker + 八个社区预设：核心/筛选/排序/条件格式/数据验证/查找替换/绘图 + **批注与超链接**（v0.48，超链接的 `urlHandler` 把外链交给系统默认浏览器——桌面上 `window.open` 会开出一个新 WebView 窗口））
   lib/univer-io.ts    xlsx 数据+样式（粗斜/颜色/字族/边框/对齐/换行/数字格式）/合并/图表/列宽行高/隐藏行列/冻结窗格 ↔ Univer 快照 转换（样式去重注册）；**规则走侧通道**——取完单元格再按 sheetId 把 `extractRules(resources)` 的结果对回每张表，`warnings` 由 `aggregateNotes` 聚合；**批注与链接同一条侧通道**（v0.48）：取侧交给 `extractCellSide`，放侧把 `resources` 写成 `[noteResourceOf(...)]`（实测裸写就能被门面读回）、链接写成带 `customRanges` 的富文本格（**公式格上那枚先记账不硬放**，只有链接没内容的格子也要占一格）；`payloadToWorkbook` 因此多收一个 `accounts` 出参
   lib/sheet-rules.ts  三类规则的前端桥（v0.46）：`extractRules` 从工作簿快照的 `resources` 里按表取规则（Univer 三个插件各写各的 JSON，条件格式按快照原序交回=高优先级在前），`applySheetRules` 经门面放回界面（**条件格式倒着插**，因为这一版门面按插入顺序的倒序吐规则；builder 无 `setRanges`，作用区在 `build()` 之后挂产物），`buildDataValidation` 只建门面表达得出的四类 + custom；归一化（`normColor` 收 rgb/#、`normDateValue` 收 ISO、`listOf` 拆 JSON 数组串与区域引用、`neg === pos` 的负色丢掉）与 `aggregateNotes`（同类收成"文案×N"）都在这，`textLength`/`time`/`any` 这类摆不进模型的退成边界账而不是硬建一条；**v0.64 那三句"没能还原"后面的原串改走 `lib/fail-msg.ts` 的 `failText`**（账目本来就上状态栏，原话只该有一份出处）
@@ -5428,9 +5517,11 @@ cargo check        # Rust 后端检查（在 src-tauri 下）
       边在「清除」之后 Word 那头还在不在，本轮没有判据
 - [ ] **v0.88 没有 release A/B**：到得了「重跑那一拍」的注入缝是 DEV-only 的，而本轮买的是界面那一排——它在 release 上
       长同样的形状（同一个组件、同一份 CSS）却**只有形状推断**（v0.83 那条同族未勾项原样挂着）
-- [ ] **纸上有没有边框从来没正面量**（v0.88 前置实测明记的一条）：本轮的证据全在屏幕 DOM、docx/odt 字节与 Word 只读
-      三头，"边框进不进导出 PDF"没有判据（v0.49 那条「屏幕上的颜色先穿过 CSS 变量」管的是主题色，边框是内容自己
-      声明的，照规矩该上纸而没人量过）
+- [x] **纸上有没有边框从来没正面量**（v0.88 前置实测明记的一条，v0.93 结掉）：那一轮的证据全在屏幕 DOM、docx/odt
+      字节与 Word 只读三头，"边框进不进导出 PDF"没有判据（v0.49 那条「屏幕上的颜色先穿过 CSS 变量」管的是主题色，
+      边框是内容自己声明的，照规矩该上纸而没人量过）。**v0.93 纸面腿量到了**：`borders` 臂的 PDF 上 4 枚红段落边 +
+      6 枚蓝格上边 + 1 块黄段落底纹各按声明的颜色与位置真上纸（判据 P23），而**纸上零枚带 dash 的路径**——边框被
+      铺成实心矩形 `fill`（`dash` 全 null）⇒ 屏幕上的 `1.5px dashed` 到纸上成实线，这一档另立未勾项
 - [ ] **表级边框摊进每一枚单元格**（2 枚 `w:tcBorders` → 6 枚，外观相同而字节膨胀）：v0.88 前置实测记下的形状，没动
 - [x] **文档：docx 的表格列宽写了个假网格**（导出件 `w:tblW` 恒 `pct 100%`、`w:gridCol` 恒库默认的 `w="100"`、`w:tcW` 与
       `w:tblLayout` 零枚 ⇒ Word 把 90/120/180 磅压成三等分 150.3/150.25/150.25，而这份件再导入时模型揣着 [7]px 的荒谬值
@@ -5477,12 +5568,28 @@ cargo check        # Rust 后端检查（在 src-tauri 下）
       屏上会被缩走 1px；根因是 CSS 的 20mm 边距取整与 twip 取整不同路，本轮只记账没合
 - [ ] **等分补平那一档的算法住了两处**：`docx.ts` 的 `fill` 与 `table-width.ts` 的 `baseWidths` 是同一算法的两份
       实现（注释互相指着但没有合一）⇒ 改一处不改另一处时，屏上显示的宽度与导出字节会分叉
-- [ ] **键入值超出版心时整表不夹取 ⇒ 屏上现在如实溢出，而纸面那一头没量**：`redistribute` 只夹"给其余列各留 1px"，
+- [x] **键入值超出版心时整表不夹取 ⇒ 屏上如实溢出，纸面那一头 v0.93 已量并收口**：`redistribute` 只夹"给其余列各留 1px"，
       不夹整表不超过可用宽（X20 `over` 臂 `[90,300,300]` 仍写 `[4500,4500,4500]`、表级绝对宽 13500 dxa ≈ 比版心宽 43%）；
       v0.92 起屏上跟字节同一形状（`over` 臂 inline 900px、`contentScroll` 900 > `clientWidth` 626、表右沿 1259.29 顶出
       文档右沿 985.36），**不缩表是刻意的**——Word 16.0 对同一件读回 225 磅 ×3（和 675 > 可用 470.6）也不缩，第三方
-      不替用户作主，屏上就不该假装缩了；没量的是**纸面**：文档导出 PDF 走 WebView2 `PrintToPdf` 吃的就是这份 DOM，
-      超宽表上纸是被裁掉、缩进下一页还是照样出血，从来没有正面量过
+      不替用户作主，屏上就不该假装缩了；**纸面 v0.93 第一次正面量**（文档导出 PDF 走 WebView2 `PrintToPdf` 吃的就是这份
+      DOM）：量出来不是"裁掉 / 缩下一页 / 出血"三选一，而是**整页被按比例缩小**——超宽件纸上 scale 0.6981（= 627/899），
+      正文 15px 在纸上只有 10.5px，是 Blink 打印替整页作了主；修法一枚 `@media print` 的 `.doc-content{overflow:hidden}`，
+      改后 scale 回到 1.0004、前两列按 300px 真尺寸上纸（纸上间距 299.86/298.86）、第三列被裁在版心右沿（P5/P24/P27）
+- [ ] **超宽表被裁掉的那一列在纸上没有任何提示**（v0.93 新开）：现在的形状是"静静裁掉"——第三列的起点 681.72 在版心内
+      而它的文字不在纸上（P25），屏幕上却看得见（v0.92 的如实溢出）。Word 那头同样出血不提示，但我们的裁位与它不同：
+      自家裁在版心右沿（710px = 532.5pt，纸的右白边不画），Word 裁在纸边（595.32pt），同一件两头的纸面形状不同形
+- [ ] **纸面把虚线边框降成实线**（v0.93 新开）：`borders` 臂纸上量到红 4 条段落边 / 蓝 6 枚格上边 / 黄 1 块底纹（P23）而
+      **带 dash 的路径零枚**——`setStrokeRGBColor` 与 fill 都上纸而线型分不出。这一枚与 v0.88 记的"纸上有无边框从来没
+      正面量过"是同一层：那一轮结掉了"有没有"，本轮量出"线型在纸上丢档"
+- [ ] **超高表被 `break-inside:avoid` 整张推到后面一页，前一页近空白**（v0.93 量出）：`longtall` 臂第 1、2 页纸面上
+      **0 枚格标**而 22 行全在后面的页（P19），`wide-tall` 臂第 1 页同样 0 枚——表比一页高时 `avoid` 无法满足，Blink
+      选择整张往后推而不是在页边断开。本轮没动（改它等于改"表能不能跨页"这一档的取舍）
+- [ ] **部分账那一档纸面仍是比例**（v0.93 量出）：`partial` 臂纸上间距 247.88 / 188.91 / 188.91——248 那一枚按真尺寸上纸，
+      剩下两枚分享剩余版心（与屏上 248/188.7/188.71 同形），而字节里是 3720/2835/2835 = 248/189/189。数值接近是浏览器
+      算法与补平算法碰巧同形，不是同一份账上了屏（v0.92 那条"屏上 vs 字节"的未合一口径在纸上的对应）
+- [ ] **v0.93 没有 release A/B**：改的是 `@media print` 的内联样式那一半，到不了 release 的注入缝；纸面形状由 dev 腿
+      落盘的件交几何腿裁，写侧不回归由独立字节腿裁 ⇒ release 上这条收口只有形状推断
 - [ ] **v0.91 没有 release A/B**：界面那一半（「列宽」输入框与真光标）到不了 release 的注入缝，字节那一半由
       dev 腿落盘的件交独立字节腿 + Word 只读腿裁 ⇒ 输入框在 release 上只有形状推断
 - [ ] **读侧只吃 `w:gridCol`，不读 `w:tblLayout` / `w:tcW` / `w:tblCellMar` / `w:trHeight`**：第三方件里 `w:tcW` 与
@@ -5520,9 +5627,14 @@ cargo check        # Rust 后端检查（在 src-tauri 下）
       `rows` 仍是 `[120,160,240] ×2`）。本轮据此定了"精确设宽必须一次写遍整列"的形状，但插件那一路本身没动
 - [ ] **v0.90 没有 release A/B**：把手那一半是纯 CSS（release 上到不了注入缝，只有形状推断），字节那一半由 dev 腿
       落盘的件交给独立字节腿 + Word 16.0 只读腿裁 ⇒ "release 真机上把手看得见"这一格没有第三方证据
-- [ ] **纸面那一头没量**（v0.92 开）：文档导出 PDF 走 WebView2 `PrintToPdf`，吃的就是这份 DOM，而 `over` 臂现在屏上
-      就撑出（`contentScroll` 900 > `clientWidth` 626、表右沿顶出文档右沿）⇒ 超宽表上纸是被裁掉、缩进下一页还是
-      照样出血，从来没有正面量过（v0.88 记过"纸面有没有边框"同一族，这一枚是它在宽度那一头的续篇）
+- [x] **纸面那一头没量**（v0.92 开，v0.93 结掉）：文档导出 PDF 走 WebView2 `PrintToPdf`，吃的就是这份 DOM，而 `over`
+      臂屏上就撑出（`contentScroll` 900 > `clientWidth` 626、表右沿顶出文档右沿）⇒ 超宽表上纸是被裁掉、缩进下一页还是
+      照样出血，从来没有正面量过。**量出来是一枚真缺陷**：Blink 打印遇到比版心宽的内容时把**整页**按比例缩小
+      （`over` 臂纸上 `scalePx` 0.6981 = 627/899，正文 15px 在纸上只有 10.5px，而其余八臂一律 1.0004 不受影响），
+      v0.93 在 `@media print` 的 `.doc-content` 上补 `overflow: hidden` 把这一档改成"裁在版心右沿"（注入五枚候选里
+      只有 `.doc-content` 与 `.doc-page` 修得住 `scale`，选只管正文那一层的；Word 16.0 自己导出的同一件按真尺寸排、
+      超出纸外的部分被纸裁掉 ⇒ 裁而不缩有第三方对照）。纸面判据腿 35/0、CSS 结构+变异腿 10/10 + 11 枚变异全响、
+      dev 腿 45/0、字节腿 41/0（含十臂 `word/document.xml` 与改前逐字节相同 = 写侧没碰）
 - [ ] **NodeView 与 `renderHTML` 两口径没合一**（v0.92 记的诚实不对称）：`IndentTableView.applyIndent` 看得见子节点
       因而能算 `accountTotalPx`，而 `marginLeft` 的 `renderHTML` 只能按属性写 `calc(100% − Npx)` ⇒ 同一张表在
       NodeView 那条路（编辑器里真渲染的那条）吃绝对宽、在 `renderHTML` 那条路（序列化/非 NodeView 渲染）仍是比例；
