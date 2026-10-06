@@ -577,6 +577,14 @@
   `.doc-content table{page-break-inside:auto; break-inside:auto}` 显式写流式，而**不给 `tr`/`td` 补 `avoid`**（注入候选
   实测：那一档在装得下的表上是纯 no-op，却把比一页还高的那一行退回同一缺陷），纸上的形状落到"表级流、行边界切、
   不劈行"——与 Word 16.0 自己分页那一头逐行落页映射同形
+- **表头组（v0.95）**：表流着排之后跨页的第二页原本是一张无头表（实测 22 行那张纸上 `head 3/0`——第 1 页 3 枚表头标而
+  第 2 页 0 枚），因为模型只把 `tableHeader` 落在**行属性**上、`contentDOM` 渲染成 `tbody > tr > th`，而浏览器在纸上
+  只认 DOM 里真住的 `<thead>`（给 `tbody > tr:has(> th)` 单写 `display:table-header-group` 那档注入实测是纯 no-op）。
+  现在 `IndentTableView` 按模型那份账**克隆**开头连续的表头行成 `<thead class="doc-th">`（搬移那一档会把模型吃掉——
+  实测搬之后 `rows 23→22`、`thRows 1→0`），标记住在 `<table>`（`doc-th-rep`）而不是 `<tr>`，因为 PM 会擦 `contentDOM`
+  里行的 `class`；CSS 屏上一条 `display:none`（克隆在屏上不占位，实测表高差恰为 0）+ `@media print` 两条
+  （`table-header-group` 与藏 `tbody > tr:has(> th)`）。那道门只认「开头连续的全部表头行」，中途夹一枚表头行的表
+  整块不建克隆，纸面与改前逐枚同形
 - **坑**：① `@page` margin box 的 `content` 只吃**空格串接**片段，写成 `"a" + counter(page)` 会让整条声明
   静默失效（页眉有、页脚整块消失）；② PrintToPdf 忽略 CSS `@page` 的 `size`/`margin`，纸张与边距必须由 Rust
   侧 `PrintSettings` 决定，CSS 那份只服务浏览器打印；③ pdf.js 读回中文「页」可能归一成部首字符 `⻚`，
@@ -4572,6 +4580,111 @@ docx 库默认的 `w="100"`（twip，≈6.7px），`w:tcW` 与 `w:tblLayout` 零
   全程未碰已装正式版）；自动更新的源托管与 macOS 打包按指令继续等信号，签名私钥已加密备份并演练 7/7，
   **私钥本体在本机仍是单点**。
 
+## 表头行在纸上第一次重复：跨页长表的第二页不再是无头表（v0.95）
+
+- **前置实测（九枚夹具，dev 真机 + 真光标 + 真导出 + pdf.js 几何量具 + Word 16.0 只读腿，只量不改产品）**：
+  写侧从 v0.37 起就在表头行盖 `w:tblHeader`（本轮字节腿再验：`hdr` 23 行里恰 1 枚、`hdr2` 22 行里 2 枚、
+  `mixth` 22 行里 1 枚而它住在第 2 行、`nohdr` 0 枚），缺的是纸面那一头。屏上量到的是 **DOM 里根本没有 `thead`**：
+  `DOM|hdr|{"tables":1,"thead":0,"tbody":1,"kids":"COLGROUP:3|TBODY:23","thRows":1,"tableH":1171.8,"rowH":50.9}`
+  —— 模型只把 `tableHeader` 落在行属性上，`contentDOM` 渲染成 `tbody > tr > th`，浏览器在纸上没有可重复的表头组；
+  同一件纸上 2 页而**逐页表头标 `head 3/0`**（第 1 页 3 枚、第 2 页 0 枚）、`rows 18/5`；`hdr2`（双表头行）`head 6/0`、
+  `span`（跨列表头）`head 2/0`、`short`（3 行）1 页 `head 3`、`mixth`（中途夹一枚表头行）`head 3/0` 而它原本就在第 1 页、
+  `nohdr` `head 0/0`。**注入六档同一趟各出真件**：`i1`（只给 `tbody > tr:has(> th)` 写 `display:table-header-group`）
+  纸上**一点没变**（`head 3/0`、`rows 18/5` 与改前逐枚同）⇒ 这一族只认 DOM 里真住的 `<thead>`；
+  `i2`（把原行搬进真 `thead`）纸上 `head 3/3` 可**模型被吃**（`MOVE|hdr|moved=1` 后 `rows 23→22`、`thRows 1→0`、
+  哈希 `568008ca→27c4b4bb`）⇒ 搬行不是选项；于是只剩"克隆一份"，而克隆要过四道裁决（`out4/b6-c0..c4`）：
+  `c0`（克隆而不写任何 CSS）屏上表高从 1171.8 涨到 1222.7（**多画整整一行 50.9px**）且纸上第 1 页 `head=6`
+  （`HMAP` 里每枚表头标出现两次）；`c1`（只在纸上开表头组 + 藏原行、屏上不藏）屏上仍 1222.7 ⇒ 屏幕那一头也得管；
+  `c2`（屏上藏 + 纸上开表头组而不藏原行）纸上第 1 页仍 `head=6` ⇒ **藏原行必不必 = 必**；
+  `c3`（屏上藏克隆 + 纸上开表头组 + 纸上藏原行）屏上 1171.8 而 `theadH=[0]`（克隆不占位）、纸上 `head 3/3`
+  `rows 18/6` `distinct=66 dups=-` ⇒ 胜出形状；`c4`（在 `c3` 上把表头行的账改按「开头连续那几行」算）
+  `hdr/span/short cloned=1` 而 `mixth/nohdr cloned=0` ⇒ 这道门就是这么立起来的；
+  另两格：给「原行」打行级标记被 PM 的观察器抹掉（`ALLTAG|hdr|tagged=0` ⇒ 标记只能住在 `<table>` 上，
+  NodeView 自己管的元素 v0.37 起就没被抹过），克隆会不会过期（`PERSIST-DATA|built=1`：真编辑数据格之后
+  `cls/clone/tableH` 前后逐枚相同）。Word 16.0 只读腿第三方那一头逐行读 `Rows.Item(i).HeadingFormat`：
+  `hdr` 行 1 = −1（真）而整表 1 枚、`hdr2` 2 枚、`mixth` **行 1 = 0 而整表 1 枚**（标志住在中途那一行）、
+  `nohdr` 0 枚 ⇒ 「表顶连着」与「中途夹一枚」在第三方眼里本来就是两档
+- **本轮唯一的架构决定（跟着数据走，缺陷住在屏上渲染这一层）**：表头重复的权威只有一处——模型那份行属性
+  （`tableHeader` 行 + 写侧 `w:tblHeader`），屏上要把这份账渲染成浏览器认识的表头组，五条形状都不是可选的——
+  **只克隆不搬移**（`i2` 那档 `moved=1` 就把模型吃了，搬行走不通）；
+  **只给「开头连续的全部表头行」开这一档**（`leading.length && leading.length === rows.filter(isHeader).length`，
+  中途夹表头行那一档整块不建克隆——`mixth` 臂纸面与改前**逐枚同形**判的就是这道门；`c4` 那档就是量出来要立它的证据）；
+  **标记住 `<table>` 而不是 `<tr>`**（`tagged=0`：PM 会擦 `contentDOM` 里行的 `class`，实测 `rowCls` 归 `-/-/-`，
+  所以 CSS 走 `.doc-content table.doc-th-rep > thead.doc-th` 这一口径）；
+  **建与拆走 `queueMicrotask`**（`spec.update` 跑在 PM 重画行之前，同一趟里读 `contentDOM` 拿到的是旧行；
+  隔 600ms 连读两趟屏上形状逐枚相同 ⇒ 不会来回重读抖动）；
+  **屏上藏克隆、纸上才成表头组**（屏幕一条 `display:none`、`@media print` 两条：`table-header-group` +
+  藏 `tbody > tr:has(> th)`——`c0/c1/c2` 三档就是「少写其中一条」的三种后果）；
+  写侧与字节一寸不碰（改的是 DOM/CSS，到不了 docx 写手——不回归由字节腿以「与改前逐字节相同」为证，
+  Word 那一头的 `HeadingFormat` 由本轮 Word 腿逐臂复量）
+- **实现（窄口径：`src/lib/cell-style.ts` 的 `IndentTableView` 加 `scheduleReplica`/`syncReplica` 与
+  `src/index.css` 三条规则，Rust 一个字没动）**：`syncReplica()` 先撤旧克隆与标记**再**过门（撤在门之前 ⇒
+  中途表头行那一档回到"根本没有这一档"的形状），过门才建 `<thead class="doc-th">` + 克隆 leading 行 +
+  给表加 `doc-th-rep`；CSS 屏幕一条、`@media print` 两条，注释里写清弃掉的那三档与它们的实测后果
+- **验证（腿 + 编译，全部在版本号 bump 三处对齐之后在最终源文上以 `POST=b5` 复跑）**：
+  结构+变异合并一腿 `RESULT struct pass=34/34`、`RESULT mutants pass=29/29 bad=0`、
+  `B0|ts注释剥除=true css注释剥除=true|字符串活着=true/true/除号=true`、`B0z|中文注释残留=无`、
+  `TRAP|注释里埋两枚假声明|基线BAD=0 埋后BAD=0 print内枚数=2（应=2）|ok`、
+  `REVTRAP|真删 T14 锚点|fired=T14,T16|ok`（T 系列钉「只克隆不搬移」「撤在门之前」「门的两枚出口」「标记在 table」
+  「`queueMicrotask`」；C 系列钉屏幕那一条与 print 那两条、`tr:has(> th)` 只在 print 里藏、口径不越出 `.doc-content`；
+  29 枚变异各响该响的那条，含「把门去掉于是中途表头行也克隆」「屏上与纸上两条 `display` 写反」「撤克隆写在门之后」
+  「改用行级标记」）；
+  CDP dev 真机腿 `RESULT dev pass=93 bad=0` + `PAGEERRS|0`（六臂逐臂 D1~D11：`D1 标记由产品自己建（与模型现算的门同判）`
+  `hdr:1/1 hdr2:1/1 mixth:0/0 short:1/1 span:1/1 nohdr:0/0`、`D3 屏上表高不回归` 1171.8/1120.8/1120.8/153.4/1069.9/1120.8
+  逐臂与改前同、`D4 屏上克隆不占位` `[[0],["none"]]`、`D7 打印媒体计算样式` `thead=table-header-group` 而
+  表头那行 `none`、数据行 `table-row`、`D10 建克隆收敛` 隔 600ms 两趟逐枚相同、`D11` 六臂 PDF+docx 全落盘）；
+  纸面判据腿 `RESULT paper pass=59 fail=0`（`Z0` 六臂门状态全从本轮 dev 日志读出不硬编码 + `Z1 模型期望与屏上读数逐臂相同`；
+  开火四臂 `A/A2/B/B2/C/D/E/F/R` 九条各一臂：`hdr head 3/0 → 3/3`、`hdr2 6/0 → 6/6`、`span 2/0 → 2/2`、`short 3 → 3`
+  且每页表头枚数 = 表头标总数（整行重复而不是只重复一枚格）、数据标不丢不重（`distinct=66/60/60/6`、`dups` 全空）、
+  逐页数据枚数与改前相同（`51/15`、`48/12`、`51/9`、`6` ⇒ 没有因为表头重复而重新分页）、页数没变多、纸张 595.0×841.9 没变；
+  不开火两臂 `B0/B1` 纸面与改前**逐枚同形**且原行没被 `display:none` 吃掉；`G-mixth` 中途表头行不重复、原行不消失；
+  `H1~H5` 开关两趟（撤表头行 `head 3/0` 回改前那一档、翻回来 `3/3`，`off=18/5 post=18/6 pre=18/5`）；
+  `I1~I5` 编辑两趟（改表头那一格 ⇒ 每页少一枚可读标而仍逐页重复；改一枚数据格 ⇒ 只吃那一枚、不重新分页））；
+  独立字节腿（zipfile + 正则直解 `word/document.xml` 并独立解析 `.odoc`，不吃自家读侧）`RESULT bytes pass=39 fail=0`
+  （逐臂 `A1~A6` 六头同判：表枚数、行数（`hdr 23 / hdr2 22 / mixth 22 / short 3 / span 21 / nohdr 22`）、格数
+  （69/66/66/9/62/66）、`w:tblHeader` 枚数 == 模型表头行数（1/2/1/1/1/0）、每格在字节里恰好出现一次（克隆没漏进字节）、
+  部件齐全 22 枚；`B1` 三臂 `document.xml` 互不同形（17124/16559/16485 字节）＝判据有区分力；`B2` 字节里没有
+  任何 `thead`/克隆漏痕；`C1 正控制` A5 那把尺认得出重复——真件计 1 而自我拼接后计 2）；
+  Word 判据腿 `RESULT word pass=19 bad=0`（六臂 `W1` 行数 == 模型、`W2` `HeadingFormat` 枚数 == 模型表头行数、
+  `W3` 逐臂那一档：`hdr/hdr2/short/span` 行 1 = −1 而 `mixth` 行 1 = 0 且整表 1 枚（标志住中途）、`nohdr` 两枚皆 0；
+  `W4` 区分力 `hdr=1 nohdr=0`）⇒ 第三方那一头没被自家 CSS 牵动；
+  `cargo test --lib` 97 passed / 0 failed / 11 ignored（Rust 本轮一个字没动）+ `pnpm exec tsc --noEmit` exit 0 +
+  `pnpm tauri build --no-bundle` 绿（openoffices v0.95.0，3m59s）
+- **本轮撞到六处量具坑，都不是产品**：① **bump 后头一趟 dev 腿的屏上绝对像素读数整体漂约 0.35px/行**
+  （`RESULT dev pass=86 bad=7`：`hdr D3 got 1179.8 want 1171.8`、`1128.5/1120.8`、`154.8/153.4`、`1077.3/1069.9`
+  外加 `H4` 那一枚）⇒ 用 `t95.mjs` 在**同一趟里**做差：`WITH|tableH=1171.75 rows=50.92×23`、
+  `NOCONE|tableH=1171.75`、`ROWS IDENTICAL|true H delta|0`（真删克隆再量，差恰为 0）且 `ENV|innerW=1360 dpr=1.5 hostW=626.07 zoom=1`
+  ⇒ 判为 app 刚重启那一趟的测量态而不是产品改动，原腿一个字没改复跑得 93/0；**教训写死：绝对表高这类跨会话比像素的
+  判据要么在同一趟里做差，要么失败后先复跑一趟再用探针裁决**；② 纸面判据的参考读数仍分散在多枚目录
+  （`out` 有 `pre-hdr2` 而没有 `pre-mixth`、`out4` 才有 `b6-pre-mixth`、胜出候选住在 `out6/b8-*`）⇒ 分头按"哪份里真有这枚标签"
+  取并缓存，且不许把两趟的 `pages` 混进同一枚判据（v0.94 那条的续篇）；③ **「每页表头枚数相同」这条不能对所有臂成立**：
+  门拒开火的两臂必须与改前同形 ⇒ 开火与否不吃硬编码清单，从本轮同一趟的 dev 日志里读 `gated` 那枚数（`readGate()`）；
+  ④ **字节腿那条"数 `w:tblHeader` 枚数"的尺要先证明它认得出重复** ⇒ `C1` 正控制（真件 1 / 自我拼接 2），否则一枚
+  永远返回 1 的尺会把"克隆漏进字节"读成"没漏"；⑤ **PS 5.1 上带中文标签的 `.ps1` 直接解析报错**
+  （`word95b.ps1`：`UnexpectedToken`、`Try 缺少自己的 Catch`）⇒ Word 腿重写成纯 ASCII 的 `word95c.ps1`
+  （同族老账第 N 次兑现：一律 ASCII-only `.ps1` + `-File`，绝不内联 `-Command`）；⑥ **bump 会重启 app ⇒ 改前的
+  dev/纸面/字节/Word 件都不属于最终源文**，本轮把四枚腿的输出前缀做成同一枚环境变量（`POST=b5`），bump 后整批重导
+  而不是沿用 `post-*`（v0.94 那条的第二次兑现）。
+- **本轮没动、量出来记着**（已开进路线图）：① **中途夹表头行那一档在纸上不重复、也没有任何提示**（`mixth` 臂门拒开火、
+  纸面与改前逐枚同形；字节里 `w:tblHeader` 明晃晃住在第 2 行，Word 也读得到那枚标志）；② **嵌套表的表头行克隆未量**
+  （本轮的门只认最外层 `table` 的 `contentDOM` 行，而 `nest` 臂前置实测里读到 `rowCount 24` 那种外层吞内层的形状）；
+  ③ **屏上藏克隆这一档意味着"表头行在屏上只有一份"而它靠 CSS 而非 DOM**——删/改原表头行时克隆靠 `update` 重建，
+  本轮 `D10`/`PERSIST-DATA` 只量了收敛与真编辑两趟，没量撤销栈回放、协作式远端改动那一类路径；
+  ④ `pre`/`img`/`blockquote`/`.doc-toc` 同族仍整块推页（v0.94 记的，本轮没重做那一族）；
+  ⑤ **纸面行高仍比 Word 那一档厚约 3×**（每行 50.9px = 38.2 磅）；⑥ v0.93 那四枚原样挂着（超宽表被裁掉的一列在纸上无提示、
+  两头裁位不同、纸面把虚线降成实线、部分账那一档纸面仍是比例）；⑦ **本轮没有 release A/B**（改的是 NodeView 的 DOM
+  与 `@media print`，dev 与 release 走同一份 CSS，但屏上与纸面证据只在 dev 一头）；⑧ v0.94/v0.92/v0.91/v0.90 那几项
+  原样挂着（NodeView 与 `renderHTML` 两口径、被跨列格盖住的后续列没有独立把手、626 与 627 那枚 1px 口径差、
+  等分补平算法住两处、拖拽混单位、`fixTables` 公开通道 no-op、ODT 两头不往返、读侧只吃 `w:gridCol`、
+  部分账存—重开变整表齐账、`w:between` 第五边、嵌套表版心按最外层近似、px 存整数的 ±0.25 磅漂移）。
+- **收尾**：README 新增本节 + 架构「分页控制」那条就地改口（表头组：屏上藏克隆、纸上 `table-header-group` + 藏原行）+
+  文件清单 `cell-style.ts` 条目补 `syncReplica` 与那道门、`index.css` 条目补 v0.95 那三条 +
+  路线图勾掉「表头行在纸上不重复」并新开上述①②③，版本 0.95.0（package.json / tauri.conf.json / Cargo.toml 三处对齐），
+  tmp/x95 的夹具、前置实测腿（六档）、纸面几何量具与判据腿、结构+变异腿、dev 腿、独立字节腿与 Word 腿按惯例删除
+  （收摊后 1420/9222 无监听、openoffices.exe 0 支、com.openoffices.app 的 msedgewebview2 0 支、WINWORD 0 支，
+  按显式 PID 收宿主而不是按进程名乱杀，全程未碰已装正式版）；自动更新的源托管与 macOS 打包按指令继续等信号，
+  签名私钥已加密备份并演练 7/7，**私钥本体在本机仍是单点**。
+
 ## 性能（v0.3）
 
 
@@ -4639,7 +4752,7 @@ src-tauri/            Rust 后端
 src/                  React 前端
   store.ts            标签页 / 最近文件 / 主题（zustand）；`openTab` 里有**两行**按 `tab.path && tab.kind === …` gating 的预取（`prefetchWorkbook` 管表格、`prefetchPdf` 管 PDF；v0.67 起是表格那一头，v0.68 把 PDF 那一头接上同一层：读件请求在开标签那一刻就出门，而不是等编辑器挂载），`closeTab` 里有两行对称的撤账（`dropWorkbook`/`dropPdf`，关掉的是那枚还没人取的标签就撤掉在途的账，**撤账跟着标签的格式走**）；两处都只调用 `lib/open-prefetch.ts` 而不内联那份字典，也不在这一层碰读侧实现（判据 S1–S5）
   App.tsx             全局快捷键、拖拽打开、文件关联打开（启动 argv + 单实例转发）、关闭确认、懒加载路由；dev 钩子另加 `__oofFail(cmd, args)`（v0.64：原样发起一次命令调用并把失败时用户会看到的那串话交回，冒烟据此问"写侧真失败怎么说"而不必经过我们自己的读侧）
-  index.css           外壳样式、两套主题，以及**纸面与屏幕主题的断钩处**（v0.49）：屏幕上的颜色一律先落进 CSS 变量（`--bg/--panel/--text/--text-2/--border/--accent/--code-bg/--quote-bg`），`@media print` 里一段同时命中 `:root` 与 `:root[data-theme='dark']` 的规则把 `color-scheme` 压回 `light` 并重声明整套纸面调色板（**段必须排在暗色段之后**，同特异度靠源序说话），顺手清掉屏幕辅助（`.fr-hit`/`.fr-active` 的查找命中高亮）；内容自己声明的字面色（段落底纹、单元格底色、幻灯片背景）不经过这条规则，所以照旧上纸；v0.50 又在这里补了 `.doc-content{min-height:0 !important}`——屏幕上那 900px 是打字辅助，矮纸（横向/A5）的可印高度不足它，正文尾巴会被顶成凭空多出的空白一页；**表格的网格线从无条件改为 `.sheet-print-grid` 一类**（v0.51：`printOptions@gridLines` 是打印设置里的一勾，而 Excel 的默认是"没勾就不印"），并新增 `.sheet-print-heading`/`.sheet-print-corner`（行列标题）与 `.sheet-print-band{break-inside:auto}`（一个列带一张表，带内可被分页切开，带与带之间由 `.sheet-print-break` 隔开）；v0.52 再添「页面设置」面板那一份（`.print-pop` 的分组 fieldset、毫米边距格、开关格、分页符 chip，以及 `.print-pop-errs` 与 `.print-pop-notes` 两本账的分色，`--danger` 同时进暗色 token 与 `@media print` 的纸面调色板——面板自己也可能被印出来，规矩照 v0.49 那条「屏幕上的颜色必须先穿过一枚 CSS 变量」）；**v0.59 换掉了 `.sheet-print-table td` 那一整档行盒**：`font-size` 从写死的 `11px` 改成 `var(--oof-print-base-size, 14.67px)`（底数由每张表 `<section>` 上那枚自定义属性说话，括号里那档只是"文件那一层没交代"时的兜底，与 `baseFontPt` 同一个数），`padding` 上下归零、`line-height` 从 1.45 收到 1.25、**`height:18px` 不再写**——底数一动，旧的固定行高就成了多出来的一截（接上文件而仍用旧行盒时 11pt 那份每行 24.98px、被挤成两页），而 1em 的方框又装不住下行墨（td 是 `overflow:hidden`，`line-height:1.0` 那一档在纸上把 p/g/y 那几笔切掉），1.25 × 底数正好落回 Excel 那一档（11pt ⇒ 13.75pt vs Excel 报的 14；14pt ⇒ 17.5 = Excel 报的 17.5）。**这一档行盒是 `PRINT_ROW_BIAS_PX` 的标定条件**：再动 `line-height`/`padding`/把 `height` 写回来，那枚偏置必须重跑实测；**v0.90 在这一层给列宽把手补齐了样式**（`.column-resize-handle` 这一族此前产品里一条 CSS 都没有，`grep -rn "column-resize" src/` → 0 命中，实测装饰 rect 是 `width 188 / height 0` 而拖拽功能一直是通的）：`table td/th{position:relative}` 一枚 containing block + 把手 `position:absolute; right:-3px; top:0; bottom:0; width:6px; cursor:col-resize`，常态靠 `::after{opacity:0}` 不刷存在感、悬停才 `.65`（不占额外宽度），拖拽中的那一列用 `outline:2px solid var(--accent); outline-offset:-2px` 而**不用 `background`**（v0.38 那层单元格底纹是内联样式，背景会把它压掉），`@media print` 里 `.column-resize-handle{display:none}`——编辑态的把手不上纸；全部选择符住 `.doc-content` 口径内，且**不给这一版根本不产出的 `.column-resize-proxy` 写样式**；**v0.93 在这一层的 `.doc-content` 那条 print 规则里补了 `overflow: hidden`**（与 v0.50 那句 `min-height:0 !important` 同住一条规则）——版心是纸上的硬边界：内容比版心宽时 Blink 打印会把**整页**按比例缩小去迁就那一枚超宽件（实测 900px 的表 ⇒ `scale` 0.6981 = 627/899，正文 15px 在纸上只有 10.5px），而 Word 从不替整页决定字号（它的表按真尺寸排、超出纸外的部分被纸裁掉）；注入五枚候选里只有 `.doc-content` 与 `.doc-page` 这两条能修住 `scale`，选前者因为它只管正文那一层、不牵页眉页脚与分页参考线，且**只在 `@media print` 生效**（屏幕上 v0.92 刚立的"超宽如实撑出"那一档一个字没动）；**v0.94 把表从这一层的 `break-inside: avoid` 家族里摘出来**（`.doc-content table{page-break-inside:auto; break-inside:auto}` 一条独立规则块，同族的 `img`/`pre`/`blockquote`/`.doc-toc` 照旧 `avoid`）——`avoid` 带着表格时比剩余版心高的表被整张推到后面一页（22 行那张 3 页而第 1 页 0 枚格标、`mid` 臂页边空出 304.9px），显式 `auto` 后纸上是"表级流、行边界切、不劈行"（`tall` 2 页、页边三臂第 1 页行数恰为剩余空间容得下的 1/2/4），两句都写是因为老 Blink 只认 `page-break-inside` 而"靠缺省值"那一档实测就把表推走；**刻意不给 `tr`/`td`/`th` 补 `avoid`**：注入候选 `i2`/`i3` 量出来在装得下的表上是纯 no-op，而 `bigrow`（单行 1953.7px 比一页还高）从 3 页退回 4 页＝同一枚缺陷换面孔
+  index.css           外壳样式、两套主题，以及**纸面与屏幕主题的断钩处**（v0.49）：屏幕上的颜色一律先落进 CSS 变量（`--bg/--panel/--text/--text-2/--border/--accent/--code-bg/--quote-bg`），`@media print` 里一段同时命中 `:root` 与 `:root[data-theme='dark']` 的规则把 `color-scheme` 压回 `light` 并重声明整套纸面调色板（**段必须排在暗色段之后**，同特异度靠源序说话），顺手清掉屏幕辅助（`.fr-hit`/`.fr-active` 的查找命中高亮）；内容自己声明的字面色（段落底纹、单元格底色、幻灯片背景）不经过这条规则，所以照旧上纸；v0.50 又在这里补了 `.doc-content{min-height:0 !important}`——屏幕上那 900px 是打字辅助，矮纸（横向/A5）的可印高度不足它，正文尾巴会被顶成凭空多出的空白一页；**表格的网格线从无条件改为 `.sheet-print-grid` 一类**（v0.51：`printOptions@gridLines` 是打印设置里的一勾，而 Excel 的默认是"没勾就不印"），并新增 `.sheet-print-heading`/`.sheet-print-corner`（行列标题）与 `.sheet-print-band{break-inside:auto}`（一个列带一张表，带内可被分页切开，带与带之间由 `.sheet-print-break` 隔开）；v0.52 再添「页面设置」面板那一份（`.print-pop` 的分组 fieldset、毫米边距格、开关格、分页符 chip，以及 `.print-pop-errs` 与 `.print-pop-notes` 两本账的分色，`--danger` 同时进暗色 token 与 `@media print` 的纸面调色板——面板自己也可能被印出来，规矩照 v0.49 那条「屏幕上的颜色必须先穿过一枚 CSS 变量」）；**v0.59 换掉了 `.sheet-print-table td` 那一整档行盒**：`font-size` 从写死的 `11px` 改成 `var(--oof-print-base-size, 14.67px)`（底数由每张表 `<section>` 上那枚自定义属性说话，括号里那档只是"文件那一层没交代"时的兜底，与 `baseFontPt` 同一个数），`padding` 上下归零、`line-height` 从 1.45 收到 1.25、**`height:18px` 不再写**——底数一动，旧的固定行高就成了多出来的一截（接上文件而仍用旧行盒时 11pt 那份每行 24.98px、被挤成两页），而 1em 的方框又装不住下行墨（td 是 `overflow:hidden`，`line-height:1.0` 那一档在纸上把 p/g/y 那几笔切掉），1.25 × 底数正好落回 Excel 那一档（11pt ⇒ 13.75pt vs Excel 报的 14；14pt ⇒ 17.5 = Excel 报的 17.5）。**这一档行盒是 `PRINT_ROW_BIAS_PX` 的标定条件**：再动 `line-height`/`padding`/把 `height` 写回来，那枚偏置必须重跑实测；**v0.90 在这一层给列宽把手补齐了样式**（`.column-resize-handle` 这一族此前产品里一条 CSS 都没有，`grep -rn "column-resize" src/` → 0 命中，实测装饰 rect 是 `width 188 / height 0` 而拖拽功能一直是通的）：`table td/th{position:relative}` 一枚 containing block + 把手 `position:absolute; right:-3px; top:0; bottom:0; width:6px; cursor:col-resize`，常态靠 `::after{opacity:0}` 不刷存在感、悬停才 `.65`（不占额外宽度），拖拽中的那一列用 `outline:2px solid var(--accent); outline-offset:-2px` 而**不用 `background`**（v0.38 那层单元格底纹是内联样式，背景会把它压掉），`@media print` 里 `.column-resize-handle{display:none}`——编辑态的把手不上纸；全部选择符住 `.doc-content` 口径内，且**不给这一版根本不产出的 `.column-resize-proxy` 写样式**；**v0.93 在这一层的 `.doc-content` 那条 print 规则里补了 `overflow: hidden`**（与 v0.50 那句 `min-height:0 !important` 同住一条规则）——版心是纸上的硬边界：内容比版心宽时 Blink 打印会把**整页**按比例缩小去迁就那一枚超宽件（实测 900px 的表 ⇒ `scale` 0.6981 = 627/899，正文 15px 在纸上只有 10.5px），而 Word 从不替整页决定字号（它的表按真尺寸排、超出纸外的部分被纸裁掉）；注入五枚候选里只有 `.doc-content` 与 `.doc-page` 这两条能修住 `scale`，选前者因为它只管正文那一层、不牵页眉页脚与分页参考线，且**只在 `@media print` 生效**（屏幕上 v0.92 刚立的"超宽如实撑出"那一档一个字没动）；**v0.94 把表从这一层的 `break-inside: avoid` 家族里摘出来**（`.doc-content table{page-break-inside:auto; break-inside:auto}` 一条独立规则块，同族的 `img`/`pre`/`blockquote`/`.doc-toc` 照旧 `avoid`）——`avoid` 带着表格时比剩余版心高的表被整张推到后面一页（22 行那张 3 页而第 1 页 0 枚格标、`mid` 臂页边空出 304.9px），显式 `auto` 后纸上是"表级流、行边界切、不劈行"（`tall` 2 页、页边三臂第 1 页行数恰为剩余空间容得下的 1/2/4），两句都写是因为老 Blink 只认 `page-break-inside` 而"靠缺省值"那一档实测就把表推走；**刻意不给 `tr`/`td`/`th` 补 `avoid`**：注入候选 `i2`/`i3` 量出来在装得下的表上是纯 no-op，而 `bigrow`（单行 1953.7px 比一页还高）从 3 页退回 4 页＝同一枚缺陷换面孔；**v0.95 再加三条（表头组）**——屏幕一条 `.doc-content table.doc-th-rep > thead.doc-th{display:none}`（克隆在屏上不占位，实测表高差恰 0），`@media print` 两条：那枚 `thead` 写 `display:table-header-group` 与 `tbody > tr:has(> th){display:none}`（藏原行，纸上由克隆来当那一行）。少写其中任一条都是实测过的错形状：不写屏幕那条 ⇒ 屏上多画一整行 50.9px 且纸上每枚表头标出现两次；不写 print 里的 `table-header-group` ⇒ 纸上第 2 页无头（`head 3/0` 原样）；不藏原行 ⇒ 纸上第 1 页 `head=6`
   lib/univer.ts       Univer 实例工厂（公式 worker + 八个社区预设：核心/筛选/排序/条件格式/数据验证/查找替换/绘图 + **批注与超链接**（v0.48，超链接的 `urlHandler` 把外链交给系统默认浏览器——桌面上 `window.open` 会开出一个新 WebView 窗口））
   lib/univer-io.ts    xlsx 数据+样式（粗斜/颜色/字族/边框/对齐/换行/数字格式）/合并/图表/列宽行高/隐藏行列/冻结窗格 ↔ Univer 快照 转换（样式去重注册）；**规则走侧通道**——取完单元格再按 sheetId 把 `extractRules(resources)` 的结果对回每张表，`warnings` 由 `aggregateNotes` 聚合；**批注与链接同一条侧通道**（v0.48）：取侧交给 `extractCellSide`，放侧把 `resources` 写成 `[noteResourceOf(...)]`（实测裸写就能被门面读回）、链接写成带 `customRanges` 的富文本格（**公式格上那枚先记账不硬放**，只有链接没内容的格子也要占一格）；`payloadToWorkbook` 因此多收一个 `accounts` 出参
   lib/sheet-rules.ts  三类规则的前端桥（v0.46）：`extractRules` 从工作簿快照的 `resources` 里按表取规则（Univer 三个插件各写各的 JSON，条件格式按快照原序交回=高优先级在前），`applySheetRules` 经门面放回界面（**条件格式倒着插**，因为这一版门面按插入顺序的倒序吐规则；builder 无 `setRanges`，作用区在 `build()` 之后挂产物），`buildDataValidation` 只建门面表达得出的四类 + custom；归一化（`normColor` 收 rgb/#、`normDateValue` 收 ISO、`listOf` 拆 JSON 数组串与区域引用、`neg === pos` 的负色丢掉）与 `aggregateNotes`（同类收成"文案×N"）都在这，`textLength`/`time`/`any` 这类摆不进模型的退成边界账而不是硬建一条；**v0.64 那三句"没能还原"后面的原串改走 `lib/fail-msg.ts` 的 `failText`**（账目本来就上状态栏，原话只该有一份出处）
@@ -4652,7 +4765,7 @@ src/                  React 前端
   lib/ole.ts          OLE 嵌入对象的**内容**提取（v0.44）：`unwrapEmbed` 拆容器（现代形状=部件本身就是原生文件；老形状=复合文档里的流 `\x01Ole10Native`），`oleNativePayload` 按实测字段布局走一遍、走不通再按"哪枚 DWORD 能把数据吃到接近结尾"扫兜底（数据不贴着流末尾，按流长反推必错）；`classifyEmbed` 先魔数后文件名，`embedHtml(content, depth)` 分派 docx（递归 `docxToHtmlFidelity`，depth≥2 停）/ xlsx（只要值，`r="C5"` 定位、空列不挤位）/ CSV（首行嗅探分隔符 + RFC4180 引号）/ txt（空行分段，UTF-8 出替换符换 GBK 重试），取不出的一律给带真名与大小的 `note`；上限 24MB / 200 行 × 40 列 × 4 表 / 64KB × 200 段，**截断写进告警不静默少给**；`inlineFlatten` 把块级正文压成行内（单元格放不下第二层表）
   lib/docx-fidelity.ts OOXML → HTML 保真导入器（v0.37）：run 级 rPr（粗斜/删除线/下划线/字色/高亮/字族/字号/上下标 `w:vertAlign`）、段落 pPr（jc/`w:ind` 左右与首行悬挂四种缩进写法/pStyle 样式链）、numPr+numbering.xml → 有序无序与 ilvl 层级（**跳档按 numId 折基准层**，不凭空补中间层）、表格 gridSpan/vMerge + tblGrid 列宽 + 单元格四边 `w:tcBorders`（含 val=nil 的显式去边）/底纹 `w:shd fill`/竖排 `w:vAlign`/表级 `w:tblInd`、段落 `w:spacing`（行距两档 + 段前后，含按行的 `w:*Lines` 估算）/`w:shd` 底纹/`w:pBdr` 四边、脚注与尾注引用（`w:footnoteReference`/`w:endnoteReference` 按 `w:id` 配 `word/footnotes.xml`·`endnotes.xml` 正文，跳过 separator/continuationSeparator，正文缺失记告警且不留空标记）、图片 rels→dataURL、内外超链接、分页符、批注三态锚点、域代码文字不外泄、**域编号重算**（v0.43：`fldChar` begin/separate/end 三道门接 `docx-fields` 的 `FieldEngine`——`SEQ` 现算并压掉缓存、`REF` 无缓存按书签段落文本兜底（书签表渲染前预扫）、算不了的沿缓存且无缓存记边界、`fldSimple` 同路、被跳过的分支不占号）、`w:object` 嵌入对象（v0.43 预览是 EMF/WMF 解不开时留一行可见占位，ProgID + rels 反查的部件文件名；**v0.44 先走 `lib/ole` 取内容**——取到就把内层正文接为段落兄弟块（格内改压行内）且不再叠占位，取不到才留占位）、文本框 `w:txbxContent`（`wps:txbx` 与旧式 `v:textbox`）展平为段落、OMML 公式线性化、`mc:AlternateContent` 只取 Choice（空则退 Fallback，避免同一份正文翻倍）、drawing 锚点经 rels 找图示/图表部件（v0.42，部件缺失与关系缺失各记一条告警）；认不出就抛错或 blocks=0，调用方回退 mammoth
   lib/docx-fields.ts 域重算引擎（v0.43，零依赖、纯 Node 可直测）：`parseInstr` 拆 `命令 参数 \开关`（**开关 token 原样保留大小写**——Word 就按它决定结果形态）、`seqText` 按 `\* ROMAN`/`roman`/`ALPHABETIC`/`alphabetic`/`Alpha` 出对应形态、`FieldEngine`（`from(doc)` 渲染前扫全篇建书签表（只排 `_GoBack`，`_Ref…`/`_Toc…` 必须留）+ `seqValue` 跟着文档顺序走 + `refText` 兜底段落文本）、`recomputable`（只有带 label 的 SEQ 现算）、`fieldLabel`/`paraText`（域代码与已删文字不算正文）
-  lib/cell-style.ts   单元格样式扩展（v0.38）：tableCell/tableHeader 的 bdTop/bdRight/bdBottom/bdLeft + background + vAlign、table 的 marginLeft 全局属性（只声明属性不改内容模型）；边框统一规范串 `"0.67px solid #8899aa"`，三态 null 未声明/'none' 显式去边/有值；`inlineBorder()` 读 CSSOM longhand（shorthand 对 none 返回空串）、`IndentTableView` 子类补 marginLeft（resizable 的节点视图不传 HTMLAttributes；**v0.92 起 `applyIndent` 里加一枚宽度判定**——`accountTotalPx(node)` 非零就写 `width: Σpx`，否则才退回 `calc(100% − ml)` / `''`，缺陷在自家这一层而不是库）、`eighthsToPx`/`pxToEighths` 管 1/8 磅换算、命令 setCellBackground/setCellVAlign；**v0.88 拆掉两处静默**——① `CSS_BORDER_STYLE` 补上 Word「虚线」对话框实际写出的那几档 token（`dashSmallGap`/`dashLargeGap`/`dotDotDash`/`dashDotStroked` → `dashed`；原先只有 `dotDash` 会被小写归一命中，`dashSmallGap` 命不中 ⇒ Word 里的虚线导进来显示成实线、再导出也是实线且零告警），② 表头格那枚 no-op：`setCell` 原来是 `updateAttributes('tableCell',…) && updateAttributes('tableHeader',…)`，表头行上第一型返回 false 就整条短路 ⇒ **边框/底纹/竖排对齐在表头格上从 v0.38 起全是静默失败**，改成 `[两型].some(Boolean)`（段落那一头 v0.39 早就是这个形状）；同轮新出界面用的四味：`bdAttr`（边名 → 属性名）、`edgeAttrs`（若干条边 → 一份 patch）、`BORDER_STYLES`/`BORDER_WIDTH_PT`/`borderCss`（磅 → 规范串，换算只写这一处）与 `EDGE_LABEL`
+  lib/cell-style.ts   单元格样式扩展（v0.38）：tableCell/tableHeader 的 bdTop/bdRight/bdBottom/bdLeft + background + vAlign、table 的 marginLeft 全局属性（只声明属性不改内容模型）；边框统一规范串 `"0.67px solid #8899aa"`，三态 null 未声明/'none' 显式去边/有值；`inlineBorder()` 读 CSSOM longhand（shorthand 对 none 返回空串）、`IndentTableView` 子类补 marginLeft（resizable 的节点视图不传 HTMLAttributes；**v0.92 起 `applyIndent` 里加一枚宽度判定**——`accountTotalPx(node)` 非零就写 `width: Σpx`，否则才退回 `calc(100% − ml)` / `''`，缺陷在自家这一层而不是库）、`eighthsToPx`/`pxToEighths` 管 1/8 磅换算、命令 setCellBackground/setCellVAlign；**v0.88 拆掉两处静默**——① `CSS_BORDER_STYLE` 补上 Word「虚线」对话框实际写出的那几档 token（`dashSmallGap`/`dashLargeGap`/`dotDotDash`/`dashDotStroked` → `dashed`；原先只有 `dotDash` 会被小写归一命中，`dashSmallGap` 命不中 ⇒ Word 里的虚线导进来显示成实线、再导出也是实线且零告警），② 表头格那枚 no-op：`setCell` 原来是 `updateAttributes('tableCell',…) && updateAttributes('tableHeader',…)`，表头行上第一型返回 false 就整条短路 ⇒ **边框/底纹/竖排对齐在表头格上从 v0.38 起全是静默失败**，改成 `[两型].some(Boolean)`（段落那一头 v0.39 早就是这个形状）；同轮新出界面用的四味：`bdAttr`（边名 → 属性名）、`edgeAttrs`（若干条边 → 一份 patch）、`BORDER_STYLES`/`BORDER_WIDTH_PT`/`borderCss`（磅 → 规范串，换算只写这一处）与 `EDGE_LABEL`；**v0.95 加表头行克隆**（`scheduleReplica`/`syncReplica`，`spec.update` 里排队走 `queueMicrotask`——PM 重画行在同一趟之后）：把「开头连续的全部表头行」克隆进 `<thead class="doc-th">` 并给表加 `doc-th-rep`，供纸上 `table-header-group` 重复。三条形状由实测钉住：只克隆不搬移（搬走 `rows 23→22`、`thRows 1→0` 把模型吃了）、标记住 `<table>` 而不 `tr`（PM 会擦 `contentDOM` 里行的 `class`，实测 `tagged=0`）、那道门只认开头连着的那几行（`leading.length === 全部表头行数` 才过门，且撤旧克隆排在过门之前，中途夹一枚表头行的表整块不建克隆）
   lib/table-width.ts  精确列宽的把手（v0.91，252 行）：`tableGrid` 自己的占位遍历算出每格的**起始**行列与绝对位置（不借 prosemirror-tables 的 `TableMap`——它不是本项目的声明依赖、TipTap 也没转出来；跨列的格按起点记，实测跨两列那一格里光标认到的是第 0 列），`gridAccount` 只取行 0 摊平出的逐网格列账（与 docx 写侧同一份权威），`accountTotalPx`（v0.92 新立的导出纯函数，+19 行）把这份账折成一枚绝对像素数——任一网格列没账或 <1 就整表 `return null`，屏上的表宽就吃这一枚数，`baseWidths` 给没带账的列补 `max(1, floor((可用宽 − Σ已有账)/未带账列数))`（屏上那一档实测 `[248,null,null]` → 248/188.7/188.7 而 (626−248)/2 = 189，与写侧同一算法），`redistribute` 是键入一列之后的整表账（四道门：列数非零 / 列号在范围内 / 可用宽 ≥ 列数 / 键入值 ≥ 1px；键入列夹到 `min(键入值, 可用宽 − (列数−1))` 给其余列各留 1px；其余列按各自现有账**等比**分享剩下的那一份，舍入用最大余项法配平、每列至少 1px ⇒ Σ 恰等于可用宽，这是"键入值 1:1 上屏"的条件，否则浏览器按 `table-layout: auto` 把整表比例缩走），`tableTargetPx` = 版心 px − 表级 `marginLeft`（屏上写的是 `width: calc(100% - Npx)`，不扣它键入值照样被缩），`caretColumn` 给界面用（光标在哪一列 / 一共几列 / 当前显示值，没带账的列显示等分那一份与屏上一致）；`TableWidth` 扩展的 `setGridColumnWidth(px, targetPx)` **一次事务写遍该网格列的每一格**（只写行 0 会在同一次 dispatch 里被 `tableEditing` 的 `appendTransaction` 按其余各行抹回去）、先验齐再落（任一格的 `colwidth.length` 不等于它的 colspan 就整表拒绝，不写半份账进去）、**账本来就是这一份的格子跳过**（PM 的 `setNodeMarkup` 即便属性相同也推一步 ⇒ 重打同一个数字会凭空多一枚撤销步），全部跳过则返回 false 不派发
   lib/paragraph-style.ts 段落排版扩展（v0.39）：paragraph/heading 的 lineHeight/lineRule/spaceBefore/spaceAfter/background/bdTop..bdLeft 全局属性，一组属性拼**一条** style（多条各写一份会互相盖掉）；`ooxmlLine`/`lineToOoxml`/`ruleOf` 管 1/240 行与二十分之一磅两套语义，"最小值"档 CSS 表达不了就修行内自定义属性 `--oof-lr` 带回；命令 setParagraphStyle/setLineSpacing/setSpaceAround/setParaBackground；**v0.88 多一条 `setParaBorders(edges, value)`**（走 `edgeAttrs`，与单元格共用那一份「边名 → 属性名」的换算），段落这一头界面只给「清除」（写 `null` 收回未声明）不给「压掉」（`'none'`）——读侧早把样式链那层 `w:pBdr` 合并进段落自己名下（docx-fidelity 的 `effPPr`），编辑器里没有「一条样式边框等着被盖」这一层，而实测 Word 去掉段落某条边时也是干脆不写那一枚
   lib/indent-extension.ts 段落全局属性 indentLeft/indentFirst（32px 一档、上限 320px）+ setIndent/indent/outdent 命令 + Ctrl+] / Ctrl+[ + 悬挂缩进感知的出退格
@@ -5667,9 +5780,23 @@ cargo check        # Rust 后端检查（在 src-tauri 下）
       **没有任何一行被劈开**（十臂每页 `partial=-`）、`mid` 的页边空档从 304.9px 被表格填上（墨底 681.7→986.6）、
       页边三臂第 1 页行数恰为剩余空间容得下的那一档 1/2/4、`short` 与 `precise` 两臂逐页回归改前读数（没动的族不碰）；
       Word 16.0 只读腿第三方纸面对照（每行强制 60 磅那一档）逐行落页映射与自家改后同向＝表级流、行边界切、不劈行
-- [ ] **表头行在纸上不重复**（v0.94 量出）：`b4-hdr` 臂第 1 页 `head=3`（表头那三枚格标在）而第 2 页 `head=0` ⇒ 跨页后
-      第二页没有表头，Word 的默认是重复标题行。写侧那一档是齐的（同一件字节腿 Y6 数出 23 行且带 `w:tblHeader`），
-      缺的是 CSS/打印这一头的 `thead` 重复；本轮没量 `position:sticky` 之外的任何方案能不能在 PrintToPdf 上兑现
+- [x] **表头行在纸上不重复**（v0.94 量出，v0.95 结掉）：`b4-hdr` 臂第 1 页 `head=3` 而第 2 页 `head=0` ⇒ 跨页后
+      第二页没有表头，Word 的默认是重复标题行。写侧那一档一直是齐的（同一件字节腿数出 23 行且带 `w:tblHeader`），
+      缺的是屏上渲染这一头的 `<thead>`。v0.95 由 `IndentTableView` 按模型那份行属性**克隆**开头连续的表头行成
+      `thead.doc-th`（标记住 `<table>`，因为 PM 擦行的 `class`），屏上 `display:none`、纸上一枚 `table-header-group`
+      加一枚藏原行：`hdr` 纸上 `head 3/0 →` **3/3**、`hdr2` **6/6**、`span` **2/2**，每页表头枚数 = 表头标总数
+      （整行重复而不是只重复一枚格）、数据标不丢不重（`distinct=66/60/60/6`）、逐页数据枚数与改前相同（没有因重复表头
+      而重新分页）；那道门拒开火的两臂（`mixth` 中途夹表头行 / `nohdr` 无表头行）纸面与改前**逐枚同形**
+- [ ] **中途夹表头行那一档在纸上不重复、也没有任何提示**（v0.95 量出）：`mixth` 臂那道门只认「开头连续的全部表头行」，
+      实测 `gated=0`、纸面 `head 3/0` 与改前同形——而字节里 `w:tblHeader` 明晃晃住在第 2 行，Word 也只读得到那枚标志
+      （`HeadingFormat` 行 1 = 0 而整表 1 枚）。要么把它也做成表头组（语义上 Word 也不这么干），要么在界面上说这一档
+      纸上不重复，两条都没选
+- [ ] **嵌套表的表头行克隆未量**（v0.95 记）：本轮那道门只认最外层 `table` 的 `contentDOM` 行，而 `nest` 臂前置实测里读到
+      的是 `rowCount 24` 那种外层吞内层的形状 ⇒ 内层表的表头行会不会被外层克隆重复、或外层自己的表头行被内层行数带偏，
+      两头都没有读数
+- [ ] **屏上藏克隆靠 CSS 而非 DOM，重建路径只量了两趟**（v0.95 记）：屏上「表头行只有一份」是 `display:none` 撑的，
+      克隆靠 `spec.update` 重建——本轮 `D10`（隔 600ms 两趟逐枚相同）与 `PERSIST-DATA`（真编辑数据格之后前后同形）
+      只量了收敛与真编辑，撤销栈回放、协作式远端改动那一类路径没有读数
 - [ ] **`pre` / `img` / `blockquote` / `.doc-toc` 同族仍整块推页**（v0.94 对照组）：`precise` 臂（40 行代码块）改后与改前
       **逐页相同**——3 页而第 1 页只有 1 枚 mark。本轮只把表从 avoid 家族摘出来，这一族的"整块推 vs 页边断开"仍未取舍
       （代码块在纸上半截断行是可接受的还是不可接受的，没有第三方证据；Word 的代码块走的是段落流）

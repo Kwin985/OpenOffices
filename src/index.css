@@ -1414,6 +1414,11 @@ button {
   }
   th { background: var(--bg); }
 }
+/* 表头行的纸面克隆：屏幕上不占位（原行照旧好好待在 tbody 里），只在纸上作为重复表头组出现。
+   标记由 IndentTableView 挂在 <table> 上（v0.95：给 <tr> 打的 class 会被 ProseMirror 的观察器抹掉） */
+.doc-content table.doc-th-rep > thead.doc-th {
+  display: none;
+}
 /* 列宽把手：拖列边界改宽度这件事一直是通的（库只认 pluginState.activeHandle，不认指针是否压在把手上），
    但产品此前一条样式都没给 .column-resize-handle —— 实测装饰的 rect 高 0，看得见表格却找不到那条缝 */
 .doc-content table td,
@@ -2277,6 +2282,20 @@ button {
   .doc-content table {
     page-break-inside: auto;
     break-inside: auto;
+  }
+
+  /* 表头行在纸上重复。Blink 只重复真 <thead>（display:table-header-group）里的行，而模型那一头
+     只能把表头行留在 tbody（TableView 的 contentDOM 就是 tbody，库里 grep thead → 0 命中），
+     所以纸上这一份是 IndentTableView 建的克隆，标记 doc-th-rep 只挂在「开头连续的表头行 =
+     全部表头行」那一档：中途夹表头行的那种表三条都不吃（克隆就得藏原行，而原行不能藏——
+     它在模型的正文顺序里，实测那样会让那枚表头整枚从纸上消失）。 */
+  .doc-content table.doc-th-rep > thead.doc-th {
+    display: table-header-group;
+  }
+
+  /* 纸上的原行必须藏：不藏就是第 1 页两枚表头（实测 P1 head=6 而其余页 3 枚）*/
+  .doc-content table.doc-th-rep > tbody > tr:has(> th) {
+    display: none;
   }
 
   /* 把手是编辑态的把手，不上纸 */

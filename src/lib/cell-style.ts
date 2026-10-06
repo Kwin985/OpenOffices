@@ -280,16 +280,24 @@ export const CellStyle = Extension.create({
  * 少了 TipTap 自己那条路径的第 4 个参数（HTMLAttributes），于是 renderHTML 里的 margin-left
  * 只进了 JSON 没进页面（屏幕与导出 PDF 都看不见缩进）。这里按节点属性直接写元素样式，
  * 并在 update 时跟着属性刷新（改缩进、撤销重做都走这里）。
+ * 另一件事住在这个视图里：给纸上建一份重复表头的 <thead> 克隆（见 syncReplica）。
  */
 export class IndentTableView extends TableView {
+  /** 纸上那一份重复表头：本视图自己建的 <thead>，模型里没有它 */
+  private replica: HTMLTableSectionElement | null = null
+
   constructor(node: Node, cellMinWidth: number, view: EditorView) {
     super(node, cellMinWidth, view)
     this.applyIndent(node)
+    this.scheduleReplica()
   }
 
   update(node: Node): boolean {
     const ok = super.update(node)
-    if (ok) this.applyIndent(node)
+    if (ok) {
+      this.applyIndent(node)
+      this.scheduleReplica()
+    }
     return ok
   }
 
@@ -302,5 +310,34 @@ export class IndentTableView extends TableView {
     const total = accountTotalPx(node)
     if (total) this.table.style.width = `${total}px`
     else this.table.style.width = has ? `calc(100% - ${ml}px)` : ''
+  }
+
+  /**
+   * spec.update 跑在 PM 重画行之前，那一刻 DOM 还是上一份账 ⇒ 排到微任务，
+   * 等这一趟渲染落地再按屏上那些行建克隆（不在 update 里同步做，否则纸上永远是过期的一份）。
+   */
+  private scheduleReplica(): void {
+    queueMicrotask(() => this.syncReplica())
+  }
+
+  private syncReplica(): void {
+    const rows = Array.from(this.contentDOM.children) as HTMLTableRowElement[]
+    const isHeader = (tr: HTMLTableRowElement) => tr.querySelector(':scope > th') !== null
+    const leading: HTMLTableRowElement[] = []
+    for (const tr of rows) {
+      if (!isHeader(tr)) break
+      leading.push(tr)
+    }
+    this.replica?.remove()
+    this.replica = null
+    this.table.classList.remove('doc-th-rep')
+    // 克隆集与藏集必须是同一批行：只克隆开头那几行、却要藏所有带 th 的行 ⇒ 中途那枚两头不讨好
+    if (!leading.length || leading.length !== rows.filter(isHeader).length) return
+    const thead = document.createElement('thead')
+    thead.className = 'doc-th'
+    for (const tr of leading) thead.appendChild(tr.cloneNode(true))
+    this.table.insertBefore(thead, this.contentDOM)
+    this.replica = thead
+    this.table.classList.add('doc-th-rep')
   }
 }
