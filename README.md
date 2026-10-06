@@ -472,7 +472,9 @@
   **v0.90 两半**：认账门只松「每一格都得带账」那一道 ⇒ 界面上拖一次得到的**部分账**（`[248]|null|null` 那一型）不再
   整表作废、没带账的列按剩下的版心补平，而拖列边界那条缝自这一版起才**看得见**（`.column-resize-handle` 此前一条样式
   都没有，实测装饰 rect 高 0）；**v0.91 把「每行 colspan 之和等于列数」那道门改成按占位走**（`gridShapeOf`：被竖跨
-  压掉的格子算占位而不算缺格），此前含竖跨的表整表判成形状不合、宽度账整表作废）
+  压掉的格子算占位而不算缺格），此前含竖跨的表整表判成形状不合、宽度账整表作废；**v0.92 起屏上也吃这一份账**
+  （`accountTotalPx`：整表每列都带账 ⇒ `table.style.width = Σpx`，与 docx 的 `w:tblW`（网格和）同一形状，键入的 90px
+  在屏上就是 89.94；没账或部分账仍走版心比例那一档，逐格宽度与导出字节都不变）
 - **图片增强**：剪贴板粘贴图片直接转 base64 插入（`handlePaste`）；选中图片浮出工具条——
   宽度按版心 25/50/75/100%（按当前显示比例换算 height）、居中（display:block+auto margin
   自定义 align 属性）、恢复原尺寸；宽度随 docx ImageRun/odt draw:frame 导出往返
@@ -758,7 +760,8 @@
   ② **表格缩进在屏幕和 PDF 上完全不生效**——`TableKit` 开 `resizable: true` 后表格 DOM 由 prosemirror-tables 的
   `columnResizing` 节点视图生成，它 `new View(node, min, view)` **不传 HTMLAttributes**，`renderHTML` 里的
   `margin-left` 永远落不了地；`IndentTableView` 子类在构造与 `update()` 里自己套 `marginLeft`（并同步
-  `width: calc(100% - Npx)`，否则满宽版心会被顶出页面）；
+  `width: calc(100% - Npx)`，否则满宽版心会被顶出页面；**v0.92 起这一枚 `calc` 只在"没账或部分账"那一档盖**——整表每列
+  都带账时表宽就是那份账的绝对像素和 `accountTotalPx`，缩进不再靠 `calc` 收右边，见 v0.92 一节）；
   ③ Word 里"显式去掉的边框"照样画出来——`w:val="none"` 在 Word 语义里**压不住表级默认边框**（它当"没指定"，
   继续吃 `w:tblBorders` 的 insideV，导出再开变成 0.5pt 实线），只有 **`w:val="nil"`** 才是真去掉；
   导出侧改 `BorderStyle.NIL`，导入侧 `CSS_BORDER_STYLE` 加 `nil → none`
@@ -4310,6 +4313,98 @@ docx 库默认的 `w="100"`（twip，≈6.7px），`w:tcW` 与 `w:tblLayout` 零
   全程未碰已装正式版）；自动更新的源托管与 macOS 打包按指令继续等信号，签名私钥已加密备份并演练 7/7，
   **私钥本体在本机仍是单点**。
 
+## 屏上的表宽第一次吃同一份账（v0.92）
+
+窄口径：`src/lib/table-width.ts` +19（新增一枚导出的纯函数 `accountTotalPx`）、`src/lib/cell-style.ts` +7/−3
+（`IndentTableView.applyIndent` 里那一行宽度判定），**Rust 一个字没动**。还的是 v0.90 就记着、v0.91 又量到一次、
+一直没有动的那层账：屏幕上宽度是比例、导出字节与 Word 里是绝对宽度——同一张表在三个头上不是同一个数。
+
+- **前置实测九格**（tmp/x92，dev 真机、真光标、只量不改产品）：逐枚读「表级宽度」这一层在屏上的形状——模型账
+  （行 0 逐格 `colwidth`）/ `<col>` 的 style / `table` 的 inline `width` 与 `minWidth`（库自己的判定）/ 单元格与表
+  在屏上的 rect。八格里只有两格是"屏上与账同形"的：`exact` 三列键成 [90,268,268]（Σ=626）而 rect 89.94/267.73/267.74
+  ——因为这一枚的 Σ 恰好等于可用宽；其余六格只要 Σ ≠ 可用宽，屏上就被按比例缩走——`narrow` [120,160,240]（Σ=520）
+  的 `<col>` 是模型 px 而 rect 144.32/192.43/288.66、`over` [300,300,300]（Σ=900）的 rect 又回到 208.47 ×3、
+  `single` 一列 [90] 的 rect 625.41＝单列被拉满整个版心（v0.91 记的「单列表 Σ ≠ 可用宽」正是这一档的屏上一半）、
+  `span` 跨两列那格 [100,100]+[100]（Σ=300）rect 416.94/208.47、`vspan` [180,240,360]（Σ=780）rect 147.2/193.15/285.06、
+  `indent`（ml=40 + Σ=520）inline `width: calc(100% - 40px)` 而 css 586.073、rect 135.09/180.13/270.19。另两枚是
+  对照：`none` 三列全 null（rect 208.47 ×3，浏览器 auto 布局在算宽）、`partial` [248,null,null]（inline `(empty)`
+  而库写 `minWidth=298px`，rect 248/188.7/188.71）。**就地探针那一档是本轮唯一的裁决证据**：只在 `table.style.width`
+  上手工写这份账的 Σpx、写完立刻复原——narrow 520 → rect 119.86/159.79/239.68、single 90 → 89.33、span 300 →
+  199.5/99.83、vspan 780 → 179.85/239.79/359.69、over 900 → 299.77 ×3 且表右沿 1259.29 顶过文档右沿 985.36。
+  ⇒ 键入值 1:1 上屏的那一枚条件从来不是"其余列怎么算"，而是**表宽本身要写成这份账的和**；库（prosemirror-tables
+  1.8.5 的 `updateColumnsOnResize`）在整表齐账时本来就写 `table.style.width = Σ + "px"`，而我们的子类 `applyIndent`
+  紧跟其后无条件盖成 `calc(100% − Npx)` / `''`——缺陷在自己的那一层，不在库。
+- **本轮唯一的架构决定（跟着数据走）**：屏上的表宽吃行 0 那一份账，与 docx 写侧（`w:tblW` = 网格和、逐格 `w:tcW`）
+  同一权威，四条形状都不是可选的——① **只有整表齐账才写绝对宽**：`accountTotalPx(table)` 把行 0 摊平出的每一枚
+  网格列求和，缺任何一枚（部分账）或压根没账 ⇒ `null`，与写侧 `gridPxOf` 吃的是同一份权威（同一个 `tableGrid` /
+  `gridAccount`，不另起一套判定）；② **没账或部分账保留原来的比例档**：一个字不改库那一路（`minWidth` 照旧、
+  `.doc-content table { width: 100% }` 照旧），实测 `partial` 臂改后与改前逐字相同（inline `(empty)`、minWidth 298px、
+  rect 248/188.7/188.71），`none` 臂 tableRect 仍是 626.07；③ **不夹取到版心**：`over` 那臂（Σ=900）现在如实撑出
+  （tableRect 900、contentScroll 900 > clientWidth 626、表右沿 1259.29 顶出文档右沿 985.36）——Word 16.0 对同一件
+  读回 225 磅 ×3 = 675 磅而版心只有 470.6 磅，**第三方也不缩表**，屏上把 900px 缩成 626px 是我们这一头擅自作的决定，
+  把它如实画出来才是与字节/Word 同形；④ **有账时缩进不再靠 `calc` 收右边**：宽度既然是绝对值，`calc(100% − ml)`
+  那一条就只在没账那一档留着（`indent` 臂现在 inline 520px + computed marginLeft 40px，而不是 586.073 的百分比）。
+  单位仍只有一处换算（`PX_TWIP = 15`）；一处诚实的不对称留在 `renderHTML` 那一路——attrs 通道看不见子节点，算不出 Σ，
+  仍只能写 `calc`（结构腿 CS8 钉住这个口径，不是漏网）。
+- **验证**（腿 + 编译，全部在版本号 bump 三处对齐之后在最终源文上复跑）：算术腿 17/0（R1~R17 钉 `accountTotalPx`
+  的形状：没账 null / 齐账求和 / 部分账 null / 跨列格按 colspan 展开 / 竖跨按占位不重复计数 / 长度不齐 null /
+  0 与负数不算账 / 非数组不算账 / 表头格同吃 / 权威只认行 0（行 1 有账而行 0 没有 ⇒ null）/ 行与行打架按行 0）；
+  结构+变异合并一腿 RESULT struct=21/21 mutants=15 bad=0 extra=0 b0=5/5 trap=ok（吃剥掉注释并归一 LF 的源文；
+  TW1~TW11 钉 `accountTotalPx` 住在 table-width.ts、复用 `tableGrid`/`gridAccount` 而不另起判定、null 出口齐、
+  CS1~CS10 钉 `applyIndent` 只在有账时写绝对宽、部分账走 `''`、缩进那一句没被顺手改、`.doc-content table` 的
+  比例兜底一条没动、宽度只问 table-width 那一处；M1~M15 各响该响的那条——含 M15「把绝对宽那一行整行删掉」
+  正是本轮修之前的缺陷形状、M3「宽度算成 0」响 CS1；B0 自检五条含「模板态里的正则字面量不被吞」「顶层花括号帧里的
+  注释确实被剥掉」；两枚正控制 P0 原样、P1 注释陷阱 + 一枚反向控制（拆掉真代码那一行之后判据必须响 CS3））；
+  CDP dev 真机腿 RESULT dev pass=45/45 bad=0、PAGEERRS|0（真光标 + 真导出：A 齐账六臂的 inline 宽 = Σpx 且行 0
+  rect 之和 = Σ（±2px）且逐格 1:1（±1.5px，跨两列那格按两枚之和 199.5）、B 单列表也吃账（90px，本轮挖掉屏上那一半）、
+  C `over` 臂如实撑出 + 记下外沿读数、D `none`/`partial` 两臂不谎称绝对宽且仍按版心铺满、E `indent` 臂缩进照属性
+  上屏而表宽是 Σ 不是 100%−ml、F `vspan` 臂屏上也吃账、G 键入端到端（在无账件上真走 `setGridColumnWidth(90, 626)`
+  ⇒ 账 [90,268,268]、inline 626px、rect0 89.93）；独立字节腿（zipfile + 正则直解 `word/document.xml`，不吃自家读侧）
+  34/0（Y1~Y9 本轮写侧一个字没动 ⇒ 九臂的 `w:tblW` / `w:tblInd` / `w:tblLayout` / `w:gridCol` / `w:tcW` 逐枚等于
+  改前基线，G 系列钉 v0.89/v0.90/v0.91 那几档形状未回归：无账仍 pct 100% + 3135×3 + 零枚 tcW + 不声明 fixed、
+  部分账仍 3720/2835/2835、竖跨件仍 2700/3600/5400 而不是等分、`w:tblInd 600` 与表级绝对宽 7800 各住各处、
+  `gridSpan` 与 `vMerge` 不塌、逐格正文不丢，T1~T4 键入那臂的 90px = 1350 twip 真进字节而其余两列按等比重排成 4020）；
+  Word 16.0 只读腿 RESULT word pass=21/21 fail=0 + 一条 NOTE（W1 无账件仍百分比且三列 156.7 磅、W2 齐账件逐格磅
+  = 屏上 px × 0.75（90/120/180）、W3 键入那档 67.5/201/201 磅与屏上 90/268/268 对上、**W4 `over` 件 Word 也不夹取
+  （675 磅 > 版心 470.6 磅）⇒ 屏上如实撑出有第三方对照**、W5 单列 67.5 磅、W6 缩进不吃宽度账、W7 补平那档 186 磅、
+  W8 跨两列那格读两枚之和 150 磅、W9 竖跨件经 `Range.Cells` 第一次读得出（135/180/270）、W10 九臂改后与改前逐枚
+  同读数、W11 键入的 90px 走到 Word；NOTE：`indent` 件的 `LeftIndent` 读回 0 而字节上写着 `w:tblInd 600`）；
+  `cargo test --lib` 97 passed / 0 failed / 11 ignored（Rust 本轮一个字没动）+ `pnpm exec tsc --noEmit` exit 0 +
+  `pnpm tauri build --no-bundle` 绿（openoffices v0.92.0，2m54s）。
+- **本轮撞到八处量具坑，都不是产品**：① **剥注释器把顶层花括号帧当"非常规态"**——`normal()` 只认 `expr` 帧，于是
+  每一个函数体（brace 帧）里的注释都原样吐进"剥后源文"，B0a 当场抓住（中文短语还在）；修成
+  `normal = !(top() && top().t === 'tpl')`，**这一格意味着此前所有吃这两个文件的判据都在没剥净的源文上匹配**，
+  是「同族假绿」的第七次兑现、也是这条腿自己第二次被自己抓住；② **变异期望要按判据实际量的字面写**——M2 把
+  `const total = accountTotalPx(node)` 换成一枚常量，同时打掉 TW6 匹配的那行 `return total` 字面，期望里只写 TW7
+  就报「多响」；③ **变异打不到那一行就要另立一枚**——M3 只改宽度算出的值，`applyIndent` 里写绝对宽的那一行原样
+  还在（CS3 不响），于是另加 M15 整行删掉，让它响 CS3；④ **反向陷阱控制要带 `throw` 守卫**——删真代码那枚锚点把
+  缩进写成 6 枚空格而文件里是 4 枚，删不掉任何东西而控制"看起来通过"，补 `if (minusRaw === RAW.cs) throw`；
+  ⑤ **改了产品源码后 dev 腿必须 `Page.reload{ignoreCache:true}`**（vite 发陈旧 transform 模块，同一条 PASS 会量到
+  改前的屏上）；⑥ **CDP 探针 IIFE 少了「找不到活动标签就取末位」那枚兜底** ⇒ 键入那一臂整臂 TypeError，而同一个
+  PROBE 里早就写着这枚兜底——量具内部不一致比缺量具更难查；⑦ **判据里的数字凭记忆写**——字节腿 G4a 期望写成
+  `[1800,2400,3600]`（磅）而夹具是 180/240/360 **px** = 2700/3600/5400 twip，G6 的「文本枚数 ≥ 6」对单列与跨度两臂
+  根本不成立 ⇒ 改成与 `<w:tc>` 枚数成对判（「必须由同一趟量出来」的老账第三次兑现）；⑧ Word 的 `Rows.Item(1).Cells`
+  对含竖跨的表一律抛（v0.89 记过），本轮改走 `Range.Cells` + 按 `RowIndex` 过滤，那一档第一次有到达面；另
+  bash 里 `powershell -Command "$o=@(...)"` 的 `$o` 被吞（老账，一律 `.ps1` + `-File`）、版本号 bump 会重启 app
+  ⇒ **bump 之前那份 dev 日志不属于最终源文**（本轮以 b4 前缀在重启后的应用上整腿复跑）。
+- **本轮没动、量出来记着**（已开进路线图）：① **纸面那一头没量**——文档导出 PDF 走 WebView2 `PrintToPdf` 吃的就是
+  这份 DOM，而 `over` 臂现在屏上就撑出（contentScroll 900 > clientWidth 626、表右沿顶出文档右沿）⇒ 超宽表上纸是被
+  裁掉、缩进下一页还是照样出血，从来没正面量过；② NodeView 与 `renderHTML` 两口径没合一（一处吃账、一处只能 `calc`，
+  因为它看不见子节点）；③ 部分账那一档屏上仍是比例（248/188.7/188.71）而字节里是 3720/2835/2835（= 189px 那一档），
+  本轮只让齐账那一路同形、没把它拧成绝对宽；④ 屏上 626 与 `contentPxOf` 的 627 那一枚 1px 口径差原样；
+  ⑤ 等分补平的算法仍住两处（docx.ts 的 `fill` 与 table-width.ts 的 `baseWidths`）；⑥ 被跨列格盖住的后续列没有
+  独立把手；⑦ **本轮没有 release A/B**（界面那一半到不了 release 的注入缝，屏上形状由 dev 真机腿裁、字节与磅值由
+  两条独立腿裁）；⑧ 拖拽混单位、`fixTables` 公开通道 no-op、ODT 两头不往返、读侧只吃 `w:gridCol`、部分账存—重开
+  变整表齐账、`w:between` 第五边、嵌套表版心按最外层近似、px 存整数的 ±0.25 磅漂移原样挂着。
+- **收尾**：README 新增本节 + 架构两处就地改口（v0.30 表格通道那条补「屏上的表宽从 v0.92 起吃同一份账」、
+  v0.37/v0.38 缩进与 NodeView 那条把「无条件盖 `calc(100% − Npx)`」改口成「只在没账或部分账那一档盖」）+ 文件清单
+  `lib/table-width.ts` 条目补 `accountTotalPx`、`lib/cell-style.ts` 条目补这一枚判定 + 路线图勾掉「屏上比例 vs
+  字节绝对宽」与「单列表键入后 Σ ≠ 可用宽」的屏上一半、把「键入值超出版心时整表不夹取」改写成「如实渲染（纸面未量）」，
+  版本 0.92.0（package.json / tauri.conf.json / Cargo.toml 三处对齐），tmp/x92 的夹具、前置实测腿、算术腿、
+  结构+变异腿、dev 腿、字节腿与 Word 腿按惯例删除（收摊后 1420/9222 无监听、openoffices.exe 0 支、
+  com.openoffices.app 的 msedgewebview2 0 支、WINWORD 0 支，按显式 PID 收宿主而不是按进程名乱杀，全程未碰已装正式版）；
+  自动更新的源托管与 macOS 打包按指令继续等信号，签名私钥已加密备份并演练 7/7，**私钥本体在本机仍是单点**。
+
 ## 性能（v0.3）
 
 
@@ -4390,8 +4485,8 @@ src/                  React 前端
   lib/ole.ts          OLE 嵌入对象的**内容**提取（v0.44）：`unwrapEmbed` 拆容器（现代形状=部件本身就是原生文件；老形状=复合文档里的流 `\x01Ole10Native`），`oleNativePayload` 按实测字段布局走一遍、走不通再按"哪枚 DWORD 能把数据吃到接近结尾"扫兜底（数据不贴着流末尾，按流长反推必错）；`classifyEmbed` 先魔数后文件名，`embedHtml(content, depth)` 分派 docx（递归 `docxToHtmlFidelity`，depth≥2 停）/ xlsx（只要值，`r="C5"` 定位、空列不挤位）/ CSV（首行嗅探分隔符 + RFC4180 引号）/ txt（空行分段，UTF-8 出替换符换 GBK 重试），取不出的一律给带真名与大小的 `note`；上限 24MB / 200 行 × 40 列 × 4 表 / 64KB × 200 段，**截断写进告警不静默少给**；`inlineFlatten` 把块级正文压成行内（单元格放不下第二层表）
   lib/docx-fidelity.ts OOXML → HTML 保真导入器（v0.37）：run 级 rPr（粗斜/删除线/下划线/字色/高亮/字族/字号/上下标 `w:vertAlign`）、段落 pPr（jc/`w:ind` 左右与首行悬挂四种缩进写法/pStyle 样式链）、numPr+numbering.xml → 有序无序与 ilvl 层级（**跳档按 numId 折基准层**，不凭空补中间层）、表格 gridSpan/vMerge + tblGrid 列宽 + 单元格四边 `w:tcBorders`（含 val=nil 的显式去边）/底纹 `w:shd fill`/竖排 `w:vAlign`/表级 `w:tblInd`、段落 `w:spacing`（行距两档 + 段前后，含按行的 `w:*Lines` 估算）/`w:shd` 底纹/`w:pBdr` 四边、脚注与尾注引用（`w:footnoteReference`/`w:endnoteReference` 按 `w:id` 配 `word/footnotes.xml`·`endnotes.xml` 正文，跳过 separator/continuationSeparator，正文缺失记告警且不留空标记）、图片 rels→dataURL、内外超链接、分页符、批注三态锚点、域代码文字不外泄、**域编号重算**（v0.43：`fldChar` begin/separate/end 三道门接 `docx-fields` 的 `FieldEngine`——`SEQ` 现算并压掉缓存、`REF` 无缓存按书签段落文本兜底（书签表渲染前预扫）、算不了的沿缓存且无缓存记边界、`fldSimple` 同路、被跳过的分支不占号）、`w:object` 嵌入对象（v0.43 预览是 EMF/WMF 解不开时留一行可见占位，ProgID + rels 反查的部件文件名；**v0.44 先走 `lib/ole` 取内容**——取到就把内层正文接为段落兄弟块（格内改压行内）且不再叠占位，取不到才留占位）、文本框 `w:txbxContent`（`wps:txbx` 与旧式 `v:textbox`）展平为段落、OMML 公式线性化、`mc:AlternateContent` 只取 Choice（空则退 Fallback，避免同一份正文翻倍）、drawing 锚点经 rels 找图示/图表部件（v0.42，部件缺失与关系缺失各记一条告警）；认不出就抛错或 blocks=0，调用方回退 mammoth
   lib/docx-fields.ts 域重算引擎（v0.43，零依赖、纯 Node 可直测）：`parseInstr` 拆 `命令 参数 \开关`（**开关 token 原样保留大小写**——Word 就按它决定结果形态）、`seqText` 按 `\* ROMAN`/`roman`/`ALPHABETIC`/`alphabetic`/`Alpha` 出对应形态、`FieldEngine`（`from(doc)` 渲染前扫全篇建书签表（只排 `_GoBack`，`_Ref…`/`_Toc…` 必须留）+ `seqValue` 跟着文档顺序走 + `refText` 兜底段落文本）、`recomputable`（只有带 label 的 SEQ 现算）、`fieldLabel`/`paraText`（域代码与已删文字不算正文）
-  lib/cell-style.ts   单元格样式扩展（v0.38）：tableCell/tableHeader 的 bdTop/bdRight/bdBottom/bdLeft + background + vAlign、table 的 marginLeft 全局属性（只声明属性不改内容模型）；边框统一规范串 `"0.67px solid #8899aa"`，三态 null 未声明/'none' 显式去边/有值；`inlineBorder()` 读 CSSOM longhand（shorthand 对 none 返回空串）、`IndentTableView` 子类补 marginLeft（resizable 的节点视图不传 HTMLAttributes）、`eighthsToPx`/`pxToEighths` 管 1/8 磅换算、命令 setCellBackground/setCellVAlign；**v0.88 拆掉两处静默**——① `CSS_BORDER_STYLE` 补上 Word「虚线」对话框实际写出的那几档 token（`dashSmallGap`/`dashLargeGap`/`dotDotDash`/`dashDotStroked` → `dashed`；原先只有 `dotDash` 会被小写归一命中，`dashSmallGap` 命不中 ⇒ Word 里的虚线导进来显示成实线、再导出也是实线且零告警），② 表头格那枚 no-op：`setCell` 原来是 `updateAttributes('tableCell',…) && updateAttributes('tableHeader',…)`，表头行上第一型返回 false 就整条短路 ⇒ **边框/底纹/竖排对齐在表头格上从 v0.38 起全是静默失败**，改成 `[两型].some(Boolean)`（段落那一头 v0.39 早就是这个形状）；同轮新出界面用的四味：`bdAttr`（边名 → 属性名）、`edgeAttrs`（若干条边 → 一份 patch）、`BORDER_STYLES`/`BORDER_WIDTH_PT`/`borderCss`（磅 → 规范串，换算只写这一处）与 `EDGE_LABEL`
-  lib/table-width.ts  精确列宽的把手（v0.91，252 行）：`tableGrid` 自己的占位遍历算出每格的**起始**行列与绝对位置（不借 prosemirror-tables 的 `TableMap`——它不是本项目的声明依赖、TipTap 也没转出来；跨列的格按起点记，实测跨两列那一格里光标认到的是第 0 列），`gridAccount` 只取行 0 摊平出的逐网格列账（与 docx 写侧同一份权威），`baseWidths` 给没带账的列补 `max(1, floor((可用宽 − Σ已有账)/未带账列数))`（屏上那一档实测 `[248,null,null]` → 248/188.7/188.7 而 (626−248)/2 = 189，与写侧同一算法），`redistribute` 是键入一列之后的整表账（四道门：列数非零 / 列号在范围内 / 可用宽 ≥ 列数 / 键入值 ≥ 1px；键入列夹到 `min(键入值, 可用宽 − (列数−1))` 给其余列各留 1px；其余列按各自现有账**等比**分享剩下的那一份，舍入用最大余项法配平、每列至少 1px ⇒ Σ 恰等于可用宽，这是"键入值 1:1 上屏"的条件，否则浏览器按 `table-layout: auto` 把整表比例缩走），`tableTargetPx` = 版心 px − 表级 `marginLeft`（屏上写的是 `width: calc(100% - Npx)`，不扣它键入值照样被缩），`caretColumn` 给界面用（光标在哪一列 / 一共几列 / 当前显示值，没带账的列显示等分那一份与屏上一致）；`TableWidth` 扩展的 `setGridColumnWidth(px, targetPx)` **一次事务写遍该网格列的每一格**（只写行 0 会在同一次 dispatch 里被 `tableEditing` 的 `appendTransaction` 按其余各行抹回去）、先验齐再落（任一格的 `colwidth.length` 不等于它的 colspan 就整表拒绝，不写半份账进去）、**账本来就是这一份的格子跳过**（PM 的 `setNodeMarkup` 即便属性相同也推一步 ⇒ 重打同一个数字会凭空多一枚撤销步），全部跳过则返回 false 不派发
+  lib/cell-style.ts   单元格样式扩展（v0.38）：tableCell/tableHeader 的 bdTop/bdRight/bdBottom/bdLeft + background + vAlign、table 的 marginLeft 全局属性（只声明属性不改内容模型）；边框统一规范串 `"0.67px solid #8899aa"`，三态 null 未声明/'none' 显式去边/有值；`inlineBorder()` 读 CSSOM longhand（shorthand 对 none 返回空串）、`IndentTableView` 子类补 marginLeft（resizable 的节点视图不传 HTMLAttributes；**v0.92 起 `applyIndent` 里加一枚宽度判定**——`accountTotalPx(node)` 非零就写 `width: Σpx`，否则才退回 `calc(100% − ml)` / `''`，缺陷在自家这一层而不是库）、`eighthsToPx`/`pxToEighths` 管 1/8 磅换算、命令 setCellBackground/setCellVAlign；**v0.88 拆掉两处静默**——① `CSS_BORDER_STYLE` 补上 Word「虚线」对话框实际写出的那几档 token（`dashSmallGap`/`dashLargeGap`/`dotDotDash`/`dashDotStroked` → `dashed`；原先只有 `dotDash` 会被小写归一命中，`dashSmallGap` 命不中 ⇒ Word 里的虚线导进来显示成实线、再导出也是实线且零告警），② 表头格那枚 no-op：`setCell` 原来是 `updateAttributes('tableCell',…) && updateAttributes('tableHeader',…)`，表头行上第一型返回 false 就整条短路 ⇒ **边框/底纹/竖排对齐在表头格上从 v0.38 起全是静默失败**，改成 `[两型].some(Boolean)`（段落那一头 v0.39 早就是这个形状）；同轮新出界面用的四味：`bdAttr`（边名 → 属性名）、`edgeAttrs`（若干条边 → 一份 patch）、`BORDER_STYLES`/`BORDER_WIDTH_PT`/`borderCss`（磅 → 规范串，换算只写这一处）与 `EDGE_LABEL`
+  lib/table-width.ts  精确列宽的把手（v0.91，252 行）：`tableGrid` 自己的占位遍历算出每格的**起始**行列与绝对位置（不借 prosemirror-tables 的 `TableMap`——它不是本项目的声明依赖、TipTap 也没转出来；跨列的格按起点记，实测跨两列那一格里光标认到的是第 0 列），`gridAccount` 只取行 0 摊平出的逐网格列账（与 docx 写侧同一份权威），`accountTotalPx`（v0.92 新立的导出纯函数，+19 行）把这份账折成一枚绝对像素数——任一网格列没账或 <1 就整表 `return null`，屏上的表宽就吃这一枚数，`baseWidths` 给没带账的列补 `max(1, floor((可用宽 − Σ已有账)/未带账列数))`（屏上那一档实测 `[248,null,null]` → 248/188.7/188.7 而 (626−248)/2 = 189，与写侧同一算法），`redistribute` 是键入一列之后的整表账（四道门：列数非零 / 列号在范围内 / 可用宽 ≥ 列数 / 键入值 ≥ 1px；键入列夹到 `min(键入值, 可用宽 − (列数−1))` 给其余列各留 1px；其余列按各自现有账**等比**分享剩下的那一份，舍入用最大余项法配平、每列至少 1px ⇒ Σ 恰等于可用宽，这是"键入值 1:1 上屏"的条件，否则浏览器按 `table-layout: auto` 把整表比例缩走），`tableTargetPx` = 版心 px − 表级 `marginLeft`（屏上写的是 `width: calc(100% - Npx)`，不扣它键入值照样被缩），`caretColumn` 给界面用（光标在哪一列 / 一共几列 / 当前显示值，没带账的列显示等分那一份与屏上一致）；`TableWidth` 扩展的 `setGridColumnWidth(px, targetPx)` **一次事务写遍该网格列的每一格**（只写行 0 会在同一次 dispatch 里被 `tableEditing` 的 `appendTransaction` 按其余各行抹回去）、先验齐再落（任一格的 `colwidth.length` 不等于它的 colspan 就整表拒绝，不写半份账进去）、**账本来就是这一份的格子跳过**（PM 的 `setNodeMarkup` 即便属性相同也推一步 ⇒ 重打同一个数字会凭空多一枚撤销步），全部跳过则返回 false 不派发
   lib/paragraph-style.ts 段落排版扩展（v0.39）：paragraph/heading 的 lineHeight/lineRule/spaceBefore/spaceAfter/background/bdTop..bdLeft 全局属性，一组属性拼**一条** style（多条各写一份会互相盖掉）；`ooxmlLine`/`lineToOoxml`/`ruleOf` 管 1/240 行与二十分之一磅两套语义，"最小值"档 CSS 表达不了就修行内自定义属性 `--oof-lr` 带回；命令 setParagraphStyle/setLineSpacing/setSpaceAround/setParaBackground；**v0.88 多一条 `setParaBorders(edges, value)`**（走 `edgeAttrs`，与单元格共用那一份「边名 → 属性名」的换算），段落这一头界面只给「清除」（写 `null` 收回未声明）不给「压掉」（`'none'`）——读侧早把样式链那层 `w:pBdr` 合并进段落自己名下（docx-fidelity 的 `effPPr`），编辑器里没有「一条样式边框等着被盖」这一层，而实测 Word 去掉段落某条边时也是干脆不写那一枚
   lib/indent-extension.ts 段落全局属性 indentLeft/indentFirst（32px 一档、上限 320px）+ setIndent/indent/outdent 命令 + Ctrl+] / Ctrl+[ + 悬挂缩进感知的出退格
   lib/toc-extension.ts TipTap 目录原子节点：按标题实时汇总、点击跳转
@@ -5371,8 +5466,9 @@ cargo check        # Rust 后端检查（在 src-tauri 下）
       导出成 `[3135,3135,3135]` 的等分而不是 `[1800,2400,3600]` 的夹具账；改成按占位走的 `gridShapeOf`（竖跨算占位
       不算缺格），字节腿 X18 判的就是这一枚形状、Word 腿 W1×5 里 rowspan 那一件现在逐格 = 自家 `w:gridCol/20`
 - [ ] **单列表（`cols === 1`）键入后 Σ ≠ 可用宽**：`redistribute` 那一档没有"其余列"可分享，返回的是
-      `[键入值]` 本身而这一列的和就不再等于 `targetPx` ⇒ 屏上照样被 `table-layout: auto` 按比例放大（本轮只保证
-      不早退崩，没替这一档作主——把单列钉成可用宽是替用户改表宽）
+      `[键入值]` 本身而这一列的和就不再等于 `targetPx`（本轮只保证不早退崩，没替这一档作主——把单列钉成可用宽是
+      替用户改表宽）；**屏上那一半 v0.92 已经结掉**：v0.91 那句"照样被 `table-layout: auto` 按比例放大"不再成立，
+      单列件现在读 inline `width: 90px` 而 rect 89.33（前置实测手写成 Σpx 那一档的同枚读数）
 - [ ] **被跨列格盖住的后续列没有独立把手**：跨列的格按**起点**记列号（M1 实测跨两列那一格里光标认到的是第 0 列），
       在跨列格上键入 90 写的是它第一枚网格列，而跨列格的 `colwidth` 是它覆盖的**各列**（C4 实测那一格写成
       `[90,269]`）⇒ 界面上没有"这一枚跨两列的格整体 180px"这一档
@@ -5381,9 +5477,12 @@ cargo check        # Rust 后端检查（在 src-tauri 下）
       屏上会被缩走 1px；根因是 CSS 的 20mm 边距取整与 twip 取整不同路，本轮只记账没合
 - [ ] **等分补平那一档的算法住了两处**：`docx.ts` 的 `fill` 与 `table-width.ts` 的 `baseWidths` 是同一算法的两份
       实现（注释互相指着但没有合一）⇒ 改一处不改另一处时，屏上显示的宽度与导出字节会分叉
-- [ ] **键入值超出版心时整表不夹取**：`redistribute` 只夹"给其余列各留 1px"，不夹整表不超过可用宽（X20 `over`
-      臂 `[90,300,300]` 仍写 `[4500,4500,4500]`、表级绝对宽 13500 dxa ≈ 比版心宽 43%）⇒ 表会写出纸外，
-      Word 那头是整表读回而不会替我们缩
+- [ ] **键入值超出版心时整表不夹取 ⇒ 屏上现在如实溢出，而纸面那一头没量**：`redistribute` 只夹"给其余列各留 1px"，
+      不夹整表不超过可用宽（X20 `over` 臂 `[90,300,300]` 仍写 `[4500,4500,4500]`、表级绝对宽 13500 dxa ≈ 比版心宽 43%）；
+      v0.92 起屏上跟字节同一形状（`over` 臂 inline 900px、`contentScroll` 900 > `clientWidth` 626、表右沿 1259.29 顶出
+      文档右沿 985.36），**不缩表是刻意的**——Word 16.0 对同一件读回 225 磅 ×3（和 675 > 可用 470.6）也不缩，第三方
+      不替用户作主，屏上就不该假装缩了；没量的是**纸面**：文档导出 PDF 走 WebView2 `PrintToPdf` 吃的就是这份 DOM，
+      超宽表上纸是被裁掉、缩进下一页还是照样出血，从来没有正面量过
 - [ ] **v0.91 没有 release A/B**：界面那一半（「列宽」输入框与真光标）到不了 release 的注入缝，字节那一半由
       dev 腿落盘的件交独立字节腿 + Word 只读腿裁 ⇒ 输入框在 release 上只有形状推断
 - [ ] **读侧只吃 `w:gridCol`，不读 `w:tblLayout` / `w:tcW` / `w:tblCellMar` / `w:trHeight`**：第三方件里 `w:tcW` 与
@@ -5404,10 +5503,14 @@ cargo check        # Rust 后端检查（在 src-tauri 下）
       **屏上视觉只动了 +26.24px** —— 这一版 prosemirror-tables 不产出 `.column-resize-proxy`（C6 判的就是"别给它写样式"），
       于是 `updateColumnWidth` 拿的是鼠标像素而不是"按列比例折算后的像素"＝混单位。本轮只保证这份账进得了字节，
       没有替用户把这两把尺对齐
-- [ ] **屏上是比例、导出字节是绝对宽**（v0.90 前置实测 P4 记的一层不一致）：`IndentTableView.applyIndent` 把
-      `table.style.width` 写成 `calc(100% − Npx)`，覆盖了库按 `columnWidths` 给的绝对宽 ⇒ 齐账件模型 px 是 120/160/240
-      而 rect 读数是 144.32/192.43/288.66（按 626px 比例摊开）。docx 那头写的是绝对 dxa，两头各说各话；
-      本轮只记账不动（要动得先量缩进那一层在 Word 里怎么落，超出本轮口径）
+- [x] **屏上是比例、导出字节是绝对宽**（v0.90 前置实测 P4 记的那层不一致，v0.92 结掉）：`IndentTableView.applyIndent`
+      把 `table.style.width` 写成 `calc(100% − Npx)`，覆盖了库按 `columnWidths` 给的绝对宽 ⇒ 齐账件模型 px 是 120/160/240
+      而 rect 读数是 144.32/192.43/288.66（按 626px 比例摊开），docx 那头写的是绝对 dxa，两头各说各话。v0.92 量出
+      这一枚缺陷住在**自家那一层**（库的 `updateColumnsOnResize` 本来就写 `Σ + "px"`，只是在我们 `applyIndent` 之前跑、
+      被无条件盖掉）⇒ 现在整表每列都带账时表宽 = `accountTotalPx`（Σpx），没账或部分账才照旧走比例；实测 narrow
+      inline 520px + rect 119.86/159.79/239.68（= 模型 px 1:1）、indent 臂 520px 而 `marginLeft` 仍 40px、
+      而 `none`/`partial` 两臂逐枚回归改前读数（208.47×3 与 248/188.7/188.71）；字节与磅值两头 Y1~Y9 + W10_* 证明
+      写侧一个字没动（屏上第一次吃的是同一份账，不是新造的一份）
 - [ ] **部分账件存—重开一趟会变成整表齐账**（v0.89 那条「无账换档」的同族）：补平出来的那份真网格（`2835/2835`）
       被读侧逐列收下 ⇒ 下一趟每一枚网格列都带账，导出从"部分账 + 补平"变成"整表账"。字节上形状没变（仍是 `fixed` +
       绝对宽），变的是"这表原本只有拖过的那一列有账"这份信息跨一趟就没了；要留住它就得把"哪几列原本没账"另记一笔
@@ -5417,6 +5520,18 @@ cargo check        # Rust 后端检查（在 src-tauri 下）
       `rows` 仍是 `[120,160,240] ×2`）。本轮据此定了"精确设宽必须一次写遍整列"的形状，但插件那一路本身没动
 - [ ] **v0.90 没有 release A/B**：把手那一半是纯 CSS（release 上到不了注入缝，只有形状推断），字节那一半由 dev 腿
       落盘的件交给独立字节腿 + Word 16.0 只读腿裁 ⇒ "release 真机上把手看得见"这一格没有第三方证据
+- [ ] **纸面那一头没量**（v0.92 开）：文档导出 PDF 走 WebView2 `PrintToPdf`，吃的就是这份 DOM，而 `over` 臂现在屏上
+      就撑出（`contentScroll` 900 > `clientWidth` 626、表右沿顶出文档右沿）⇒ 超宽表上纸是被裁掉、缩进下一页还是
+      照样出血，从来没有正面量过（v0.88 记过"纸面有没有边框"同一族，这一枚是它在宽度那一头的续篇）
+- [ ] **NodeView 与 `renderHTML` 两口径没合一**（v0.92 记的诚实不对称）：`IndentTableView.applyIndent` 看得见子节点
+      因而能算 `accountTotalPx`，而 `marginLeft` 的 `renderHTML` 只能按属性写 `calc(100% − Npx)` ⇒ 同一张表在
+      NodeView 那条路（编辑器里真渲染的那条）吃绝对宽、在 `renderHTML` 那条路（序列化/非 NodeView 渲染）仍是比例；
+      本轮没把宽度账塞进 `renderHTML`（它没有列账可看）
+- [ ] **部分账那一档屏上仍是比例**（v0.92 只让齐账那一路同形）：`[248,null,null]` 那型在字节里是
+      `3720/2835/2835`（= 248/189/189 px）而屏上读 248/188.7/188.71 —— 数值恰好接近是浏览器 auto 布局与我们的
+      补平算法碰巧同形，不是同一份账上了屏；`accountTotalPx` 对部分账整表 `return null`，故这一档照旧走比例
+- [ ] **v0.92 没有 release A/B**：改的是 NodeView 内联样式那一半，到不了 release 的注入缝 ⇒ 屏上形状由 dev 真机腿裁、
+      字节与磅值由两条独立腿裁，"release 真机上齐账表按绝对宽渲染"这一格只有形状推断
 - [ ] macOS 打包（需签名/公证凭据）
 
 ## License

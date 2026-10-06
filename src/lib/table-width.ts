@@ -82,6 +82,25 @@ export function gridAccount(g: { cols: number; cells: TableCellPos[] }): (number
 }
 
 /**
+ * 整表的一份齐账换算出来的表宽（px）：行 0 摊平出来的每一枚网格列都带账才返回它们的和，
+ * 缺任何一枚（部分账）或压根没账 ⇒ null。
+ *
+ * 屏上吃这一枚、docx 写侧的 `w:tblW` 也吃这一枚（= 网格和），Word 那头逐格磅同样是这份账，
+ * 于是「这一列 90px」键进去之后三头说的是一样的话。超出版心时这里只如实报数、不夹取——
+ * Word 16.0 实测对 900px 那份账解出 225 磅 ×3（和 675 磅 > 版心 470.6）也不缩表。
+ */
+export function accountTotalPx(table: Node): number | null {
+  const g = tableGrid(table, 0)
+  if (g.cols < 1) return null
+  let total = 0
+  for (const px of gridAccount(g)) {
+    if (px == null || px < 1) return null
+    total += px
+  }
+  return total
+}
+
+/**
  * 没带账的列按剩下的可用宽等分——与 docx 写侧的 fill 同一算法，屏上也是这一档
  * （实测 [248,null,null] 渲染成 248/188.7/188.7，而 (626−248)/2 = 189）。
  * 已有账的列合计超出版心时等分退化成 1px 保底，不在这儿替用户作主缩表。

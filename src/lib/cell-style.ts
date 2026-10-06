@@ -3,6 +3,7 @@ import type { CommandProps } from '@tiptap/core'
 import { TableView } from '@tiptap/extension-table'
 import type { Node } from '@tiptap/pm/model'
 import type { EditorView } from '@tiptap/pm/view'
+import { accountTotalPx } from './table-width'
 
 /**
  * 单元格与表格的样式属性：让 Word/LibreOffice 带进来的边框、底纹、竖排对齐和表格缩进
@@ -274,7 +275,7 @@ export const CellStyle = Extension.create({
 })
 
 /**
- * 表格 NodeView：把 marginLeft 补回 DOM。
+ * 表格 NodeView：把 marginLeft 与整表的宽度账补回 DOM。
  * 可缩放模式下表格的 DOM 由 prosemirror-tables 建，它只调 `new View(node, cellMinWidth, view)`——
  * 少了 TipTap 自己那条路径的第 4 个参数（HTMLAttributes），于是 renderHTML 里的 margin-left
  * 只进了 JSON 没进页面（屏幕与导出 PDF 都看不见缩进）。这里按节点属性直接写元素样式，
@@ -296,7 +297,10 @@ export class IndentTableView extends TableView {
     const ml = Number(node.attrs?.marginLeft)
     const has = Number.isFinite(ml) && ml > 0
     this.table.style.marginLeft = has ? `${ml}px` : ''
-    // 版心表宽是 100%，只加左缩进会把右半边顶出页面，故同步收右边（与 renderHTML 同一套算法）
-    this.table.style.width = has ? `calc(100% - ${ml}px)` : ''
+    // 整表每列都带账 ⇒ 表宽就是这份账本身，与 docx 的 w:tblW（网格和）同一形状；
+    // 没账或部分账才退回版心比例，此时缩进必须同时收右边，否则整张表顶出页面
+    const total = accountTotalPx(node)
+    if (total) this.table.style.width = `${total}px`
+    else this.table.style.width = has ? `calc(100% - ${ml}px)` : ''
   }
 }
