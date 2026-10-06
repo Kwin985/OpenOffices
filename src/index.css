@@ -2263,12 +2263,20 @@ button {
     break-after: avoid;
   }
 
-  .doc-content table,
   .doc-content img,
   .doc-content pre,
   .doc-content blockquote,
   .doc-content .doc-toc {
     break-inside: avoid;
+  }
+
+  /* 表是这一族里唯一该在纸上流着排的件：整张 avoid 会把比剩余版心高的表推到下一页，
+     实测 22 行的表因此摊成 3 页而第 1 页只有 0 枚格标，页边那一档空出 ~224pt 只为等一张推得走的表。
+     Word 16.0 的纸面形状是「表级流、行边界切、不劈行」⇒ 表级显式写 auto，不靠缺省值。
+     注意不给 tr/td 补 avoid：装得下的行它是纯 no-op，而比一页还高的那一行会退回同一档缺陷。 */
+  .doc-content table {
+    page-break-inside: auto;
+    break-inside: auto;
   }
 
   /* 把手是编辑态的把手，不上纸 */
