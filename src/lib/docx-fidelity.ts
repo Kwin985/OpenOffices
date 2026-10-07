@@ -162,9 +162,11 @@ interface StyleInfo {
   pPr?: XEl
   /** 表样式的 w:tblPr（段落样式没有这一枚） */
   tblPr?: XEl
-  /** w:default="1" 的那一枚（默认表样式在格边距这一层不算层，见 styleCellMargins） */
+  /** 表样式自己的 w:tcPr：格底纹的基座层住这里（格边距不在这枚上，它在 tblPr/w:tblCellMar） */
+  tcPr?: XEl
+  /** w:default="1" 的那一枚：被表引用时它算一层，没被引用时不算；内建 TableNormal 由 Word 换自己的定义 */
   isDefault?: boolean
-  /** 条件层 `w:tblStylePr`（一型一块，块里的 w:tcPr/w:tcMar 才说格边距；顺序就是文档顺序） */
+  /** 条件层 `w:tblStylePr`（一型一块，块里的 w:tcPr 同时说格边距与格底纹；顺序就是文档顺序） */
   tblStylePr?: XEl[]
   /** outlineLvl 或样式名推出的标题级别（1..9），非标题为 undefined */
   level?: number
@@ -204,6 +206,7 @@ function readStyles(xml: string): StyleBook {
       isDefault: ['1', 'true'].includes(attr(s, 'w:default') ?? ''),
       rPr: find(s, 'w:rPr'),
       pPr,
+      tcPr: find(s, 'w:tcPr'),
       tblPr: find(s, 'w:tblPr'),
       tblStylePr: all(s, 'w:tblStylePr'),
     }
@@ -1309,14 +1312,12 @@ class Fidelity {
     const styleId = val(tblPr, 'w:tblStyle')
     const styleMarEdges = styleCellMargins(this.book, styleId)
     const tblMarEdges = marginsOf(find(tblPr, 'w:tblCellMar'))
-    // 条件层（`w:tblStylePr` 的格边距）与它的闸门（`w:tblLook`）：闸门只吃表上那一枚，
-    // 逐格按行型/列型取一份账，落在样式基座与表级默认之上、逐格 tcMar 之下
-    const conds = styleCondMargins(this.book, styleId)
+    // 条件层（`w:tblStylePr` 那块 w:tcPr 同时说格边距与格底纹）与它的闸门（`w:tblLook`）：
+    // 闸门只吃表上那一枚，边距按行型/列型取一份账落在样式基座与表级默认之上、逐格 tcMar 之下，
+    // 底纹按位置取一型（含四角型），落在样式基座之上、逐格 w:shd 之下
+    const conds = styleCondCells(this.book, styleId)
     const look = tblLookOn(el)
-    if (!styleId) {
-      const inert = defaultCondMarginTypes(this.book)
-      if (inert.length) this.warn(`默认表样式的条件层格边距未铺：${inert.join('/')}`)
-    }
+    const styleShd = styleCellShading(this.book, styleId)
     // 横向 gridSpan / 纵向 vMerge 都按网格列记账：Word 保证同一次纵向合并里各行的 gridSpan 一致，
     // 所以 continue 单元格就落在 restart 单元格同一批网格列上，无需跳过被占用列。
     type Span = { row: number; span: number }
@@ -1403,13 +1404,22 @@ class Fidelity {
           ...tblMarEdges,
           ...condMarginsFor(look, conds, ri, ri === last),
           ...marginsOf(find(tcPr, 'w:tcMar')),
+        // 底纹三层取一（逐格 > 条件层 > 样式基座）：比的是哪一层的 w:shd 在场，
+        // 所以逐格那枚说 fill="auto" 也是说了话——它把下面两层的色清掉（q15/r4）
+        const shd = cellShadingEl(
+          tcPr,
+          condShadingFor(look, conds, ri, ri === last, c.gc, c.colspan, acct.length),
+          styleShd,
+        )
+        const pat = patternVal(shd)
+        if (pat) this.warn(`图案底纹（w:shd @w:val=${pat}）按纯色读入，图案那一半没铺`)
         })
         const style = [cellStyleCss(tcPr, {
           top: cb.top ?? (ri === 0 ? tb.top : tb.insideH),
           bottom: cb.bottom ?? (ri === last ? tb.bottom : tb.insideH),
           left: cb.left ?? (c.gc === 0 ? tb.left : tb.insideV),
           right: cb.right ?? (c.gc + c.colspan >= rowEnd ? tb.right : tb.insideV),
-        }), mar].filter(Boolean).join('; ')
+        }, shadingHex(shd)), mar].filter(Boolean).join('; ')
         if (style) attrs.push(`style="${style}"`)
         s += `<${tag}${attrs.length ? ' ' + attrs.join(' ') : ''}>${await this.cellBlocks(c.el)}</${tag}>`
       }
@@ -1530,10 +1540,21 @@ function shadingHex(shd: XEl | undefined): string | null {
   const hex = rgb2hex(`#${fill.replace(/^#/, '').toLowerCase()}`)
   return hex && hex !== '#ffffff' ? hex : null
 }
+/**
+ * `w:shd` 的 @w:val 说的是图案而不是纯色时交回那一档的名字（clear/none/缺省给空串）。
+ * Word 读这类件时把 fill 当颜色、把图案另住在 Texture（p19 的 pct50 在 Word 那头是 FF0000/500），
+ * 而 CSS 里没有对应的底纹档位，所以这一半本轮不铺，只如实记一条。
+ */
+function patternVal(shd: XEl | undefined): string {
+  const v = (attr(shd, 'w:val') ?? 'clear').toLowerCase()
+  return v === 'clear' || v === 'none' ? '' : v
+}
+
 
 /** 单元格边框四边 + 底纹 + 竖排对齐 → 一段内联 style（顺序固定，供结构测试直接比对） */
 function cellStyleCss(
   tcPr: XEl | undefined,
+  hex: string | null,
   edges: { top?: string; bottom?: string; left?: string; right?: string },
 ): string {
   const bits: string[] = []
@@ -1541,7 +1562,6 @@ function cellStyleCss(
     const v = edges[edge]
     if (v) bits.push(`border-${edge}: ${v}`)
   }
-  const hex = shadingHex(find(tcPr, 'w:shd'))
   if (hex) bits.push(`background-color: ${hex}`)
   const va = (val(tcPr, 'w:vAlign') ?? '').toLowerCase()
   const align = va === 'center' ? 'middle' : va === 'top' || va === 'bottom' ? va : ''
@@ -1600,54 +1620,83 @@ function marginsOf(mar: XEl | undefined): Margins {
   if (r !== undefined) out.right = r
   return out
 }
+/**
+ * Word 打开文件时会把自己那套内建定义换上来的表样式 id——文件里往这几枚身上写的数从不落地。
+ * 量出来的两枚同一天：u6 往 TableNormal 写 w:tblCellMar left=400 缇（=20 磅），Word 读回 5.4 磅
+ * （它自带的那档应用默认）；q21 往同一枚身上写 w:tcPr/w:shd D9D9D9，Word 九枚格全读回无底纹。
+ * v0.97 的 a11 那一臂（表直接引用 TableNormal）量的是同一件事的边距那一半。
+ */
+const SUBSTITUTED_TABLE_STYLES = new Set(['TableNormal'])
+
 
 /**
  * 表样式那一层的格边距：`w:tblPr/w:tblStyle` 指着的样式及其 basedOn 祖先，沿链自根向下逐边合并。
  *
- * 默认表样式（`w:default="1"` 的 Normal Table）不算这一层——前置实测三臂同一读数：
- * a2（表不引用任何样式）、a10（同臂但不写 semiHidden，判的就是「失效」是不是 semiHidden 造成的）、
- * a11（表直接 w:tblStyle="TableNormal" 引用它）在 Word 都读回 top/bottom 0 磅、left/right 5.4 磅，
- * 而不是文件里声明的 10.8/14.4 磅；a8 更把这条钉死：默认样式声明了 bottom 216 而被引用的样式没说
- * bottom，Word 读回 0 而不是 10.8。那枚 0/5.4/0/5.4 是 Word 自带的应用默认，不是文档说了的数，
- * 所以这一层我们既不读也不铺（铺了就是把别人的默认当成用户的声明写回文件）。
+ * 这一层吃的不是「默认标记」而是「引用」：前置实测的三档 r1/v1（自造 id 的默认标记样式，被表引用）
+ * 里 Word 把样式说的 240 缇读成 12 磅，而 r2/v2（同一枚样式没人引用）与 q19/q20 两头都什么都不落——
+ * 没人引用的样式压根不在链上，我们本来也不读，所以这一族的门只留上面那条替换名单。
+ * 四层都没说的边仍然不铺数：Word 那一头此时给的是它自带的 0/5.4/0/5.4 磅（u4 与 v0.97 的 a2/a10/a11），
+ * 那是应用默认而不是文档说了的数，铺进我们的账里就是把别人的默认写成用户的声明。
  */
 function styleCellMargins(book: StyleBook, id: string | undefined): Margins {
   const out: Margins = {}
   for (const s of styleChain(book, id)) {
-    if (s.isDefault) continue
+    if (SUBSTITUTED_TABLE_STYLES.has(s.id)) continue
     Object.assign(out, marginsOf(find(s.tblPr, 'w:tblCellMar')))
   }
   return out
 }
-
-/** 条件层里会把格边距落到实处的四型（Word 16.0 实测只有这四型落地） */
-const LOOK_BITS = ['firstRow', 'lastRow', 'firstColumn', 'lastColumn'] as const
-
 /**
- * 条件层 `w:tblStylePr` 说的格边距：型名 → 那一块的账。
+ * 底纹的基座层：被引用的表样式（及其 basedOn 祖先）自己那枚 `w:tcPr/w:shd`。
  *
- * 同一型的两块、以及 basedOn 祖先与本体各说同一型时，都是**整块替换**而不是逐边合并——
- * 前置实测 r_dup_type_firstRow_L3（同一型两块 A{left,top} + B{left,bottom}）里 Word 落的是
- * B 的 left 与 bottom 而 A 的 top 一次都没出现（那一枚读回的是基座 4px）；q_basedon_L3 里本体的 firstRow
- * 说了 right 而祖先的 firstRow 说了 left，Word 只落 right 而 left 仍是基座。
- * 不同型各落各的（r_basedon_diff_type_L3：祖先的 firstRow 落第 0 行、本体的 lastRow 落末行）。
+ * 交回的是**元素**而不是色值——三层要比的是"哪一层说了话"，而「说了话」里包含「说了没有」
+ * （`w:fill="auto"`：q15 里它清得掉样式基座，r4 里它清得掉条件层），色值那一档把这两种分不开。
+ * 沿链自根向下后来者覆盖：p17（祖先 D9D9D9 + 本体 FFF2CC）Word 九枚格全读 FFF2CC，
+ * p18（只有祖先说）读回 D9D9D9——所以本体说了才算本体的，没说就继承祖先的。
  */
-function styleCondMargins(book: StyleBook, id: string | undefined): Record<string, Margins> {
-  const out: Record<string, Margins> = {}
+function styleCellShading(book: StyleBook, id: string | undefined): XEl | undefined {
+  let out: XEl | undefined
   for (const s of styleChain(book, id)) {
-    for (const pr of s.tblStylePr ?? []) {
-      const type = attr(pr, 'w:type')
-      if (!type) continue
-      const mar = condTcMar(pr)
-      if (Object.keys(mar).length) out[type.toLowerCase()] = mar
-    }
+    if (SUBSTITUTED_TABLE_STYLES.has(s.id)) continue
+    const shd = find(s.tcPr, 'w:shd')
+    if (shd) out = shd
   }
   return out
 }
 
-/** 一块条件里说的格边距：只有 `w:tcPr/w:tcMar` 这一格算数（`w:tblPr/w:tblCellMar` 那一格不落） */
-function condTcMar(pr: XEl): Margins {
-  return marginsOf(find(find(pr, 'w:tcPr'), 'w:tcMar'))
+
+/** 条件层里会把格边距落到实处的四型（Word 16.0 实测只有这四型落地） */
+const LOOK_BITS = ['firstRow', 'lastRow', 'firstColumn', 'lastColumn'] as const
+/** 一块条件里说的格载荷：格边距与格底纹住在同一枚 `w:tcPr` 上，两族共用同一份"同型整块替换"的账 */
+type CondCell = { mar: Margins; shd?: XEl }
+
+
+/**
+ * 条件层 `w:tblStylePr` 说的格载荷：型名 → 那一块的账。
+ *
+ * 同一型的两块、以及 basedOn 祖先与本体各说同一型时，都是**整块替换**而不是逐边合并——
+ * 前置实测 r_dup_type_firstRow_L3（同一型两块 A{left,top} + B{left,bottom}）里 Word 落的是
+ * B 的 left 与 bottom 而 A 的 top 一次都没出现（那一枚读回的是基座 4px）；q_basedon_L3 里本体的 firstRow
+ * 说了 right 而祖先的 firstRow 说了 left，Word 只落 right 而 left 仍是基座。底纹那一半同一形状
+ * （q18：同一型两块各说一枚色，Word 只落后面那枚）。
+ * 不同型各落各的（r_basedon_diff_type_L3：祖先的 firstRow 落第 0 行、本体的 lastRow 落末行；
+ * q17 底纹版：祖先的 firstRow 落第 0 行）。
+ * 一块条件里只认 `w:tcPr` 那一格的载荷：同一块换成 `w:tblPr/w:tblCellMar` 那格写，Word 不落。
+ */
+function styleCondCells(book: StyleBook, id: string | undefined): Record<string, CondCell> {
+  const out: Record<string, CondCell> = {}
+    if (SUBSTITUTED_TABLE_STYLES.has(s.id)) continue
+  for (const s of styleChain(book, id)) {
+    for (const pr of s.tblStylePr ?? []) {
+      const type = attr(pr, 'w:type')
+      if (!type) continue
+      const tcPr = find(pr, 'w:tcPr')
+      const mar = marginsOf(find(tcPr, 'w:tcMar'))
+      const shd = find(tcPr, 'w:shd')
+      if (Object.keys(mar).length || shd) out[type.toLowerCase()] = { mar, shd }
+    }
+  }
+  return out
 }
 
 /**
@@ -1685,26 +1734,64 @@ function tblLookOn(tbl: XEl): Record<string, boolean> {
  * 撞车时的次序都量过：末列压首列、行压列（r_rowcol_same_edge_L3 里 firstCol 那枚 22px 一次都没出现）、
  * 单行既是首行又是末行时首行赢（r_one_row_first_last_L3）。
  */
-function condMarginsFor(look: Record<string, boolean>, conds: Record<string, Margins>, ri: number, isLastRow: boolean): Margins {
+function condMarginsFor(look: Record<string, boolean>, conds: Record<string, CondCell>, ri: number, isLastRow: boolean): Margins {
   const out: Margins = {}
-  if (look.firstColumn) Object.assign(out, conds.firstcol)
-  if (look.lastColumn) Object.assign(out, conds.lastcol)
+  if (look.firstColumn) Object.assign(out, conds.firstcol?.mar)
+  if (look.lastColumn) Object.assign(out, conds.lastcol?.mar)
   const row: Margins = {}
-  if (isLastRow && look.lastRow) Object.assign(row, conds.lastrow)
-  if (ri === 0 && look.firstRow) Object.assign(row, conds.firstrow)
+  if (isLastRow && look.lastRow) Object.assign(row, conds.lastrow?.mar)
+  if (ri === 0 && look.firstRow) Object.assign(row, conds.firstrow?.mar)
   return Object.assign(out, row)
 }
 
-/** 默认表样式的条件层里说了格边距的那些型（Word 会落这一份，而我们这一轮不铺——见 table() 里那条告警） */
-function defaultCondMarginTypes(book: StyleBook): string[] {
-  const out: string[] = []
-  for (const s of book.byId.values()) {
-    if (!s.isDefault || s.type !== 'table') continue
-    for (const pr of s.tblStylePr ?? []) {
-      if (Object.keys(condTcMar(pr)).length) out.push(attr(pr, 'w:type') ?? '?')
-    }
+/**
+ * 这一格的条件层底纹：底纹那一族**真按位置**落，跟上面那族格边距不是一种作用域。
+ *
+ * 同一个闸门、同一枚 firstCol，载荷是 w:tcMar 时九枚格全落（上一轮 g_firstCol 的 22px），
+ * 载荷是 w:shd 时只落在每行第 0 网格列上（t7：FCE4D6 只在 #0/#3/#6，其余六枚格 Word 报 000000/0），
+ * 而跨两列且从第 0 列起的那种格也算第 0 列（q16：那枚格落 FCE4D6 而它右边那枚落基座）。
+ * 角型（nwCell/neCell/swCell/seCell）是一等型别：落点就是那一角那一格（u1 四枚各落一格），
+ * 闸门要那一角的两枚位都开（u3 里只有 seCell 的末行+末列都开着，于是只有它落），
+ * 尊卑按**型别**而不按声明顺序（u2 把 nwCell 写在 lastRow/lastCol 之后、u7 把它写在最前，
+ * Word 两趟都在第 0 格落 D2691E 而把 firstRow 让到 #1/#2、firstCol 让到 #3/#6）。
+ * 行型里首行压末行、列型里末列压首列沿用上一轮边距那头的读数（r_one_row_first_last / r_rowcol_same_edge）；
+ * 一枚格同时踩到两型底纹时（比如 1×1 表上的四角同格）没有实测，按上面这条梯子取先说话的那一型。
+ */
+function condShadingFor(
+  look: Record<string, boolean>,
+  conds: Record<string, CondCell>,
+  ri: number,
+  isLastRow: boolean,
+  gc: number,
+  colspan: number,
+  cols: number,
+): XEl | undefined {
+  const first = ri === 0
+  const at0 = gc === 0
+  const atEnd = gc + colspan >= cols
+  const ladder: string[] = []
+  if (first && at0 && look.firstRow && look.firstColumn) ladder.push('nwcell')
+  if (first && atEnd && look.firstRow && look.lastColumn) ladder.push('necell')
+  if (isLastRow && at0 && look.lastRow && look.firstColumn) ladder.push('swcell')
+  if (isLastRow && atEnd && look.lastRow && look.lastColumn) ladder.push('secell')
+  if (first && look.firstRow) ladder.push('firstrow')
+  if (isLastRow && look.lastRow) ladder.push('lastrow')
+  if (at0 && look.firstColumn) ladder.push('firstcol')
+  if (atEnd && look.lastColumn) ladder.push('lastcol')
+  for (const t of ladder) {
+    const shd = conds[t]?.shd
+    if (shd) return shd
   }
-  return out
+  return undefined
+}
+
+/**
+ * 底纹三层取一：比的是"哪一层说了话"，所以逐格那枚 `w:shd` 只要在场就赢，
+ * 哪怕它说的是 `w:fill="auto"`（q15/r4：那一枚把样式基座与条件层都清掉了）。
+ * 纯色之外的图案那一半（`w:val="pct50"` 这类）CSS 里没有对应档位，只把 fill 当纯色读并如实记一条。
+ */
+function cellShadingEl(tcPr: XEl | undefined, cond: XEl | undefined, base: XEl | undefined): XEl | undefined {
+  return find(tcPr, 'w:shd') ?? cond ?? base
 }
 
 /**

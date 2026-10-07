@@ -730,8 +730,19 @@
   **再往下一层（样式层）**：被表引用的样式（`w:tblPr/w:tblStyle` 指着的，沿 `w:basedOn` 自根向下、叶子覆盖根）说的 `w:tblCellMar`
   是这一层的基座，表自身逐边盖它、样式条件层（`w:tblStylePr` 里 `w:tcPr/w:tcMar` 那一份，配 `w:tblLook` 的闸门——只有 firstRow/lastRow/firstColumn/lastColumn
   四型落地，`w:val` 那位十六进制从不被 consult，而行型按行落、首末列那两型按全表落、同一型的两块是**整块**替换）再盖表级、逐格最后盖条件——四层**逐边**合并；
-  而 `w:default="1"` 的默认表样式**不算这一层**（四枚判别臂量的正是这道门，它带的条件层本轮也只发一句告警而不铺），Word 自带的 0/
-  5.4/0/5.4 磅是应用默认，既不读也不铺）、
+  而**「默认标记」不再当门**（`r1_def_referenced` / `v1_def_referenced_mar` 两臂：自造 id 而带 `w:default="1"` 的样式被表引用时，Word 把样式说的
+  240 缇读成 12 磅 = 16px、把 `w:tcPr/w:shd` 的 D9D9D9 落满九枚格，而我们两头照落）；门里只留**被替换的内建样式** `TableNormal`（边距 `u6_normal_substitution`
+  往它身上写 400 缇而 Word 读回 5.4 磅 = 7.2px，底纹 `q21_default_referenced` 往同一枚写 D9D9D9 而九枚格全读回无底色、`word_style=????` 就是它换上了自己那套内建定义）；
+  没人引用的样式压根不在链上（`q19_default_tcpr` / `r2_def_unreferenced` / `v2_def_unreferenced_mar` 两头都全空，我们本来也不读）；四层都没说的边仍不铺数，
+  Word 自带的 0/5.4/0/5.4 磅是应用默认而不是文档说了的数）、
+  **格底纹从此也是三层取一**（表格读侧第六笔账，69 枚夹具三方同一趟：逐格 `w:tcPr/w:shd` > 条件层 `w:tblStylePr/w:tcPr/w:shd`（含四枚角型，梯子按**型别**而不按声明顺序）
+  > 被引用样式自己的 `w:tcPr/w:shd` 基座（沿 `w:basedOn`，本体说了才覆盖祖先：`p17_chain_leaf_wins` 九枚 FFF2CC 而 `p18_chain_inherit` 九枚 D9D9D9）；
+  比的是**哪一层的元素在场**而不是色值，所以逐格那枚 `w:fill="auto"` 也算说了话（`q15_cell_auto_over_base` 清掉样式基座、`r4_cell_auto_over_cond` 清掉条件层）；
+  条件层的底纹**真按位置**落（`p5_firstCol` / `t7_firstCol_B_ctl` 只落每行第 0 网格列，跨两列而自第 0 列起的格算第 0 列 `q16_firstCol_span`；四枚角型要那一角的**两枚位都开**才落，
+  `u3_corner_last_bits` 里只有 seCell 落；`u2_corner_vs_rowcol` 与 `u7_nw_declared_first` 两趟第 0 格都是 D2691E 而把 firstRow 让到 #1/#2、firstCol 让到 #3/#6），
+  而同一个闸门同一个型换成格边距时落到**全表每一格**（上一轮 `g_firstCol_L4_full` 的 22px）⇒ 两族的作用域不同，读侧因此分两条路走而不是并成一条；
+  `@w:val="pct50"` 那一半 CSS 里没有对应档位，只把 fill 当纯色读并如实记一句（`p19_pct50` Word 那头是 FF0000/500 ⇒ 我们的告警 `×9`），而写侧没有样式层与条件层的底纹出口
+  ⇒ 样式与条件的色落盘时塌成逐格 `w:shd`（同一趟 69 臂里 29 臂换档，`COLLAPSE|arms=29 src_cells=6 exp_cells=169`）
   `w:drawing`/`v:imagedata` 图片（rels → data URL）、
   超链接（外部 `r:id` 与内部 `w:anchor`）、`w:br type="page"` → pageBreak 节点、批注 `commentRangeStart/End` 三态锚点、
   上标下标（v0.38 起真还原成 `<sup>/<sub>`）、`fldSimple`/`fldChar` 的**域代码文字不外泄**（结果段才渲染）、TOC 内容控件跳过
@@ -5050,6 +5061,72 @@ Rust 一个字没动、写侧一寸没碰。**本轮不占版本号**：`package
   本轮不与之抢那三处）；`tmp/xcond` 的 63 枚夹具、三头前置实测腿、两批判据腿、结构+变异腿、往返腿与独立字节腿按惯例删除；**dev 树全程未碰**（它属于另一会话）
 
 
+## 格底纹第一次上样式层与条件层的账：三层比「哪一层在场」，而它真按位置落、格边距那族不按
+
+按「不扩格式、把现有格式做深」的路线图开工，本轮取上一节明写的两枚未勾项——「oddRow/evenRow/band1H/band2H/wholeTable 各型的其余载荷没接」里底纹的那一半，
+以及「条件块里只接了 `w:tcPr/w:tcMar` 那一格」里同一格的另一枚载荷。窄口径：`src/lib/docx-fidelity.ts` +131 / −44（26 枚 hunk，全部住在读手），
+Rust 一个字没动、写侧一寸没碰。**本轮不占版本号**：`package.json` / `Cargo.toml` / `tauri.conf.json` 现在住着并发轮次的 0.98.0 ⇒ 本节按内容命名。
+
+- **前置实测**（`tmp/xshd`，69 枚自造夹具分六批 20 + 22 + 8 + 9 + 7 + 3，三头同一趟：自家读手 + Word 16.0 只读 COM + 独立字节腿，互不吃对方的读手）：每枚臂仍是一份最小 docx
+  （一枚 3×3 表），色一律摆成互不相同的档（基座 FFF2CC、firstRow D9E1F2、firstCol FCE4D6、lastRow E2EFDA、lastCol E4DFCB、四角 nw D2691E / ne 5F9EA0 / sw 9370DB / se F08080、逐格 806000），
+  这样任一枚格的颜色回来都能认出它是哪一层说的。量出来六格：① **三层尊卑 + 「auto 是真值」**——逐格压条件压基座（`p15_cell_wins` 两头 #4 那一格都是 806000 而其余八枚 FFF2CC）；
+  而逐格那枚 `w:fill="auto"` 也算「说了话」：`q15_cell_auto_over_base` 里它把样式基座清掉（两头 #4 那一枚都读回无底色而其余八枚 FFF2CC）而 `r4_cell_auto_over_cond` 里它把条件层清掉
+  （那一枚格两头都无底色，而同一行没被顶掉的格子照落条件层的 D9E1F2）⇒ 三层要比的是**哪一层的 `w:shd` 在场**而不是色值，色值那一档把「说了没有」和「没说」分不开；基座沿 `w:basedOn` 自根向下后来者覆盖（`p17_chain_leaf_wins` 祖先 D9D9D9 + 本体 FFF2CC ⇒
+  Word 九枚全读 FFF2CC；`p18_chain_inherit` 只有祖先说 ⇒ 九枚 D9D9D9）。② **条件层的底纹真按位置落**——firstRow 落第 0 行三枚（`p3_firstRow`）、firstCol 只落每行第 0 网格列三枚
+  （`p5_firstCol` / `t7_firstCol_B_ctl` 都是 FCE4D6,-,- 那一型而其余六枚 Word 报 `000000/0`），跨两列且自第 0 列起的那枚格也算第 0 列（`q16_firstCol_span`：8 枚格里 FCE4D6 落 #0/#2/#5 而它右边那枚落基座）；
+  四枚角型（nw/ne/sw/seCell）是一等型别，落点就是那一角那一格（`u1_corners_look_on` 四枚各落一格），闸门要那一角的**两枚位都开**（`u3_corner_last_bits` 里只有 seCell 的末行+末列都开着 ⇒ 只它落 F08080），
+  尊卑按**型别**而不按声明顺序（`u2_corner_vs_rowcol` 把 nwCell 写在 lastRow/lastCol 之后、`u7_nw_declared_first` 把它写在最前，Word 两趟都在第 0 格落 D2691E 而把 firstRow 让到 #1/#2、firstCol 让到 #3/#6）；
+  全梯子同时开的那臂逐枚同账（`p14_gate_all_on` 两头都是 D9E1F2×3, FCE4D6, 空, E4DFCB, E2EFDA×3）。③ **底纹与格边距不是同一种作用域**——同一个闸门、同一个 firstCol，载荷是 `w:tcMar` 时上一轮量到
+  九枚格全落（`g_firstCol_L4_full` ours 22px ↔ Word 16.5 磅），载荷换成 `w:shd` 时只落每行第 0 网格列 ⇒ 缺陷不住在「条件层没接」而住在「条件层只有一副落点」，所以读侧两族分两条路走而不是并成一条；
+  同一型的两块条件与 basedOn 链上的同型仍是**整块**替换（`q18_dup_type_shd` 两块各说一枚色 ⇒ Word 只落后面那枚 D9E1F2；`q17_chain_cond_types` 祖先的 firstRow 落第 0 行而本体的别的型各落各的）。
+  ④ **band/odd/even/wholeTable 连底纹也不落**（`q1_band1HV_A` / `q3_band1HV_C` / `q4_band1HV_D` / `q10_band2V_B` / `p10_evenRow` / `p11_wholeTable` / `p12_band1H` 七臂 Word 九枚格全 `000000/0` 而 ours 同一趟全空
+  ⇒ 空集对空集同样是通过）；`p20_fill_auto` 那一臂两头也全空，「基座说了 fill=auto」与「基座什么都没说」在 Word 眼里是同一件事。⑤ **样式身份：被引用才算一层，而 `TableNormal` 会被换掉**——
+  自造 id 而带 `w:default="1"` 的样式被表引用时 Word 会落（底纹 `r1_def_referenced` 九枚全落 D9D9D9；同一档在边距那头 `v1_def_referenced_mar` 240 缇 = 16px 照落），没人引用时两头都不落
+  （`q19_default_tcpr` / `r2_def_unreferenced` / `v2_def_unreferenced_mar` 全空）；而往内建 `TableNormal` 身上写的数从不落地：`q21_default_referenced` 写 D9D9D9 而 Word 九枚格全读回无底色、
+  `word_style=????`，`u6_normal_substitution` 写 400 缇边距而 Word 读回 5.4 磅 = 7.2px ⇒ 门从「isDefault」换成「这张 id 会被 Word 换上自带定义」。⑥ **图案那一半 CSS 里没档位**——
+  `p19_pct50` 的 `@w:val="pct50"` 在 Word 那头是 FF0000 配 Texture 500（`word_tex=-` 之外另读 500），我们只把 fill 当纯色读并如实记一句（同一趟 `×9`；同一枚住在逐格那一层时 `r7_cell_pct50` 只 `×1`，
+  门发在该发的那一枚上）。
+
+- **本轮唯一的架构决定**（跟着数据走，缺陷住在读侧那三层之外的一格）：格底纹从此是**三层取一**——逐格 `w:tcPr/w:shd` > 条件层 `w:tblStylePr/w:tcPr/w:shd` > 被引用样式自己的 `w:tcPr/w:shd` 基座，
+  五条形状都不是可选的——**比「哪一层在场」而不是比色**（`cellShadingEl(tcPr, cond, base)` 三层各交回元素，逐格那枚 `fill="auto"` 也赢：`q15`/`r4` 两臂就是量出来要弃「按色值取先」的备选解释）；
+  条件层的底纹按**位置**走一枚 8 档梯子（角型四枚 > firstRow > lastRow > firstCol > lastCol，行型里首行压末行、列型里末列压首列沿用上一轮边距那头的读数，且每一档都要 `w:tblLook` 的对应位说话，
+  角型要那一角的两枚位都开），而**格边距那一族保持按位置-blind**（列型落全表）：两族的落点集合被量出来不同，把它们并成一条就把 `t7` 那一臂读歪；**默认标记换成替换名单**——
+  `SUBSTITUTED_TABLE_STYLES` 只吃内建 `TableNormal`，这道门**同时改掉了上一轮边距那一族的 `if (s.isDefault) continue`**（`v1` 那臂证明旧门在过杀：被引用的默认标记样式 Word 真会落）；
+  四层都没说的边/色仍不铺数（Word 自带的 0/5.4/0/5.4 磅与无底色都是应用默认而不是文档说了的数）；图案档只读 fill 并记一句，不假装图案活着。换算仍只走那一枚 `PX_TWIP/TWIP_PX`（1px = 15 缇），
+  写侧一个字节没动。
+
+- **验证**（离线三头 + 结构/变异腿 + 往返腿，Rust 本轮一个字没动、屏上与纸面本轮没有读数）：结构+变异合并一腿 `RESULT struct pass=19 fail=0 | mutants pass=20 bad=0 []`，
+  三模式各跑一遍同一份最终源文（`TRAP=1` 那趟 `TRAP|注释里埋两枚假声明|基线BAD=0 埋后BAD=0|ok`、`REV=1` 那趟 `REVTRAP|真删 S4 锚点|fired=S4|ok`、`P0|正控制 删 nwcell 那一行|fired=S6,S7|ok`，
+  `DATA|files=1 judges=19 baseBad=[]`）；S/C/D 三系列分别钉「梯子八档的形状与两处出口」「`SUBSTITUTED_TABLE_STYLES` 一枚列表生两族门」「角型两枚位都开」「三层比在场而不是比色」「patternVal 只挡 clear/none」，
+  20 枚变异各响该响的那条（含「三层退回按色值取先」「角型只开一枚位」「把底纹也写成按位置-blind 的边距那条路」「默认标记的门改回 isDefault」「auto 不当说了话」）；
+  三方判据腿 `RESULT|arms=69|files=6 MINE|69` 六批 `pass=20 diff=0 / 21 diff=1 / 8 diff=0 / 9 diff=0 / 5 diff=2 / 3 diff=0` ⇒ 现场加总 **pass=66 diff=3 miss=0**，逐格颜色
+  `ours_missing=0`、`both_real_same=169`、`both_none=451`、`real_diff=0`、`ours_extra=0`、`count_diff=0`；**改前的同一把尺在同一批夹具上** `pass=36 diff=33 miss=0`（`ours_missing=165`、`both_real_same=4`）
+  ⇒ 缺色从 165 枚降到 0 枚是被同一趟量出来的，而残余的 3 枚 diff **全在边距那一族（`lp`）而不是底纹**：`q21_default_referenced` 与 `u6_normal_substitution`（Word 换上自带默认，两头都不铺是判据里的 gap 而非缺陷）、
+  `u4_corner_margins`（角型那块的格边距本轮没接，Word 三枚 40.0px 而 ours 全空——已开进路线图）；往返腿三批 `RESULT|arms=20 same=20 drift=0 no_table=0` / `30 same=30` / `19 same=19` ⇒ 69 臂 `same=69`；
+  独立字节腿 `RESULT|rt_bytes pass=69 fail=0 miss=0` 并当场量出塌缩那格 `COLLAPSE|arms=29 src_cells=6 exp_cells=169`（样式与条件的色落盘时全部重住逐格 `w:shd`）；`pnpm exec tsc --noEmit` exit 0；
+  **没有 dev 真机腿与纸面腿**（dev 树由另一会话持有而本轮的 dev 腿开头会关掉它全部标签，破坏性故不跑 ⇒ 底纹三层在屏上和纸上没有读数），**没有 release A/B**。
+
+- **本轮撞到五处量具坑，都不是产品**：① B0 探针不许用「含中文且无引号」当注释判据（这一族源文里住着 `/^标题\s*/` 那一枚正则——中文而无引号，剥完仍算「裸中文行」而把整腿假红；
+  现场读数 `B0d|剥后裸中文行=1|const m = /^heading ([1-9])$/.exec(n) ?? /^标题\s*` 就是那枚正则本体，改成按注释标记判而 `B0z` 断字面量/正则/除号三件活着）；
+  ② 注释陷阱必须把假声明埋进 **raw** 源再走剥注释器（在已剥净的文本上注入再重剥＝恒假阴），且要双向断言「埋后判据数不变而变异计数不得变」；③ 判据要吃**函数体**而不是签名
+  （`condShadingFor` 起初被数成锚点，而八档梯子住在函数体里 ⇒ 改坏梯子判据一个字不动，那是假绿发生器）；④ 日志名必须与判据取数的那把尺同形（本轮 `fin_L*.log` / `sum_L*.log` / `new_docx*.log` 三套命名，
+  按一套取并集就漏批）；⑤ **报数前现场加总**——本轮把「改前」读数手抄成 `pass=37 diff=32`，靠逐批 grep `RESULT|ours_vs_word` 那行才发现真数是 `pass=36 diff=33`（11+16+2+6+0+1 / 9+6+6+3+7+2）；
+  另记一处工作树形状：`git apply --cached` 在 `core.autocrlf` 与 `index <pre-image>` 双重检查下对这份混合文件必失败（"error: patch failed / Files differ"），出账只能走「HEAD 原文 + 只我那 26 枚 hunk」
+  重建 blob（逐枚 assert a-side 行全等、自底向上套）再 `git hash-object -w` + `git update-index --cacheinfo`；而并发会话的工作树 README 此刻**不含上一节的第四笔账与第五笔账**（工作树 `grep -c tblLook README.md` = 0 而
+  HEAD 里两节都在），故本节以 `git show HEAD:README.md` 为底落 blob，不去动他们那一份。
+
+- **本轮没动的量出来记着**（已开进路线图）：**图案 Texture 那一半**（`p19_pct50` 只读 fill，屏/纸/字节三头都没承载）；**条件块的 `w:tblPr/w:tblCellMar` 那一格**仍不接（Word 照样落）；
+  **band/odd/even 各型的字体那一档**没量（本轮只把底纹那半结掉）；**角型的格边距**没铺（`u4` 三枚 diff 就是它）；**写侧没有样式层与条件层的底纹出口** ⇒ 落盘塌成逐格 `w:shd`（`COLLAPSE|arms=29 src_cells=6 exp_cells=169`）；
+  `TableNormal` 身上 Word 自带的那套默认既不读也不再发上一轮那句告警；`w:shd` 在 ODT 两头的表格里仍没有通道（段落那一头 v0.39 早接了）；`w:tblLayout` 仍不读、cell-clash 那一格两头次序不同仍无第三方判据、
+  exact 行高只一枚告警、Word 自带的 0/5.4/0/5.4 磅仍不铺（前几节原样）；屏上/纸面本轮没有读数；「默认行距 `line-height: normal`」那一枚拆出去的轮次仍挂着。
+
+- **收尾**：README 新增本节 + 架构两处就地改口（「覆盖」那条把「`w:default="1"` 的默认表样式不算这一层」换成「按引用与内建替换判定」并补上格底纹三层与两族作用域不同；文件清单 `lib/docx-fidelity.ts`
+  条目补 `SUBSTITUTED_TABLE_STYLES` 与那枚 8 档梯子）+ 路线图把「oddRow/band/wholeTable 各型的其余载荷没接」按底纹半勾结掉、把「条件块里只接了 `w:tcPr/w:tcMar` 那一格」改口成「两样载荷已接、剩 `w:tblPr` 那一格」、
+  把「`w:default="1"` 表样式上的条件层只发告警不铺」换成「只剩 `TableNormal` 被替换而它自带的那套不铺，告警随门一起删掉」，并新开图案 Texture / 角型边距 / 底纹往返无样式出口 / 无 dev 与纸面腿 / 不占版本号五枚；
+  **版本文件不入本提交**（0.98.0 住着并发轮次的对齐号，本轮不与之抢那三处）；`tmp/xshd` 的 69 枚夹具、三头前置实测腿、两批判据腿、结构+变异腿、往返腿与独立字节腿按惯例删除；
+  **dev 树全程未碰**（它属于另一会话）
+
+
 ## 性能（v0.3）
 
 
@@ -5135,7 +5212,7 @@ src/                  React 前端
   lib/ooxml-graphics.ts 图形部件读侧（v0.42，零依赖、不碰 DOM 所以 Node 侧可直测）：`smartArtToHtml(dataXml, inCell)` 解 DiagramML dataModel 的 ptLst/cxnLst（parOf 建树 + srcOrd 定序、空节点下钻、首次认父挡回边、`a:fld` 域编号不采）→ 嵌套 `bulletList`（格内改段落 `margin-left` 表层级）；`chartToHtml(chartSpaceXml, inCell)` 解 ChartML 缓存值（下钻找系列、`strRef`/`numRef` 中间层、`c:pt/@idx` 空洞留格、`multiLvlStrRef` 各级拼一格、轴标题不当图表标题）→ 标题段 + 数据表，无缓存只取标题；两者都返 `{html, kept}` 让调用方按"真取回多少"说告警
   lib/cfb.ts          复合文档（OLE 2 / MS-C 容器）读侧（v0.44，零依赖、不碰 DOM）：`isCfb` 认魔数、`openCfb(bytes)` 走 DIFAT（109 直槽 + 链）→ FAT（扇区编号即下标）→ 128 字节目录项的红黑树（left/right 兄弟 + child 指孩子根，`assigned` 兼防环），小于 4096 的流从根存储链装的迷你流按 64 字节迷你扇区拼；扇区 512/4096、v3/v4 都认，**结构不合返回 null 不抛**（坏件要"少部分内容照出"而不是整篇打不开），截断的件按 `floor(len/sec)-1` 收边界、v4 高 32 位非零的流只报名字不去碰
   lib/ole.ts          OLE 嵌入对象的**内容**提取（v0.44）：`unwrapEmbed` 拆容器（现代形状=部件本身就是原生文件；老形状=复合文档里的流 `\x01Ole10Native`），`oleNativePayload` 按实测字段布局走一遍、走不通再按"哪枚 DWORD 能把数据吃到接近结尾"扫兜底（数据不贴着流末尾，按流长反推必错）；`classifyEmbed` 先魔数后文件名，`embedHtml(content, depth)` 分派 docx（递归 `docxToHtmlFidelity`，depth≥2 停）/ xlsx（只要值，`r="C5"` 定位、空列不挤位）/ CSV（首行嗅探分隔符 + RFC4180 引号）/ txt（空行分段，UTF-8 出替换符换 GBK 重试），取不出的一律给带真名与大小的 `note`；上限 24MB / 200 行 × 40 列 × 4 表 / 64KB × 200 段，**截断写进告警不静默少给**；`inlineFlatten` 把块级正文压成行内（单元格放不下第二层表）
-  lib/docx-fidelity.ts OOXML → HTML 保真导入器（v0.37）：run 级 rPr（粗斜/删除线/下划线/字色/高亮/字族/字号/上下标 `w:vertAlign`）、段落 pPr（jc/`w:ind` 左右与首行悬挂四种缩进写法/pStyle 样式链）、numPr+numbering.xml → 有序无序与 ilvl 层级（**跳档按 numId 折基准层**，不凭空补中间层）、表格 gridSpan/vMerge + tblGrid 列宽 + 单元格四边 `w:tcBorders`（含 val=nil 的显式去边）/底纹 `w:shd fill`/竖排 `w:vAlign`/表级 `w:tblInd`、段落 `w:spacing`（行距两档 + 段前后，含按行的 `w:*Lines` 估算）/`w:shd` 底纹/`w:pBdr` 四边、脚注与尾注引用（`w:footnoteReference`/`w:endnoteReference` 按 `w:id` 配 `word/footnotes.xml`·`endnotes.xml` 正文，跳过 separator/continuationSeparator，正文缺失记告警且不留空标记）、图片 rels→dataURL、内外超链接、分页符、批注三态锚点、域代码文字不外泄、**域编号重算**（v0.43：`fldChar` begin/separate/end 三道门接 `docx-fields` 的 `FieldEngine`——`SEQ` 现算并压掉缓存、`REF` 无缓存按书签段落文本兜底（书签表渲染前预扫）、算不了的沿缓存且无缓存记边界、`fldSimple` 同路、被跳过的分支不占号）、`w:object` 嵌入对象（v0.43 预览是 EMF/WMF 解不开时留一行可见占位，ProgID + rels 反查的部件文件名；**v0.44 先走 `lib/ole` 取内容**——取到就把内层正文接为段落兄弟块（格内改压行内）且不再叠占位，取不到才留占位）、文本框 `w:txbxContent`（`wps:txbx` 与旧式 `v:textbox`）展平为段落、OMML 公式线性化、`mc:AlternateContent` 只取 Choice（空则退 Fallback，避免同一份正文翻倍）、drawing 锚点经 rels 找图示/图表部件（v0.42，部件缺失与关系缺失各记一条告警）；认不出就抛错或 blocks=0，调用方回退 mammoth
+  lib/docx-fidelity.ts OOXML → HTML 保真导入器（v0.37）：run 级 rPr（粗斜/删除线/下划线/字色/高亮/字族/字号/上下标 `w:vertAlign`）、段落 pPr（jc/`w:ind` 左右与首行悬挂四种缩进写法/pStyle 样式链）、numPr+numbering.xml → 有序无序与 ilvl 层级（**跳档按 numId 折基准层**，不凭空补中间层）、表格 gridSpan/vMerge + tblGrid 列宽 + 单元格四边 `w:tcBorders`（含 val=nil 的显式去边）/底纹 `w:shd fill`/竖排 `w:vAlign`/表级 `w:tblInd`、段落 `w:spacing`（行距两档 + 段前后，含按行的 `w:*Lines` 估算）/`w:shd` 底纹/`w:pBdr` 四边、脚注与尾注引用（`w:footnoteReference`/`w:endnoteReference` 按 `w:id` 配 `word/footnotes.xml`·`endnotes.xml` 正文，跳过 separator/continuationSeparator，正文缺失记告警且不留空标记）、图片 rels→dataURL、内外超链接、分页符、批注三态锚点、域代码文字不外泄、**域编号重算**（v0.43：`fldChar` begin/separate/end 三道门接 `docx-fields` 的 `FieldEngine`——`SEQ` 现算并压掉缓存、`REF` 无缓存按书签段落文本兜底（书签表渲染前预扫）、算不了的沿缓存且无缓存记边界、`fldSimple` 同路、被跳过的分支不占号）、`w:object` 嵌入对象（v0.43 预览是 EMF/WMF 解不开时留一行可见占位，ProgID + rels 反查的部件文件名；**v0.44 先走 `lib/ole` 取内容**——取到就把内层正文接为段落兄弟块（格内改压行内）且不再叠占位，取不到才留占位）、文本框 `w:txbxContent`（`wps:txbx` 与旧式 `v:textbox`）展平为段落、OMML 公式线性化、`mc:AlternateContent` 只取 Choice（空则退 Fallback，避免同一份正文翻倍）、drawing 锚点经 rels 找图示/图表部件（v0.42，部件缺失与关系缺失各记一条告警）、**格底纹的三层取一与格边距的四层逐边合并（表格读侧第六笔账）**：底纹按「哪一层的 `w:shd` 在场」比（逐格 > 条件层含四枚角型 > 被引用样式的 `w:tcPr/w:shd` 基座，沿 `w:basedOn` 本体说了才覆盖祖先），条件层的落点走一枚 8 档梯子（角型 > 行型 > 列型、首行压末行、末列压首列）且要 `w:tblLook` 的对应位说话（角型要那一角的两枚位都开），内建 `TableNormal` 走替换名单（`SUBSTITUTED_TABLE_STYLES`：Word 打开时换上自己的定义，文件里往它身上写的数从不落地）而「默认标记」不再当门，图案档 `@w:val=pct50` 只读 fill 并按型别记一句；认不出就抛错或 blocks=0，调用方回退 mammoth
   lib/docx-fields.ts 域重算引擎（v0.43，零依赖、纯 Node 可直测）：`parseInstr` 拆 `命令 参数 \开关`（**开关 token 原样保留大小写**——Word 就按它决定结果形态）、`seqText` 按 `\* ROMAN`/`roman`/`ALPHABETIC`/`alphabetic`/`Alpha` 出对应形态、`FieldEngine`（`from(doc)` 渲染前扫全篇建书签表（只排 `_GoBack`，`_Ref…`/`_Toc…` 必须留）+ `seqValue` 跟着文档顺序走 + `refText` 兜底段落文本）、`recomputable`（只有带 label 的 SEQ 现算）、`fieldLabel`/`paraText`（域代码与已删文字不算正文）
   lib/cell-style.ts   单元格样式扩展（v0.38）：tableCell/tableHeader 的 bdTop/bdRight/bdBottom/bdLeft + background + vAlign、table 的 marginLeft 全局属性（只声明属性不改内容模型）；边框统一规范串 `"0.67px solid #8899aa"`，三态 null 未声明/'none' 显式去边/有值；`inlineBorder()` 读 CSSOM longhand（shorthand 对 none 返回空串）、`IndentTableView` 子类补 marginLeft（resizable 的节点视图不传 HTMLAttributes；**v0.92 起 `applyIndent` 里加一枚宽度判定**——`accountTotalPx(node)` 非零就写 `width: Σpx`，否则才退回 `calc(100% − ml)` / `''`，缺陷在自家这一层而不是库）、`eighthsToPx`/`pxToEighths` 管 1/8 磅换算、命令 setCellBackground/setCellVAlign；**v0.88 拆掉两处静默**——① `CSS_BORDER_STYLE` 补上 Word「虚线」对话框实际写出的那几档 token（`dashSmallGap`/`dashLargeGap`/`dotDotDash`/`dashDotStroked` → `dashed`；原先只有 `dotDash` 会被小写归一命中，`dashSmallGap` 命不中 ⇒ Word 里的虚线导进来显示成实线、再导出也是实线且零告警），② 表头格那枚 no-op：`setCell` 原来是 `updateAttributes('tableCell',…) && updateAttributes('tableHeader',…)`，表头行上第一型返回 false 就整条短路 ⇒ **边框/底纹/竖排对齐在表头格上从 v0.38 起全是静默失败**，改成 `[两型].some(Boolean)`（段落那一头 v0.39 早就是这个形状）；同轮新出界面用的四味：`bdAttr`（边名 → 属性名）、`edgeAttrs`（若干条边 → 一份 patch）、`BORDER_STYLES`/`BORDER_WIDTH_PT`/`borderCss`（磅 → 规范串，换算只写这一处）与 `EDGE_LABEL`；**v0.95 加表头行克隆**（`scheduleReplica`/`syncReplica`，`spec.update` 里排队走 `queueMicrotask`——PM 重画行在同一趟之后）：把「开头连续的全部表头行」克隆进 `<thead class="doc-th">` 并给表加 `doc-th-rep`，供纸上 `table-header-group` 重复。三条形状由实测钉住：只克隆不搬移（搬走 `rows 23→22`、`thRows 1→0` 把模型吃了）、标记住 `<table>` 而不 `tr`（PM 会擦 `contentDOM` 里行的 `class`，实测 `tagged=0`）、那道门只认开头连着的那几行（`leading.length === 全部表头行数` 才过门，且撤旧克隆排在过门之前，中途夹一枚表头行的表整块不建克隆）
   lib/table-width.ts  精确列宽的把手（v0.91，252 行）：`tableGrid` 自己的占位遍历算出每格的**起始**行列与绝对位置（不借 prosemirror-tables 的 `TableMap`——它不是本项目的声明依赖、TipTap 也没转出来；跨列的格按起点记，实测跨两列那一格里光标认到的是第 0 列），`gridAccount` 只取行 0 摊平出的逐网格列账（与 docx 写侧同一份权威），`accountTotalPx`（v0.92 新立的导出纯函数，+19 行）把这份账折成一枚绝对像素数——任一网格列没账或 <1 就整表 `return null`，屏上的表宽就吃这一枚数，`baseWidths` 给没带账的列补 `max(1, floor((可用宽 − Σ已有账)/未带账列数))`（屏上那一档实测 `[248,null,null]` → 248/188.7/188.7 而 (626−248)/2 = 189，与写侧同一算法），`redistribute` 是键入一列之后的整表账（四道门：列数非零 / 列号在范围内 / 可用宽 ≥ 列数 / 键入值 ≥ 1px；键入列夹到 `min(键入值, 可用宽 − (列数−1))` 给其余列各留 1px；其余列按各自现有账**等比**分享剩下的那一份，舍入用最大余项法配平、每列至少 1px ⇒ Σ 恰等于可用宽，这是"键入值 1:1 上屏"的条件，否则浏览器按 `table-layout: auto` 把整表比例缩走），`tableTargetPx` = 版心 px − 表级 `marginLeft`（屏上写的是 `width: calc(100% - Npx)`，不扣它键入值照样被缩），`caretColumn` 给界面用（光标在哪一列 / 一共几列 / 当前显示值，没带账的列显示等分那一份与屏上一致）；`TableWidth` 扩展的 `setGridColumnWidth(px, targetPx)` **一次事务写遍该网格列的每一格**（只写行 0 会在同一次 dispatch 里被 `tableEditing` 的 `appendTransaction` 按其余各行抹回去）、先验齐再落（任一格的 `colwidth.length` 不等于它的 colspan 就整表拒绝，不写半份账进去）、**账本来就是这一份的格子跳过**（PM 的 `setNodeMarkup` 即便属性相同也推一步 ⇒ 重打同一个数字会凭空多一枚撤销步），全部跳过则返回 false 不派发
@@ -6248,20 +6325,36 @@ cargo check        # Rust 后端检查（在 src-tauri 下）
       闸门只吃表上那一枚（`r_style_look_on_L3` 与 `r_style_look_off_L3` 逐格同形），首末列那两型的边距落到**全表每一格**（`g_firstCol_L4_full` ours 22px ↔
       Word 16.5 磅，九枚分毫不差）而同一型换成 `w:rPr` 载荷时才是真按列落（`q_bold_firstCol_L3` 只 R1C1 bold=-1），同一型的两块条件与 basedOn 链上的同型是
       **整块**替换（`r_dup_type_firstRow_L3` 里 A 的 top 一次没出现、`q_basedon_L3` 里祖先的 left 一次没出现）
-- [ ] **`w:default="1"` 表样式上的条件层只发告警不铺**：`r_default_style_cond_L3` 臂 ours 九枚格全空而 Word R1C1 left 15 磅 = 20px（第一节的「默认表样式不算一层」
-      立的是基座那一层，本轮不再从条件层这一后门把它请回来）⇒ 判据里以显式 gap 臂 + 同一趟的告警对账记着
-- [ ] **条件块里只接了 `w:tcPr/w:tcMar` 那一格**：同一块写在 `w:tblPr/w:tblCellMar` 那一格时 Word 照样落（`r_slot_tblpr_firstRow_L3` 九枚读数在字节账外，
-      COM 报 -1 磅）而我们不接；`w:rPr` / `w:pPr` 两格本轮只当探针量过一次（加粗的作用域），实现没有
-- [ ] **oddRow/evenRow/band1H/band2H/wholeTable 各型的其余载荷没接**：本轮量到它们不落格边距，可底纹与字体那一档 Word 是会落的（`k15_band_alias` 只问了边距）⇒
-      条件层的这一半仍是未接状态
+- [ ] **内建 `TableNormal` 身上 Word 自带的那套默认不读也不铺**：上一轮立的门是「`w:default="1"` 的默认表样式不算一层」，**表格读侧第六笔账把它换成按引用与内建替换判定**
+      （`r1_def_referenced` / `v1_def_referenced_mar` 量的就是那枚旧门的过杀：自造 id 而带默认标记、被表引用时 Word 会落，而我们当时连边距带底纹一起不读），
+      于是剩下的只有替换名单里那一枚：`q21_default_referenced`（往 TableNormal 写 `w:shd` D9D9D9，Word 九枚格全读回无底色而 `word_style=????`）与
+      `u6_normal_substitution`（同一枚写 400 缇边距，Word 读回 5.4 磅 = 7.2px）⇒ 它自带的定义我们既读不到也不铺。上一轮那句
+      `默认表样式的条件层格边距未铺：<型名>` 的告警随这道门一起删掉了（不再有一种「默认标记」需要它）；`r_default_style_cond_L3` 那一臂当时 ours 全空而 Word R1C1 left 15 磅 = 20px，
+      按新的判据现在两头同判（引用就落）
+- [ ] **条件块里那格的载荷只接了 `w:tcMar` 与 `w:shd` 两样**：同一块写在 `w:tblPr/w:tblCellMar` 那一格时 Word 照样落（`r_slot_tblpr_firstRow_L3` 九枚读数在字节账外，
+      COM 报 -1 磅）而我们不接；`w:rPr` / `w:pPr` 两格本轮只当探针量过一次（加粗的作用域），实现没有——**本轮把同一块里的 `w:tcPr/w:shd` 接上了**（底纹三层里的那一层）
+- [x] **oddRow/evenRow/band1H/band2H/wholeTable 各型的其余载荷没接**：**底纹那一半本轮量到它们连底纹也不落**（`q1_band1HV_A` / `q3_band1HV_C` / `q4_band1HV_D` /
+      `q10_band2V_B` / `p10_evenRow` / `p11_wholeTable` / `p12_band1H` 七臂 Word 九枚格全 `000000/0` 而 ours 同一趟全空 ⇒ 空集对空集，落点集合逐枚相同），
+      与上一轮边距那头的读数同一形状；剩下的只有**字体那一档**没量（`k15_band_alias` 与本轮各臂都只问了边距与底纹）⇒ 这一项按「底纹半勾」结掉，字体另立一轮
 - [ ] **样式层读进来的数在写侧没有出口**：写件里既没有 `w:tblStyle` 也没有表级 `w:tblCellMar`， styles.xml 里也没有 `w:tblStylePr`（往返件独立字节腿 `R6`/`R7`/`R8`
       三枚零计数），样式层与条件层的边距落盘时都以逐格 `w:tcMar` 的形式重住 ⇒ 同一趟 63 臂里 **60 臂换档**（`shiftArms=60`，`expCells=553` / `expEdges=2176` 的数
       换档之后仍逐边相等）；往返视觉等价而**字节换档**，第三方件重存一趟之后，原来那份样式层/条件层声明不再活着，那句「默认表样式未铺」的告警也不在往返之后回来
-      （`warnsBefore=1|warnsAfter=0`）
+      （`warnsBefore=1|warnsAfter=0`）；**底纹这一族本轮同一趟再量一遍**：写件里没有任何样式层/条件层的底纹出口，样式与条件的色落盘时全部重住逐格 `w:shd`
+      （`COLLAPSE|arms=29 src_cells=6 exp_cells=169`：69 臂里 29 臂换档，6 枚「文件只说样式」的格在往返件里变成 169 枚逐格 `w:shd`），往返视觉等价而**字节换档**
 - [ ] **条件层这一趟没有 dev 真机腿与纸面腿**：dev 树由另一会话持有而本轮的 dev 腿开头会关掉它全部标签（破坏性，不跑）⇒ 条件层读进来的边距在屏上和纸上的形状本轮
       **没有读数**；证据全在离线三头 + 往返腿 + 独立字节腿
 - [ ] **本轮没有 dev 真机腿与纸面腿**：dev 树由另一会话持有而本轮的 dev 腿开头会关掉它全部标签（破坏性，不跑） ⇒
       样式层读进来的边距在屏上和纸上的形状本轮**没有读数**；证据全在离线三头 + 往返腿
+- [ ] **图案底纹（`w:shd @w:val` 非 clear/none）只读纯色**（表格读侧第六笔账量出）：`p19_pct50` 在 Word 那头是 FF0000 配 Texture 500，CSS 里没有这一档 ⇒ 只把 fill 当纯色读、
+      按型别记一句 `图案底纹（w:shd @w:val=pct50）按纯色读入，图案那一半没铺`（同一条在样式层那档 `×9`、在逐格那一档 `r7_cell_pct50` 只 `×1`，门发在应该发的那一枚上）⇒ 图案那一半在屏上、
+      纸与字节三头都没有承载
+- [ ] **角型只铺了底纹，没铺它的格边距**（表格读侧第六笔账量出）：`u4_corner_margins` 臂 nwCell 那一块说 left 600 缇，Word 三枚格读回 40.0px 而 ours `lp` 全空 ⇒
+      边距那一族上一轮按「只有 firstRow/lastRow/firstColumn/lastColumn 四型落地」立了门，本轮的底纹则真按角型落；同一型在两族里的落点集合不同，判据里以残余 diff 记着
+- [ ] **条件层底纹的往返没有样式层出口**（表格读侧第六笔账）：样式与条件的色在导出时塌成逐格 `w:shd`，第三方件重存一趟之后原来那份样式层/条件层声明不再活着；
+      往返腿 69 臂 `same=69 drift=0` 判的是**色**回来而不是**层的形状**回来
+- [ ] **表格读侧第六笔账没有 dev 真机腿与纸面腿**：dev 树由另一会话持有而本轮的 dev 腿开头会关掉它全部标签（破坏性，不跑）⇒ 底纹三层读进来的色在屏上和纸上的形状本轮
+      **没有读数**；证据全在离线三头 + 往返腿 + 独立字节腿（`RESULT|rt_bytes pass=69 fail=0 miss=0`）
+- [ ] **表格读侧第六笔账不占版本号**：`package.json` / `Cargo.toml` / `tauri.conf.json` 现在住着并发轮次的 0.98.0 ⇒ 本轮不与之抢那三处对齐，源码形状以内容命名
 - [ ] **tcW 与 gridCol 打架时两头次序不同**（v0.97 量出）：`cell-clash` 臂 ours=[90,180]px 跟 gridCol 而
       Word=[106.55,95.95]pt 按 `w:tblW`/tcW 重摊（字节里 tcW=[3000,2700]）⇒ grid-first 是本轮选的次序，
       第三方那一头没有对齐判据（被弃的均摊算法量出来最差偏差 127.50 磅而我们这一档 0.00）
