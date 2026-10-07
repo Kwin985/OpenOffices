@@ -206,8 +206,8 @@ function readStyles(xml: string): StyleBook {
       isDefault: ['1', 'true'].includes(attr(s, 'w:default') ?? ''),
       rPr: find(s, 'w:rPr'),
       pPr,
-      tcPr: find(s, 'w:tcPr'),
       tblPr: find(s, 'w:tblPr'),
+      tcPr: find(s, 'w:tcPr'),
       tblStylePr: all(s, 'w:tblStylePr'),
     }
     const outline = valNum(pPr, 'w:outlineLvl')
@@ -1404,6 +1404,7 @@ class Fidelity {
           ...tblMarEdges,
           ...condMarginsFor(look, conds, ri, ri === last),
           ...marginsOf(find(tcPr, 'w:tcMar')),
+        })
         // 底纹三层取一（逐格 > 条件层 > 样式基座）：比的是哪一层的 w:shd 在场，
         // 所以逐格那枚说 fill="auto" 也是说了话——它把下面两层的色清掉（q15/r4）
         const shd = cellShadingEl(
@@ -1413,7 +1414,6 @@ class Fidelity {
         )
         const pat = patternVal(shd)
         if (pat) this.warn(`图案底纹（w:shd @w:val=${pat}）按纯色读入，图案那一半没铺`)
-        })
         const style = [cellStyleCss(tcPr, {
           top: cb.top ?? (ri === 0 ? tb.top : tb.insideH),
           bottom: cb.bottom ?? (ri === last ? tb.bottom : tb.insideH),
@@ -1540,6 +1540,7 @@ function shadingHex(shd: XEl | undefined): string | null {
   const hex = rgb2hex(`#${fill.replace(/^#/, '').toLowerCase()}`)
   return hex && hex !== '#ffffff' ? hex : null
 }
+
 /**
  * `w:shd` 的 @w:val 说的是图案而不是纯色时交回那一档的名字（clear/none/缺省给空串）。
  * Word 读这类件时把 fill 当颜色、把图案另住在 Texture（p19 的 pct50 在 Word 那头是 FF0000/500），
@@ -1550,12 +1551,11 @@ function patternVal(shd: XEl | undefined): string {
   return v === 'clear' || v === 'none' ? '' : v
 }
 
-
 /** 单元格边框四边 + 底纹 + 竖排对齐 → 一段内联 style（顺序固定，供结构测试直接比对） */
 function cellStyleCss(
   tcPr: XEl | undefined,
-  hex: string | null,
   edges: { top?: string; bottom?: string; left?: string; right?: string },
+  hex: string | null,
 ): string {
   const bits: string[] = []
   for (const edge of CELL_EDGES) {
@@ -1620,6 +1620,7 @@ function marginsOf(mar: XEl | undefined): Margins {
   if (r !== undefined) out.right = r
   return out
 }
+
 /**
  * Word 打开文件时会把自己那套内建定义换上来的表样式 id——文件里往这几枚身上写的数从不落地。
  * 量出来的两枚同一天：u6 往 TableNormal 写 w:tblCellMar left=400 缇（=20 磅），Word 读回 5.4 磅
@@ -1627,7 +1628,6 @@ function marginsOf(mar: XEl | undefined): Margins {
  * v0.97 的 a11 那一臂（表直接引用 TableNormal）量的是同一件事的边距那一半。
  */
 const SUBSTITUTED_TABLE_STYLES = new Set(['TableNormal'])
-
 
 /**
  * 表样式那一层的格边距：`w:tblPr/w:tblStyle` 指着的样式及其 basedOn 祖先，沿链自根向下逐边合并。
@@ -1646,6 +1646,7 @@ function styleCellMargins(book: StyleBook, id: string | undefined): Margins {
   }
   return out
 }
+
 /**
  * 底纹的基座层：被引用的表样式（及其 basedOn 祖先）自己那枚 `w:tcPr/w:shd`。
  *
@@ -1664,12 +1665,11 @@ function styleCellShading(book: StyleBook, id: string | undefined): XEl | undefi
   return out
 }
 
-
 /** 条件层里会把格边距落到实处的四型（Word 16.0 实测只有这四型落地） */
 const LOOK_BITS = ['firstRow', 'lastRow', 'firstColumn', 'lastColumn'] as const
+
 /** 一块条件里说的格载荷：格边距与格底纹住在同一枚 `w:tcPr` 上，两族共用同一份"同型整块替换"的账 */
 type CondCell = { mar: Margins; shd?: XEl }
-
 
 /**
  * 条件层 `w:tblStylePr` 说的格载荷：型名 → 那一块的账。
@@ -1685,8 +1685,8 @@ type CondCell = { mar: Margins; shd?: XEl }
  */
 function styleCondCells(book: StyleBook, id: string | undefined): Record<string, CondCell> {
   const out: Record<string, CondCell> = {}
-    if (SUBSTITUTED_TABLE_STYLES.has(s.id)) continue
   for (const s of styleChain(book, id)) {
+    if (SUBSTITUTED_TABLE_STYLES.has(s.id)) continue
     for (const pr of s.tblStylePr ?? []) {
       const type = attr(pr, 'w:type')
       if (!type) continue
