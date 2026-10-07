@@ -2260,7 +2260,7 @@ button {
     display: block;
   }
 
-  /* 分页控制：标题不与其后正文分离，原子块不跨页折断，段落避免孤行寡行 */
+  /* 分页控制：标题不与其后正文分离，图片不跨页折断，段落避免孤行寡行 */
   .doc-content h1,
   .doc-content h2,
   .doc-content h3,
@@ -2268,11 +2268,25 @@ button {
     break-after: avoid;
   }
 
-  .doc-content img,
+  /* 这一族里只剩图片：它是替换件，没有内部断点，所以 auto 对它是惰性的——
+     实测 400×500px 与 600×1200px 两件在「摘掉 avoid」的四档注入里逐枚同形（图仍整枚上纸、
+     前一页照旧空着），摘它不换来任何形状。比一页还高的图被纸裁掉那一段是另一件事，见路线图。 */
+  .doc-content img {
+    break-inside: avoid;
+  }
+
+  /* 代码块/引用/目录从 avoid 家族里摘出来，在纸上流着排（与 v0.94 的表同一档）。
+     它们的正文本身就是行，断点天然存在，整块 avoid 只会把它们比剩余版心高的那一件整枚推走：
+     实测 40 行代码块让第 1 页只剩 2 枚段落标（空 ~685pt）、60 段引用让第 1 页只有 1 枚标（空 ~710pt），
+     而 16 段填充 + 目录那一件第 1 页墨底停在 438.6 只为等一张推得走的目录。
+     Word 16.0 对同一件是「段落流、分行切」：90 行代码块那件在 Word 里同一段落 pgStart=1 而 pgEnd=2，
+     40 条目录逐条落页（第 49 条在第 1 页 761.6、第 50 条起第 2 页）。
+     和表一样显式写两门，不靠缺省值（老 Blink 只认 page-break-inside 那一门）。 */
   .doc-content pre,
   .doc-content blockquote,
   .doc-content .doc-toc {
-    break-inside: avoid;
+    page-break-inside: auto;
+    break-inside: auto;
   }
 
   /* 表是这一族里唯一该在纸上流着排的件：整张 avoid 会把比剩余版心高的表推到下一页，
