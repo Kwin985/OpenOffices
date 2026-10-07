@@ -728,7 +728,9 @@
   **v0.97 起读侧不再只吃 `w:gridCol`**（网格说了数的列先占住自己的账、行 0 逐格 `w:tcW` 只往缺账的列里补，auto/pct
   不吃；同一趟另收 `w:trHeight` → `rowHeight`、`w:tblCellMar` / `w:tcMar` → `pad*` 四属性且逐边覆盖，导出逐边回写；
   **再往下一层（样式层）**：被表引用的样式（`w:tblPr/w:tblStyle` 指着的，沿 `w:basedOn` 自根向下、叶子覆盖根）说的 `w:tblCellMar`
-  是这一层的基座，表自身逐边盖它、逐格再盖表——三层**逐边**合并；而 `w:default="1"` 的默认表样式**不算这一层**（四枚判别臂量的正是这道门），Word 自带的 0/
+  是这一层的基座，表自身逐边盖它、样式条件层（`w:tblStylePr` 里 `w:tcPr/w:tcMar` 那一份，配 `w:tblLook` 的闸门——只有 firstRow/lastRow/firstColumn/lastColumn
+  四型落地，`w:val` 那位十六进制从不被 consult，而行型按行落、首末列那两型按全表落、同一型的两块是**整块**替换）再盖表级、逐格最后盖条件——四层**逐边**合并；
+  而 `w:default="1"` 的默认表样式**不算这一层**（四枚判别臂量的正是这道门，它带的条件层本轮也只发一句告警而不铺），Word 自带的 0/
   5.4/0/5.4 磅是应用默认，既不读也不铺）、
   `w:drawing`/`v:imagedata` 图片（rels → data URL）、
   超链接（外部 `r:id` 与内部 `w:anchor`）、`w:br type="page"` → pageBreak 节点、批注 `commentRangeStart/End` 三态锚点、
@@ -4971,6 +4973,83 @@ docx 库默认的 `w="100"`（twip，≈6.7px），`w:tcW` 与 `w:tblLayout` 零
   往返腿与独立字节腿按惯例删除；**dev 树全程未碰**（它属于另一会话）
 
 
+## 格边距的条件层第一次上账：四层逐边合并，而 `w:tblLook` 的 `w:val` 从不被读
+
+按「不扩格式、把现有格式做深」的路线图开工，本轮取上一节明写的那枚未勾项——「表样式条件层 `w:tblStylePr`（firstRow/lastRow/oddRow…）不接」
+（`a9_condition` 臂 ours 首行四边一律 7.2px 而 Word 读回 15 磅 = 20px）。窄口径：`src/lib/docx-fidelity.ts` +110 / −4（六枚 hunk，全部住在读手），
+Rust 一个字没动、写侧一寸没碰。**本轮不占版本号**：`package.json` / `Cargo.toml` / `tauri.conf.json` 现在住着并发轮次的 0.98.0 ⇒ 本节按内容命名。
+
+- **前置实测**（`tmp/xcond`，63 枚自造夹具分两批 55 + 8，三头同一趟：自家读手 + Word 16.0 只读 COM + 独立字节腿，互不吃对方的读手）：每枚臂出一份最小
+  docx（一枚 3×3 表），数全部摆成互不相同的档，这样任一枚格的任一边走回来都能认出它是哪一层说的——样式基座 `w:tblCellMar`
+  60/108/90/120 缇 = top/left/bottom/right 4/7.2/6/8px，`firstRow` left 300（20px）、`lastRow` left 450（30px）、`oddRow` top 150（10px）、
+  `evenRow` top 270（18px）、`firstCol` 330（22px）、`lastCol` 510（34px）、表自身 `w:tblCellMar` left 144（9.6px）、逐格 `w:tcMar` left 216（14.4px）。
+  量出来五格：① **闸门有四副面孔而 `w:val` 一位都不算数**——`w:tblLook` 不存在、或存在而一枚位属性都没写 ⇒ 首行与首列开、末行与末列关
+  （`k3_look_absent`：Word 首行 left 15 磅 = 20px 而二三行 left 5.4 磅 = 基座 7.2px，同时 `firstCol` 的 right 16.5 磅 = 22px 落在九枚格上；
+  `g_firstCol_L1_empty` 空元素同判）；只写 `w:val` 而无逐位属性 ⇒ 四位全关（`g_firstCol_L2_val` ours left=7.2px ↔ Word 5.4 磅，条件一次没落；
+  `k4_zero` 六枚条件全声明而 val=0000 ⇒ 九枚格全在基座）；写了至少一枚位属性 ⇒ 说了的按说的算、没说的按开算（`k5_attr_beats_val` 里 val=0000 而
+  firstRow=1 firstColumn=1，Word 末行照落 left 22.5 磅 = 30px、九枚格照落 right 25.5 磅 = 34px；`k6_val_beats_attr` 里 val=000F 而 firstRow=0 firstColumn=0
+  ⇒ 首行首列关掉而未说的末行末列照开）；样式自己写的那枚 `w:tblLook` 不参与裁决（`r_style_look_on_L3` 与 `r_style_look_off_L3` 逐格同形，表上那枚 absent）。
+  ② **只有四型会把边距落到实处**——`oddRow` / `evenRow` / `band1H` / `band2H` / `wholeTable` / 未知型六臂（`g_oddRow_L4_bands`、`g_evenRow_L4_bands`、
+  `g_band1H_L4_bands`、`g_band2H_L4_bands`、`k13_wholetable`、`k15_band_alias`、`k17_unknown_type`）在 Word 眼里九枚格全不落边距，而 ours 同一趟也全不落
+  （判据里空集对空集同样是通过，落点集合逐枚相同）。③ **首列/末列那两型的边距落到全表每一格**——`g_firstCol_L4_full` ours left=22px 而 Word left=16.5 磅，
+  九枚格分毫不差（`g_lastCol` 那档 34px ↔ 25.5 磅同形，`k16_firstcol_colspan` 把跨列格也算进这一档）；而同一个闸门同一个型换成 `w:rPr` 载荷时才是真按列落
+  （`q_bold_firstCol_L3`：Word 只在 R1C1 读回 bold=-1 而三列的边一律 5.4 磅）⇒ 「边距这一族在 Word 里不是列作用域」是被量出来的而不是猜的。
+  ④ **同一型的两块条件是整块替换而不是逐边合并**——`r_dup_type_firstRow_L3`（A{left 300, top 600} + B{left 270, bottom 450}）Word 落的是 B 的
+  left 13.5 磅与 bottom 22.5 磅而 A 的 top 一次都没出现（那枚读回基座 4px），`q_basedon_L3`（祖先 firstRow 说 left、本体 firstRow 说 right 360）Word 只落
+  right 18 磅而 left 仍是基座；不同型各落各的（`r_basedon_diff_type_L3`：祖先 firstRow 落第 0 行 20px、本体 lastRow 落末行 30px）。
+  ⑤ **撞车次序**逐臂问了一遍：逐格 > 条件 > 表级 > 样式基座（`k8_cell_vs_cond` / `q_cell_vs_cond_L3` 两头 R1C1 left 14.4px ↔ 10.8 磅；
+  `k7_tbl_vs_cond` / `q_tbl_vs_cond_L3` 表自身那枚 144 压住条件的 300 ⇒ 两头 9.6px ↔ 7.2 磅），末列压首列（`q_firstCol_lastCol_both`），
+  行型压列型（`r_rowcol_same_edge_L3`：firstRow 的 left 落地而 firstCol 那枚 22px 一次都没出现 ⇒ 两头 left=20px ↔ 15 磅），
+  单行表既是首行又是末行时首行赢（`r_one_row_first_last_L3` 两枚位属性都 1 ⇒ 20px ↔ 15 磅，`k18_one_row_table` 同一档在 val 门上再问一遍）。
+
+- **本轮唯一的架构决定**（跟着数据走，缺陷住在读侧那第四层）：格边距从此是**四层逐边合并**——样式基座（沿 `w:basedOn`）→ 表级 `w:tblCellMar` →
+  **条件层 `w:tblStylePr/w:tcPr/w:tcMar` 配 `w:tblLook` 闸门** → 逐格 `w:tcMar`，四条形状都不是可选的——闸门只吃**表上**那一枚 `w:tblLook`
+  （`r_style_look_on/off` 两臂就是量出来要弃「样式自己那枚也算」的备选解释）；只有 firstRow/lastRow/firstColumn/lastColumn 四型落地，其余型按实测一律不落；
+  同一型的两块与 basedOn 链上的同型是**整块替换**（`out[type] = mar`），而四**层**之间才是逐边合并（`{...样式, ...表级, ...条件, ...逐格}`），0 仍是真值；
+  行型按行落、列型按**全表**落（③ 那格的后果）；`w:default="1"` 的表样式上的条件层 Word 会落而我们**不铺**，只发一句
+  `默认表样式的条件层格边距未铺：<型名>`（上一节刚把「默认表样式不算一层」立起来，本轮不再从后门把它请回来）；条件块里只认 `w:tcPr/w:tcMar` 那一格，
+  `w:tblPr/w:tblCellMar` 那一格本轮不接（Word 照样落，量出来记着）。换算仍只走那一枚 `PX_TWIP/TWIP_PX`（1px = 15 缇），写侧一个字节没动。
+
+- **验证**（离线三头 + 结构/变异 + 往返 + 独立字节腿，全部在最终源文上跑，Rust 本轮一个字没动、屏上与纸面本轮没有读数）：三方判据腿第一批 55 臂
+  `RESULT judge pass=95 fail=0`（`落地点 ours=26 word=26`、`PER-EDGE|不等枚数=0` 即每一格每一条边在两头读回同一个数、`OFF-LEDGER|…枚数=0`、
+  `告警对得上=True`、`gapDefault=无`）；第二批 8 臂 `RESULT judge pass=18 fail=0`（`落地点 ours=10 word=10`，`gap臂=r_default_style_cond_L3` 就是刻意不铺的
+  那一臂——ours 九枚格全空而 Word R1C1 left 15 磅，那一句告警在同一趟对上了，`OFF-LEDGER 枚数=9` 全部住在 `r_slot_tblpr_firstRow_L3`（Word 落了
+  `w:tblPr` 那一格而 COM 把它的读数报成 -1 磅 = 账外），`ours 同时出账外=0` 判的就是「账外只许 Word 一头有」）；结构+变异合并一腿
+  `RESULT struct pass=14 fail=0` + `RESULT mutants pass=15 bad=0`（`DATA|files=1 judges=14 baseBad=无`、`B0|剥注释自检 pass=13 bad=无`、
+  `CONTROL|旧版在这一把尺下通过的枚数=0`、TRAP/TRAP2/REVTRAP 全过；15 枚变异各响该响的那条，含 M1「条件层改成逐边合并而不是整块替换」响 S2、
+  M3「val-only 那一档不再关门」响 S5、M6「首列压末列」与 M7「末行压首行」响 S7、M13「默认样式的条件层也铺」响 S12、M14「readStyles 收错元素」响 S13+S14）；
+  往返腿（docxToHtmlFidelity → prosemirrorToDocxBytes）`RESULT rt pass=63 fail=0 arms=63 cells=553 declaredEdges=2176 dupLabels=0`，默认样式那一臂
+  `declared=0|bad=0|warnsBefore=1|warnsAfter=0`；独立字节腿（zipfile + 正则直解 `document.xml`/`styles.xml`，不吃自家读手）
+  `RESULT rtbytes pass=13 fail=0`（`DATA|arms=63 expCells=553 expEdges=2176 shiftArms=60` ⇒ 63 臂里 60 臂的层位从「样式/条件声明」换成了逐格 `w:tcMar`；
+  `R6` 往返件零枚表级 `w:tblCellMar`、`R7` styles.xml 零枚 `w:tblStylePr`、`R8` 零枚 `w:tblStyle` 引用 ⇒ 写侧确实没有样式层与条件层的出口；
+  `R9` 层换档确实发生而不是顺手；`R10` 不铺就不出口；`R11`/`R12` 两枚正控制：把一枚 `w:w` 改成 7 会被 `R2` 抓到、那把尺认得出重复计数）；
+  `pnpm exec tsc --noEmit` exit 0。
+
+- **本轮撞到的量具坑，都不是产品**：① **`python <腿>.py` 那一趟打印的是另一枚脚本的输出**——`rtbytes.log` 与 `struct.txt` 逐字节相同（3253 字节）、exit 0、
+  stderr 全空，连重定向进去的日志里都是那份别人的读数 ⇒ 跑不起来的腿看着像通过了；此后每条腿自打一行 `IDENT|<腿名>-<批> pid=… here=…`，
+  读数只吃带这一行的那份日志（「先证明校验脚本跑起来了再报结论」在这一族的第三次兑现）；② `python -I` 隐含 `-E` ⇒ `PYTHONIOENCODING` 被静默忽略，
+  日志里中文全成 mojibake（`rb2.log` 那一趟）⇒ `-I -X utf8` 两枚一起写；③ `rtout/` 的文件名带 `rt-` 前缀而 `rt.log` 的 DECL 行吃的是臂名，差一枚前缀就整腿
+  FileNotFoundError（`rb1.err`），而「拿不到期望数」在判据里会被读成空判 ⇒ 修尺之外新立 `R0`「每一臂都有模型那份期望数」；④ DECL 行本身有 7 段
+  （`fmt()` 把四边用 `|` join 起来）而 `split("|")` 不限刀数就 unpack 报错 ⇒ `split("|", 3)`；⑤ 模型 attr 名是 `padTop/padLeft/…` 而 HTML 边名是 `top/left/…`，
+  往返腿起初把 HTML 那份边名 spread 进 attrs ⇒ 553 枚格全假红；⑥ 块注释里不能写 `*/`（那句 `pad*/rowHeight` 让 .mts 直接 PARSE_ERROR）；
+  ⑦ Word 的 COM `Cell.*Padding` 在「条件块住在 `w:tblPr` 那一格」的臂上返回 -1 磅，既不能当「不等」也不能当「通过」⇒ 账外读数另立一枚计数，而「我们这一头
+  也出账外」才是真缺陷。
+
+- **本轮没动、量出来记着**（已开进路线图）：① `w:default="1"` 表样式上的条件层只发告警不铺（`r_default_style_cond_L3` 臂 ours 全空 ↔ Word R1C1 15 磅）；
+  ② 条件块里只接了 `w:tcPr/w:tcMar` 那一格，`w:tblPr/w:tblCellMar` 那一格 Word 照样落（`r_slot_tblpr_firstRow_L3` 九枚账外读数），`w:rPr`/`w:pPr` 两格本轮只当探针
+  （`q_bold_firstCol_L3` 量到 bold 只落每行第 0 格 ⇒ 边距与字体两族在 Word 里的作用域不同）；③ `oddRow`/`evenRow`/`band1H`/`band2H`/`wholeTable` 各型按实测不落边距，
+  而它们的底纹与字体载荷仍未接；④ **写侧没有样式层与条件层的出口** ⇒ 读进来的数落盘一律变成逐格 `w:tcMar`（同一趟 60/63 臂换档），第三方件重存一趟之后原声明不再活着，
+  而那句「默认表样式未铺」的告警也不在往返之后回来（`warnsAfter=0`）；⑤ **屏上/纸面本轮没有读数**（无 dev 腿、无纸面腿，dev 树由另一会话持有 ⇒ 破坏性，不跑）；
+  ⑥ `pad*` / `rowHeight` 在 ODT 两头仍没有通道、`w:tblLayout` 仍不读、cell-clash 那一格两头次序不同仍无第三方判据、exact 行高只一枚告警、Word 自带的 0/5.4/0/5.4
+  磅应用默认仍不铺（前几节原样），「默认行距 `line-height: normal`」那一枚拆出去的轮次仍挂着
+
+- **收尾**：README 新增本节 + 架构一处就地改口（v0.30/v0.97 那条格边距的「三层逐边合并」补成四层：条件层与 `w:tblLook` 闸门的四副面孔、四型才落地、同型整块替换）+
+  路线图勾掉「表样式条件层 `w:tblStylePr`（firstRow/lastRow/oddRow…）不接」并改口（量出来只有四型落地而 `w:val` 从不被读），把「样式层读进来的数在写侧没有出口」补上本轮的
+  `expEdges=2176 / shiftArms=60` 三枚零计数，把「样式条件层里只碰了 `w:tcMar` 那一格」收窄成剩下的那一格与两格载荷，新开「`w:default="1"` 表样式上的条件层只发告警不铺」
+  「band/oddRow 各型的其余载荷没接」「条件层这一趟没有 dev 真机腿与纸面腿」三枚并留上述①②③④⑤；**版本文件不入本提交**（0.98.0 住着并发轮次的对齐号，
+  本轮不与之抢那三处）；`tmp/xcond` 的 63 枚夹具、三头前置实测腿、两批判据腿、结构+变异腿、往返腿与独立字节腿按惯例删除；**dev 树全程未碰**（它属于另一会话）
+
+
 ## 性能（v0.3）
 
 
@@ -6162,13 +6241,25 @@ cargo check        # Rust 后端检查（在 src-tauri 下）
       `a13_default_mid_chain` 四臂各砍一种备选解释：ours 全空而 Word 三臂同一读数 top/bottom 0 磅、left/right 5.4 磅，
       `a8_default_vs_ref` 把这条钉死），Word 自带的那组数是应用默认而不是文档说了的数 ⇒ 仍不铺；`a5_none` 臂 ours 全空而 Word=[0,0,0,0]
       磅，与那组 0/5.4/0/5.4 **不同形**——引用一枚什么都没说过的样式，Word 连自带的左右边距也不铺
-- [ ] **表样式条件层 `w:tblStylePr`（firstRow/lastRow/oddRow…）不接**：`a9_condition` 臂基础样式说四边 108 而
-      `firstRow` 里的 `w:tcMar` 说 left 300 ⇒ ours 首行四边一律 7.2px 而 Word 读回 [5.4,5.4,5.4,**15**] 磅（那一格在
-      Word 是 20px）。这一层牵着 `w:tblLook` 的位语义（哪个条件对哪一格真生效），本轮没有连同样式链一起裁住的把握 ⇒ 如实未勾，判据里以显式豁免清单 +
-      由另一条判据现场供数记着
-- [ ] **样式层读进来的数在写侧没有出口**：写件里既没有 `w:tblStyle` 也没有表级 `w:tblCellMar`（往返腿 `R5`），样式层的边距落盘时以逐格
-      `w:tcMar` 的形式重住（同一趟 6 枚格数到 5 枚 `w:tcMar`）⇒ 往返视觉等价而**字节换档**，第三方件重存一趟之后，原来那份样式层声明不再活着
-- [ ] **样式条件层里只碰了 `w:tcMar` 那一格**：`w:tblStylePr` 下的 `w:tcPr` / `w:rPr` / `w:pPr` 三格本轮没有读数也没有实现
+- [x] **表样式条件层 `w:tblStylePr`（firstRow/lastRow/oddRow…）不接**：本轮已接，而量出来的形状比原话窄得多——只有 firstRow/lastRow/firstColumn/lastColumn
+      四型会把边距落到实处（`g_oddRow_L4_bands` / `g_evenRow_L4_bands` / `g_band1H_L4_bands` / `g_band2H_L4_bands` / `k13_wholetable` / `k15_band_alias` /
+      `k17_unknown_type` 七臂 ours 与 Word 在九枚格上**都**不落，空集对空集），`w:val` 那位十六进制从不被 consult（`k4_zero` val=0000 六型全声明 ⇒ 全不落；
+      `k5_attr_beats_val` val=0000 而 firstRow=1 firstColumn=1 ⇒ 未说的末行末列照落 left 22.5 磅 / right 25.5 磅；`k6_val_beats_attr` 反向），
+      闸门只吃表上那一枚（`r_style_look_on_L3` 与 `r_style_look_off_L3` 逐格同形），首末列那两型的边距落到**全表每一格**（`g_firstCol_L4_full` ours 22px ↔
+      Word 16.5 磅，九枚分毫不差）而同一型换成 `w:rPr` 载荷时才是真按列落（`q_bold_firstCol_L3` 只 R1C1 bold=-1），同一型的两块条件与 basedOn 链上的同型是
+      **整块**替换（`r_dup_type_firstRow_L3` 里 A 的 top 一次没出现、`q_basedon_L3` 里祖先的 left 一次没出现）
+- [ ] **`w:default="1"` 表样式上的条件层只发告警不铺**：`r_default_style_cond_L3` 臂 ours 九枚格全空而 Word R1C1 left 15 磅 = 20px（第一节的「默认表样式不算一层」
+      立的是基座那一层，本轮不再从条件层这一后门把它请回来）⇒ 判据里以显式 gap 臂 + 同一趟的告警对账记着
+- [ ] **条件块里只接了 `w:tcPr/w:tcMar` 那一格**：同一块写在 `w:tblPr/w:tblCellMar` 那一格时 Word 照样落（`r_slot_tblpr_firstRow_L3` 九枚读数在字节账外，
+      COM 报 -1 磅）而我们不接；`w:rPr` / `w:pPr` 两格本轮只当探针量过一次（加粗的作用域），实现没有
+- [ ] **oddRow/evenRow/band1H/band2H/wholeTable 各型的其余载荷没接**：本轮量到它们不落格边距，可底纹与字体那一档 Word 是会落的（`k15_band_alias` 只问了边距）⇒
+      条件层的这一半仍是未接状态
+- [ ] **样式层读进来的数在写侧没有出口**：写件里既没有 `w:tblStyle` 也没有表级 `w:tblCellMar`， styles.xml 里也没有 `w:tblStylePr`（往返件独立字节腿 `R6`/`R7`/`R8`
+      三枚零计数），样式层与条件层的边距落盘时都以逐格 `w:tcMar` 的形式重住 ⇒ 同一趟 63 臂里 **60 臂换档**（`shiftArms=60`，`expCells=553` / `expEdges=2176` 的数
+      换档之后仍逐边相等）；往返视觉等价而**字节换档**，第三方件重存一趟之后，原来那份样式层/条件层声明不再活着，那句「默认表样式未铺」的告警也不在往返之后回来
+      （`warnsBefore=1|warnsAfter=0`）
+- [ ] **条件层这一趟没有 dev 真机腿与纸面腿**：dev 树由另一会话持有而本轮的 dev 腿开头会关掉它全部标签（破坏性，不跑）⇒ 条件层读进来的边距在屏上和纸上的形状本轮
+      **没有读数**；证据全在离线三头 + 往返腿 + 独立字节腿
 - [ ] **本轮没有 dev 真机腿与纸面腿**：dev 树由另一会话持有而本轮的 dev 腿开头会关掉它全部标签（破坏性，不跑） ⇒
       样式层读进来的边距在屏上和纸上的形状本轮**没有读数**；证据全在离线三头 + 往返腿
 - [ ] **tcW 与 gridCol 打架时两头次序不同**（v0.97 量出）：`cell-clash` 臂 ours=[90,180]px 跟 gridCol 而

@@ -25,6 +25,8 @@
 // 表格读侧的三笔度量账在 v0.97 起认全：逐格 w:tcW（gridCol 缺列/全零时的权威账）、行高 w:trHeight、
 // 格边距 w:tblCellMar / w:tcMar（落进 cell-style 的 pad*/rowHeight 属性，docx/odoc 保存链路往返）；
 // 段落边框的第五边 w:between 同轮接上：与下一段是同一串「相同边框与底纹」时落成前一段的下边框。
+// 格边距从此是四层逐边合并（样式基座 → 表级 → 条件层 → 逐格），条件层就是 `w:tblStylePr` 的 tcMar
+// 配 `w:tblLook` 的闸门——只有首行/末行/首列/末列四型会把边距落到实处，而 `w:val` 那枚十六进制从不被读。
 
 import { all, allDesc, attr, attrL, attrNum, els, find, findDesc, findL, local, parseXml, textOf, type XEl } from './ooxml'
 import { FieldEngine, fieldLabel, parseInstr, recomputable } from './docx-fields'
@@ -162,6 +164,8 @@ interface StyleInfo {
   tblPr?: XEl
   /** w:default="1" 的那一枚（默认表样式在格边距这一层不算层，见 styleCellMargins） */
   isDefault?: boolean
+  /** 条件层 `w:tblStylePr`（一型一块，块里的 w:tcPr/w:tcMar 才说格边距；顺序就是文档顺序） */
+  tblStylePr?: XEl[]
   /** outlineLvl 或样式名推出的标题级别（1..9），非标题为 undefined */
   level?: number
   quote?: boolean
@@ -201,6 +205,7 @@ function readStyles(xml: string): StyleBook {
       rPr: find(s, 'w:rPr'),
       pPr,
       tblPr: find(s, 'w:tblPr'),
+      tblStylePr: all(s, 'w:tblStylePr'),
     }
     const outline = valNum(pPr, 'w:outlineLvl')
     if (outline !== undefined && outline >= 0 && outline <= 8) info.level = outline + 1
@@ -1298,11 +1303,20 @@ class Fidelity {
     // 表级默认格边距（w:tblCellMar）：v0.97 之前整条丢弃，声明了的左右 108 缇（=7.2px）也读不出来。
     // 逐格 w:tcMar 只在它说到的那几边上优先。
     // 再往下一层（样式层）：表引用的样式（w:tblStyle）及其 basedOn 祖先说的格边距是这一层的基座，
-    // 表自身说的边覆盖它，逐格说的边再覆盖表——三层都是逐边合并，不是整组替换。
-    // 三层都没说的边仍然不铺数：Word 那一头此时给的是它自带的 0/5.4/0/5.4 磅（a2/a10/a11 三臂量出来的），
+    // 表自身说的边覆盖它，逐格说的边再覆盖表——这几层都是逐边合并，不是整组替换。
+    // 四层都没说的边仍然不铺数：Word 那一头此时给的是它自带的 0/5.4/0/5.4 磅（a2/a10/a11 三臂量出来的），
     // 那是应用默认而不是文档说了的数，铺进我们的账里就是把别人的默认写成用户的声明
-    const styleMarEdges = styleCellMargins(this.book, val(tblPr, 'w:tblStyle'))
+    const styleId = val(tblPr, 'w:tblStyle')
+    const styleMarEdges = styleCellMargins(this.book, styleId)
     const tblMarEdges = marginsOf(find(tblPr, 'w:tblCellMar'))
+    // 条件层（`w:tblStylePr` 的格边距）与它的闸门（`w:tblLook`）：闸门只吃表上那一枚，
+    // 逐格按行型/列型取一份账，落在样式基座与表级默认之上、逐格 tcMar 之下
+    const conds = styleCondMargins(this.book, styleId)
+    const look = tblLookOn(el)
+    if (!styleId) {
+      const inert = defaultCondMarginTypes(this.book)
+      if (inert.length) this.warn(`默认表样式的条件层格边距未铺：${inert.join('/')}`)
+    }
     // 横向 gridSpan / 纵向 vMerge 都按网格列记账：Word 保证同一次纵向合并里各行的 gridSpan 一致，
     // 所以 continue 单元格就落在 restart 单元格同一批网格列上，无需跳过被占用列。
     type Span = { row: number; span: number }
@@ -1384,7 +1398,12 @@ class Fidelity {
           const widths = acct.slice(c.gc, c.gc + c.colspan).filter((v) => v > 0)
           if (widths.length) attrs.push(`colwidth="${widths.join(',')}"`)
         }
-        const mar = marginsCss({ ...styleMarEdges, ...tblMarEdges, ...marginsOf(find(tcPr, 'w:tcMar')) })
+        const mar = marginsCss({
+          ...styleMarEdges,
+          ...tblMarEdges,
+          ...condMarginsFor(look, conds, ri, ri === last),
+          ...marginsOf(find(tcPr, 'w:tcMar')),
+        })
         const style = [cellStyleCss(tcPr, {
           top: cb.top ?? (ri === 0 ? tb.top : tb.insideH),
           bottom: cb.bottom ?? (ri === last ? tb.bottom : tb.insideH),
@@ -1597,6 +1616,93 @@ function styleCellMargins(book: StyleBook, id: string | undefined): Margins {
   for (const s of styleChain(book, id)) {
     if (s.isDefault) continue
     Object.assign(out, marginsOf(find(s.tblPr, 'w:tblCellMar')))
+  }
+  return out
+}
+
+/** 条件层里会把格边距落到实处的四型（Word 16.0 实测只有这四型落地） */
+const LOOK_BITS = ['firstRow', 'lastRow', 'firstColumn', 'lastColumn'] as const
+
+/**
+ * 条件层 `w:tblStylePr` 说的格边距：型名 → 那一块的账。
+ *
+ * 同一型的两块、以及 basedOn 祖先与本体各说同一型时，都是**整块替换**而不是逐边合并——
+ * 前置实测 r_dup_type_firstRow_L3（同一型两块 A{left,top} + B{left,bottom}）里 Word 落的是
+ * B 的 left 与 bottom 而 A 的 top 一次都没出现（那一枚读回的是基座 4px）；q_basedon_L3 里本体的 firstRow
+ * 说了 right 而祖先的 firstRow 说了 left，Word 只落 right 而 left 仍是基座。
+ * 不同型各落各的（r_basedon_diff_type_L3：祖先的 firstRow 落第 0 行、本体的 lastRow 落末行）。
+ */
+function styleCondMargins(book: StyleBook, id: string | undefined): Record<string, Margins> {
+  const out: Record<string, Margins> = {}
+  for (const s of styleChain(book, id)) {
+    for (const pr of s.tblStylePr ?? []) {
+      const type = attr(pr, 'w:type')
+      if (!type) continue
+      const mar = condTcMar(pr)
+      if (Object.keys(mar).length) out[type.toLowerCase()] = mar
+    }
+  }
+  return out
+}
+
+/** 一块条件里说的格边距：只有 `w:tcPr/w:tcMar` 这一格算数（`w:tblPr/w:tblCellMar` 那一格不落） */
+function condTcMar(pr: XEl): Margins {
+  return marginsOf(find(find(pr, 'w:tcPr'), 'w:tcMar'))
+}
+
+/**
+ * `w:tblLook` 的闸门（Word 16.0 实测四种形状，`w:val` 那位十六进制数从不被 consult）：
+ * 元素不存在、或存在而一个属性都没写 → 首行与首列开、末行与末列关；
+ * 只写 `w:val` 而没有逐位属性 → 四位全关（g_*_L2_val 那三臂连 firstRow=0001 都不 fire）；
+ * 写了至少一枚逐位属性 → 说了的按说的算，没说的按开算（k5：val=0000 + firstRow=1 firstColumn=1，
+ * 而末行与末列照 fire；k6：firstRow=0 关掉首行，未说的末行末列仍开）。
+ * 样式自己写的那枚 `w:tblLook` 不参与裁决（r_style_look_on/off 两臂逐格同形，表上那枚 absent）。
+ */
+function tblLookOn(tbl: XEl): Record<string, boolean> {
+  const look = find(find(tbl, 'w:tblPr'), 'w:tblLook')
+  const on = (v: string | undefined, dflt: boolean) => (v === undefined ? dflt : ['1', 'true', 'on'].includes(v.toLowerCase()))
+  const stated = LOOK_BITS.filter((b) => attr(look, `w:${b}`) !== undefined)
+  if (!stated.length) {
+    const off = look && attr(look, 'w:val') !== undefined
+    return {
+      firstRow: !off,
+      lastRow: false,
+      firstColumn: !off,
+      lastColumn: false,
+    }
+  }
+  const out: Record<string, boolean> = {}
+  for (const b of LOOK_BITS) out[b] = on(attr(look, `w:${b}`), true)
+  return out
+}
+
+/**
+ * 这一格的条件层账：行型按行落，列型按全表落。
+ *
+ * 首列/末列那两型的 tcMar 在 Word 眼里落到**全表每一格**（g_firstCol 的 22px、g_lastCol 的 34px
+ * 在九枚格上分毫不差），而同一个闸门同一个型换成 `w:rPr` 载荷时才是真按列落
+ * （q_bold_firstCol_L3：加粗只出现在每行第 0 格）——这是边距这一族在 Word 里的形状，不是列作用域。
+ * 撞车时的次序都量过：末列压首列、行压列（r_rowcol_same_edge_L3 里 firstCol 那枚 22px 一次都没出现）、
+ * 单行既是首行又是末行时首行赢（r_one_row_first_last_L3）。
+ */
+function condMarginsFor(look: Record<string, boolean>, conds: Record<string, Margins>, ri: number, isLastRow: boolean): Margins {
+  const out: Margins = {}
+  if (look.firstColumn) Object.assign(out, conds.firstcol)
+  if (look.lastColumn) Object.assign(out, conds.lastcol)
+  const row: Margins = {}
+  if (isLastRow && look.lastRow) Object.assign(row, conds.lastrow)
+  if (ri === 0 && look.firstRow) Object.assign(row, conds.firstrow)
+  return Object.assign(out, row)
+}
+
+/** 默认表样式的条件层里说了格边距的那些型（Word 会落这一份，而我们这一轮不铺——见 table() 里那条告警） */
+function defaultCondMarginTypes(book: StyleBook): string[] {
+  const out: string[] = []
+  for (const s of book.byId.values()) {
+    if (!s.isDefault || s.type !== 'table') continue
+    for (const pr of s.tblStylePr ?? []) {
+      if (Object.keys(condTcMar(pr)).length) out.push(attr(pr, 'w:type') ?? '?')
+    }
   }
   return out
 }
