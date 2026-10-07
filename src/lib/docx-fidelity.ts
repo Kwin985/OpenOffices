@@ -1312,9 +1312,12 @@ class Fidelity {
     const styleId = val(tblPr, 'w:tblStyle')
     const styleMarEdges = styleCellMargins(this.book, styleId)
     const tblMarEdges = marginsOf(find(tblPr, 'w:tblCellMar'))
-    // 条件层（`w:tblStylePr` 那块 w:tcPr 同时说格边距与格底纹）与它的闸门（`w:tblLook`）：
-    // 闸门只吃表上那一枚，边距按行型/列型取一份账落在样式基座与表级默认之上、逐格 tcMar 之下，
-    // 底纹按位置取一型（含四角型），落在样式基座之上、逐格 w:shd 之下
+    // 条件层（`w:tblStylePr`）与它的闸门（`w:tblLook`）：闸门只吃表上那一枚，两格各归各的层——
+    // 那块里 `w:tcPr/w:tcMar` 归条件那一层（落在表级之上、逐格 tcMar 之下），
+    // `w:tblPr/w:tblCellMar` 归的仍是样式那一层（压得过样式基座说的数，压不过表自身那枚；
+    // sa_slot_top_vs_tbl 与 sc_slot_top_vs_stylebase 两臂用竖直位置尺量出来的），
+    // 两族的落点作用域共用一份账：行型按行、列型按全表、角型按其所在那一行且要两枚位都开。
+    // 底纹按位置取一型（含四角型，落点就是那一角那一格），落在样式基座之上、逐格 w:shd 之下
     const conds = styleCondCells(this.book, styleId)
     const look = tblLookOn(el)
     const styleShd = styleCellShading(this.book, styleId)
@@ -1401,8 +1404,9 @@ class Fidelity {
         }
         const mar = marginsCss({
           ...styleMarEdges,
+          ...condMarginsFor(look, conds, ri, ri === last, 'tblMar'),
           ...tblMarEdges,
-          ...condMarginsFor(look, conds, ri, ri === last),
+          ...condMarginsFor(look, conds, ri, ri === last, 'mar'),
           ...marginsOf(find(tcPr, 'w:tcMar')),
         })
         // 底纹三层取一（逐格 > 条件层 > 样式基座）：比的是哪一层的 w:shd 在场，
@@ -1637,6 +1641,10 @@ const SUBSTITUTED_TABLE_STYLES = new Set(['TableNormal'])
  * 没人引用的样式压根不在链上，我们本来也不读，所以这一族的门只留上面那条替换名单。
  * 四层都没说的边仍然不铺数：Word 那一头此时给的是它自带的 0/5.4/0/5.4 磅（u4 与 v0.97 的 a2/a10/a11），
  * 那是应用默认而不是文档说了的数，铺进我们的账里就是把别人的默认写成用户的声明。
+ *
+ * 条件块里 `w:tblPr/w:tblCellMar` 那一格也算这一层（第七笔账：表级 108 缇压得过它的 600，
+ * 而它压得过样式基座说的 108），但它按型别作用域落、闸门跟着 `w:tblLook` 走，所以要逐格现取，
+ * 见调用处 `condMarginsFor(..., 'tblMar')` 那一行——不在这一枚函数里，因为这枚不分位置。
  */
 function styleCellMargins(book: StyleBook, id: string | undefined): Margins {
   const out: Margins = {}
@@ -1665,11 +1673,14 @@ function styleCellShading(book: StyleBook, id: string | undefined): XEl | undefi
   return out
 }
 
-/** 条件层里会把格边距落到实处的四型（Word 16.0 实测只有这四型落地） */
+/** `w:tblLook` 上那四位闸门：条件层的落点全从这几位取闸（`w:val` 那位十六进制数从不被 consult） */
 const LOOK_BITS = ['firstRow', 'lastRow', 'firstColumn', 'lastColumn'] as const
 
-/** 一块条件里说的格载荷：格边距与格底纹住在同一枚 `w:tcPr` 上，两族共用同一份"同型整块替换"的账 */
-type CondCell = { mar: Margins; shd?: XEl }
+/**
+ * 一块条件里说的格载荷：`w:tcPr` 那一格同时说格边距与格底纹（两族共用同一份"同型整块替换"的账），
+ * `w:tblPr/w:tblCellMar` 那一格只说格边距，且它归的是样式那一层而不是条件那一层（见 styleCellMargins）
+ */
+type CondCell = { mar: Margins; tblMar: Margins; shd?: XEl }
 
 /**
  * 条件层 `w:tblStylePr` 说的格载荷：型名 → 那一块的账。
@@ -1681,7 +1692,9 @@ type CondCell = { mar: Margins; shd?: XEl }
  * （q18：同一型两块各说一枚色，Word 只落后面那枚）。
  * 不同型各落各的（r_basedon_diff_type_L3：祖先的 firstRow 落第 0 行、本体的 lastRow 落末行；
  * q17 底纹版：祖先的 firstRow 落第 0 行）。
- * 一块条件里只认 `w:tcPr` 那一格的载荷：同一块换成 `w:tblPr/w:tblCellMar` 那格写，Word 不落。
+ * 一块条件里的两格都说格边距时是 **tcPr 那一格盖 tblPr 那一格**（sc_slot_top_vs_tcpr：同一块 tblPr 说 top 600
+ * 缇而 tcPr 说 top 300 缇，位置尺读回 300 那一档，比只说 600 的那臂低 15.05 磅）；
+ * `wholeTable` 那一型换哪一格写都不落（sa_slot_wholeTable 的左右仍是 Word 自带的 108 缇、sc_slot_top_whole 位移 0.00）。
  */
 function styleCondCells(book: StyleBook, id: string | undefined): Record<string, CondCell> {
   const out: Record<string, CondCell> = {}
@@ -1691,9 +1704,11 @@ function styleCondCells(book: StyleBook, id: string | undefined): Record<string,
       const type = attr(pr, 'w:type')
       if (!type) continue
       const tcPr = find(pr, 'w:tcPr')
+      const prTbl = find(pr, 'w:tblPr')
       const mar = marginsOf(find(tcPr, 'w:tcMar'))
+      const tblMar = marginsOf(prTbl ? find(prTbl, 'w:tblCellMar') : undefined)
       const shd = find(tcPr, 'w:shd')
-      if (Object.keys(mar).length || shd) out[type.toLowerCase()] = { mar, shd }
+      if (Object.keys(mar).length || Object.keys(tblMar).length || shd) out[type.toLowerCase()] = { mar, tblMar, shd }
     }
   }
   return out
@@ -1726,22 +1741,49 @@ function tblLookOn(tbl: XEl): Record<string, boolean> {
 }
 
 /**
- * 这一格的条件层账：行型按行落，列型按全表落。
+ * 这一格吃条件层的哪几型：列型按全表、行型按本行、角型按它所在那一整行（不按那一角，见 condMarginsFor），
+ * 自低向高排——角型要那一角的两枚位都开才入梯。
+ */
+function condMarginLadder(look: Record<string, boolean>, ri: number, isLastRow: boolean): string[] {
+  const ladder: string[] = []
+  if (look.firstColumn) ladder.push('firstcol')
+  if (look.lastColumn) ladder.push('lastcol')
+  if (ri === 0 && look.firstRow && look.firstColumn) ladder.push('nwcell')
+  if (ri === 0 && look.firstRow && look.lastColumn) ladder.push('necell')
+  if (isLastRow && look.lastRow && look.firstColumn) ladder.push('swcell')
+  if (isLastRow && look.lastRow && look.lastColumn) ladder.push('secell')
+  if (isLastRow && look.lastRow) ladder.push('lastrow')
+  if (ri === 0 && look.firstRow) ladder.push('firstrow')
+  return ladder
+}
+
+/**
+ * 这一格的条件层账：行型按行落，列型按全表落，**角型也按行落而不按那一角**。
  *
  * 首列/末列那两型的 tcMar 在 Word 眼里落到**全表每一格**（g_firstCol 的 22px、g_lastCol 的 34px
  * 在九枚格上分毫不差），而同一个闸门同一个型换成 `w:rPr` 载荷时才是真按列落
  * （q_bold_firstCol_L3：加粗只出现在每行第 0 格）——这是边距这一族在 Word 里的形状，不是列作用域。
- * 撞车时的次序都量过：末列压首列、行压列（r_rowcol_same_edge_L3 里 firstCol 那枚 22px 一次都没出现）、
- * 单行既是首行又是末行时首行赢（r_one_row_first_last_L3）。
+ * 角型换到边距这一族同样不按位置：sb_nw_all_on 的 left 落在第 0 行三枚格（各 30 磅）而第 1、2 行九枚里全 0，
+ * ne 落首行的右边距、sw/se 落末行整行（sb_ne_all_on / sb_sw_all_on / sb_se_all_on）——
+ * 与底纹那一族「只落那一角那一格」（u1）不是一种形状，两族的梯子也不同序（见 condShadingFor）。
+ * 闸门要那一角的两枚位都开：sb_nw_fr_only（缺 firstColumn）与 sb_nw_fc_only（缺 firstRow）两臂九枚格全 0。
+ * 撞车时的次序按型别而与**声明次序无关**：nw 与 firstRow 各说 left 600/300 缇，正反两序（sb_nw_vs_firstRow /
+ * sb_firstrow_then_nw）都落 firstRow 那档 15 磅；nw 与 firstCol 各说 600/900，正反两序都落「第 0 行 30 磅、
+ * 其余行 45 磅」；sw 与 lastRow 两序都落 lastRow 那档——所以梯子是 行型 > 角型 > 列型。
+ * 三型同说而把 nw 写在最末（sb_nw_declared_last）仍落 firstRow 与 firstCol 的数，角型一次没赢。
+ * 末列压首列、单行既是首行又是末行时首行赢沿用上一轮读数（r_rowcol_same_edge / r_one_row_first_last）。
+ * 同一行里两枚角型说同一枚边（nw 说 right、ne 也说 right）没有实测，本序按后入的 necell 取，记为未量档。
  */
-function condMarginsFor(look: Record<string, boolean>, conds: Record<string, CondCell>, ri: number, isLastRow: boolean): Margins {
+function condMarginsFor(
+  look: Record<string, boolean>,
+  conds: Record<string, CondCell>,
+  ri: number,
+  isLastRow: boolean,
+  key: 'mar' | 'tblMar',
+): Margins {
   const out: Margins = {}
-  if (look.firstColumn) Object.assign(out, conds.firstcol?.mar)
-  if (look.lastColumn) Object.assign(out, conds.lastcol?.mar)
-  const row: Margins = {}
-  if (isLastRow && look.lastRow) Object.assign(row, conds.lastrow?.mar)
-  if (ri === 0 && look.firstRow) Object.assign(row, conds.firstrow?.mar)
-  return Object.assign(out, row)
+  for (const t of condMarginLadder(look, ri, isLastRow)) Object.assign(out, conds[t]?.[key])
+  return out
 }
 
 /**
@@ -1756,6 +1798,8 @@ function condMarginsFor(look: Record<string, boolean>, conds: Record<string, Con
  * Word 两趟都在第 0 格落 D2691E 而把 firstRow 让到 #1/#2、firstCol 让到 #3/#6）。
  * 行型里首行压末行、列型里末列压首列沿用上一轮边距那头的读数（r_one_row_first_last / r_rowcol_same_edge）；
  * 一枚格同时踩到两型底纹时（比如 1×1 表上的四角同格）没有实测，按上面这条梯子取先说话的那一型。
+ * 注意这一条梯子与边距那族**是反的**：边距里行型压角型、角型压列型（见 condMarginsFor），底纹里角型压一切——
+ * 两族各自的序都是按自己那一族量出来的，不是一条通用梯子，别把它当成不一致去"统一"。
  */
 function condShadingFor(
   look: Record<string, boolean>,
