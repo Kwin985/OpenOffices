@@ -158,6 +158,10 @@ interface StyleInfo {
   basedOn?: string
   rPr?: XEl
   pPr?: XEl
+  /** 表样式的 w:tblPr（段落样式没有这一枚） */
+  tblPr?: XEl
+  /** w:default="1" 的那一枚（默认表样式在格边距这一层不算层，见 styleCellMargins） */
+  isDefault?: boolean
   /** outlineLvl 或样式名推出的标题级别（1..9），非标题为 undefined */
   level?: number
   quote?: boolean
@@ -193,8 +197,10 @@ function readStyles(xml: string): StyleBook {
       name,
       type: attr(s, 'w:type') ?? 'paragraph',
       basedOn: val(s, 'w:basedOn'),
+      isDefault: ['1', 'true'].includes(attr(s, 'w:default') ?? ''),
       rPr: find(s, 'w:rPr'),
       pPr,
+      tblPr: find(s, 'w:tblPr'),
     }
     const outline = valNum(pPr, 'w:outlineLvl')
     if (outline !== undefined && outline >= 0 && outline <= 8) info.level = outline + 1
@@ -1289,9 +1295,13 @@ class Fidelity {
     const rows = all(el, 'w:tr')
     const tb = borderEdges(tblPr ? find(tblPr, 'w:tblBorders') : undefined)
     const tblInd = tblPr ? attrNum(find(tblPr, 'w:tblInd'), 'w') : undefined
-    // 表级默认格边距（w:tblCellMar）：本轮之前整条丢弃，声明了的左右 108 缇（=7.2px）也读不出来。
-    // 字节里没有这一层时我们不铺数（Word 那一头此时给的是文档默认 0.5 磅，属另一层，见判据腿 NOTE）。
-    // 逐格 w:tcMar 只在它说到的那几边上优先
+    // 表级默认格边距（w:tblCellMar）：v0.97 之前整条丢弃，声明了的左右 108 缇（=7.2px）也读不出来。
+    // 逐格 w:tcMar 只在它说到的那几边上优先。
+    // 再往下一层（样式层）：表引用的样式（w:tblStyle）及其 basedOn 祖先说的格边距是这一层的基座，
+    // 表自身说的边覆盖它，逐格说的边再覆盖表——三层都是逐边合并，不是整组替换。
+    // 三层都没说的边仍然不铺数：Word 那一头此时给的是它自带的 0/5.4/0/5.4 磅（a2/a10/a11 三臂量出来的），
+    // 那是应用默认而不是文档说了的数，铺进我们的账里就是把别人的默认写成用户的声明
+    const styleMarEdges = styleCellMargins(this.book, val(tblPr, 'w:tblStyle'))
     const tblMarEdges = marginsOf(find(tblPr, 'w:tblCellMar'))
     // 横向 gridSpan / 纵向 vMerge 都按网格列记账：Word 保证同一次纵向合并里各行的 gridSpan 一致，
     // 所以 continue 单元格就落在 restart 单元格同一批网格列上，无需跳过被占用列。
@@ -1374,7 +1384,7 @@ class Fidelity {
           const widths = acct.slice(c.gc, c.gc + c.colspan).filter((v) => v > 0)
           if (widths.length) attrs.push(`colwidth="${widths.join(',')}"`)
         }
-        const mar = marginsCss({ ...tblMarEdges, ...marginsOf(find(tcPr, 'w:tcMar')) })
+        const mar = marginsCss({ ...styleMarEdges, ...tblMarEdges, ...marginsOf(find(tcPr, 'w:tcMar')) })
         const style = [cellStyleCss(tcPr, {
           top: cb.top ?? (ri === 0 ? tb.top : tb.insideH),
           bottom: cb.bottom ?? (ri === last ? tb.bottom : tb.insideH),
@@ -1569,6 +1579,25 @@ function marginsOf(mar: XEl | undefined): Margins {
   if (l !== undefined) out.left = l
   const r = side(['w:right', 'w:end'])
   if (r !== undefined) out.right = r
+  return out
+}
+
+/**
+ * 表样式那一层的格边距：`w:tblPr/w:tblStyle` 指着的样式及其 basedOn 祖先，沿链自根向下逐边合并。
+ *
+ * 默认表样式（`w:default="1"` 的 Normal Table）不算这一层——前置实测三臂同一读数：
+ * a2（表不引用任何样式）、a10（同臂但不写 semiHidden，判的就是「失效」是不是 semiHidden 造成的）、
+ * a11（表直接 w:tblStyle="TableNormal" 引用它）在 Word 都读回 top/bottom 0 磅、left/right 5.4 磅，
+ * 而不是文件里声明的 10.8/14.4 磅；a8 更把这条钉死：默认样式声明了 bottom 216 而被引用的样式没说
+ * bottom，Word 读回 0 而不是 10.8。那枚 0/5.4/0/5.4 是 Word 自带的应用默认，不是文档说了的数，
+ * 所以这一层我们既不读也不铺（铺了就是把别人的默认当成用户的声明写回文件）。
+ */
+function styleCellMargins(book: StyleBook, id: string | undefined): Margins {
+  const out: Margins = {}
+  for (const s of styleChain(book, id)) {
+    if (s.isDefault) continue
+    Object.assign(out, marginsOf(find(s.tblPr, 'w:tblCellMar')))
+  }
   return out
 }
 
