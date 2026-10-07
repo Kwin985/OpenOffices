@@ -102,6 +102,14 @@ export function bdAttr(edge: CellEdge): 'bdTop' | 'bdRight' | 'bdBottom' | 'bdLe
   return BD_ATTR[edge]
 }
 
+/** 单元格内边距的四条属性（padTop/padRight/padBottom/padLeft），存 CSS px，0 是真值 */
+const PAD_SIDES = ['top', 'right', 'bottom', 'left'] as const
+type PadSide = (typeof PAD_SIDES)[number]
+
+function padAttrName(side: PadSide): 'padTop' | 'padRight' | 'padBottom' | 'padLeft' {
+  return `pad${side[0].toUpperCase()}${side.slice(1)}` as 'padTop' | 'padRight' | 'padBottom' | 'padLeft'
+}
+
 /** 四条边的属性补丁：段落的 bd* 与单元格的 bd* 同名，两家的命令共用这一处 */
 export type BorderPatch = Partial<Record<'bdTop' | 'bdRight' | 'bdBottom' | 'bdLeft', string | null>>
 
@@ -229,6 +237,43 @@ export const CellStyle = Extension.create({
             parseHTML: (el: HTMLElement) => vAlignOf(el.style.getPropertyValue('vertical-align')),
             renderHTML: (attrs: Record<string, unknown>) =>
               attrs.vAlign ? { style: `vertical-align: ${attrs.vAlign}` } : {},
+          },
+          // 格边距：docx 的 w:tblCellMar / w:tcMar 落这里（v0.97 起）。0 是真值（Word 的上下边距
+          // 常就是 0），判空不用真值判断；mergeAttributes 会把各属性给出的 style 片段串起来，
+          // 所以每条属性只写自己的那一边
+          ...Object.fromEntries(
+            PAD_SIDES.map((side) => [
+              padAttrName(side),
+              {
+                default: null as number | null,
+                parseHTML: (el: HTMLElement) => {
+                  const px = Number.parseFloat(el.style.getPropertyValue(`padding-${side}`))
+                  return Number.isFinite(px) && px >= 0 ? round2(px) : null
+                },
+                renderHTML: (attrs: Record<string, unknown>) => {
+                  const v = attrs[padAttrName(side)]
+                  return typeof v === 'number' && v >= 0 ? { style: `padding-${side}: ${v}px` } : {}
+                },
+              },
+            ]),
+          ),
+        },
+      },
+      {
+        types: ['tableRow'],
+        attributes: {
+          // 行高：docx 的 w:trHeight 落这里（v0.97 起）。HTML 里 tr 的高度本就是下限语义，
+          // 与 OOXML 的 atLeast 恰好同形；exact 的"超高裁内容"CSS 表达不了，导入按 atLeast 记
+          rowHeight: {
+            default: null as number | null,
+            parseHTML: (el: HTMLElement) => {
+              const h = Number.parseFloat(el.style.getPropertyValue('height'))
+              return Number.isFinite(h) && h > 0 ? round2(h) : null
+            },
+            renderHTML: (attrs: Record<string, unknown>) => {
+              const n = Number(attrs.rowHeight)
+              return Number.isFinite(n) && n > 0 ? { style: `height: ${n}px` } : {}
+            },
           },
         },
       },

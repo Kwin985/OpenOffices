@@ -724,7 +724,10 @@
   `colwidth`——跨列格记「所覆盖的各列」而不是合起来的宽，而写侧一直没写回去，直到 v0.89**；**v0.90 起写侧改成「有几枚
   写几枚、没带账的列按剩余版心补平」**，因为界面上拖一次本来就只写被拖那一枚（`updateColumnWidth` 的形状），要求整表
   齐账等于把用户拖出来的宽度在导出时整表作废）；**v0.91 起写侧的网格形状按占位走**（`gridShapeOf` 把被竖跨压掉的格子
-  算占位，认账与导出逐格游标共用同一份起始列账 ⇒ 含竖跨的表不再整表丢账，界面上也键得出精确宽度）、`w:drawing`/`v:imagedata` 图片（rels → data URL）、
+  算占位，认账与导出逐格游标共用同一份起始列账 ⇒ 含竖跨的表不再整表丢账，界面上也键得出精确宽度）；
+  **v0.97 起读侧不再只吃 `w:gridCol`**（网格说了数的列先占住自己的账、行 0 逐格 `w:tcW` 只往缺账的列里补，auto/pct
+  不吃；同一趟另收 `w:trHeight` → `rowHeight`、`w:tblCellMar` / `w:tcMar` → `pad*` 四属性且逐边覆盖，导出逐边回写）、
+  `w:drawing`/`v:imagedata` 图片（rels → data URL）、
   超链接（外部 `r:id` 与内部 `w:anchor`）、`w:br type="page"` → pageBreak 节点、批注 `commentRangeStart/End` 三态锚点、
   上标下标（v0.38 起真还原成 `<sup>/<sub>`）、`fldSimple`/`fldChar` 的**域代码文字不外泄**（结果段才渲染）、TOC 内容控件跳过
 - **缩进进 schema**（`lib/indent-extension.ts`）：`indentLeft`/`indentFirst` 作为段落级全局属性（32px 一档、上限 320px），
@@ -819,7 +822,8 @@
 - **单位各钉一处**：ODF 段间距与绝对行距写 **pt**（px↔pt 是精确换算，`cm` 写第三位小数会磨掉零点几 px，
   缩进仍写 cm），读回走新的 `lenPx()`（保留两位小数），旧的整数取整 `len2px` 只留给缩进/边距；
   段落边框宽度仍是 1/8 磅制的 `w:sz`（0.67px ↔ sz4 ↔ 0.5pt；**v0.88 的界面就接在这一层上**——`.doc-para-bar` 那一排四边、
-  按磅显示、九档磅值 × `borderCss` 换算只写一处，「清除」写 `null` 收回未声明；第五边 `w:between` 与 `w:space` 仍未接）
+  按磅显示、九档磅值 × `borderCss` 换算只写一处，「清除」写 `null` 收回未声明；第五边 `w:between` **v0.97 已接**
+  （与下一段是同一串签名时落成本段下边框），`w:space` 仍未接）
 - **UI**：段落上下文条 `.doc-para-bar`——行距下拉（单倍/1.15/1.5/2 + 固定值/最小值 + 自定义 `x倍数`）、
   段前段后两个数字框与「无间距」、底纹取色与「无底纹」；**界面按「磅」显示、属性里存 CSS px**（pt×4/3），
   不让用户换算。`TextStyleKit` 的 `lineHeight` 必须关掉：那是它给段落挂的**同名**属性，
@@ -4787,6 +4791,87 @@ docx 库默认的 `w="100"`（twip，≈6.7px），`w:tcW` 与 `w:tblLayout` 零
   WINWORD 0 支，按显式 PID 收宿主而不是按进程名乱杀，全程未碰已装正式版）；自动更新的源托管与 macOS 打包
   按指令继续等信号，签名私钥已加密备份并演练 7/7，**私钥本体在本机仍是单点**。
 
+## 文字深化一期：表格读侧三笔账 + 段落第五边（v0.97）
+
+按「不扩格式、把现有格式做深」的路线图开工，窄口径：`src/lib/docx-fidelity.ts` +189 / −17（读手）、
+`src/lib/cell-style.ts` +45（模型属性层）、`src/lib/docx.ts` +20（写侧）。Rust 一个字没动。
+
+- **前置实测**（`tmp/x97`，18 枚夹具 + 3 枚往返件，三头对照：自家读手（HEAD 与改后两份对同一批件各出一份 HTML）+
+  独立字节腿（zipfile 直解 `word/document.xml`，不吃自家读侧）+ Word 16.0 只读 COM 腿
+  （`Table.*Padding` / `Cell.*Padding` / `Row.Height` / `WdRowHeightRule` / `Cell.Width`），只量不改产品）：
+  ① **宽度那一格**——`gridzero`（`w:gridCol` 三枚全零）改前整表无账，改后读手给 [120,160,240]px 而 Word 读回
+  90/120/180 磅 = 同一份账；`nogrid`（压根没有 `w:tblGrid`）与 `row0-notc`、`span-uneven`、`rt-span` 四臂逐臂同判
+  ours=[90,270,90]px / word=[67.5,202.5,67.5]pt / gridTwips=[1350,4050,1350] ⇒ 网格说话时按网格；
+  `span-clash`（行 0 逐格 `w:tcW` 与网格打架）读手 [90,270,90] 跟 gridCol 而 Word=[106.55,95.95]pt 按 `w:tblW` 重摊
+  （字节里 tcW=[3000,2700]）⇒ 这一臂是**两头的次序不同**，本轮选了 grid-first 并把不同形如实记 NOTE；
+  被弃的「把 tcW 均摊覆盖已有账」那一档量出来是 variantPx=[100,100,90]、对 Word 的最差偏差 127.50 磅而本轮算法 0.00
+  ⇒ 均摊不是备选而是错的形状。② **行高** `w:trHeight`——`rowh` 四行读手 40/80/60/无 px 而 Word 30/60/45 磅 +
+  rules=["atLeast","atLeast","exactly","auto"]：数只在 atLeast 那一档对得上，而**数住在 `@w:val` 而不是邻居那种 `@w:w`**
+  （改前 `headBefore=0`：字节里声明了 3 枚而读手一枚都拿不到，`bytesDeclared=3 / wordReal=3` 两头互证）；
+  `hRule` 缺省按 OOXML 说 atLeast，`exact` 的「超高裁内容」CSS 表达不了 ⇒ 按最小行高读入并**只在这一档**发一枚告警
+  （`fxRules=[null,"atLeast","exact",null]` 而 `exactWarnFx=1`，往返件 `warnRt=0`）。③ **格边距**
+  `w:tblCellMar` / `w:tcMar`——`mar-tbl` 表级 108 缇读手 [7.2,7.2,0,0]px 而 Word [5.4,5.4,0,0] 磅（同一份账三单位），
+  改前 `headPaddedCells=0` 而改后 4/4；`mar-subset`（表级说四边、格级只说左边）读手 `{top:2,right:7.2,bottom:3,left:20}`
+  而 Word [15,5.4,1.5,2.25] 磅 ⇒ **逐边覆盖**成立，而「整组替换」那一档量出来是 oursEdges=4 而 groupEdges=1
+  （Word 那一头也是 4）；`mar-zero` 的 0 是真值（上下边距就是 0 也落），而字节里没有 `w:tblCellMar` 时 Word 读
+  0.5/0.5 磅——那是**文档级默认那一层**，我们不读也不铺（记 NOTE，屏上交给 CSS 缺省）。④ **段落第五边 `w:between`**——
+  `between-nobottom` 三段读手 `workBottom=[true,true,false]` 而改前 `[false,false,false]`（串尾不画，与 Word 同方向）；
+  `between-break`（两段之间夹一张表）`[false,true,false]` ⇒ 断串那道门真管住了；`between-bottom`（显式 `w:bottom` 在场）
+  同一条缝不叠两根线；`between-run`（run 级 `w:pBdr`）三臂 `identical=true` ⇒ 本轮没有牵连 run 级那一头
+- **架构决定**（跟着数据走，宽度账的权威次序是本轮唯一的新裁决）：三笔账的形状都不是可选的——**网格先占、逐格补缺**
+  （`w:gridCol` 说了数的列先落自己的账，`w:tcW` 只往缺账的列 `holes` 里补，补的是「这一跨的总账减掉已知列再平摊给 holes」，
+  没有 holes 或减完剩负就整格跳过；没有 `w:tblGrid` 的表列数取「网格枚数与行 0 跨界的较大者」，`colwidth` 只在至少有一枚
+  数时才写；`w:type` 为 auto/pct 的 tcW 不吃——pct 的换算要版心宽而导入处没有）；**行高住 `tableRow.rowHeight`**
+  （HTML 里 `tr` 的高度本就是下限语义，与 atLeast 恰好同形；0 与缺省都不出账）；**格边距四边各一枚属性**
+  （`padTop/padRight/padBottom/padLeft` 存 CSS px、0 是真值，`mergeAttributes` 把各属性给出的 style 片段串起来所以每条
+  只写自己那一边；读侧「表级打底 + 逐边覆盖」，写侧只在有声明时给逐边 `w:tcMar`（缇），没声明的格不写）；
+  **between 只在下一段是同一串签名时落成本段下边框**（签名 = 生效 pPr 的四边 + between + 底纹，样式链里的边框参与判定；
+  中间隔表或非段落构件即断串、元素间的空白文本节点不算构件；显式 `w:bottom` 让位）。导出侧没有 between 出口，
+  落下去的边按 `w:bottom` 回写（同一条缝同一根线，Word 视觉等价而字节换档，诚实记下）。
+  **默认行距那一档不在本轮**：工作树里另有一枚 `.doc-content{line-height: 1.75 → normal}` 的 CSS 改动（v0.95/v0.96 记的
+  「纸面行高比 Word 厚」的默认档对应），它需要屏上 + 纸面两腿并会作废 v0.94/0.95/0.96 的绝对像素与纸面基线，
+  本轮没有 dev 树可用 ⇒ 拆出去另立一轮，本轮的口径只有上面这三笔账 + 第五边
+- **验证**（三条腿 + 编译，全部离线，证据都在最终源文上）：三方判据腿 `RESULT judge pass=28 fail=0`
+  （读手 / Word 16.0 的尺 / 字节三头同一趟，`Z|armsRead=17 warnArms=["f1-rowh"]`——告警只住在文档里真声明了 exact 的
+  那一臂）；结构+变异合并一腿 `RESULT struct pass=61 fail=0 | judges=47 files=3 mutants=38 bad=0`（`S1~S34` 钉读手：
+  `@w:val` 而非 `@w:w`、hRule 缺省 atLeast、exact 告警只在真 exact 时发、grid-first 那三枚出口、`tcWpx` 的 auto/pct
+  两枚 null 出口、表级打底 + 逐边覆盖、0 是真值、`w:start/w:end` 别名、between 的五条门（`bottom === undefined` 让位、
+  `local(nx.name) !== 'p'` 断串、空白文本节点跳过、签名一致才画、正文与格内两条通道都接上）；`C1~C7` 钉模型属性层
+  （四条边由一枚列表生成、逐边读自己的 padding、边距 0 是真值而行高只收正数、行高住在 `tableRow`）；`D1~D6` 钉写侧
+  （atLeast 回写、`pad*` 四边各取自己的属性、`margins` 只在有声明时给且单位 DXA）；38 枚变异各响该响的那条，含 `M14`
+  「退回本轮之前：表级边距整条丢弃」、`M7`「均摊覆盖已有账」、`M15`「整组替换而不是逐边覆盖」、`MD1`「导出改写成
+  exact ⇒ 读进来 atLeast、写出去 exact，往返不稳」、`MD2`「0 那一档写不出（读到的 0 边距在字节里蒸发）」；
+  `B0` 三份源文各自检（注释短语「原文里有且剥后没有」、代码字面与字符串活着、带引号的正则原样活着）+ `P1` 注释陷阱
+  三份各埋不响 + `P2` 反陷阱三份各真删一枚锚点并该响（`S5`/`C3`/`D1`））；往返腿（写→读同一份源文）`rt-rowh` 三行
+  `height: 40px / 80px / 无`、`rt-mar` 第一格四条边 `0/0/7.2/7.2` 而第二格只有 `padding-left: 20px`、`rt-span`
+  `colspan="2" colwidth="90,270"`；`pnpm exec tsc --noEmit` exit 0（Rust 本轮一个字没动，故 cargo/build 未跑）。
+  **本轮没有 dev 真机腿与纸面腿**：dev 树此刻由另一会话持有，而我的 dev 腿开头就 `__oofCloseTab` 关全部标签（那会毁掉
+  它未保存的工作）⇒ 行高与格边距在屏上和纸上的形状本轮**没有读数**，明写成未勾项
+- **本轮撞到的量具坑，都不是产品**：① 判据把格子里的 `<p>` 数成了段落（`paras=5` 而夹具是 3 段正文 + 1 张表），
+  「串尾不画」那条于是整臂假失败 ⇒ 量 `between` 的相邻关系前必须先把 `<table>…</table>` 整块摘掉；② `S19` 数的是
+  `marginsCss(` 的枚数，而那枚**函数定义本身**也命中 ⇒ 基线天然红，这一红在变异腿里伪装成「30 枚变异全都多响 [S19]」
+  （产品没坏，腿全红），改成「旧通道名 0 枚 + 调用恰 2 枚 + `padding-top:` 文案恰 1 枚」——同族教训：**数定义点的判据
+  是假绿/假红发生器**；③ `B0a` 的探针短语从别的文件（`src/index.css`）抄来，而它在本轮源文的注释里根本不存在 ⇒
+  探针改成「原文里必须有、剥后必须没有」两个条件一起判，判据自己证明它量得到；④ Word 腿在本机仍只能只读
+  （`SaveAs2`/`ExportAsFixedFormat` 挂），要的读数一律在导出之前落盘；⑤ 三份文件共用一枚变异表时，漏填 `file`
+  字段会让锚点在错的那份文件里数到 0 而报「锚点枚数 raw=0 stripped=0」，那是量具错不是产品错（锚点枚数门是这一轮
+  第一次跨三份文件生效的那道）；⑥ 产品注释里那句「Word 对每张表都写 `w:tblCellMar`」是**没有据的**——字节腿在手写
+  夹具上读出 15 枚 `TBLCELLMAR|None`，而判据腿的 NOTE 记着 Word 那一头此时给的是文档级 0.5 磅（另一层）⇒ 注释改成
+  实测形状
+- **本轮没动、量出来记着**（已开进路线图）：① **Word 的文档级默认格边距那一层**（字节里没有 `w:tblCellMar` 时 Word
+  读 0.5/0.5 磅）我们不读也不铺；② **cell-clash 那一格两头次序不同**（我们跟 gridCol，Word 按 tcW/tblW 重摊）——
+  grid-first 是本轮选的，第三方那一头没有对齐判据；③ **ODT 链路没有 `pad*` / `rowHeight` 通道**（odt.ts 两头都不认）；
+  ④ **`w:tblLayout` 仍不读**（自动/固定布局档吃不到）；⑤ **exact 行高的裁剪语义**（读入按 atLeast，屏上不裁，只有
+  一枚告警）；⑥ **行高与格边距在屏上/纸面没有读数**（本轮没有 dev 腿与纸面腿）；⑦ `w:between` 的**导出出口**
+  （写回成 `w:bottom`，字节换档）；⑧ v0.96 那六枚与 v0.95/v0.94/v0.93/v0.92/v0.91 那几项原样挂着
+- **收尾**：README 新增本节 + 架构两处就地改口（v0.30 表格通道那条补「v0.97 起读侧不再只吃 `w:gridCol`：网格先占、
+  tcW 补缺」并记上另两笔账、v0.39 段落边框那条把「第五边仍未接」改口成「v0.97 已接，`w:space` 仍未接」）+
+  路线图勾掉「读侧只吃 `w:gridCol`…」与「段落的第五边 `w:between` 仍未接」两条（各留改口注）并新开上述①~⑦ 与
+  「默认行距」那一枚拆出去的轮次；**版本号本轮不碰**——`package.json` / `tauri.conf.json` / `Cargo.toml` 现在住着
+  并发轮次的 0.98.0，本轮不与之抢这三处对齐（故本节描述的是源码形状而不是发行号）；tmp/x97 的 18 枚夹具、三头
+  前置实测腿、三方判据腿、结构+变异腿与往返腿按惯例删除；**dev 树全程未碰**（它属于另一会话）
+
+
 ## 性能（v0.3）
 
 
@@ -5801,9 +5886,15 @@ cargo check        # Rust 后端检查（在 src-tauri 下）
       no-op**（v0.38 起边框/底纹/竖排对齐在表头格上全都写不进去，普通格上又被第二型 false 记成失败），与
       **Word 虚线 `dashSmallGap` 一族读成实线**（`CSS_BORDER_STYLE` 补 `dashSmallGap`/`dashLargeGap`/`dotDotDash`/
       `dashDotStroked` → `dashed`）
-- [ ] **段落的第五边 `w:between` 仍未接**（v0.88 由字节腿当场数出代价：往返件里 **7 枚段落丢掉这一边**）：读侧没有这一枚
+- [x] **段落的第五边 `w:between` 仍未接**（v0.88 由字节腿当场数出代价：往返件里 **7 枚段落丢掉这一边**）：读侧没有这一枚
       ⇒ PSINGLE5 与 PSINGLE4 的 attrs 逐字相同且零告警，写侧也没有出口；COM 那头 `Borders.Item(5)` 对段落抛
       「集合要求的成员不存在」（单元格才有 e5）⇒ 这一格只能由 OOXML 字面判
+      ——**v0.97 已接，按近似落**：与下一段是同一串「相同边框与底纹」（四边 + between + 底纹的生效 pPr 签名一致）时，
+      between 落成**前一段**的下边框（CSS 没有"段间"这一条边；首段起每段有下边、串尾没有，方向天然同 Word）；
+      显式声明了 `w:bottom` 时 between 让位。导出侧没有 between 出口，落下去的边按 `w:bottom` 回写 ⇒ 往返件里
+      between 会改写成 bottom（同一条缝、同一根线，Word 读侧视觉等价，但字节形状换了档——诚实记下）。
+      判据（`between-nobottom` 三段）改前 `[false,false,false]` → 改后 `[true,true,false]`，夹一张表那一臂
+      `[false,true,false]`（断串的门真管得住）。
 - [ ] **异形线型一律静默降档**（v0.88）：我们写的 `dashed` 在 Word 读成另一档虚线（件里 `style3` → 件外 `style4`，
       Word 对话框写 `dashSmallGap`(3) 而 `dashed` 对回 `DashLargeGap`(4)），`thinThick*` / `thickThin*` / `threeD*`
       在 CSS 里没有对应表达 ⇒ `CSS_BORDER_STYLE` 认不出的按 solid 兜底，**明写不做界面**（四档线型之外不扩张）
@@ -5950,8 +6041,33 @@ cargo check        # Rust 后端检查（在 src-tauri 下）
       落盘的件交几何腿裁，写侧不回归由独立字节腿裁 ⇒ release 上这条收口只有形状推断
 - [ ] **v0.91 没有 release A/B**：界面那一半（「列宽」输入框与真光标）到不了 release 的注入缝，字节那一半由
       dev 腿落盘的件交独立字节腿 + Word 只读腿裁 ⇒ 输入框在 release 上只有形状推断
-- [ ] **读侧只吃 `w:gridCol`，不读 `w:tblLayout` / `w:tcW` / `w:tblCellMar` / `w:trHeight`**：第三方件里 `w:tcW` 与
+- [x] **读侧只吃 `w:gridCol`，不读 `w:tblLayout` / `w:tcW` / `w:tblCellMar` / `w:trHeight`**：第三方件里 `w:tcW` 与
       `w:gridCol` 打架时以谁为准**未量**（我们自己的件两边自洽，判据买不到这一格）；单元格边距与行高两头都没有通道
+      ——**v0.97 已接三笔**：**`w:gridCol` 先占、`w:tcW` 只补缺账的列**（holes；跨列格的 tcW 按「这一跨的总账减掉已知列
+      再平摊给 holes」，auto/pct 不吃；没有 `w:tblGrid` 的表列数取网格枚数与行 0 跨界的较大者）、`w:tblCellMar` /
+      `w:tcMar` 落 cell-style 的 `pad*` 四属性（0 是真值，**逐边覆盖**而不是整组替换）且导出逐边回写 `w:tcMar`（缇）、
+      `w:trHeight` 落 `rowHeight` 属性（数住 `@w:val`、hRule 缺省按 atLeast）且导出按 atLeast 回写（exact 的裁剪档
+      CSS 表达不了，导入记一枚告警）。判据不是自造件独证：三方同一趟 `RESULT judge pass=28 fail=0`（自家读手 /
+      Word 16.0 只读 COM / 独立字节腿），`gridzero` 臂 ours[120,160,240]px ↔ word[90,120,180]pt 同账、`rowh` 臂
+      40/80/60px ↔ 30/60/45 磅、`mar-tbl` 臂 108 缇 ↔ 7.2px ↔ 5.4 磅。
+- [ ] **`w:tblLayout` 仍不读**（v0.97 明写）：自动/固定布局那一档吃不到，第三方件里 `w:tblLayout w:type="autofit"`
+      与我们的固定布局解释不同形——本轮只补了宽度/行高/边距三笔账，布局档原样挂着
+- [ ] **Word 的文档级默认格边距那一层不读也不铺**（v0.97 量出）：字节里没有 `w:tblCellMar` 时 Word 的 COM 那头读回
+      0.5/0.5 磅（`mar-zero` 臂第二枚格），而独立字节腿在同一批夹具上数到 15 枚 `TBLCELLMAR|None` ⇒ 这一层住在
+      styles.xml 的文档默认而不是表上；我们不铺数，屏上交给 CSS 缺省
+- [ ] **tcW 与 gridCol 打架时两头次序不同**（v0.97 量出）：`cell-clash` 臂 ours=[90,180]px 跟 gridCol 而
+      Word=[106.55,95.95]pt 按 `w:tblW`/tcW 重摊（字节里 tcW=[3000,2700]）⇒ grid-first 是本轮选的次序，
+      第三方那一头没有对齐判据（被弃的均摊算法量出来最差偏差 127.50 磅而我们这一档 0.00）
+- [ ] **`pad*` / `rowHeight` 在 ODT 两头都没有通道**（v0.97 明写）：odt.ts 不认格边距也不认行高，docx → odt 再回 docx
+      这两笔账必丢
+- [ ] **exact 行高的裁剪语义只有一枚告警**（v0.97）：读入按 atLeast（下限），屏上内容超高时不会被裁，
+      而 Word 的 exact 是真裁——这一档的观感差异只在导入时说一句，没有别的到达面
+- [ ] **v0.97 没有 dev 真机腿与纸面腿**：行高与格边距在屏上和纸上的形状本轮**没有读数**（dev 树由另一会话持有，
+      而本轮的 dev 腿开头会关掉它全部标签 ⇒ 破坏性，不跑）；证据全在离线三头（读手/字节/Word 只读 COM）
+- [ ] **默认行距 `line-height` 仍比 Word 厚**（v0.95/v0.96 记的那笔纸面行高的默认档对应）：工作树里已备好
+      `.doc-content{line-height: 1.75 → normal}` 这一枚改动而**它不属于 v0.97**——它要屏上 + 纸面两腿，
+      并会作废 v0.94/0.95/0.96 那三批绝对像素与纸面基线（那三批都在 `line-height: 1.75` 的树上量的），
+      故另立一轮整批复跑
 - [ ] **无账的表存—重开一趟之后变成"有账"**（v0.89 带来的形状改变）：等分那份真网格被读侧收下 ⇒ 下一趟按固定宽写，
       Word 只读腿实测 re2-notblwidth 的 `PreferredWidthType` 2（百分比）→ 3（固定）。等分账本身三趟逐枚稳定（字节腿 E×4
       + W11），但"表级布局档跨一趟会换"这一格只记读数未作取舍；要维持百分比那一档就得把"这表原本没有账"另记一笔

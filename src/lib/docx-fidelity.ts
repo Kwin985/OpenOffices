@@ -22,6 +22,9 @@
 // 的文本，其余记一条"没有缓存结果，未重算"。OLE 嵌入对象的**内容**在 v0.44 起能取的都取：
 // 复合文档里的原生文件（\x01Ole10Native）与直接放 zip 的部件都会展开，工作表出表格、嵌入文档递归展开，
 // 取不出来的（Excel 97 的 BIFF、Visio 绘图、超过 24MB 的大件）才留"内容未提取"那行可见占位。
+// 表格读侧的三笔度量账在 v0.97 起认全：逐格 w:tcW（gridCol 缺列/全零时的权威账）、行高 w:trHeight、
+// 格边距 w:tblCellMar / w:tcMar（落进 cell-style 的 pad*/rowHeight 属性，docx/odoc 保存链路往返）；
+// 段落边框的第五边 w:between 同轮接上：与下一段是同一串「相同边框与底纹」时落成前一段的下边框。
 
 import { all, allDesc, attr, attrL, attrNum, els, find, findDesc, findL, local, parseXml, textOf, type XEl } from './ooxml'
 import { FieldEngine, fieldLabel, parseInstr, recomputable } from './docx-fields'
@@ -570,7 +573,9 @@ class Fidelity {
   ): Promise<{ html: string; items: number }> {
     let html = ''
     let items = 0
-    for (const n of nodes) {
+    // 带 下标 走：w:between 要看相邻的下一段是不是同一串边框（见 betweenOfSiblings）
+    for (let ni = 0; ni < nodes.length; ni++) {
+      const n = nodes[ni]
       if (typeof n === 'string') continue
       const t = local(n.name)
       if (t === 'sectPr' || t === 'altChunk') continue
@@ -604,7 +609,7 @@ class Fidelity {
         // 列表项之间由 ListState 负责开合；非列表段落出现即把整串列表关掉
         const numbered = !inCell && this.numOf(n).id !== undefined
         if (!numbered && list.open) html += list.flush()
-        html += await this.paragraph(n, list, inCell)
+        html += await this.paragraph(n, list, inCell, this.betweenOfSiblings(nodes, ni))
         items += 1
         continue
       }
@@ -635,12 +640,57 @@ class Fidelity {
     return { level: directLv ?? 0 }
   }
 
-  private async paragraph(el: XEl, list: ListState, inCell: boolean): Promise<string> {
+  /** 段落的生效 pPr：样式链给基线，段落自己的 pPr 覆盖同名项（Word 的直接格式优先于样式） */
+  private effPPrOf(el: XEl): { pPr?: XEl; effPPr?: XEl } {
     const pPr = find(el, 'w:pPr')
-    const styleId = pPr ? val(pPr, 'w:pStyle') : undefined
-    const view = styleView(this.book, styleId)
-    // 样式链给基线，段落自己的 pPr 覆盖同名项（Word 的直接格式优先于样式）
-    const effPPr = mergePPr([view.pPr, pPr])
+    const view = styleView(this.book, pPr ? val(pPr, 'w:pStyle') : undefined)
+    return { pPr, effPPr: mergePPr([view.pPr, pPr]) }
+  }
+
+  /**
+   * 段落边框/底纹签名：四边 + between + 底纹全部一致才算 Word 说的「相同边框与底纹」。
+   * 边框与底纹都取生效 pPr（样式链并入），样式里声明的边框同样参与同一串的判定。
+   */
+  private paraBorderSig(p: XEl): { sig: string; between?: string } | null {
+    const { effPPr } = this.effPPrOf(p)
+    const pbdr = effPPr ? find(effPPr, 'w:pBdr') : undefined
+    if (!pbdr) return null
+    const edges = borderEdges(pbdr)
+    return {
+      sig: JSON.stringify([
+        edges.top ?? null,
+        edges.right ?? null,
+        edges.bottom ?? null,
+        edges.left ?? null,
+        edges.between ?? null,
+        shadingHex(find(effPPr, 'w:shd')),
+      ]),
+      between: edges.between,
+    }
+  }
+
+  /**
+   * w:between（第五边）的落点：本段带 between、紧邻的下一段是 w:p 且签名一致时，
+   * between 落成**本段**的下边框（Word 的 between 只画在「相同段落之间」，末段不画——
+   * 这个方向天然满足：首段起每段都有下边、末段没有）。中间隔一张表、一个非段落构件即断串；
+   * 元素之间的空白文本节点不算构件（手写/整理过的 XML 常带换行）。
+   */
+  private betweenOfSiblings(nodes: (XEl | string)[], i: number): string {
+    const cur = nodes[i]
+    if (typeof cur === 'string' || local(cur.name) !== 'p') return ''
+    const curSig = this.paraBorderSig(cur)
+    if (!curSig?.between) return ''
+    let k = i + 1
+    while (k < nodes.length && typeof nodes[k] === 'string') k++
+    const nx = nodes[k]
+    if (!nx || typeof nx === 'string' || local(nx.name) !== 'p') return ''
+    const nxSig = this.paraBorderSig(nx)
+    return nxSig && nxSig.sig === curSig.sig ? (curSig.between ?? '') : ''
+  }
+
+  private async paragraph(el: XEl, list: ListState, inCell: boolean, betweenCss = ''): Promise<string> {
+    const { pPr, effPPr } = this.effPPrOf(el)
+    const view = styleView(this.book, pPr ? val(pPr, 'w:pStyle') : undefined)
     const base = baseRunProps(view.chain, effPPr)
 
     let prefix = ''
@@ -653,7 +703,7 @@ class Fidelity {
     const pieces = await this.inline(el, base, inCell)
     if (view.preformatted) return prefix + `<pre><code>${escText(plainText(el))}</code></pre>`
 
-    const style = this.paraCss(effPPr)
+    const style = this.paraCss(effPPr, betweenCss)
     const tag = view.level && view.level <= 4 ? `h${view.level}` : 'p'
     const body = this.layout(tag, style, pieces)
     return view.quote ? prefix + `<blockquote>${body}</blockquote>` : prefix + body
@@ -663,7 +713,7 @@ class Fidelity {
    * 段落样式 → CSS：对齐 + 缩进（lib/indent-extension.ts）+ 行距与段前后 + 底纹 + 四边边框
    * （后三项落在 lib/paragraph-style.ts 的属性上）
    */
-  private paraCss(pPr: XEl | undefined): string {
+  private paraCss(pPr: XEl | undefined, betweenCss = ''): string {
     const bits: string[] = []
     const jc = val(pPr, 'w:jc')
     const align =
@@ -716,6 +766,9 @@ class Fidelity {
         const v = edges[edge]
         if (v) bits.push(`border-${edge}: ${v}`)
       }
+      // w:between（第五边）：与下一段是同一串时落成本段下边框；显式声明了 w:bottom 时
+      // between 是冗余的，让位——两条都画会在同一条缝上叠出两根线
+      if (betweenCss && edges.bottom === undefined) bits.push(`border-bottom: ${betweenCss}`)
       // 段落的边框离字有 w:space（磅）距离，schema 里没有 padding 这一层，丢了不假装在
       if (all(pbdr, 'w:top').some((e) => (attrNum(e, 'w:space') ?? 0) > 1)) this.warn('段落边框与文字的间距未保留')
     }
@@ -1232,10 +1285,14 @@ class Fidelity {
 
   private async table(el: XEl): Promise<string> {
     const tblPr = find(el, 'w:tblPr')
-    const grid = all(find(el, 'w:tblGrid'), 'w:gridCol').map((g) => Math.round((attrNum(g, 'w') ?? 0) * TWIP_PX))
+    const gridRaw = all(find(el, 'w:tblGrid'), 'w:gridCol').map((g) => Math.round((attrNum(g, 'w') ?? 0) * TWIP_PX))
     const rows = all(el, 'w:tr')
     const tb = borderEdges(tblPr ? find(tblPr, 'w:tblBorders') : undefined)
     const tblInd = tblPr ? attrNum(find(tblPr, 'w:tblInd'), 'w') : undefined
+    // 表级默认格边距（w:tblCellMar）：本轮之前整条丢弃，声明了的左右 108 缇（=7.2px）也读不出来。
+    // 字节里没有这一层时我们不铺数（Word 那一头此时给的是文档默认 0.5 磅，属另一层，见判据腿 NOTE）。
+    // 逐格 w:tcMar 只在它说到的那几边上优先
+    const tblMarEdges = marginsOf(find(tblPr, 'w:tblCellMar'))
     // 横向 gridSpan / 纵向 vMerge 都按网格列记账：Word 保证同一次纵向合并里各行的 gridSpan 一致，
     // 所以 continue 单元格就落在 restart 单元格同一批网格列上，无需跳过被占用列。
     type Span = { row: number; span: number }
@@ -1260,6 +1317,30 @@ class Fidelity {
       }
       plan.push(cells)
     })
+    // 行 0 的网格账（px）：w:gridCol 说了数的列就是它的账（Word 解固定布局时按逐列网格排，
+    // 实测跨列表头格的 tcW 与 gridCol 之和打架时纸上吃的是 gridCol），gridCol 缺列、全零或压根
+    // 没有 grid 的那些列才由逐格 w:tcW 补——跨列格的 tcW 是这一跨的总宽，只能减掉已知列后分给
+    // 缺账的列，摊开覆盖已有账会把不等宽的三列抹成等宽（v0.97 前置实测 span-clash 臂量出来的）
+    const gridCols = Math.max(gridRaw.length, plan[0]?.reduce((m, c) => Math.max(m, c.gc + c.colspan), 0) ?? 0)
+    const acct: number[] = new Array(Math.max(1, gridCols)).fill(0)
+    for (let i = 0; i < acct.length; i++) if (gridRaw[i] > 0) acct[i] = gridRaw[i]
+    for (const c of plan[0] ?? []) {
+      const total = tcWpx(find(c.el, 'w:tcPr'))
+      if (total === null) continue
+      const holes: number[] = []
+      let known = 0
+      for (let i = 0; i < c.colspan; i++) {
+        const k = c.gc + i
+        if (k >= acct.length) break
+        if (acct[k]) known += acct[k]
+        else holes.push(k)
+      }
+      const rest = total - known
+      if (!holes.length || rest <= 0) continue
+      const each = Math.max(1, Math.round(rest / holes.length))
+      for (const k of holes) acct[k] = each
+    }
+    const gridKnown = acct.some((v) => v > 0)
     // 记账完成后才出 HTML：rowspan 要等所有行的 continue 都数完
     const tblStyle = tblInd ? tableIndentCss(Math.round(tblInd * TWIP_PX)) : ''
     let s = `<table${tblStyle ? ` style="${tblStyle}"` : ''}>`
@@ -1267,9 +1348,20 @@ class Fidelity {
       const trPr = find(rows[ri], 'w:trPr')
       // 表头由 w:trPr/w:tblHeader 决定，不限首行（Word 里可以声明第 2 行起重复表头）
       const tag = trPr && find(trPr, 'w:tblHeader') ? 'th' : 'td'
+      // 行高（w:trHeight）：HTML 里 tr 的高度本就是下限语义，atLeast 恰好同形；
+      // exact 的"超高裁内容"CSS 表达不了，按最小行高读入并如实记一条。
+      // 这一层的数住在 @w:val 而不是邻居 w:tcW / w:gridCol 那样的 @w:w
+      let trStyle = ''
+      const th = trPr ? find(trPr, 'w:trHeight') : undefined
+      const thv = attrNum(th, 'w:val')
+      if (thv !== undefined && thv > 0) {
+        if ((attr(th, 'w:hRule') ?? 'atLeast').toLowerCase() === 'exact')
+          this.warn('固定行高（exact）按最小行高读入，超高内容不再裁剪')
+        trStyle = `height: ${px2(thv * TWIP_PX)}px`
+      }
       const last = plan.length - 1
       const rowEnd = plan[ri].reduce((m, c) => Math.max(m, c.gc + c.colspan), 0)
-      s += '<tr>'
+      s += `<tr${trStyle ? ` style="${trStyle}"` : ''}>`
       for (const c of plan[ri]) {
         if (c.cont) continue
         const tcPr = find(c.el, 'w:tcPr')
@@ -1278,16 +1370,17 @@ class Fidelity {
         if (c.colspan > 1) attrs.push(`colspan="${c.colspan}"`)
         const sp = spanAt[c.gc]
         if (sp && sp.row === ri && sp.span > 1) attrs.push(`rowspan="${sp.span}"`)
-        if (ri === 0) {
-          const widths = grid.slice(c.gc, c.gc + c.colspan).filter((v) => v > 0)
+        if (ri === 0 && gridKnown) {
+          const widths = acct.slice(c.gc, c.gc + c.colspan).filter((v) => v > 0)
           if (widths.length) attrs.push(`colwidth="${widths.join(',')}"`)
         }
-        const style = cellStyleCss(tcPr, {
+        const mar = marginsCss({ ...tblMarEdges, ...marginsOf(find(tcPr, 'w:tcMar')) })
+        const style = [cellStyleCss(tcPr, {
           top: cb.top ?? (ri === 0 ? tb.top : tb.insideH),
           bottom: cb.bottom ?? (ri === last ? tb.bottom : tb.insideH),
           left: cb.left ?? (c.gc === 0 ? tb.left : tb.insideV),
           right: cb.right ?? (c.gc + c.colspan >= rowEnd ? tb.right : tb.insideV),
-        })
+        }), mar].filter(Boolean).join('; ')
         if (style) attrs.push(`style="${style}"`)
         s += `<${tag}${attrs.length ? ' ' + attrs.join(' ') : ''}>${await this.cellBlocks(c.el)}</${tag}>`
       }
@@ -1300,10 +1393,11 @@ class Fidelity {
   private async cellBlocks(tc: XEl): Promise<string> {
     const list = new ListState()
     let html = ''
-    for (const b of tc.children) {
+    for (let i = 0; i < tc.children.length; i++) {
+      const b = tc.children[i]
       if (typeof b === 'string') continue
       const t = local(b.name)
-      if (t === 'p') html += await this.paragraph(b, list, true)
+      if (t === 'p') html += await this.paragraph(b, list, true, this.betweenOfSiblings(tc.children, i))
       else if (t === 'tbl') {
         this.warn('嵌套表格已展平为段落')
         for (const tr of all(b, 'w:tr')) for (const inner of all(tr, 'w:tc')) html += await this.cellBlocks(inner)
@@ -1429,6 +1523,67 @@ function cellStyleCss(
 /** `w:tblInd`（twips）→ 表格离版心的缩进；表宽 100%，右边要一起收，否则顶出页面 */
 function tableIndentCss(px: number): string {
   return `margin-left: ${px}px; width: calc(100% - ${px}px)`
+}
+
+/**
+ * 一格的 w:tcW（dxa）→ 这一跨的总宽（px）。
+ * auto/pct 与没账都给 null：pct 的换算要版心宽（调用处没有），auto 本来就是"没账"。
+ * 跨列格写的就是它跨的那几列之和，不是单列宽，所以这里只交回总数、由调用处去分账。
+ */
+function tcWpx(tcPr: XEl | undefined): number | null {
+  const tcW = tcPr ? find(tcPr, 'w:tcW') : undefined
+  if (!tcW) return null
+  const type = (attr(tcW, 'w:type') ?? 'dxa').toLowerCase()
+  if (type === 'auto' || type === 'pct') return null
+  const v = attrNum(tcW, 'w')
+  if (v === undefined || v <= 0) return null
+  return Math.max(1, Math.round(v * TWIP_PX))
+}
+
+/** 四边格边距（px），没说的边是 undefined（不是 0） */
+type Margins = { top?: number; bottom?: number; left?: number; right?: number }
+
+/**
+ * w:tblCellMar / w:tcMar → 逐边 px。缺省边不落（让应用默认说话），auto/pct 不落，
+ * 0 是真值（Word 的上下边距常就是 0）。
+ */
+function marginsOf(mar: XEl | undefined): Margins {
+  if (!mar) return {}
+  const side = (names: string[]): number | undefined => {
+    for (const name of names) {
+      const e = find(mar, name)
+      if (!e) continue
+      const type = (attr(e, 'w:type') ?? 'dxa').toLowerCase()
+      if (type === 'auto' || type === 'pct') continue
+      const v = attrNum(e, 'w')
+      if (v !== undefined && v >= 0) return px2(v * TWIP_PX)
+    }
+    return undefined
+  }
+  const out: Margins = {}
+  const t = side(['w:top'])
+  if (t !== undefined) out.top = t
+  const b = side(['w:bottom'])
+  if (b !== undefined) out.bottom = b
+  const l = side(['w:left', 'w:start'])
+  if (l !== undefined) out.left = l
+  const r = side(['w:right', 'w:end'])
+  if (r !== undefined) out.right = r
+  return out
+}
+
+/**
+ * 逐边合并后的格边距 → padding。ECMA-376 §17.4.61 与 Word 实机读的都是"逐边"：
+ * 一枚只写了 left 的 tcMar，其余三边在 Word 眼里仍是表级那几个数
+ * （前置实测 mar-subset 臂：Word 报 15/5.4/1.5/2.25 磅而整组换那一档只剩 20px 的左边距）。
+ */
+function marginsCss(m: Margins): string {
+  const bits: string[] = []
+  if (m.top !== undefined) bits.push(`padding-top: ${m.top}px`)
+  if (m.bottom !== undefined) bits.push(`padding-bottom: ${m.bottom}px`)
+  if (m.left !== undefined) bits.push(`padding-left: ${m.left}px`)
+  if (m.right !== undefined) bits.push(`padding-right: ${m.right}px`)
+  return bits.join('; ')
 }
 
 /** 属性值里的引号要转义：脚注正文是用户文字，落在 data-* 属性上 */

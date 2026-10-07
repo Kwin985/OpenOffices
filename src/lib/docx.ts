@@ -11,6 +11,7 @@ import {
   FootnoteReferenceRun,
   Header,
   HeadingLevel,
+  HeightRule,
   type IBorderOptions,
   type IFontAttributesProperties,
   type ISpacingProperties,
@@ -948,11 +949,15 @@ function blocksOf(
               // 被上面竖跨压掉的那几枚列不能省（不省就会把整行往左错一枚，键进去的账落错格子）
               let gc = 0
               let ck = 0
+              // 行高（v0.97 起）：导入侧按 atLeast 读入（exact 的裁剪档 CSS 表达不了），
+              // 导出同档回写，往返稳定在 atLeast
+              const rh = num(r.attrs?.rowHeight)
               return new TableRow({
                 // 表头行由行级 w:trPr/w:tblHeader 记账（TipTap 用 th 单元格类型表示）。
                 // 只在命中时给属性：写成 tableHeader:false 会落 <w:tblHeader w:val="false"/>，
                 // 而读侧按"有没有这个元素"判断，伪标记会把正文行错认成表头。
                 ...(r.content ?? []).some((c) => c.type === 'tableHeader') ? { tableHeader: true } : {},
+                ...(rh > 0 ? { height: { value: Math.round(rh * PX_TWIP), rule: HeightRule.ATLEAST } } : {}),
                 children: (r.content ?? []).map((cell) => {
                   // TipTap 合并语义 colspan/rowspan → gridSpan + vMerge（docx 库内部展开 restart/continue）
                   const cs = colspanOf(cell)
@@ -964,6 +969,20 @@ function blocksOf(
                   const borders = bordersOf(cell.attrs)
                   const bg = shadingOf(cell.attrs?.background)
                   const va = cell.attrs?.vAlign
+                  // 格边距（v0.97 起）：pad* 属性（px，0 是真值）→ 逐边 w:tcMar（缇）；
+                  // 只在有声明时给 margins，不给默认值——Word 读侧对缺省边自己有表级账
+                  const padTw = (v: unknown): number | undefined =>
+                    typeof v === 'number' && v >= 0 ? Math.round(v * PX_TWIP) : undefined
+                  const mTop = padTw(cell.attrs?.padTop)
+                  const mBottom = padTw(cell.attrs?.padBottom)
+                  const mLeft = padTw(cell.attrs?.padLeft)
+                  const mRight = padTw(cell.attrs?.padRight)
+                  const margins = {
+                    ...(mTop !== undefined ? { top: mTop } : {}),
+                    ...(mBottom !== undefined ? { bottom: mBottom } : {}),
+                    ...(mLeft !== undefined ? { left: mLeft } : {}),
+                    ...(mRight !== undefined ? { right: mRight } : {}),
+                  }
                   // 一格多段要一段一个 w:p：早先图省事把所有子节点并成一个段落，
                   // 于是格内的第二行起既没有换行也没有自己的缩进/对齐（读回来整格糊成一行）
                   const cellBlocks = blocksOf(cell.content ?? [], 0, dt, contentTwips)
@@ -973,6 +992,7 @@ function blocksOf(
                     ...(rs > 1 ? { rowSpan: rs } : {}),
                     ...(borders ? { borders } : {}),
                     ...(bg ? { shading: bg } : {}),
+                    ...(Object.keys(margins).length ? { margins: { marginUnitType: WidthType.DXA, ...margins } } : {}),
                     ...(va === 'top' || va === 'middle' || va === 'bottom'
                       ? { verticalAlign: va === 'middle' ? VerticalAlignTable.CENTER : va === 'top' ? VerticalAlignTable.TOP : VerticalAlignTable.BOTTOM }
                       : {}),
