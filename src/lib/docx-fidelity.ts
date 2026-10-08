@@ -27,6 +27,10 @@
 // 段落边框的第五边 w:between 同轮接上：与下一段是同一串「相同边框与底纹」时落成前一段的下边框。
 // 格边距从此是四层逐边合并（样式基座 → 表级 → 条件层 → 逐格），条件层就是 `w:tblStylePr` 的 tcMar
 // 配 `w:tblLook` 的闸门——只有首行/末行/首列/末列四型会把边距落到实处，而 `w:val` 那枚十六进制从不被读。
+// 表级那一层的 w:tblW 从第八笔账起上账，但它只在整盘宽度账都没说时说话（无 w:gridCol、网格全零、
+// 行 0 也没逐格 w:tcW 的那些列）：Word 那趟量到的落点是「表宽折算后按列等分」，而 pct 那一档的口径是
+// 五十分之一百分点（5000 = 100% 版心）。w:tblLayout 的分流（fixed 按网格比例缩、autofit 等分）仍不吃：
+// 它的作用点在「网格有账」的那些臂，动它要重标屏上与纸面三批基线（v0.92/v0.93/v0.94）。
 
 import { all, allDesc, attr, attrL, attrNum, els, find, findDesc, findL, local, parseXml, textOf, type XEl } from './ooxml'
 import { FieldEngine, fieldLabel, parseInstr, recomputable } from './docx-fields'
@@ -515,6 +519,8 @@ class Fidelity {
   private bins = new Map<string, Promise<Uint8Array | null>>()
   /** 书签表与 SEQ 计数（交叉引用可以指向后面的段落，所以正文渲染前先扫一遍整篇） */
   private fields = new FieldEngine()
+  /** 版心宽（缇）：body 末尾 sectPr 的 pgSz 减左右页边距；表宽的 pct 那一档按它折算，说不全就是 0 */
+  private contentTw = 0
   /** w:id → 正文（脚注与尾注各自的编号空间，故分两张表）；引用处按此查正文 */
   private noteBodies: Record<'footnote' | 'endnote', Map<number, string>> = {
     footnote: new Map(),
@@ -571,6 +577,7 @@ class Fidelity {
     const body = findDesc(doc, 'w:body')
     if (!body) throw new Error('document.xml 缺 w:body')
     this.fields = FieldEngine.from(body)
+    this.contentTw = contentTwipsOf(body)
     const list = new ListState()
     const r = await this.sequence(body.children, list)
     return { html: r.html + list.flush(), blocks: r.items }
@@ -1369,6 +1376,18 @@ class Fidelity {
       for (const k of holes) acct[k] = each
     }
     const gridKnown = acct.some((v) => v > 0)
+    // 表级那一层的 w:tblW 只在整盘账都没说时说话：无网格、行 0 也没逐格 tcW 的那些列，
+    // Word 落的是「表宽折算后按列等分」（tb_pct30_nogrid 60% 版心 /3 格 = 120.67 磅、
+    // tc_only_tblw 4500 缇 /3 格 = 100 磅，两臂实测逐格等宽，而自家此前整盘无账交给浏览器自动布局）。
+    // 网格或 tcW 有账的那些臂本轮仍走原梯级：那里表宽的作用点是「按网格比例缩（layout=fixed）
+    // 还是等分（autofit/缺失）」，两档都由 w:tblLayout 那格分流，而动它要重标屏上与纸面三批基线
+    // （v0.92/v0.93/v0.94），故读手仍不吃 layout。
+    const tblTotal = gridKnown ? null : tblWpx(tblPr, this.contentTw)
+    if (tblTotal) {
+      const each = Math.max(1, Math.round(tblTotal / acct.length))
+      for (let i = 0; i < acct.length; i++) acct[i] = each
+    }
+    const acctKnown = gridKnown || !!tblTotal
     // 记账完成后才出 HTML：rowspan 要等所有行的 continue 都数完
     const tblStyle = tblInd ? tableIndentCss(Math.round(tblInd * TWIP_PX)) : ''
     let s = `<table${tblStyle ? ` style="${tblStyle}"` : ''}>`
@@ -1398,7 +1417,7 @@ class Fidelity {
         if (c.colspan > 1) attrs.push(`colspan="${c.colspan}"`)
         const sp = spanAt[c.gc]
         if (sp && sp.row === ri && sp.span > 1) attrs.push(`rowspan="${sp.span}"`)
-        if (ri === 0 && gridKnown) {
+        if (ri === 0 && acctKnown) {
           const widths = acct.slice(c.gc, c.gc + c.colspan).filter((v) => v > 0)
           if (widths.length) attrs.push(`colwidth="${widths.join(',')}"`)
         }
@@ -1591,6 +1610,49 @@ function tcWpx(tcPr: XEl | undefined): number | null {
   const v = attrNum(tcW, 'w')
   if (v === undefined || v <= 0) return null
   return Math.max(1, Math.round(v * TWIP_PX))
+}
+
+/**
+ * 表级的 w:tblW → 整张表的宽（px）。auto/0/没说都交回 null（那本来就是"没账"）。
+ * pct 那一档的口径是五十分之一百分点（5000 = 100%），基数是版心宽：三臂实测
+ * （tb_pct30_nogrid 3000 → Word 总宽 361.87px、tb_pct50_auto 与 tb_pct50_fixed 5000 → 603.07px，
+ * 版心 601.73px）只有这一档撞得上，按"百分之几"折的那档全都差着一倍。
+ * @w:w 还允许写成 "100%" 字面（我们的写侧无账时就是这么落的），两种形状都吃。
+ */
+function tblWpx(tblPr: XEl | undefined, contentTw: number): number | null {
+  const tblW = tblPr ? find(tblPr, 'w:tblW') : undefined
+  if (!tblW) return null
+  const type = (attr(tblW, 'w:type') ?? 'dxa').toLowerCase()
+  if (type === 'auto') return null
+  if (type === 'pct') {
+    if (contentTw <= 0) return null
+    const num = attrNum(tblW, 'w')
+    const raw = attr(tblW, 'w')
+    let ratio: number | null = null
+    if (num !== undefined) ratio = num / 5000
+    else if (raw && raw.endsWith('%')) ratio = Number(raw.slice(0, -1)) / 100
+    if (ratio === null || !(ratio > 0)) return null
+    const px = Math.round(contentTw * ratio * TWIP_PX)
+    return px > 0 ? px : null
+  }
+  const v = attrNum(tblW, 'w')
+  if (v === undefined || v <= 0) return null
+  return Math.max(1, Math.round(v * TWIP_PX))
+}
+
+/**
+ * 版心宽（缇）：body 末尾 sectPr 的 pgSz 减左右页边距，两腿各自量出来的是同一枚
+ * （字节腿 9026 缇 = 601.73px，Word 报 451.3 磅）。说不全给 0，pct 那一档就此没账。
+ */
+function contentTwipsOf(body: XEl): number {
+  const sect = findDesc(body, 'w:sectPr')
+  const pg = sect ? find(sect, 'w:pgSz') : undefined
+  const mar = sect ? find(sect, 'w:pgMar') : undefined
+  const w = attrNum(pg, 'w')
+  const left = attrNum(mar, 'left')
+  const right = attrNum(mar, 'right')
+  if (w === undefined || left === undefined || right === undefined) return 0
+  return w - left - right > 0 ? w - left - right : 0
 }
 
 /** 四边格边距（px），没说的边是 undefined（不是 0） */
