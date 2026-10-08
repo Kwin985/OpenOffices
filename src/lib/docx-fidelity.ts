@@ -22,15 +22,17 @@
 // 的文本，其余记一条"没有缓存结果，未重算"。OLE 嵌入对象的**内容**在 v0.44 起能取的都取：
 // 复合文档里的原生文件（\x01Ole10Native）与直接放 zip 的部件都会展开，工作表出表格、嵌入文档递归展开，
 // 取不出来的（Excel 97 的 BIFF、Visio 绘图、超过 24MB 的大件）才留"内容未提取"那行可见占位。
-// 表格读侧的三笔度量账在 v0.97 起认全：逐格 w:tcW（gridCol 缺列/全零时的权威账）、行高 w:trHeight、
-// 格边距 w:tblCellMar / w:tcMar（落进 cell-style 的 pad*/rowHeight 属性，docx/odoc 保存链路往返）；
+// 表格读侧的三笔度量账在 v0.97 起认全：逐格 w:tcW（与 w:gridCol 谁说了算，第十笔账起看 w:tblLayout）、
+// 行高 w:trHeight、格边距 w:tblCellMar / w:tcMar（落进 cell-style 的 pad*/rowHeight 属性，docx/odoc 保存链路往返）；
 // 段落边框的第五边 w:between 同轮接上：与下一段是同一串「相同边框与底纹」时落成前一段的下边框。
 // 格边距从此是四层逐边合并（样式基座 → 表级 → 条件层 → 逐格），条件层就是 `w:tblStylePr` 的 tcMar
 // 配 `w:tblLook` 的闸门——只有首行/末行/首列/末列四型会把边距落到实处，而 `w:val` 那枚十六进制从不被读。
 // 表级那一层的 w:tblW 从第八笔账起上账，但它只在整盘宽度账都没说时说话（无 w:gridCol、网格全零、
-// 行 0 也没逐格 w:tcW 的那些列）：Word 那趟量到的落点是「表宽折算后按列等分」，而 pct 那一档的口径是
-// 五十分之一百分点（5000 = 100% 版心）。w:tblLayout 的分流（fixed 按网格比例缩、autofit 等分）仍不吃：
-// 它的作用点在「网格有账」的那些臂，动它要重标屏上与纸面三批基线（v0.92/v0.93/v0.94）。
+// 所有行也没逐格 w:tcW 的那些列）：Word 那趟量到的落点是「表宽折算后按列等分」，而 pct 那一档的口径是
+// 五十分之一百分点（5000 = 100% 版心）。w:tblLayout 从第十笔账起吃：fixed 那一档网格是地板，
+// 任何一行的逐格 w:tcW 只往宽里抬（缩小不落）、跨列格的正差落所跨最后一条而负差丢、w:vMerge=continue
+// 那一格不参与；autofit 与 layout 缺失那一档反过来——网格让位、缩小照落，跨列格那一份均摊到所跨各列，
+// 一行都没说话的列退网格（Word 那里按内容重排，是账外）。真数 w:tblW 压过逐格账那两道门仍未开。
 
 import { all, allDesc, attr, attrL, attrNum, els, find, findDesc, findL, local, parseXml, textOf, type XEl } from './ooxml'
 import { FieldEngine, fieldLabel, parseInstr, recomputable } from './docx-fields'
@@ -1352,49 +1354,70 @@ class Fidelity {
       }
       plan.push(cells)
     })
-    // 行 0 的列账（px）：这一层现在由逐格 w:tcW 说了算，w:gridCol 退成它没说话时的底。
-    // 三头实测（第九笔账 b3，26 臂）：单列格的 tcW 与网格打架时 Word 纸上吃 tcW，缩小也照吃，
-    // 且与 w:tblLayout 三档无关（c_clash_uniform 三臂都落 75 磅、c_clash_sum_under_fixed 落
-    // 30|45|60 磅）；跨列格的 tcW 是这一跨的总账，只有「比它跨的网格之和还宽」那截上账，
-    // 落点是这一跨的最后一条（f_span 三臂第二行 60|120|120 磅），而比网格窄的那截 Word 直接不要
-    // （i_span_under 两臂第二行仍是网格 60|90|120 磅，跨列格自己量出来 150 磅 = 网格之和）——
-    // 余量加、缺口撤，两向不对称，故这里也不做负差。gridCol 缺列、全零或压根没有 grid 的那些列
-    // 仍由 tcW 减掉已知列后分给缺账的列（v0.97 那档不动：摊开覆盖已有账会把不等宽的三列抹成等宽）。
+    // 列账（px）第一次由 `w:tblLayout` 分流，且**所有行**一起上账（第十笔账三头实测，53 臂）：
+    // fixed 那一档网格是地板——任何一行的单列格都只往宽里抬，缩小不落（x_fix_nw 行0 各 1500 缇
+    // 而网格 60|90|120 磅，纸上落 75|90|120；c_clash_sum_under 落 60|90|120 而不是 30|45|60），
+    // 两行同列打架取最大而不是取最后一行（n_row12_big_first / _big_last 两序都落 105|90|120）；
+    // 跨列格仍是「比它跨的那盘账还宽」那截上账、落所跨的最后一条，负差丢（n_row1_span_pos 60|120|120、
+    // n_row1_span_neg 60|90|120），而 w:vMerge=continue 那一格的 tcW 根本不参与
+    // （n_row1_vmerge_continue 只有「跳过 continue 那格」这一支对得上，尺子=列 75|90|120）。
+    // autofit 与 layout 缺失那一档反过来：网格让位，逐列取所有行 tcW 的最大，缩小照落
+    // （x_aut_aw_shrink 30|30|30、n_row1_only_autofit 75|75|45），跨列格那一份均摊到所跨各列
+    // 而不是落最后一条（z_aut_row1_span 行1 跨 2 格 3600 缇 ⇒ 90|90|120，最后一条那一档是 60|120|120），
+    // 一行都没说话的列 Word 按内容重排（z_aut_row12 那两列落 10.55 磅）——那是账外，这里退网格。
     const gridCols = Math.max(gridRaw.length, plan[0]?.reduce((m, c) => Math.max(m, c.gc + c.colspan), 0) ?? 0)
     const acct: number[] = new Array(Math.max(1, gridCols)).fill(0)
     for (let i = 0; i < acct.length; i++) if (gridRaw[i] > 0) acct[i] = gridRaw[i]
-    for (const c of plan[0] ?? []) {
-      const total = tcWpx(find(c.el, 'w:tcPr'))
-      if (total === null) continue
-      const span: number[] = []
-      for (let i = 0; i < c.colspan; i++) if (c.gc + i < acct.length) span.push(c.gc + i)
-      if (!span.length) continue
-      if (span.length === 1) {
-        acct[span[0]] = total
-        continue
+    const layEl = find(tblPr, 'w:tblLayout')
+    const layFixed = !!layEl && (attr(layEl, 'w:type') ?? '').toLowerCase() === 'fixed'
+    const pure: number[] = new Array(acct.length).fill(0)
+    for (let ri = 0; ri < plan.length; ri++) {
+      for (const c of plan[ri]) {
+        if (c.cont) continue
+        const total = tcWpx(find(c.el, 'w:tcPr'))
+        if (total === null) continue
+        const span: number[] = []
+        for (let i = 0; i < c.colspan; i++) if (c.gc + i < acct.length) span.push(c.gc + i)
+        if (!span.length) continue
+        if (span.length === 1) {
+          const k = span[0]
+          if (layFixed) { if (total > acct[k]) acct[k] = total }
+          else if (total > pure[k]) pure[k] = total
+          continue
+        }
+        if (layFixed) {
+          const holes = span.filter((k) => !acct[k])
+          let known = 0
+          for (const k of span) known += acct[k]
+          if (holes.length) {
+            const rest = total - known
+            if (rest <= 0) continue
+            const each = Math.max(1, Math.round(rest / holes.length))
+            for (const k of holes) acct[k] = each
+            continue
+          }
+          if (total > known) acct[span[span.length - 1]] += total - known
+          continue
+        }
+        const each = total / span.length
+        for (const k of span) if (each > pure[k]) pure[k] = each
       }
-      const holes = span.filter((k) => !acct[k])
-      let known = 0
-      for (const k of span) known += acct[k]
-      if (holes.length) {
-        const rest = total - known
-        if (rest <= 0) continue
-        const each = Math.max(1, Math.round(rest / holes.length))
-        for (const k of holes) acct[k] = each
-        continue
-      }
-      if (total > known) acct[span[span.length - 1]] += total - known
+    }
+    if (!layFixed) {
+      for (let k = 0; k < acct.length; k++) if (pure[k] > 0) acct[k] = pure[k]
     }
     const gridKnown = acct.some((v) => v > 0)
-    // 表级那一层的 w:tblW 只在整盘账都没说时说话：无网格、行 0 也没逐格 tcW 的那些列，
-    // Word 落的是「表宽折算后按列等分」（tb_pct30_nogrid 60% 版心 /3 格 = 120.67 磅、
-    // tc_only_tblw 4500 缇 /3 格 = 100 磅，两臂实测逐格等宽，而自家此前整盘无账交给浏览器自动布局）。
-    // 网格或 tcW 有账的那些臂本轮仍走原梯级：那里表宽的作用点是「按网格比例缩（layout=fixed）
-    // 还是等分（autofit/缺失）」，两档都由 w:tblLayout 那格分流，而动它要重标屏上与纸面三批基线
-    // （v0.92/v0.93/v0.94），故读手仍不吃 layout。
-    // 这一层留了一处已知不如 Word 的账（第九笔账实测）：Word 那边表级精确宽是压过逐格 tcW 的
-    // （d_clash_tblw_pct30_fixed 表宽 30% 版心、逐格 tcW 各 1500 缇，纸上落的是表宽等分的 45.2 磅
-    // 而不是 tcW 的 75 磅），而压过来之后怎么分列又要看 layout——两道门一起开才是那一档，故本轮不开。
+    // 表级那一层的 w:tblW 只在整盘账都没说时说话：无网格、所有行也没逐格 tcW 的那些列，
+    // Word 落的是「表宽折算后按列等分」（tb_pct30_nogrid 30% 版心 /3 格 = 45.2 磅、
+    // tc_only_tblw 4500 缇 /3 格 = 75 磅，两臂实测逐格等宽，而自家此前整盘无账交给浏览器自动布局）。
+    // 这一层留了两处已知不如 Word 的账（第十笔账 b4 实测，53 臂）：真数表宽（dxa 或 pct）在场时
+    // Word 把它压在逐格账之上，且怎么压要看 layout——fixed 那一档是把上面这盘 max 形状**等比缩到表宽**
+    // （x_fix_d3000 网格 60|90|120 + 行0 各 75 磅 ⇒ max 形状 75|90|120，表宽 3000 缇 ⇒ 纸上
+    // 39.70|47.40|62.90 磅；n_row1_tblw_present 与 tc_tcw_vs_tblw 两臂同形），
+    // autofit/缺失那一档是**表宽除以首行的格数**、跨列格那一份再摊到所跨各列
+    // （x_aut_d3000_span 首行一枚跨 2 格 + 一枚单格 ⇒ 37.50|37.50|75.00 磅，而 tcW 自己说的 90|90|75 不作数；
+    // d_clash_tblw_pct30_fixed 表宽 30% 版心 + 逐格各 1500 缇 ⇒ 35.95|42.90|56.85 而不是 75 磅）。
+    // 动这两道要重标屏上与纸面三批基线（v0.92/v0.93/v0.94），故本轮仍不开，只把「谁压谁」的机理记清。
     const tblTotal = gridKnown ? null : tblWpx(tblPr, this.contentTw)
     if (tblTotal) {
       const each = Math.max(1, Math.round(tblTotal / acct.length))
