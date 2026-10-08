@@ -1352,28 +1352,38 @@ class Fidelity {
       }
       plan.push(cells)
     })
-    // 行 0 的网格账（px）：w:gridCol 说了数的列就是它的账（Word 解固定布局时按逐列网格排，
-    // 实测跨列表头格的 tcW 与 gridCol 之和打架时纸上吃的是 gridCol），gridCol 缺列、全零或压根
-    // 没有 grid 的那些列才由逐格 w:tcW 补——跨列格的 tcW 是这一跨的总宽，只能减掉已知列后分给
-    // 缺账的列，摊开覆盖已有账会把不等宽的三列抹成等宽（v0.97 前置实测 span-clash 臂量出来的）
+    // 行 0 的列账（px）：这一层现在由逐格 w:tcW 说了算，w:gridCol 退成它没说话时的底。
+    // 三头实测（第九笔账 b3，26 臂）：单列格的 tcW 与网格打架时 Word 纸上吃 tcW，缩小也照吃，
+    // 且与 w:tblLayout 三档无关（c_clash_uniform 三臂都落 75 磅、c_clash_sum_under_fixed 落
+    // 30|45|60 磅）；跨列格的 tcW 是这一跨的总账，只有「比它跨的网格之和还宽」那截上账，
+    // 落点是这一跨的最后一条（f_span 三臂第二行 60|120|120 磅），而比网格窄的那截 Word 直接不要
+    // （i_span_under 两臂第二行仍是网格 60|90|120 磅，跨列格自己量出来 150 磅 = 网格之和）——
+    // 余量加、缺口撤，两向不对称，故这里也不做负差。gridCol 缺列、全零或压根没有 grid 的那些列
+    // 仍由 tcW 减掉已知列后分给缺账的列（v0.97 那档不动：摊开覆盖已有账会把不等宽的三列抹成等宽）。
     const gridCols = Math.max(gridRaw.length, plan[0]?.reduce((m, c) => Math.max(m, c.gc + c.colspan), 0) ?? 0)
     const acct: number[] = new Array(Math.max(1, gridCols)).fill(0)
     for (let i = 0; i < acct.length; i++) if (gridRaw[i] > 0) acct[i] = gridRaw[i]
     for (const c of plan[0] ?? []) {
       const total = tcWpx(find(c.el, 'w:tcPr'))
       if (total === null) continue
-      const holes: number[] = []
-      let known = 0
-      for (let i = 0; i < c.colspan; i++) {
-        const k = c.gc + i
-        if (k >= acct.length) break
-        if (acct[k]) known += acct[k]
-        else holes.push(k)
+      const span: number[] = []
+      for (let i = 0; i < c.colspan; i++) if (c.gc + i < acct.length) span.push(c.gc + i)
+      if (!span.length) continue
+      if (span.length === 1) {
+        acct[span[0]] = total
+        continue
       }
-      const rest = total - known
-      if (!holes.length || rest <= 0) continue
-      const each = Math.max(1, Math.round(rest / holes.length))
-      for (const k of holes) acct[k] = each
+      const holes = span.filter((k) => !acct[k])
+      let known = 0
+      for (const k of span) known += acct[k]
+      if (holes.length) {
+        const rest = total - known
+        if (rest <= 0) continue
+        const each = Math.max(1, Math.round(rest / holes.length))
+        for (const k of holes) acct[k] = each
+        continue
+      }
+      if (total > known) acct[span[span.length - 1]] += total - known
     }
     const gridKnown = acct.some((v) => v > 0)
     // 表级那一层的 w:tblW 只在整盘账都没说时说话：无网格、行 0 也没逐格 tcW 的那些列，
@@ -1382,6 +1392,9 @@ class Fidelity {
     // 网格或 tcW 有账的那些臂本轮仍走原梯级：那里表宽的作用点是「按网格比例缩（layout=fixed）
     // 还是等分（autofit/缺失）」，两档都由 w:tblLayout 那格分流，而动它要重标屏上与纸面三批基线
     // （v0.92/v0.93/v0.94），故读手仍不吃 layout。
+    // 这一层留了一处已知不如 Word 的账（第九笔账实测）：Word 那边表级精确宽是压过逐格 tcW 的
+    // （d_clash_tblw_pct30_fixed 表宽 30% 版心、逐格 tcW 各 1500 缇，纸上落的是表宽等分的 45.2 磅
+    // 而不是 tcW 的 75 磅），而压过来之后怎么分列又要看 layout——两道门一起开才是那一档，故本轮不开。
     const tblTotal = gridKnown ? null : tblWpx(tblPr, this.contentTw)
     if (tblTotal) {
       const each = Math.max(1, Math.round(tblTotal / acct.length))
