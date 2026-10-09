@@ -1581,7 +1581,9 @@ export function ommlLinear(el: XEl): string {
 function edgeCss(b: XEl): string {
   const style = CSS_BORDER_STYLE[(attr(b, 'w:val') ?? 'single').toLowerCase()] ?? 'solid'
   if (style === 'none') return 'none'
-  const px = eighthsToPx(attrNum(b, 'w:sz') ?? 8)
+  // Word 门面把 w:sz="0" 的实线报成 LineWidth=2（0.25 磅，它那刻度的最小发墨档），而 0px 的 CSS 边框一滴墨都不落；
+  // 4/6/8 原样通过（真件表级与改造件段落两臂同测），所以这是地板不是一律取最小
+  const px = eighthsToPx(Math.max(2, attrNum(b, 'w:sz') ?? 8))
   const hex = rgb2hex(`#${(attr(b, 'w:color') ?? '').replace(/^#/, '').toLowerCase()}`) ?? '#000000'
   return `${px}px ${style} ${hex}`
 }
