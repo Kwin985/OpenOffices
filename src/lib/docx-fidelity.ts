@@ -1670,7 +1670,14 @@ function tcWpx(tcPr: XEl | undefined): number | null {
  * 与 auto/没写/空字面/负数逐格同形（fixed 落 18.00 磅、autofit 与缺 layout 落 11.80 磅，两把内容重排尺），
  * 那枚 w 上的数字从不进账；规格外（w:type=foo）与缺 w:type 在表级 Word 复用数字（pwtype=3 pw=225.65 磅），
  * 所以这一层只把 nil 取出去、不设 dxa 白名单——方向与第十一笔账的格级闸相反。
- * @w:w 还允许写成 "100%" 字面（我们的写侧无账时就是这么落的），两种形状都吃。
+ * w:w 还允许写成 "100%" 这种字面，且真件（含我们自己的写侧）把它落在带前缀的 w:w 属性名上——
+ * 第十三笔账 b1 之前这一行只读无前缀的 w，那枚字面在真件上永远够不着（真件字节腿 b1：
+ * 1154 表枚全带 tblW，百分号字面 0 枚），所以这一档只在自家写侧的往返与第三方件上兑现。
+ * 两档口径不同、Word 门面各自说话（合并判据腿 b1，23 臂）：数值按五十分之一百分点
+ * （2500 → pw=50、3000 → 60），字面按百分之几（"30%" → pw=30、"100%" → 100、"50%" → 50），
+ * 按"百分之几"折字面这一档才撞得上（"100%" 两臂等严、总差 −0.05 磅，"30%"/"50%"/窄版心在松尺内）。
+ * 字面只吃紧跟百分号的十进制："30 %" 在 Word 报 pw=0（无宽）故不上账，与 abc%/空/"0%"/"-10%" 同归账外。
+ * 缺 w:type 而字面带百分号时 Word 仍推断成 pct（pw=30、45.2 磅）而我们按 dxa 落空——本轮不动。
  */
 function tblWpx(tblPr: XEl | undefined, contentTw: number): number | null {
   const tblW = tblPr ? find(tblPr, 'w:tblW') : undefined
@@ -1680,10 +1687,10 @@ function tblWpx(tblPr: XEl | undefined, contentTw: number): number | null {
   if (type === 'pct') {
     if (contentTw <= 0) return null
     const num = attrNum(tblW, 'w')
-    const raw = attr(tblW, 'w')
+    const raw = attr(tblW, 'w') ?? attrL(tblW, 'w')
     let ratio: number | null = null
     if (num !== undefined) ratio = num / 5000
-    else if (raw && raw.endsWith('%')) ratio = Number(raw.slice(0, -1)) / 100
+    else if (raw && /^-?\d+(?:\.\d+)?%$/.test(raw)) ratio = Number(raw.slice(0, -1)) / 100
     if (ratio === null || !(ratio > 0)) return null
     const px = Math.round(contentTw * ratio * TWIP_PX)
     return px > 0 ? px : null
