@@ -33,6 +33,11 @@
 // 任何一行的逐格 w:tcW 只往宽里抬（缩小不落）、跨列格的正差落所跨最后一条而负差丢、w:vMerge=continue
 // 那一格不参与；autofit 与 layout 缺失那一档反过来——网格让位、缩小照落，跨列格那一份均摊到所跨各列，
 // 一行都没说话的列退网格（Word 那里按内容重排，是账外）。真数 w:tblW 压过逐格账那两道门仍未开。
+// 逐格的 w:tcW 从此只认型别 dxa（没写 w:type 也算 dxa），auto/pct/nil/未知一律账外（第十一笔账）：
+// pct 有基数、但那基数是**表宽**不是版心（夹具把表宽与版心拉开时，Word 读折表宽那档差 0.02 磅、折版心那档差 90.27 磅），
+// 所以它落在上面那两道门之后；真件那侧同向——首行带 pct 的 30 枚表全为「缺 w:tblLayout × 有真数表宽」，pct 折宽离
+// 声明网格 19 枚 ≤1 磅（no-op）、11 枚 2.08–65.28 磅；Word 能开的 6 枚件里 11 枚同族表有 10 枚读的就是声明网格（0.00 磅）。
+// nil 是「这格没宽」而不是「宽是 0」：把它跟 dxa 一起当数字读会造出一枚假宽（夹具 p_type_nil：Word 60|90|120＝网格，旧码 75|90|120）。
 
 import { all, allDesc, attr, attrL, attrNum, els, find, findDesc, findL, local, parseXml, textOf, type XEl } from './ooxml'
 import { FieldEngine, fieldLabel, parseInstr, recomputable } from './docx-fields'
@@ -1634,15 +1639,23 @@ function tableIndentCss(px: number): string {
 }
 
 /**
- * 一格的 w:tcW（dxa）→ 这一跨的总宽（px）。
- * auto/pct 与没账都给 null：pct 的换算要版心宽（调用处没有），auto 本来就是"没账"。
+ * 一格的 w:tcW → 这一跨的总宽（px）：**只有 dxa（或没写 w:type）才是数字**。
+ * auto/nil/未知型本来就是"没账"；nil 尤其容易被读出一枚假宽——它的 `w:w` 按规格常写 0，但第三方件里
+ * 也带着旧数字（夹具 p_type_nil：Word 读 [60|90|120]＝声明的网格，旧码把 nil 的数字读成 75 磅）。
+ * pct 不是没有基数，而是它的基数是**表宽**不是版心（第十一笔账 32 臂实测：`r_fix_dxa4513_uneven`
+ * 表宽 225.65 磅时 pct 折宽对 Word 差 0.02 磅、折版心差 90.27 磅），而表宽在我们这里只在整盘宽度
+ * 账都没说时才上账（第八笔账立着的那两扇门），所以 pct 落在门外＝账外。
+ * 真件那侧同向：266 枚可读件里首行带 pct 的 30 枚表全为「缺 w:tblLayout × 有真数表宽」，pct 折宽离声明网格分两桶——
+ * 19 枚 ≤1 磅（0.10–0.64，上不上账是 no-op）、11 枚差 2.08–65.28 磅；而 Word 能开的 6 枚件里 11 枚含首行 pct 的表
+ * 有 10 枚读的就是声明的网格（0.00 磅）、1 枚读的是 pct 折出来的那档（0.32 磅）⇒ 折进来只会把前 10 枚推远。
+ * nil 在这 266 枚里 0 命中（40196 枚 tcW），故此闸对真件可证不变。
  * 跨列格写的就是它跨的那几列之和，不是单列宽，所以这里只交回总数、由调用处去分账。
  */
 function tcWpx(tcPr: XEl | undefined): number | null {
   const tcW = tcPr ? find(tcPr, 'w:tcW') : undefined
   if (!tcW) return null
   const type = (attr(tcW, 'w:type') ?? 'dxa').toLowerCase()
-  if (type === 'auto' || type === 'pct') return null
+  if (type !== 'dxa') return null
   const v = attrNum(tcW, 'w')
   if (v === undefined || v <= 0) return null
   return Math.max(1, Math.round(v * TWIP_PX))
