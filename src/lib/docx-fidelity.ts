@@ -1448,6 +1448,8 @@ class Fidelity {
         trStyle = `height: ${px2(thv * TWIP_PX)}px`
       }
       const last = plan.length - 1
+      // 行条件层 w:tblPrEx 的格边距：它是 w:tr 的首子（排在 w:trPr 之前），只说边距这一样上账
+      const exMar = marginsOf(find(find(rows[ri], 'w:tblPrEx'), 'w:tblCellMar'))
       const rowEnd = plan[ri].reduce((m, c) => Math.max(m, c.gc + c.colspan), 0)
       s += `<tr${trStyle ? ` style="${trStyle}"` : ''}>`
       for (const c of plan[ri]) {
@@ -1467,6 +1469,21 @@ class Fidelity {
           ...condMarginsFor(look, conds, ri, ri === last, 'tblMar'),
           ...tblMarEdges,
           ...condMarginsFor(look, conds, ri, ri === last, 'mar'),
+          // 行条件层（w:tblPrEx/w:tblCellMar，第十五笔账）。四臂同批（b19 构造 / b20 Word 读数 /
+          // b21 归档 / b22 改前读数；尺是每臂三行的 vpos 差，行盒高从 a1 定标成 14.00 磅）：
+          // a2_ex_full 上下 14.90/15.25 磅 ⇒ 这一层吃、且压过表级（表级只说了 5 磅）；
+          // a3_ex_top_only 上 14.90 而下 5.30 ⇒ **逐边合并**，它没说的那条边仍回落到表级，不是整组替换；
+          // a4_ex_vs_cell 与 a5_cell_only 同形 10.10/10.10 ⇒ 逐格 w:tcMar 压过它，所以铺在最后一层之前；
+          // a6_ex_over_missing 15.30/15.55 ⇒ 表级那层没说它也吃；a7_ex_zero 0.10/0.15 ⇒ 0 是真值。
+          // 两处已知不如 Word / 无从裁决的账留这儿：
+          // ① 与条件层（w:tblStylePr）、样式基座的先后——真件里行条件边距与那两层同槽 0 枚（b11），
+          //    Word 无从裁决，本轮把它放在两者之上；
+          // ② w:type="auto" 带一枚数时 Word 落 0（a8_ex_auto_type 上边 0.20 磅）而 marginsOf 把 auto
+          //    归账外——真件里这一层的边距 12722 枚全是 dxa（b11），那一档在真件上够不着，不为它改闸。
+          // 同层的 w:tblBorders / w:tblLayout / w:shd 仍不上账：真件里它们与表级同槽各 39400 边 /
+          // 1353 表 / 12 枚，读数全同（0 分歧 / 1353 与 1353 identical / 12 枚全 auto 或没写），
+          // 铺上去也改不了任何一张表。
+          ...exMar,
           ...marginsOf(find(tcPr, 'w:tcMar')),
         })
         // 底纹三层取一（逐格 > 条件层 > 样式基座）：比的是哪一层的 w:shd 在场，
