@@ -743,11 +743,14 @@
   （`p_type_nil` 写 `w:w="1500" w:type="nil"`：旧读手 [75|90|120]、Word [60|90|120]＝声明的网格，改后两头同为 60|90|120；`t_nil_aut` 同形）；
   `pct` 的账外理由由「没有基数」改口成「基数是**表宽**不是版心，而表宽那道门还关着」（`r_fix_dxa4513_uneven`：折表宽差 0.02 磅/格、折版心差 90.27 磅/格）；
   规格外型别 Word 把数字继续用（`t_foo_aut` Word [75|75|75]）而我们账外，266 枚真件里 nil 与规格外各 0 命中 ⇒ 这道闸对真件可证是 no-op；
-  `auto` / `0` 的表宽仍不吃，出账闸门仍是 `acctKnown = gridKnown || !!tblTotal`、
+  `auto` / `nil` / `0` 的表宽仍不吃（第十二笔账把表级那道闸的 nil 同族缺口收掉，见下面那条），出账闸门仍是 `acctKnown = gridKnown || !!tblTotal`、
   发射门仍是 `ri === 0 && acctKnown` 配 `.filter((v) => v > 0)` ⇒ 上账的范围变了而**出账的形状没变**。
   **表格读侧第八笔账起，表级那一层的 `w:tblW` 只在整盘宽度账都没说时说话**（无 `w:gridCol`、网格全零、所有行也没逐格 `w:tcW` 的那些列 ⇒ 折出总宽后按列等分：
   `tb_pct30_nogrid` 30% 版心 /3 格 = 45px ↔ Word 45.20|45.25|45.25（松等）、
   `tc_only_tblw` 4500 缇 /3 格 = 75 磅 ↔ Word 75|75|75；pct 那一档的口径是**五十分之一百分点**（5000 = 100% 版心 = 9026 缇，按「百分之几」折的那一档差一整倍））；
+  **第十二笔账把表级这一族的型别闸收成「`auto` 与 `nil` 都不算数字」**：带正数的 `nil` 在 Word 门面报 `pwtype=1 pw=0.00`（`w_nog_nil4513_fix` 落 18.00|18.00|18.00 磅的
+  内容重排，而旧读手把 4513 缇折成 75.00 磅/格——37 臂里这样的造宽臂 7 枚）⇒ `nil` 并入 `auto` 那一档；而**规格外与缺 `w:type` 在这一层仍复用那枚数字**
+  （`w_nog_foo4513_fix` Word `pwtype=3 pw=225.65`、逐格与 dxa 臂同形）⇒ 表级不设格级那道 dxa 白名单，**两族方向相反**（第十一笔账在格级把规格外请出门）；
   **第十笔账把「真数表宽压过逐格账」那两道门的机理量清而门仍不开**：
   fixed 那一档 Word 是把上面这盘 max 形状**等比缩到表宽**（`x_fix_d3000` max 形状 75|90|120 + 表宽 3000 缇 ⇒ 纸上 39.70|47.40|62.90 磅、
   `n_row1_tblw_present` 与 `tc_tcw_vs_tblw` 同形），autofit 与缺失那一档是**表宽 ÷ 首行格数**、
@@ -5511,6 +5514,87 @@ Rust 一个字没动、写侧一寸没碰、模型属性一枚都不新增（`pa
   `tmp/xmar11` 的 43 枚夹具、改前/改后两趟判据腿（同一份 Word 日志）、真件字节腿与结构+变异腿按惯例删除；
   并发会话的工作树 README 此刻仍不含第四~十一笔账这几节 ⇒ 本节以 `git show HEAD:README.md` 为底落 blob，不去动他们那一份；**dev 树全程未碰**。
 
+## 表级那一层的 `w:tblW` 第一次按型别收口：nil 带正数在 Word 那里是「没宽」，而规格外在表级复用数字、在格级请出门
+
+按「不扩格式、把现有格式做深」的路线图开工，本轮取第十一笔账明写挂着的那枚姊妹缺口——表级 `w:tblW` 的 `w:type` 到底哪几档算数字。逐格那一族收成 dxa 白名单时，
+源文注释就记着「表级那一层同样会读出一枚假宽」：`tblWpx` 那道闸只对 `auto` 关门，`nil` 带着正数时照样折成一枚文件里没说的表宽，再按列等分上账。
+窄口径：`src/lib/docx-fidelity.ts` 改动 6 增 / 2 删（净 +4；增里 5 行是源文注释、1 行是代码，删里 1 行注释、1 行代码），全部住在读手 `tblWpx` 那一枚闸门上，
+Rust 一个字没动、写侧一寸没碰、模型属性一枚都不新增。**本轮不占版本号**：`package.json` / `Cargo.toml` / `tauri.conf.json` 现在住着并发轮次的 0.98.0 ⇒ 本节按内容命名。
+
+- **前置实测**（`tmp/xmar12`，37 枚自造夹具 = 表级型别七档（dxa / pct / auto / nil / 规格外 / 缺 `w:type` / 没写 `w:tblW`）× 门的两种状态（无网格、有网格、全 0 网格、
+  格级只说 dxa、格级只说 pct）× `w:tblLayout` 三档 + 3 枚窄版心件；三头同一趟：自家读手 + Word 16.0 只读 COM + 独立字节腿，互不吃对方的读手）。
+  字节腿 `臂数=37 与夹具生成器打架=0 门开臂(无网格)=30 带网格臂=7 带逐格tcW臂=4 nil臂=16 规格外臂=3 窄版心臂=3 type={"dxa":7,"foo":3,"nil":16,"pct":6,"auto":2,"无tblW":2,"缺type":1} lay={"fixed":26,"autofit":9,"缺":2}`；
+  Word 腿 `arms=37 fbArms=0 failArms=0 files=37`；改前那一趟判据 `等(严)=5 等(松含严)=16 不等=11 形状不合=0 解析不合=0 ours账外=10 nil造宽臂=7`。量出来四格：
+  ① **`nil` 带正数在 Word 门面就是「没宽」**：`w_nog_nil4513_fix`（`<w:tblW w:w="4513" w:type="nil"/>`、无网格、fixed）Word 报 `pwtype=1 pw=0.00` 而首行逐格
+  18.00|18.00|18.00 磅，`autofit` 与缺 layout 那两臂（`w_nog_nil4513_aut` / `w_nog_nil4513_non`）落 11.80|11.80|11.80——两把内容重排的尺，而那枚 4513 缇（225.65 磅）
+  一分都没进账；旧读手把它折成 300.87px 再等分 ⇒ ours 75.00 磅/格（`w_nog_nil1500_fix` 那枚 1500 缇折成 24.75 磅/格）。这一族共 7 臂，是本轮唯一
+  「旧读手造出一枚文件里没说的表宽」的形状，且**全部住在门开那一侧**（其中两枚是「网格全 0」的 `w_gzero_nil4513` 与「格级只有 pct 说话」的 `w_tcw_nilpct_fix`——
+  门看着该挡而实际没挡）。
+  ② **`nil` 与 `auto` / 没写 `w:tblW` / 空字面 / 负数五臂同形**：`w_nog_nil0_fix`（`w:w="0"`）、`w_nog_empty_fix`（`w:w` 写成空字面）、`w_nog_nilneg_fix`（-100 缇）、
+  `w_nog_auto4513_fix`、`w_nog_none_fix` 在 Word 那头全是 `pwtype=1` + fixed 落 18.00 磅 / autofit 落 11.80 磅 ⇒ 表级这一层的正确闸是「把 `nil` 并入 `auto` 那一档」，
+  而不是照抄逐格那族的白名单；`w_nog_dxaneg_fix`（dxa 而负）Word 门面报 `pwtype=3 pw=-5.00` 而格仍 18.00，我们这侧 `w > 0` 那道闸本来就挡着 ⇒ 两头都没账而门面各说各话。
+  ③ **规格外型别在表级继续用那个数字**：`w_nog_foo4513_fix` / `w_nog_foo4513_aut`（`w:type="foo"`）Word 报 `pwtype=3 pw=225.65`、逐格 75.25|75.20|75.20 = 与 dxa 臂同形，
+  缺 `w:type` 那一枚 `w_nog_notype4513` 同形 ⇒ 这一层只把 `nil` 取出去。**方向与第十一笔账的格级闸相反**（格级把规格外请出门、表级把它留在账内），
+  所以两族各立一道闸而不并成一条梯子。
+  ④ **门（`gridKnown`）mask 得住谁**：有网格数字那族 mask 得住（`w_g_nil4513_fix` 严等 60|90|120 磅而 Word 门面给的是 `pw=9999999` 哨兵）、
+  有格级 dxa 那族也 mask 得住（`w_tcw_nil_fix` / `w_tcw_nil_aut` / `w_lowrow_nil_fix` 三臂严等 75|90|120 = 逐格那一盘账）；
+  全 0 网格 mask 不住（`w_gzero_nil4513`）、格级只说 pct 时同样 mask 不住（`w_tcw_nilpct_fix` ours 造 75.00×3 而 Word 2.00|2.40|2.25 是内容重排）；
+  另有一族「门挡而真数表宽在 Word 那头压过网格」本轮只数不等不开门（`w_g_dxa4513_fix` / `w_g_foo4513_fix` Word 50.25|75.20|100.20、
+  `w_g_pct5000_fix` 100.55|150.75|201.00 而 ours 落网格 60|90|120）。
+
+- **本轮唯一的架构决定**（跟着数据走：缺陷住在「表级那道闸漏了 `nil` 这一档」，而**不是**「表级也该上 dxa 白名单」）：
+  `tblWpx` 那句 `if (type === 'auto') return null` 换成 `if (type === 'auto' || type === 'nil') return null`，规格外与缺 `w:type` 继续算数字（Word 在表级复用那枚数，
+  读数与 dxa 臂逐格同形）。类型层面这条决定另给了一枚自证：在表级套白名单（变异 m2）会让它下面的 pct 分支静态不可达，
+  `pnpm exec tsc --noEmit` 直接报 `src/lib/__q12m2.ts(1680,7): error TS2367: This comparison appears to be unintentional because the types '"dxa"' and '"pct"' have no overlap`
+  ——这一枚编译错不是量具坏了，而是「表级不能设白名单」的另一种说法。
+  **三道门都不动**：出账闸门仍是 `gridKnown = acct.some((v) => v > 0)` 配 `tblTotal = gridKnown ? null : tblWpx(tblPr, this.contentTw)` 与
+  `acctKnown = gridKnown || !!tblTotal`，发射门仍是 `ri === 0 && acctKnown` 配 `.filter((v) => v > 0)`，逐格 `tcWpx` 的白名单一字未改；
+  `tblWpx` 在源文里只有一个调用处（1426），本轮没顺手给它加参数或加档。
+
+- **验证**（离线三头 + 结构/变异腿 + 真件对照腿；Rust 本轮没动、屏上与纸面本轮没有读数；腿全吃**候选件** = 以
+  `git show HEAD:src/lib/docx-fidelity.ts`（2033 行，LF 计数口径、`md5=157af492b9bcae1476c9ef28584cc2ba`）为基座、只做「闸门一行 + 注释改口一处 + 新注四行」
+  装配出来的件，`md5=8187c850e1ec43022e6099a1e85a78e0`（split 口径 2038 行、`wc -l` 口径 2037），批号 b5 且每一枚腿自己打 `IDENT|…-b5`）：
+  **三方判据腿同一把尺**——候选 `臂数=37 等(严)=5 等(松含严)=16 不等=4 形状不合=0 解析不合=0 ours账外=17 nil造宽臂=0`，
+  改前同一批件 `等(严)=5 等(松含严)=16 不等=11 ours账外=10 nil造宽臂=7` ⇒ 严等与松等两份点名**逐字相同**（原本相等的 16 臂一枚没翻红），
+  收窄的正是那 7 枚造宽臂（`w_nog_nil4513_fix` 从 ours [75|75|75] 翻成账外 ↔ Word [18|18|18]，`w_tcw_nilpct_fix` 从 [75|75|75] 翻成账外 ↔ Word [2|2.4|2.25]）；
+  自家读手两趟同为佐证：HEAD 件 `行0有账=27 行0账外=10`、候选件 `行0有账=20 行0账外=17`（`臂数=37 缺口臂=无` 两头一致）；
+  剩下 4 枚不等按账分两族——3 枚是「真数表宽按份额压过网格」那两道没开的门（`w_g_foo4513_fix` / `w_g_dxa4513_fix` / `w_g_pct5000_fix`）、
+  1 枚是内容重排那一档（`w_g_nil4513_aut` Word 11.80×3）；`Word说通` 六族恰分完 37 臂
+  `表宽除格数+门面pw=声明宽=8 / 都不(内容重排)=18 / 表宽除格数=4 / 格级dxa=3 / 表宽按份额=3 / 网格=1`。
+  **结构腿** `AGG|增行=6 删行=2 净=4`、`DIFF|增未预期=0 增缺席=0 删未预期=0 删缺席=0`、六枚 `KEEP|… HEAD=1 候选=1 合`（三道门面 + 逐格白名单 +
+  取型别那句 + pct 分支）、`GATE|旧闸句式残留=1（应 1，属 w:fill 那档） 新闸句式=1（应 1）`——同一句式在源文里住两枚（`w:fill` 的颜色闸与 `tblWpx` 的宽度闸都写
+  `if (type === 'auto') return null`），补丁腿按整行精确串匹配并断言命中恰一枚，颜色那枚没被顺手改。
+  **变异三枚 + 判读腿**（`MUT|候选=8187c850 __q12m1.ts=f1aa4596 __q12m2.ts=4dfab50c __q12m3.ts=7e6a65f7 枚枚相异=4/4`）：m1「退回 HEAD 那句只挡 `auto`」咬 7 臂且
+  `与 nil 同族集合相合=是`、每臂方向都是「候选账外 → 变异造数」；m2「表级上 dxa 白名单」咬 6 臂、`咬臂里 Word 门面没数的=0`（咬掉的全是 Word 真给数的 4 枚 pct 与
+  2 枚规格外）；m3「连 pct 一起请出门」咬 4 臂且 `其中不合 pct 那一档的=0`；三枚变异腿的读手分别是 `27/10`、`14/23`、`16/21`（有账/账外），
+  `AGG|M1咬=7 M2咬=6 M3咬=4 候选账外臂=17 变异不合项=0 判=绿`。
+  **真件对照腿** `CENSUS|候选 docx 枚=303 超 8MB 跳枚=15`、`AGG|比枚=250 跳枚=53 表枚=1253 不同处=0`（同一份字节各喂 HEAD 读手与候选读手一趟，逐表比
+  `<table>` 与首行 `colwidth`）；**真件字节腿** `可读枚=265 打不开枚=38 表枚=1302 门开表枚=0 型别={"auto":307,"dxa":950,"pct":45}`、`NIL|点名=无 FOO|点名=无`
+  ⇒ 这道闸对真件可证是 no-op（nil 与规格外各 0 命中，而「门开」的表本来一枚都没有）。
+  **编译腿** `pnpm exec tsc --noEmit` 在撤掉三枚变异件后 `exit=0`、零行输出；负控制 `src/lib/__q12neg.ts(2,14): error TS2322` 证明那一趟真跑起来了（tsc 成功时不打印任何字）。
+
+- **本轮撞到三处量具坑，都不是产品**：① **`tail` 不能用来出证据日志**——b5 那趟字节腿写成 `… | tail -3 | tee byte12-b5.log`，日志被截成 3 行而 `exit=0`
+  （管道末端还把 node 的退出码掩了），合并腿照常吃它 ⇒ 整文件重定向重跑一遍；② **批号要一路串到每一枚腿**——读手腿本轮加了 `QF` 开关去选源文
+  （`__q12head.ts` / `__q12new.ts` / `__q12m{1,2,3}.ts`），换读手就得整批换批号重跑，否则合并腿按 `IDENT` 拒吃；
+  ③ **变异件的咬合集合要拿 Word 的读数判方向**而不是拿理论：m2 在表级上白名单只看「我们少上账 6 臂」会像一次合理收紧，配上 Word 的 `pwtype`/`pw`
+  才看出它咬掉的正是 Word 真给数的那 6 臂，而它在类型层面根本编译不过。
+
+- **本轮没动的量出来记着**（已开进路线图）：**`w:tblW` 的 `w:w` 写成字符串字面那一档**（`w_nog_pctstr30_fix` 写 `w:w="30%"`，Word 门面 `pwtype=2 pw=30.00`、
+  逐格 45.20|45.25|45.25 磅，而我们取不成数 ⇒ 账外）；**规格外型别两族方向相反、本轮没去统一**（表级复用数字、格级请出门，265 枚可读件里 0 命中）；
+  **「真数表宽压过逐格账」那两道门仍不开**（`w_g_dxa4513_fix` / `w_g_foo4513_fix` / `w_g_pct5000_fix` 的按份额分列与 `w_g_nil4513_aut` 的内容重排）——开它要重标
+  v0.92 / v0.93 / v0.94 三批屏上与纸面基线；**pct 在两层的基数不同**（表级折**版心**：`w_nog_pct5000_fix` 严等 150.75×3 = 451.3 磅的 100%、
+  `w_narrow_pct2500` 在 4520 缇窄版心上 37.50 磅 = 226.0×50%/3；格级折**表宽**：第十一笔账的 `r_fix_dxa4513_uneven` 差 0.02 磅/格）⇒ 记在源文注释里而不并成一条账；
+  **写侧一寸没碰**（读侧闸门只把 nil 取出去、不新增出口 ⇒ 往返形状按机理不变，本轮没重跑往返腿）；屏上 / 纸面本轮没有读数（dev 树由另一会话持有，
+  而本轮的 dev 腿开头会关掉它全部标签 ⇒ 破坏性，不跑）；`pad*` / `rowHeight` 在 ODT 两头、exact 行高的裁剪、`w:rPr` / `w:pPr` 条件块载荷、角型同行同边、
+  slot 水平边、图案 Texture 与 Word 文档级默认格边距仍照前几节挂着；「默认行距 `line-height: normal`」那一枚拆出去的轮次仍挂着。
+
+- **收尾**：README 新增本节 + 架构两处就地改口（「覆盖」那条在表级 `w:tblW` 那两句之后补上型别闸这一格、文件清单 `lib/docx-fidelity.ts` 条目把表级那一族写成
+  「`auto` 与 `nil` 一律账外，而规格外与缺 `w:type` 在这一层复用数字」）+ 路线图勾掉「表级 `w:tblW` 的 nil 同族缺口没跟着补」一枚、新开
+  `w="30%"` 字符串字面 / 规格外两族方向相反没统一 / 真数表宽两道门仍不开（含按份额与内容重排两族）/ pct 两层基数不同只记注释 /
+  无 dev 与纸面腿 / 不占版本号六枚；**版本文件不入本提交**（0.98.0 住着并发轮次的对齐号）；
+  `tmp/xmar12` 的 37 枚夹具与这批腿日志（夹具 / 字节 / Word / 读手四趟 / 判据 / 补丁 / 结构 / 变异 / 变异判读 / 真件对照 / 真件字节 / 编译）连同两枚源文副本按惯例删除；
+  并发会话的工作树 README 此刻仍不含第四~十二笔账这几节 ⇒ 本节以 `git show HEAD:README.md` 为底落 blob，不去动他们那一份；**dev 树全程未碰**。
+
 ## 性能（v0.3）
 
 
@@ -5596,7 +5680,7 @@ src/                  React 前端
   lib/ooxml-graphics.ts 图形部件读侧（v0.42，零依赖、不碰 DOM 所以 Node 侧可直测）：`smartArtToHtml(dataXml, inCell)` 解 DiagramML dataModel 的 ptLst/cxnLst（parOf 建树 + srcOrd 定序、空节点下钻、首次认父挡回边、`a:fld` 域编号不采）→ 嵌套 `bulletList`（格内改段落 `margin-left` 表层级）；`chartToHtml(chartSpaceXml, inCell)` 解 ChartML 缓存值（下钻找系列、`strRef`/`numRef` 中间层、`c:pt/@idx` 空洞留格、`multiLvlStrRef` 各级拼一格、轴标题不当图表标题）→ 标题段 + 数据表，无缓存只取标题；两者都返 `{html, kept}` 让调用方按"真取回多少"说告警
   lib/cfb.ts          复合文档（OLE 2 / MS-C 容器）读侧（v0.44，零依赖、不碰 DOM）：`isCfb` 认魔数、`openCfb(bytes)` 走 DIFAT（109 直槽 + 链）→ FAT（扇区编号即下标）→ 128 字节目录项的红黑树（left/right 兄弟 + child 指孩子根，`assigned` 兼防环），小于 4096 的流从根存储链装的迷你流按 64 字节迷你扇区拼；扇区 512/4096、v3/v4 都认，**结构不合返回 null 不抛**（坏件要"少部分内容照出"而不是整篇打不开），截断的件按 `floor(len/sec)-1` 收边界、v4 高 32 位非零的流只报名字不去碰
   lib/ole.ts          OLE 嵌入对象的**内容**提取（v0.44）：`unwrapEmbed` 拆容器（现代形状=部件本身就是原生文件；老形状=复合文档里的流 `\x01Ole10Native`），`oleNativePayload` 按实测字段布局走一遍、走不通再按"哪枚 DWORD 能把数据吃到接近结尾"扫兜底（数据不贴着流末尾，按流长反推必错）；`classifyEmbed` 先魔数后文件名，`embedHtml(content, depth)` 分派 docx（递归 `docxToHtmlFidelity`，depth≥2 停）/ xlsx（只要值，`r="C5"` 定位、空列不挤位）/ CSV（首行嗅探分隔符 + RFC4180 引号）/ txt（空行分段，UTF-8 出替换符换 GBK 重试），取不出的一律给带真名与大小的 `note`；上限 24MB / 200 行 × 40 列 × 4 表 / 64KB × 200 段，**截断写进告警不静默少给**；`inlineFlatten` 把块级正文压成行内（单元格放不下第二层表）
-  lib/docx-fidelity.ts OOXML → HTML 保真导入器（v0.37）：run 级 rPr（粗斜/删除线/下划线/字色/高亮/字族/字号/上下标 `w:vertAlign`）、段落 pPr（jc/`w:ind` 左右与首行悬挂四种缩进写法/pStyle 样式链）、numPr+numbering.xml → 有序无序与 ilvl 层级（**跳档按 numId 折基准层**，不凭空补中间层）、表格 gridSpan/vMerge + tblGrid 列宽（**表格读侧第十笔账起，列账第一次由 `w:tblLayout` 分流且所有行一起上账**：`layFixed` 由 `w:tblPr/w:tblLayout@w:type` 是否为 `fixed` 决定——fixed 那一档 `w:gridCol` 是**地板**（逐格 `tcWpx` 只往宽里抬 `total > acct[k]`、两行同列取最大、跨列格的正差落所跨**最后一条**而负差丢、`c.cont`（`w:vMerge=continue`）那一格 `continue` 不参与、跨到缺账列时把正差补进缺口），autofit 与 layout 缺失那一档反过来（另立一盘 `pure`，逐列取各行 tcW 的最大且**缩小照落**、跨列格 `total / span.length` **均摊**、最后 `pure[k] > 0` 才覆盖网格，一行都没说话的列退网格）；**第十一笔账把逐格那一族按型别收口**（`tcWpx` 由排除法换成白名单：只有 `dxa`（缺省也算 `dxa`）才是数字，`auto`/`pct`/`nil`/规格外一律 `null`＝账外——nil 跟着当数字读会造出一枚假宽（`p_type_nil` 旧 [75|90|120] ↔ Word [60|90|120]＝网格），而 pct 的基数是**表宽**不是版心、表宽那道门仍关着）；出账闸门与发射门仍不动（`acctKnown = gridKnown || !!tblTotal`、`ri === 0 && acctKnown` 配 `.filter((v) => v > 0)`）；**表格读侧第八笔账起，整盘账都没说的那些列改由表级 `w:tblW` 折宽后等分**：`tblWpx` 吃 dxa/pct 两档而 pct 按五十分之一百分点折版心、`contentTwipsOf` 从 body 末尾 `sectPr` 的 `pgSz` 减左右 `pgMar` 算版心、出账闸门由 `gridKnown` 换成 `acctKnown`；**真数 `w:tblW` 压过逐格账那两道门（fixed 等比缩 / autofit 除以首行格数）第十笔账量清机理仍不开**——动它要重标 v0.92/v0.93/v0.94 三批屏上与纸面基线）+ 单元格四边 `w:tcBorders`（含 val=nil 的显式去边）/底纹 `w:shd fill`/竖排 `w:vAlign`/表级 `w:tblInd`、段落 `w:spacing`（行距两档 + 段前后，含按行的 `w:*Lines` 估算）/`w:shd` 底纹/`w:pBdr` 四边、脚注与尾注引用（`w:footnoteReference`/`w:endnoteReference` 按 `w:id` 配 `word/footnotes.xml`·`endnotes.xml` 正文，跳过 separator/continuationSeparator，正文缺失记告警且不留空标记）、图片 rels→dataURL、内外超链接、分页符、批注三态锚点、域代码文字不外泄、**域编号重算**（v0.43：`fldChar` begin/separate/end 三道门接 `docx-fields` 的 `FieldEngine`——`SEQ` 现算并压掉缓存、`REF` 无缓存按书签段落文本兜底（书签表渲染前预扫）、算不了的沿缓存且无缓存记边界、`fldSimple` 同路、被跳过的分支不占号）、`w:object` 嵌入对象（v0.43 预览是 EMF/WMF 解不开时留一行可见占位，ProgID + rels 反查的部件文件名；**v0.44 先走 `lib/ole` 取内容**——取到就把内层正文接为段落兄弟块（格内改压行内）且不再叠占位，取不到才留占位）、文本框 `w:txbxContent`（`wps:txbx` 与旧式 `v:textbox`）展平为段落、OMML 公式线性化、`mc:AlternateContent` 只取 Choice（空则退 Fallback，避免同一份正文翻倍）、drawing 锚点经 rels 找图示/图表部件（v0.42，部件缺失与关系缺失各记一条告警）、**格底纹的三层取一与格边距的五层逐边合并（表格读侧第六、七笔账）**：底纹按「哪一层的 `w:shd` 在场」比（逐格 > 条件层含四枚角型 > 被引用样式的 `w:tcPr/w:shd` 基座，沿 `w:basedOn` 本体说了才覆盖祖先），条件块从此**两格分开记账**（`CondCell = {mar, tblMar, shd}`：`w:tcPr/w:tcMar` 那格交回 `mar`、`w:tblPr/w:tblCellMar` 那格交回 `tblMar` 而归**样式层**——压过样式基座而压不过表自身），两族的落点各走一枚 8 档梯子而**梯子反着**（底纹在 `condShadingFor` 里按 角型 > 行型 > 列型、首行压末行、末列压首列且角型只落那一角那一格；边距按具名的 `condMarginLadder` 列型 > 角型 > 末行 > 首行，角型按其所在那一整行落），两族都要 `w:tblLook` 的对应位说话（角型要那一角的两枚位都开，`@w:val` 那位十六进制从不被 consult），内建 `TableNormal` 走替换名单（`SUBSTITUTED_TABLE_STYLES`：Word 打开时换上自己的定义，文件里往它身上写的数从不落地）而「默认标记」不再当门，图案档 `@w:val=pct50` 只读 fill 并按型别记一句；认不出就抛错或 blocks=0，调用方回退 mammoth
+  lib/docx-fidelity.ts OOXML → HTML 保真导入器（v0.37）：run 级 rPr（粗斜/删除线/下划线/字色/高亮/字族/字号/上下标 `w:vertAlign`）、段落 pPr（jc/`w:ind` 左右与首行悬挂四种缩进写法/pStyle 样式链）、numPr+numbering.xml → 有序无序与 ilvl 层级（**跳档按 numId 折基准层**，不凭空补中间层）、表格 gridSpan/vMerge + tblGrid 列宽（**表格读侧第十笔账起，列账第一次由 `w:tblLayout` 分流且所有行一起上账**：`layFixed` 由 `w:tblPr/w:tblLayout@w:type` 是否为 `fixed` 决定——fixed 那一档 `w:gridCol` 是**地板**（逐格 `tcWpx` 只往宽里抬 `total > acct[k]`、两行同列取最大、跨列格的正差落所跨**最后一条**而负差丢、`c.cont`（`w:vMerge=continue`）那一格 `continue` 不参与、跨到缺账列时把正差补进缺口），autofit 与 layout 缺失那一档反过来（另立一盘 `pure`，逐列取各行 tcW 的最大且**缩小照落**、跨列格 `total / span.length` **均摊**、最后 `pure[k] > 0` 才覆盖网格，一行都没说话的列退网格）；**第十一笔账把逐格那一族按型别收口**（`tcWpx` 由排除法换成白名单：只有 `dxa`（缺省也算 `dxa`）才是数字，`auto`/`pct`/`nil`/规格外一律 `null`＝账外——nil 跟着当数字读会造出一枚假宽（`p_type_nil` 旧 [75|90|120] ↔ Word [60|90|120]＝网格），而 pct 的基数是**表宽**不是版心、表宽那道门仍关着）；出账闸门与发射门仍不动（`acctKnown = gridKnown || !!tblTotal`、`ri === 0 && acctKnown` 配 `.filter((v) => v > 0)`）；**表格读侧第八笔账起，整盘账都没说的那些列改由表级 `w:tblW` 折宽后等分**：`tblWpx` 吃 dxa/pct 两档而 pct 按五十分之一百分点折版心（**第十二笔账把 `nil` 并入 `auto` 那一档**：带正数的 nil 在 Word 门面报 `pwtype=1 pw=0.00`，而规格外与缺 `w:type` 在这一层仍复用数字 ⇒ 表级不设格级那道 dxa 白名单、两族方向相反；表宽折算的 pctype 门与逐格白名单本轮一字未改）、`contentTwipsOf` 从 body 末尾 `sectPr` 的 `pgSz` 减左右 `pgMar` 算版心、出账闸门由 `gridKnown` 换成 `acctKnown`；**真数 `w:tblW` 压过逐格账那两道门（fixed 等比缩 / autofit 除以首行格数）第十笔账量清机理仍不开**——动它要重标 v0.92/v0.93/v0.94 三批屏上与纸面基线）+ 单元格四边 `w:tcBorders`（含 val=nil 的显式去边）/底纹 `w:shd fill`/竖排 `w:vAlign`/表级 `w:tblInd`、段落 `w:spacing`（行距两档 + 段前后，含按行的 `w:*Lines` 估算）/`w:shd` 底纹/`w:pBdr` 四边、脚注与尾注引用（`w:footnoteReference`/`w:endnoteReference` 按 `w:id` 配 `word/footnotes.xml`·`endnotes.xml` 正文，跳过 separator/continuationSeparator，正文缺失记告警且不留空标记）、图片 rels→dataURL、内外超链接、分页符、批注三态锚点、域代码文字不外泄、**域编号重算**（v0.43：`fldChar` begin/separate/end 三道门接 `docx-fields` 的 `FieldEngine`——`SEQ` 现算并压掉缓存、`REF` 无缓存按书签段落文本兜底（书签表渲染前预扫）、算不了的沿缓存且无缓存记边界、`fldSimple` 同路、被跳过的分支不占号）、`w:object` 嵌入对象（v0.43 预览是 EMF/WMF 解不开时留一行可见占位，ProgID + rels 反查的部件文件名；**v0.44 先走 `lib/ole` 取内容**——取到就把内层正文接为段落兄弟块（格内改压行内）且不再叠占位，取不到才留占位）、文本框 `w:txbxContent`（`wps:txbx` 与旧式 `v:textbox`）展平为段落、OMML 公式线性化、`mc:AlternateContent` 只取 Choice（空则退 Fallback，避免同一份正文翻倍）、drawing 锚点经 rels 找图示/图表部件（v0.42，部件缺失与关系缺失各记一条告警）、**格底纹的三层取一与格边距的五层逐边合并（表格读侧第六、七笔账）**：底纹按「哪一层的 `w:shd` 在场」比（逐格 > 条件层含四枚角型 > 被引用样式的 `w:tcPr/w:shd` 基座，沿 `w:basedOn` 本体说了才覆盖祖先），条件块从此**两格分开记账**（`CondCell = {mar, tblMar, shd}`：`w:tcPr/w:tcMar` 那格交回 `mar`、`w:tblPr/w:tblCellMar` 那格交回 `tblMar` 而归**样式层**——压过样式基座而压不过表自身），两族的落点各走一枚 8 档梯子而**梯子反着**（底纹在 `condShadingFor` 里按 角型 > 行型 > 列型、首行压末行、末列压首列且角型只落那一角那一格；边距按具名的 `condMarginLadder` 列型 > 角型 > 末行 > 首行，角型按其所在那一整行落），两族都要 `w:tblLook` 的对应位说话（角型要那一角的两枚位都开，`@w:val` 那位十六进制从不被 consult），内建 `TableNormal` 走替换名单（`SUBSTITUTED_TABLE_STYLES`：Word 打开时换上自己的定义，文件里往它身上写的数从不落地）而「默认标记」不再当门，图案档 `@w:val=pct50` 只读 fill 并按型别记一句；认不出就抛错或 blocks=0，调用方回退 mammoth
   lib/docx-fields.ts 域重算引擎（v0.43，零依赖、纯 Node 可直测）：`parseInstr` 拆 `命令 参数 \开关`（**开关 token 原样保留大小写**——Word 就按它决定结果形态）、`seqText` 按 `\* ROMAN`/`roman`/`ALPHABETIC`/`alphabetic`/`Alpha` 出对应形态、`FieldEngine`（`from(doc)` 渲染前扫全篇建书签表（只排 `_GoBack`，`_Ref…`/`_Toc…` 必须留）+ `seqValue` 跟着文档顺序走 + `refText` 兜底段落文本）、`recomputable`（只有带 label 的 SEQ 现算）、`fieldLabel`/`paraText`（域代码与已删文字不算正文）
   lib/cell-style.ts   单元格样式扩展（v0.38）：tableCell/tableHeader 的 bdTop/bdRight/bdBottom/bdLeft + background + vAlign、table 的 marginLeft 全局属性（只声明属性不改内容模型）；边框统一规范串 `"0.67px solid #8899aa"`，三态 null 未声明/'none' 显式去边/有值；`inlineBorder()` 读 CSSOM longhand（shorthand 对 none 返回空串）、`IndentTableView` 子类补 marginLeft（resizable 的节点视图不传 HTMLAttributes；**v0.92 起 `applyIndent` 里加一枚宽度判定**——`accountTotalPx(node)` 非零就写 `width: Σpx`，否则才退回 `calc(100% − ml)` / `''`，缺陷在自家这一层而不是库）、`eighthsToPx`/`pxToEighths` 管 1/8 磅换算、命令 setCellBackground/setCellVAlign；**v0.88 拆掉两处静默**——① `CSS_BORDER_STYLE` 补上 Word「虚线」对话框实际写出的那几档 token（`dashSmallGap`/`dashLargeGap`/`dotDotDash`/`dashDotStroked` → `dashed`；原先只有 `dotDash` 会被小写归一命中，`dashSmallGap` 命不中 ⇒ Word 里的虚线导进来显示成实线、再导出也是实线且零告警），② 表头格那枚 no-op：`setCell` 原来是 `updateAttributes('tableCell',…) && updateAttributes('tableHeader',…)`，表头行上第一型返回 false 就整条短路 ⇒ **边框/底纹/竖排对齐在表头格上从 v0.38 起全是静默失败**，改成 `[两型].some(Boolean)`（段落那一头 v0.39 早就是这个形状）；同轮新出界面用的四味：`bdAttr`（边名 → 属性名）、`edgeAttrs`（若干条边 → 一份 patch）、`BORDER_STYLES`/`BORDER_WIDTH_PT`/`borderCss`（磅 → 规范串，换算只写这一处）与 `EDGE_LABEL`；**v0.95 加表头行克隆**（`scheduleReplica`/`syncReplica`，`spec.update` 里排队走 `queueMicrotask`——PM 重画行在同一趟之后）：把「开头连续的全部表头行」克隆进 `<thead class="doc-th">` 并给表加 `doc-th-rep`，供纸上 `table-header-group` 重复。三条形状由实测钉住：只克隆不搬移（搬走 `rows 23→22`、`thRows 1→0` 把模型吃了）、标记住 `<table>` 而不 `tr`（PM 会擦 `contentDOM` 里行的 `class`，实测 `tagged=0`）、那道门只认开头连着的那几行（`leading.length === 全部表头行数` 才过门，且撤旧克隆排在过门之前，中途夹一枚表头行的表整块不建克隆）
   lib/table-width.ts  精确列宽的把手（v0.91，252 行）：`tableGrid` 自己的占位遍历算出每格的**起始**行列与绝对位置（不借 prosemirror-tables 的 `TableMap`——它不是本项目的声明依赖、TipTap 也没转出来；跨列的格按起点记，实测跨两列那一格里光标认到的是第 0 列），`gridAccount` 只取行 0 摊平出的逐网格列账（与 docx 写侧同一份权威），`accountTotalPx`（v0.92 新立的导出纯函数，+19 行）把这份账折成一枚绝对像素数——任一网格列没账或 <1 就整表 `return null`，屏上的表宽就吃这一枚数，`baseWidths` 给没带账的列补 `max(1, floor((可用宽 − Σ已有账)/未带账列数))`（屏上那一档实测 `[248,null,null]` → 248/188.7/188.7 而 (626−248)/2 = 189，与写侧同一算法），`redistribute` 是键入一列之后的整表账（四道门：列数非零 / 列号在范围内 / 可用宽 ≥ 列数 / 键入值 ≥ 1px；键入列夹到 `min(键入值, 可用宽 − (列数−1))` 给其余列各留 1px；其余列按各自现有账**等比**分享剩下的那一份，舍入用最大余项法配平、每列至少 1px ⇒ Σ 恰等于可用宽，这是"键入值 1:1 上屏"的条件，否则浏览器按 `table-layout: auto` 把整表比例缩走），`tableTargetPx` = 版心 px − 表级 `marginLeft`（屏上写的是 `width: calc(100% - Npx)`，不扣它键入值照样被缩），`caretColumn` 给界面用（光标在哪一列 / 一共几列 / 当前显示值，没带账的列显示等分那一份与屏上一致）；`TableWidth` 扩展的 `setGridColumnWidth(px, targetPx)` **一次事务写遍该网格列的每一格**（只写行 0 会在同一次 dispatch 里被 `tableEditing` 的 `appendTransaction` 按其余各行抹回去）、先验齐再落（任一格的 `colwidth.length` 不等于它的 colspan 就整表拒绝，不写半份账进去）、**账本来就是这一份的格子跳过**（PM 的 `setNodeMarkup` 即便属性相同也推一步 ⇒ 重打同一个数字会凭空多一枚撤销步），全部跳过则返回 false 不派发
@@ -6820,8 +6904,12 @@ cargo check        # Rust 后端检查（在 src-tauri 下）
       `t_nil_aut` [75|75|75]→[60|90|120]、`t_nil_mix_aut`、`t_nil_span_aut`、`t_foo_fix`、`t_foo_aut`）而其余 37 臂逐字节相同；
       同一把尺改前 `等(松)=等(严)=8`、改后 9/9（新转等 `p_type_nil`、`t_nil_aut`，丢了等 `t_foo_aut`）；真件不变腿 6 枚可读件 HTML 摘要 6/6 相同、
       40196 枚 `w:tcW` 里 nil 与规格外 0 命中 ⇒ 对真件可证 no-op；`tblWpx` 那侧没跟着动（见下面新开那枚）
-- [ ] **表级 `w:tblW` 的 nil 同族缺口没跟着补**（表格读侧第十一笔账只动逐格那一族）：`tblWpx` 仍只对 `auto` 关门，
-      而 nil 在表级那一层带正数时同样会读出一枚假宽（`p_type_nil` 那枚形状就住在逐格 `w:tcW` 上）⇒ 同一族的两枚姊妹缺口，开表宽那道门时要一起改
+- [x] **表级 `w:tblW` 的 nil 同族缺口没跟着补**（表格读侧第十一笔账只动逐格那一族时立下、**第十二笔账接上**）：`tblWpx` 那道闸由 `type === 'auto'` 改成
+      `type === 'auto' || type === 'nil'`——37 臂同一趟里「nil 带正数造宽」的 7 臂（`w_nog_nil4513_fix` ours [75|75|75] ↔ Word [18|18|18] 且门面 `pwtype=1 pw=0.00`、
+      `w_tcw_nilpct_fix` ours [75|75|75] ↔ Word [2|2.4|2.25]）全部翻成账外：`nil造宽臂` 7→0、`不等` 11→4，而 `等(严)=5`、`等(松含严)=16` 两份点名**逐字相同**
+      （原本相等的 16 臂一枚没翻红）；这一层**不设 dxa 白名单**（规格外 `w_nog_foo4513_fix` Word `pwtype=3 pw=225.65` 与 dxa 臂同形、缺 `w:type` 同形，
+      套白名单那枚变异件在类型层面就不成立：`src/lib/__q12m2.ts(1680,7): error TS2367: ... types '"dxa"' and '"pct"' have no overlap`）⇒ 与第十一笔账的格级闸方向相反、
+      两族各立一道闸；真件那侧可证 no-op（250 枚件 / 1253 枚表 HEAD 与候选产出 0 处不同，1302 枚表里 nil 与规格外各 0 命中）
 - [ ] **规格外型别（`w:type` 不在 auto/dxa/nil/pct 四档里）Word 把数字继续用而我们是账外**（表格读侧第十一笔账唯一一枚「改前等、改后不等」的臂）：
       `t_foo_aut` Word [75|75|75]（= tcW 的数字）而本读手 [60|90|120]（退网格）；266 枚可读件里规格外 0 命中 ⇒ 本轮按「读不出来就账外」处理并如实挂着
 - [ ] **pct 那一档折的是表宽而不是版心**（表格读侧第十一笔账前置实测 32 臂 + 真件 266 枚 pct 对表）：`r_fix_dxa4513_uneven` 表宽 225.65 磅时
@@ -6830,6 +6918,19 @@ cargo check        # Rust 后端检查（在 src-tauri 下）
 - [ ] **表格读侧第十一笔账没有 dev 真机腿与纸面腿**：dev 树由另一会话持有而本轮的 dev 腿开头会关掉它全部标签（破坏性，不跑）⇒ 屏上与纸面本轮**没有读数**，
       证据全在离线三头 + 真件不变腿 + 结构/变异腿；读侧闸门只收窄范围而不新增出口 ⇒ 往返形状按机理不变，本轮没重跑往返腿
 - [ ] **表格读侧第十一笔账不占版本号**：`package.json` / `Cargo.toml` / `tauri.conf.json` 现在住着并发轮次的 0.98.0 ⇒ 本轮不与之抢那三处对齐，源码形状以内容命名
+- [ ] **`w:tblW` 的 `w:w` 写成字符串字面那一档 Word 读成百分数而我们账外**（表格读侧第十二笔账量出）：`w_nog_pctstr30_fix` 写 `w:w="30%"`，Word 门面
+      `pwtype=2 pw=30.00`、首行逐格 45.20|45.25|45.25 磅（= 30% 版心 /3 格）而 `tblWpx` 取不成数 ⇒ 账外；规格外与空字面两族本轮按「读不出来就账外」处理并挂着
+- [ ] **规格外型别两族方向相反、本轮没去统一**（表格读侧第十二笔账）：表级 Word 复用那枚数字（`w_nog_foo4513_fix` / `_aut` `pwtype=3 pw=225.65` = 与 dxa 臂同形）
+      而格级把它请出门（第十一笔账的白名单）⇒ 两族各立一道闸；265 枚可读件里表级规格外 0 命中，真件上这一格量不到
+- [ ] **「真数表宽压过逐格账」那两道门仍不开，门挡那一侧的 4 枚不等挂账**（表格读侧第十二笔账）：`w_g_dxa4513_fix` / `w_g_foo4513_fix` Word 50.25|75.20|100.20、
+      `w_g_pct5000_fix` 100.55|150.75|201.00 而 ours 落网格 60|90|120（按份额分列那一档），`w_g_nil4513_aut` Word 11.80×3（内容重排那一档）⇒ 开它要重标
+      v0.92 / v0.93 / v0.94 三批屏上与纸面基线
+- [ ] **pct 在两层的基数不同、只记注释而不并账**（表格读侧第十二笔账）：表级折**版心**（`w_nog_pct5000_fix` 严等 150.75×3 = 451.3 磅的 100%、`w_narrow_pct2500` 在
+      4520 缇窄版心上 37.50 磅 = 226.0×50%/3），格级折**表宽**（第十一笔账的 `r_fix_dxa4513_uneven` 差 0.02 磅/格而折版心差 90.27 磅/格）⇒ 给 `tcWpx` 传表宽就等于
+      开上面那两道门，本轮只在源文注释里把两档基数写清
+- [ ] **表格读侧第十二笔账没有 dev 真机腿与纸面腿**：dev 树由另一会话持有而本轮的 dev 腿开头会关掉它全部标签（破坏性，不跑）⇒ 屏上与纸面本轮**没有读数**，
+      证据全在离线三头 + 真件对照腿 + 结构/变异腿；读侧闸门只把 nil 取出去而不新增出口 ⇒ 往返形状按机理不变，本轮没重跑往返腿
+- [ ] **表格读侧第十二笔账不占版本号**：`package.json` / `Cargo.toml` / `tauri.conf.json` 现在住着并发轮次的 0.98.0 ⇒ 本轮不与之抢那三处对齐，源码形状以内容命名
 - [ ] **`pad*` / `rowHeight` 在 ODT 两头都没有通道**（v0.97 明写）：odt.ts 不认格边距也不认行高，docx → odt 再回 docx
       这两笔账必丢
 - [ ] **exact 行高的裁剪语义只有一枚告警**（v0.97）：读入按 atLeast（下限），屏上内容超高时不会被裁，

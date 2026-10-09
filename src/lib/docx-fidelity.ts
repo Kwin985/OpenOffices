@@ -1662,17 +1662,21 @@ function tcWpx(tcPr: XEl | undefined): number | null {
 }
 
 /**
- * 表级的 w:tblW → 整张表的宽（px）。auto/0/没说都交回 null（那本来就是"没账"）。
+ * 表级的 w:tblW → 整张表的宽（px）。auto/nil/0/没说都交回 null（那本来就是"没账"）。
  * pct 那一档的口径是五十分之一百分点（5000 = 100%），基数是版心宽：三臂实测
  * （tb_pct30_nogrid 3000 → Word 总宽 361.87px、tb_pct50_auto 与 tb_pct50_fixed 5000 → 603.07px，
  * 版心 601.73px）只有这一档撞得上，按"百分之几"折的那档全都差着一倍。
+ * nil 那一档归入 auto（第十二笔账 b4 实测，37 臂）：带正数的 nil 在 Word 门面报 pwtype=1 pw=0.00，
+ * 与 auto/没写/空字面/负数逐格同形（fixed 落 18.00 磅、autofit 与缺 layout 落 11.80 磅，两把内容重排尺），
+ * 那枚 w 上的数字从不进账；规格外（w:type=foo）与缺 w:type 在表级 Word 复用数字（pwtype=3 pw=225.65 磅），
+ * 所以这一层只把 nil 取出去、不设 dxa 白名单——方向与第十一笔账的格级闸相反。
  * @w:w 还允许写成 "100%" 字面（我们的写侧无账时就是这么落的），两种形状都吃。
  */
 function tblWpx(tblPr: XEl | undefined, contentTw: number): number | null {
   const tblW = tblPr ? find(tblPr, 'w:tblW') : undefined
   if (!tblW) return null
   const type = (attr(tblW, 'w:type') ?? 'dxa').toLowerCase()
-  if (type === 'auto') return null
+  if (type === 'auto' || type === 'nil') return null
   if (type === 'pct') {
     if (contentTw <= 0) return null
     const num = attrNum(tblW, 'w')
