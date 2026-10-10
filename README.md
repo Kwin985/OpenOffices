@@ -718,7 +718,9 @@
   `src/lib/docx-fidelity.ts`（OOXML → HTML，配 `src/lib/ooxml.ts` 迷你 XML 解析器，无 DOM 依赖故 Node 侧可直测），
   mammoth 降级为**兜底**：保真导入器抛错或 `blocks === 0`（认不出这份文件）时才用
 - **覆盖**：run 级 `w:rPr`（粗斜/删除线/下划线/字色/高亮 `w:highlight` 与 `w:shd`/字族（拉丁+中文拆两档）/字号半点换算）、
-  段落 `w:pPr`（jc 对齐、`w:ind` 的 left/firstLine/hangingChars/firstLine/hanging、pStyle 样式链继承）、
+  段落 `w:pPr`（jc 对齐、`w:ind` 的 left/firstLine/hangingChars/firstLine/hanging、pStyle 样式链继承——**段落读侧第一笔账起
+  `w:ind` 沿链按属性名合并**：同名的后写层压前写层而段落没写的属性留样式那一枚，`firstLine`/`hanging` 同一枚首行槽、字符那一档
+  的宽度底数吃段落自己的字号）、
   `w:numPr` + `word/numbering.xml` 的 numFmt → 有序/无序与 ilvl 层级、表格 `gridSpan`/`vMerge`（continue 记账在
   restart 的同一批网格列上，rowspan 数完所有行才出 HTML）+ `tblGrid` 列宽（**读侧从这一版就把这份账收全并摊成逐格
   `colwidth`——跨列格记「所覆盖的各列」而不是合起来的宽，而写侧一直没写回去，直到 v0.89**；**v0.90 起写侧改成「有几枚
@@ -5997,6 +5999,101 @@ Rust 一个字没动、写侧一寸没碰、模型属性一枚都不新增。**�
   `git show HEAD:README.md` 为底落 blob，不去动他们那一份；**dev 树全程未碰**。
 
 
+## 段落缩进第一次按属性名继承：`w:ind` 在样式链上是逐枚属性合并而不是整枚元素替换，而 `firstLine` 与 `hanging` 是同一枚首行槽的正负两写法——按名字各留各的会把号读反；字符那一档的宽度底数取**段落自己的字号**，旧那枚硬写的 16px 在真件上每字最多差 4.00px
+
+按「不扩格式、把现有格式做深」的路线图开工。本轮的开门量具是一枚跨层通道普查（一次读 1342 份真件，按 `w:pPr` / `w:rPr` /
+`w:tblPr` / `w:tcPr` / `w:trPr` / `w:sectPr` 六层数出出现过的元素名与属性名，再逐名去 HEAD 的读手里查它是否被吃——grep
+命中不等于读到，要按调用处判），本节只吃其中段落缩进那一枝。窄口径：只动 `src/lib/docx-fidelity.ts`（相对 HEAD 增 57 行
+= 10 段改动、增 64 删 7，其中 25 行是注释、39 行是代码），Rust 一个字没动、docx/odt 写侧一寸没碰、模型属性一枚都不新增。
+接缝本来就在：样式链继承早就住在 `mergePPr` 里（`w:pPr` 的同名子元素沿 `w:basedOn` 自根向尾叠），本轮只把 `w:ind`
+那一枝的叠法从「整枚换」改成「逐属性合」，**不改模型一个字段**。**本轮不占版本号**：`package.json` / `Cargo.toml` /
+`tauri.conf.json` 现在住着并发轮次的 0.119.0 ⇒ 本节按内容命名。
+
+- **前置实测（Word 16.0 当段落缩进的门面，`c8`~`c22` 那十几枚腿，只量不改产品）**：①
+  **元素级替换在真件里丢的是一批账，不是一角**——带 `w:ind` 的段 98255 枚、住 998 枚文件（c1
+  `pPr|ind count=98255 files=998`），其中「样式写了而段落没写、被整枚替换一次扔掉」的属性共 **18460 枚、住 190
+  枚文件**（逐名：`firstLine` 7277 / `firstLineChars` 6255 / `leftChars` 1568 / `rightChars` 1600 / `left` 1111 /
+  `right` 269 / `hanging` 321 / `hangingChars` 59），把带编号的段剔掉仍有 79 枚文件在这一档上漏账（c19b）。②
+  **`w:firstLine` 与 `w:hanging` 是同一枚槽的正负两写法**（c21：跨层两拼法并存 818 枚、住 46
+  枚文件——段落 `firstLine` × 样式 `hanging` 248、段落 `hanging` × 样式 `firstLine` 570，另同拼法 f/f 11500、h/h
+  467；字符那一槽 `hangingChars` 压 `firstLineChars` 91 枚）⇒ 按属性名各留各的会读出反号。③
+  **别名的账比想的小**（c21：同一枚 `w:ind` 上 `w:left` 与 `w:start` 并存 0 例、跨层混拼 0
+  例且 0 枚文件）⇒ 只做取值时归一，不给它另立一槽。④ **缇值那一头先说话**（c13 门面九枚「缇值 ×
+  字符数双生」臂**全部** `verdict=literal`、`dLit=0`，例 `W13|firstLineChars wordPt=372.75 litPt=372.75 charsPt=639`）
+  ⇒ 字符档只在缇值整枚没写时说话。⑤ **0 是真值**（c17：`firstLineChars` 单独出现的 4031 枚里 4028 枚是 0、住 181
+  枚文件，其中「本段写 0 而样式链上有值」1635 枚、住 112 枚文件；c20 两枚 drop 臂在门面上报 `L=0 F=0 H=0`——显式
+  `w:firstLine="0"` 把样式的 `w:hanging="283/721"` 整槽压掉）⇒ 槽内合并要让后写那层说了算，0 不许当「没说」。⑥
+  **负数的字符档不上账**（c15w：`w:leftChars="-49"` 在 Word 门面报 `wordPt=0`）。⑦ **字符档的宽度底数＝段落自己的字号**
+  （c15w `firstLineChars=200 → wordPt=21.1`、`perCharPt=10.55`、`fontPt=10.5`；c8 `leftChars=200 → wordPt=22`、
+  `perCharPt=11`、`fontPt=11`——`perCharPt` 逐枚等于本段字号）——旧那枚硬写的 16px/字在 c16b 那 282 枚字号可解的 `leftChars`
+  臂上平均偏 0.15px、**最大 4.00px**（12 枚超 0.5px），全榜按 c9c：`firstLineChars` n=3500 均偏 1.37px/字、超 0.5px
+  2136 枚，`hangingChars` 那 16 枚**枚枚差 −2.00px/字**；字号怎么解：段标 `w:rPr/w:sz` > 样式链（本体说了才覆盖 `w:basedOn`
+  祖先）> 兜底，链上解不出字号的字符单独枚只有 13 枚、住 9 枚文件（c15）。⑧ **样式链底数与段标底数分叉那一档在真件里一枚都
+  没有**（c14 `CTRL|分叉枚=0 件=0`）⇒ 不为它改道。
+
+- **架构决定（跟着门面读数走）**：`mergePPr` 里 `w:ind` 那一枝改成 `mergeIndAttrs` **按属性名**合——同名者后写那层压前写那层、
+  段落没写的属性留样式那一枚；`IND_SLOTS` 立两枚槽（`firstLine`|`hanging`、`firstLineChars`|`hangingChars`），
+  **同槽只认后写那层**：那层写了槽里任一拼法，整槽就归它，另一层的另一拼法不再回来。其余同名子元素（`w:spacing` / `w:shd` /
+  `w:pBdr`）仍走整枚替换、孩子仍取后写那层（与旧行为一字不差）——同形状的账本轮没量就不改道。`paraCss`
+  新吃第三枚参数 `baseSz`，调用处传的是 `baseRunProps(view.chain, effPPr).sz`，**与正文渲染吃的是同一份字号账**；
+  `charPx = Math.round(baseSz × HP_PX)`（半点 → px），解不出字号才退 15px（`.doc-content` 正文那 15px，
+  `src/index.css:996`）。闸门三句：缇值先说话且**含 0**、字符档只在缇值整枚没写时说话且只认正数（`leftChars > 0` /
+  `firstChars > 0`）、缇值与字符档同写那一档的组合本轮没量过所以不接。
+
+- **验证（八腿，每枚数字都来自打印它的那一趟）**：**结构+变异腿** 11 臂五变体
+  `B0|b17|arms=11|variants=5|fixMismatch=0|exit=0`——`BITE|v_m1=6`（合并枝退回整枚替换：A1/A2/A5/A6/A9/A11）、`BITE|v_m2=1`
+  （`IND_SLOTS` 清空：A3 那一枚「段落写 0 而样式有悬挂」）、`BITE|v_m3=5`（底数退回 16px：A5/A6/A7/A8/A10），`DIFF|head->fix=9`；
+  **真件读手腿** 17 臂 head/fix 两变体逐枚对照 `B0|b17|leg=leg17b|arms=17|variants=2`，六臂可见改动，例《M52H user
+  manual.docx》#549 head `text-indent: 16px` → fix `margin-left: 7px; text-indent: 16px`（样式那枚 `w:left="103"`
+  第一次够得着）、《授权变更说明函.docx》#16 fix 多出 `text-indent: 28px`；**独立字节腿** 17 臂 `B0|b17|leg=c22|arms=17`
+  走 python 自己的单位路径（缇 → px 按 `1/15`、字符按本段字号），不吃自家读手一行代码，17/17 `idOk=True`；
+  **三头合并判据腿** `B0|b17|leg=merge17|arms=17|wordHits=10|wordMiss=7|tolPt=0.5` ⇒
+  `S|b17|三头通=9|两头通=1|只字节腿=6|Word不合=1`，且 `S|b17|head→fix改动枚=6` **全落在 keep-style 族**（c18b/16、c18b/573、
+  c20/61、c20/62、c20/549、c20/556）——正是「样式写了段落没写」那一族；那枚 `Word不合` 由 `Q|归因` 钉死为门面量的不是本臂
+  （UL212 门面上 `wordPt=-18.0` 而本臂字节折磅 `-6.0`，同一份样式里同名处有 6 枚）；**后果腿**
+  `S|b17|件=1342|读过=1306|错=36`、`正文不同枚=0|非style处不同枚=0|段数不同件=0`、`段总=421001|变CSS件=202|变CSS段=2764`，
+  改动按属性分 `text-indent: 1959 / margin-left: 1039 / margin-right: 1`（那唯一一枚 margin-right 住在《产品技术建议书模板.docx》#22）；
+  **归因腿** `S|b17|HEAD就抛=36|HEAD不抛而提交件抛=0|两头都过=1306`——36 枚排除逐枚报名与原因（34 枚报 `End of data reached`、
+  1 枚报 `expected 18 records in central dir, got 0`、1 枚报 `unexpected signature`），**没有一枚是「HEAD 能读而提交件读不出」**；
+  **三头拆分腿**（154 秒）把两笔合起来的账拆开：
+  `head→mg(合并那一笔)=件197|段2776`、`mg→fix(字符底数那一笔)=件11|段276`、`两笔都碰的段=259`，而
+  `head→fix(两笔合起来)=件202|段2764|并集段=2793` ⇒ 并集比净数多 29 段：那 29 段先被合并那一笔改道、又被底数那一笔改了回来（净零，
+  本轮如实记着）；同腿 `OK|三头正文与去 style 的形状逐字符相同——只搬形状不丢一字`；**编译腿**双证——先只吃提交件那一趟
+  `tsc --noEmit` 零错（`SELF|提交件|md5=bc776b4e34c235324c2d4bea788fdcf9`、`TSC|exit=0`），另造一枚一次性 `__q17neg.ts` 拿
+  `tmp/xmar18/ctree/src/__q17neg.ts(1,14): error TS2322: Type 'string' is not assignable to type 'number'.`
+  证明那趟真跑了，探针随即删掉。
+
+- **本轮踩到的量具坑（不是产品缺陷）**：① **Word 门面拿 URL 转义过的路径开件会一句「很抱歉，找不到您的文件」**——c8
+  那批臂里同一段号有 `D:\//FAE/…%20….docx` 那种串，六枚候选只达一枚（`W|leftChars … wordPt=22`），要把真路径原样交给 COM
+  才有读数。② **后果腿报「跳过 36 枚」而普查腿报 35 枚，两条腿都没错，是口径不同**：《【2605站外】独立站转化率提升10倍的产品详情页设计技
+  巧.docx》的 `word/document.xml` 单独整份解得出来（普查按单成员解，把它算成可读），而我们的读手解整包——那件里
+  `word/media/image6.png` 的本地头签名就不对、`image7.png` 解到一半坏（把整包成员逐个 inflate 才归因到这两枚），于是整件被跳。
+  ③ **python 腿在 cp936 控制台下打印中文会变成 mojibake**（exit 0 而日志不可读），全套腿改 `PYTHONIOENCODING=utf-8`
+  重跑，不改判据。④ 变异件与提交件三枚同族并存时 `B0|` 自证只认 md5：五棵变体树逐枚打印
+  `SELF|v_*|bytes|lines|md5` 才敢把读数归到某一件上（`v_head c34513be…` 2065 行 / `v_fix bc776b4e…` 2122 行 / `v_m1 da5beca6…` /
+  `v_m2 8bbfb0d7…` / `v_m3 baefeab9…`）。
+
+- **本轮没动的量出来记着**（已开进路线图）：**同形状的漏账在 `w:spacing` / `w:shd` / `w:pBdr`
+  上一样成立而本轮没量**（那三族同名子元素仍是整枚替换；普查榜上 `pPr|spacing@afterAutospacing`
+  10404 枚/183 件那一类仍在账外）；**编号层没接**——`numbering.xml` 里 `w:lvl/w:pPr/w:ind`
+  与段落自身的 `w:ind` 之间同样是属性级的账，本轮只在样式链上做；**字符档的字号只解两档**（段标 > 样式链 → 15px
+  兜底），`docDefaults` 那一层的字号没接进来（c16b 量到 docDefaults 可解的有 4 枚）；**`rightChars`
+  单独出现的枚数是 0**（c16b/c17）⇒ 右缩进那一档的字符写法本轮没有臂；**缇值与字符档同写的组合没量**（`w:left="0"` 配
+  `w:leftChars="200"` 现在按缇值 0 处理＝不上账，而门面那一头怎么裁本轮不知道）；**`w:start`/`w:end`
+  只在同一枚 `w:ind` 上归一**，跨层混拼没做别名合并（真件 0 例，做了也没读数证明该做）；**写侧没动**——docx/odt
+  回写仍把缩进写成整枚 `w:ind`，存—重开一趟会不会把这份账改写，本轮没量；**屏上 / 纸面本轮没有读数**（dev 树由另一会话持有而本轮的
+  dev 腿会关掉它全部标签 ⇒ 破坏性，不跑）。
+
+- **收尾**：README 新增本节 + 两处就地改口（架构那节「段落 `w:pPr`（jc 对齐、`w:ind` 的
+  left/firstLine/hangingChars/firstLine/hanging、pStyle 样式链继承）」补上「按属性名合」那句、文件清单
+  `lib/docx-fidelity.ts` 那条把这一枝的账记进去）+ 路线图新开 八枚（`w:spacing`/`w:shd`/`w:pBdr` 的同一形状 /
+  编号层的 `w:ind` / 字符档的 `docDefaults` 字号档 / `rightChars` 无臂 / 缇值与字符档同写 / `w:start`
+  跨层归一 / 写侧整枚 `w:ind` 的存—重开 / 无 dev 与纸面腿）；历史各节的口径按节保留，不改写；**版本文件不入本提交**（0.119.0
+  住着并发轮次的对齐号）；`tmp/xmar18` 的清单、基座、变体树、件副本与全部腿日志按惯例删除；并发会话的工作树此刻带着他们自己那一版
+  `src/lib/docx-fidelity.ts`（md5 `8dbbd4a8…`，相对 HEAD 增 451 删 56）与 README ⇒ 本节与提交件都以
+  `git show HEAD:…` 为底落 index-only blob，不去动他们那一份；**dev 树全程未碰**。
+
+
 ## 性能（v0.3）
 
 
@@ -6082,7 +6179,7 @@ src/                  React 前端
   lib/ooxml-graphics.ts 图形部件读侧（v0.42，零依赖、不碰 DOM 所以 Node 侧可直测）：`smartArtToHtml(dataXml, inCell)` 解 DiagramML dataModel 的 ptLst/cxnLst（parOf 建树 + srcOrd 定序、空节点下钻、首次认父挡回边、`a:fld` 域编号不采）→ 嵌套 `bulletList`（格内改段落 `margin-left` 表层级）；`chartToHtml(chartSpaceXml, inCell)` 解 ChartML 缓存值（下钻找系列、`strRef`/`numRef` 中间层、`c:pt/@idx` 空洞留格、`multiLvlStrRef` 各级拼一格、轴标题不当图表标题）→ 标题段 + 数据表，无缓存只取标题；两者都返 `{html, kept}` 让调用方按"真取回多少"说告警
   lib/cfb.ts          复合文档（OLE 2 / MS-C 容器）读侧（v0.44，零依赖、不碰 DOM）：`isCfb` 认魔数、`openCfb(bytes)` 走 DIFAT（109 直槽 + 链）→ FAT（扇区编号即下标）→ 128 字节目录项的红黑树（left/right 兄弟 + child 指孩子根，`assigned` 兼防环），小于 4096 的流从根存储链装的迷你流按 64 字节迷你扇区拼；扇区 512/4096、v3/v4 都认，**结构不合返回 null 不抛**（坏件要"少部分内容照出"而不是整篇打不开），截断的件按 `floor(len/sec)-1` 收边界、v4 高 32 位非零的流只报名字不去碰
   lib/ole.ts          OLE 嵌入对象的**内容**提取（v0.44）：`unwrapEmbed` 拆容器（现代形状=部件本身就是原生文件；老形状=复合文档里的流 `\x01Ole10Native`），`oleNativePayload` 按实测字段布局走一遍、走不通再按"哪枚 DWORD 能把数据吃到接近结尾"扫兜底（数据不贴着流末尾，按流长反推必错）；`classifyEmbed` 先魔数后文件名，`embedHtml(content, depth)` 分派 docx（递归 `docxToHtmlFidelity`，depth≥2 停）/ xlsx（只要值，`r="C5"` 定位、空列不挤位）/ CSV（首行嗅探分隔符 + RFC4180 引号）/ txt（空行分段，UTF-8 出替换符换 GBK 重试），取不出的一律给带真名与大小的 `note`；上限 24MB / 200 行 × 40 列 × 4 表 / 64KB × 200 段，**截断写进告警不静默少给**；`inlineFlatten` 把块级正文压成行内（单元格放不下第二层表）
-  lib/docx-fidelity.ts OOXML → HTML 保真导入器（v0.37）：run 级 rPr（粗斜/删除线/下划线/字色/高亮/字族/字号/上下标 `w:vertAlign`）、段落 pPr（jc/`w:ind` 左右与首行悬挂四种缩进写法/pStyle 样式链）、numPr+numbering.xml → 有序无序与 ilvl 层级（**跳档按 numId 折基准层**，不凭空补中间层）、表格 gridSpan/vMerge + tblGrid 列宽（**表格读侧第十笔账起，列账第一次由 `w:tblLayout` 分流且所有行一起上账**：`layFixed` 由 `w:tblPr/w:tblLayout@w:type` 是否为 `fixed` 决定——fixed 那一档 `w:gridCol` 是**地板**（逐格 `tcWpx` 只往宽里抬 `total > acct[k]`、两行同列取最大、跨列格的正差落所跨**最后一条**而负差丢、`c.cont`（`w:vMerge=continue`）那一格 `continue` 不参与、跨到缺账列时把正差补进缺口），autofit 与 layout 缺失那一档反过来（另立一盘 `pure`，逐列取各行 tcW 的最大且**缩小照落**、跨列格 `total / span.length` **均摊**、最后 `pure[k] > 0` 才覆盖网格，一行都没说话的列退网格）；**第十一笔账把逐格那一族按型别收口**（`tcWpx` 由排除法换成白名单：只有 `dxa`（缺省也算 `dxa`）才是数字，`auto`/`pct`/`nil`/规格外一律 `null`＝账外——nil 跟着当数字读会造出一枚假宽（`p_type_nil` 旧 [75|90|120] ↔ Word [60|90|120]＝网格），而 pct 的基数是**表宽**不是版心、表宽那道门仍关着）；出账闸门与发射门仍不动（`acctKnown = gridKnown || !!tblTotal`、`ri === 0 && acctKnown` 配 `.filter((v) => v > 0)`）；**表格读侧第八笔账起，整盘账都没说的那些列改由表级 `w:tblW` 折宽后等分**：`tblWpx` 吃 dxa/pct 两档而 pct 按五十分之一百分点折版心（**第十二笔账把 `nil` 并入 `auto` 那一档**：带正数的 nil 在 Word 门面报 `pwtype=1 pw=0.00`，而规格外与缺 `w:type` 在这一层仍复用数字 ⇒ 表级不设格级那道 dxa 白名单、两族方向相反；表宽折算的 pctype 门与逐格白名单本轮一字未改；**第十三笔账把表级 `@w:w` 的字符串字面接上**——旧那句 `const raw = attr(tblW, 'w')` 只匹配无前缀的 `w=` 键，而真 OOXML（含自家写侧）落的是带前缀的 `w:w="30%"` ⇒ 那一档在真件上从不达；改成 `attr(tblW,'w') ?? attrL(tblW,'w')` 后**字面按百分之几折而数值按 5000 分之一**，字面另过一枚形状闸 `/^-?\d+(?:\.\d+)?%$/`（`"30 %"` 在 Word 报 `pw=0` 故与 `abc%` / 空 / `"-10%"` / `"0%"` 同归账外））、`contentTwipsOf` 从 body 末尾 `sectPr` 的 `pgSz` 减左右 `pgMar` 算版心、出账闸门由 `gridKnown` 换成 `acctKnown`；**真数 `w:tblW` 压过逐格账那两道门（fixed 等比缩 / autofit 除以首行格数）第十笔账量清机理仍不开**——动它要重标 v0.92/v0.93/v0.94 三批屏上与纸面基线）+ 单元格四边 `w:tcBorders`（含 val=nil 的显式去边；**表格读侧第十四笔账起这条边的粗细带一枚最小发墨档**：`w:sz` 低于 2 抬到 2，三族——表级六槽、逐格四边、段落四边——共用 `edgeCss` 那一枚换算）/底纹 `w:shd fill`/竖排 `w:vAlign`/表级 `w:tblInd`、段落 `w:spacing`（行距两档 + 段前后，含按行的 `w:*Lines` 估算）/`w:shd` 底纹/`w:pBdr` 四边、脚注与尾注引用（`w:footnoteReference`/`w:endnoteReference` 按 `w:id` 配 `word/footnotes.xml`·`endnotes.xml` 正文，跳过 separator/continuationSeparator，正文缺失记告警且不留空标记）、图片 rels→dataURL、内外超链接、分页符、批注三态锚点、域代码文字不外泄、**域编号重算**（v0.43：`fldChar` begin/separate/end 三道门接 `docx-fields` 的 `FieldEngine`——`SEQ` 现算并压掉缓存、`REF` 无缓存按书签段落文本兜底（书签表渲染前预扫）、算不了的沿缓存且无缓存记边界、`fldSimple` 同路、被跳过的分支不占号）、`w:object` 嵌入对象（v0.43 预览是 EMF/WMF 解不开时留一行可见占位，ProgID + rels 反查的部件文件名；**v0.44 先走 `lib/ole` 取内容**——取到就把内层正文接为段落兄弟块（格内改压行内）且不再叠占位，取不到才留占位）、文本框 `w:txbxContent`（`wps:txbx` 与旧式 `v:textbox`）展平为段落、OMML 公式线性化、`mc:AlternateContent` 只取 Choice（空则退 Fallback，避免同一份正文翻倍）、drawing 锚点经 rels 找图示/图表部件（v0.42，部件缺失与关系缺失各记一条告警）、**格底纹的三层取一与格边距的六层逐边合并（表格读侧第六、七、十五笔账；第十五笔账把行条件层 `w:tr/w:tblPrEx/w:tblCellMar` 铺在条件层 `mar` 槽之上、逐格 `w:tcMar` 之下——它是 `w:tr` 的首子而不是 `w:trPr` 的孩子，顺着 `w:trPr` 找就永远够不着）**：底纹按「哪一层的 `w:shd` 在场」比（逐格 > 条件层含四枚角型 > 被引用样式的 `w:tcPr/w:shd` 基座，沿 `w:basedOn` 本体说了才覆盖祖先），条件块从此**两格分开记账**（`CondCell = {mar, tblMar, shd}`：`w:tcPr/w:tcMar` 那格交回 `mar`、`w:tblPr/w:tblCellMar` 那格交回 `tblMar` 而归**样式层**——压过样式基座而压不过表自身），两族的落点各走一枚 8 档梯子而**梯子反着**（底纹在 `condShadingFor` 里按 角型 > 行型 > 列型、首行压末行、末列压首列且角型只落那一角那一格；边距按具名的 `condMarginLadder` 列型 > 角型 > 末行 > 首行，角型按其所在那一整行落），两族都要 `w:tblLook` 的对应位说话（角型要那一角的两枚位都开，`@w:val` 那位十六进制从不被 consult），内建 `TableNormal` 走替换名单（`SUBSTITUTED_TABLE_STYLES`：Word 打开时换上自己的定义，文件里往它身上写的数从不落地）而「默认标记」不再当门，图案档 `@w:val=pct50` 只读 fill 并按型别记一句；认不出就抛错或 blocks=0，调用方回退 mammoth；格里的 `w:tbl`（第十六笔账）不再展平为段落，走同一枚 `table()` 出真嵌套表
+  lib/docx-fidelity.ts OOXML → HTML 保真导入器（v0.37）：run 级 rPr（粗斜/删除线/下划线/字色/高亮/字族/字号/上下标 `w:vertAlign`）、段落 pPr（jc/`w:ind` 左右与首行悬挂四种缩进写法/pStyle 样式链）、numPr+numbering.xml → 有序无序与 ilvl 层级（**跳档按 numId 折基准层**，不凭空补中间层）、表格 gridSpan/vMerge + tblGrid 列宽（**表格读侧第十笔账起，列账第一次由 `w:tblLayout` 分流且所有行一起上账**：`layFixed` 由 `w:tblPr/w:tblLayout@w:type` 是否为 `fixed` 决定——fixed 那一档 `w:gridCol` 是**地板**（逐格 `tcWpx` 只往宽里抬 `total > acct[k]`、两行同列取最大、跨列格的正差落所跨**最后一条**而负差丢、`c.cont`（`w:vMerge=continue`）那一格 `continue` 不参与、跨到缺账列时把正差补进缺口），autofit 与 layout 缺失那一档反过来（另立一盘 `pure`，逐列取各行 tcW 的最大且**缩小照落**、跨列格 `total / span.length` **均摊**、最后 `pure[k] > 0` 才覆盖网格，一行都没说话的列退网格）；**第十一笔账把逐格那一族按型别收口**（`tcWpx` 由排除法换成白名单：只有 `dxa`（缺省也算 `dxa`）才是数字，`auto`/`pct`/`nil`/规格外一律 `null`＝账外——nil 跟着当数字读会造出一枚假宽（`p_type_nil` 旧 [75|90|120] ↔ Word [60|90|120]＝网格），而 pct 的基数是**表宽**不是版心、表宽那道门仍关着）；出账闸门与发射门仍不动（`acctKnown = gridKnown || !!tblTotal`、`ri === 0 && acctKnown` 配 `.filter((v) => v > 0)`）；**表格读侧第八笔账起，整盘账都没说的那些列改由表级 `w:tblW` 折宽后等分**：`tblWpx` 吃 dxa/pct 两档而 pct 按五十分之一百分点折版心（**第十二笔账把 `nil` 并入 `auto` 那一档**：带正数的 nil 在 Word 门面报 `pwtype=1 pw=0.00`，而规格外与缺 `w:type` 在这一层仍复用数字 ⇒ 表级不设格级那道 dxa 白名单、两族方向相反；表宽折算的 pctype 门与逐格白名单本轮一字未改；**第十三笔账把表级 `@w:w` 的字符串字面接上**——旧那句 `const raw = attr(tblW, 'w')` 只匹配无前缀的 `w=` 键，而真 OOXML（含自家写侧）落的是带前缀的 `w:w="30%"` ⇒ 那一档在真件上从不达；改成 `attr(tblW,'w') ?? attrL(tblW,'w')` 后**字面按百分之几折而数值按 5000 分之一**，字面另过一枚形状闸 `/^-?\d+(?:\.\d+)?%$/`（`"30 %"` 在 Word 报 `pw=0` 故与 `abc%` / 空 / `"-10%"` / `"0%"` 同归账外））、`contentTwipsOf` 从 body 末尾 `sectPr` 的 `pgSz` 减左右 `pgMar` 算版心、出账闸门由 `gridKnown` 换成 `acctKnown`；**真数 `w:tblW` 压过逐格账那两道门（fixed 等比缩 / autofit 除以首行格数）第十笔账量清机理仍不开**——动它要重标 v0.92/v0.93/v0.94 三批屏上与纸面基线）+ 单元格四边 `w:tcBorders`（含 val=nil 的显式去边；**表格读侧第十四笔账起这条边的粗细带一枚最小发墨档**：`w:sz` 低于 2 抬到 2，三族——表级六槽、逐格四边、段落四边——共用 `edgeCss` 那一枚换算）/底纹 `w:shd fill`/竖排 `w:vAlign`/表级 `w:tblInd`、段落 `w:spacing`（行距两档 + 段前后，含按行的 `w:*Lines` 估算）/`w:shd` 底纹/`w:pBdr` 四边、脚注与尾注引用（`w:footnoteReference`/`w:endnoteReference` 按 `w:id` 配 `word/footnotes.xml`·`endnotes.xml` 正文，跳过 separator/continuationSeparator，正文缺失记告警且不留空标记）、图片 rels→dataURL、内外超链接、分页符、批注三态锚点、域代码文字不外泄、**域编号重算**（v0.43：`fldChar` begin/separate/end 三道门接 `docx-fields` 的 `FieldEngine`——`SEQ` 现算并压掉缓存、`REF` 无缓存按书签段落文本兜底（书签表渲染前预扫）、算不了的沿缓存且无缓存记边界、`fldSimple` 同路、被跳过的分支不占号）、`w:object` 嵌入对象（v0.43 预览是 EMF/WMF 解不开时留一行可见占位，ProgID + rels 反查的部件文件名；**v0.44 先走 `lib/ole` 取内容**——取到就把内层正文接为段落兄弟块（格内改压行内）且不再叠占位，取不到才留占位）、文本框 `w:txbxContent`（`wps:txbx` 与旧式 `v:textbox`）展平为段落、OMML 公式线性化、`mc:AlternateContent` 只取 Choice（空则退 Fallback，避免同一份正文翻倍）、drawing 锚点经 rels 找图示/图表部件（v0.42，部件缺失与关系缺失各记一条告警）、**格底纹的三层取一与格边距的六层逐边合并（表格读侧第六、七、十五笔账；第十五笔账把行条件层 `w:tr/w:tblPrEx/w:tblCellMar` 铺在条件层 `mar` 槽之上、逐格 `w:tcMar` 之下——它是 `w:tr` 的首子而不是 `w:trPr` 的孩子，顺着 `w:trPr` 找就永远够不着）**：底纹按「哪一层的 `w:shd` 在场」比（逐格 > 条件层含四枚角型 > 被引用样式的 `w:tcPr/w:shd` 基座，沿 `w:basedOn` 本体说了才覆盖祖先），条件块从此**两格分开记账**（`CondCell = {mar, tblMar, shd}`：`w:tcPr/w:tcMar` 那格交回 `mar`、`w:tblPr/w:tblCellMar` 那格交回 `tblMar` 而归**样式层**——压过样式基座而压不过表自身），两族的落点各走一枚 8 档梯子而**梯子反着**（底纹在 `condShadingFor` 里按 角型 > 行型 > 列型、首行压末行、末列压首列且角型只落那一角那一格；边距按具名的 `condMarginLadder` 列型 > 角型 > 末行 > 首行，角型按其所在那一整行落），两族都要 `w:tblLook` 的对应位说话（角型要那一角的两枚位都开，`@w:val` 那位十六进制从不被 consult），内建 `TableNormal` 走替换名单（`SUBSTITUTED_TABLE_STYLES`：Word 打开时换上自己的定义，文件里往它身上写的数从不落地）而「默认标记」不再当门，图案档 `@w:val=pct50` 只读 fill 并按型别记一句；认不出就抛错或 blocks=0，调用方回退 mammoth；格里的 `w:tbl`（第十六笔账）不再展平为段落，走同一枚 `table()` 出真嵌套表；**段落读侧第一笔账**把样式链上 `mergePPr` 的叠法改了口——只有 `w:ind` 那一枝从「整枚元素替换」换成 `mergeIndAttrs` 「逐属性合并」（同名者后写层压前写层、段落没写的属性留样式那一枚，`firstLine`|`hanging` 与 `firstLineChars`|`hangingChars` 各一枚槽而**同槽只认后写那层**，其余同名子元素与孩子的取法一字未改），字符那一档的宽度底数从硬写的 16px 换成段落自己的字号（`paraCss` 新吃第三枚参数 `baseSz`，与正文渲染同一份字号账，解不出才退 `.doc-content` 的 15px）
   lib/docx-fields.ts 域重算引擎（v0.43，零依赖、纯 Node 可直测）：`parseInstr` 拆 `命令 参数 \开关`（**开关 token 原样保留大小写**——Word 就按它决定结果形态）、`seqText` 按 `\* ROMAN`/`roman`/`ALPHABETIC`/`alphabetic`/`Alpha` 出对应形态、`FieldEngine`（`from(doc)` 渲染前扫全篇建书签表（只排 `_GoBack`，`_Ref…`/`_Toc…` 必须留）+ `seqValue` 跟着文档顺序走 + `refText` 兜底段落文本）、`recomputable`（只有带 label 的 SEQ 现算）、`fieldLabel`/`paraText`（域代码与已删文字不算正文）
   lib/cell-style.ts   单元格样式扩展（v0.38）：tableCell/tableHeader 的 bdTop/bdRight/bdBottom/bdLeft + background + vAlign、table 的 marginLeft 全局属性（只声明属性不改内容模型）；边框统一规范串 `"0.67px solid #8899aa"`，三态 null 未声明/'none' 显式去边/有值；`inlineBorder()` 读 CSSOM longhand（shorthand 对 none 返回空串）、`IndentTableView` 子类补 marginLeft（resizable 的节点视图不传 HTMLAttributes；**v0.92 起 `applyIndent` 里加一枚宽度判定**——`accountTotalPx(node)` 非零就写 `width: Σpx`，否则才退回 `calc(100% − ml)` / `''`，缺陷在自家这一层而不是库）、`eighthsToPx`/`pxToEighths` 管 1/8 磅换算、命令 setCellBackground/setCellVAlign；**v0.88 拆掉两处静默**——① `CSS_BORDER_STYLE` 补上 Word「虚线」对话框实际写出的那几档 token（`dashSmallGap`/`dashLargeGap`/`dotDotDash`/`dashDotStroked` → `dashed`；原先只有 `dotDash` 会被小写归一命中，`dashSmallGap` 命不中 ⇒ Word 里的虚线导进来显示成实线、再导出也是实线且零告警），② 表头格那枚 no-op：`setCell` 原来是 `updateAttributes('tableCell',…) && updateAttributes('tableHeader',…)`，表头行上第一型返回 false 就整条短路 ⇒ **边框/底纹/竖排对齐在表头格上从 v0.38 起全是静默失败**，改成 `[两型].some(Boolean)`（段落那一头 v0.39 早就是这个形状）；同轮新出界面用的四味：`bdAttr`（边名 → 属性名）、`edgeAttrs`（若干条边 → 一份 patch）、`BORDER_STYLES`/`BORDER_WIDTH_PT`/`borderCss`（磅 → 规范串，换算只写这一处）与 `EDGE_LABEL`；**v0.95 加表头行克隆**（`scheduleReplica`/`syncReplica`，`spec.update` 里排队走 `queueMicrotask`——PM 重画行在同一趟之后）：把「开头连续的全部表头行」克隆进 `<thead class="doc-th">` 并给表加 `doc-th-rep`，供纸上 `table-header-group` 重复。三条形状由实测钉住：只克隆不搬移（搬走 `rows 23→22`、`thRows 1→0` 把模型吃了）、标记住 `<table>` 而不 `tr`（PM 会擦 `contentDOM` 里行的 `class`，实测 `tagged=0`）、那道门只认开头连着的那几行（`leading.length === 全部表头行数` 才过门，且撤旧克隆排在过门之前，中途夹一枚表头行的表整块不建克隆）
   lib/table-width.ts  精确列宽的把手（v0.91，252 行）：`tableGrid` 自己的占位遍历算出每格的**起始**行列与绝对位置（不借 prosemirror-tables 的 `TableMap`——它不是本项目的声明依赖、TipTap 也没转出来；跨列的格按起点记，实测跨两列那一格里光标认到的是第 0 列），`gridAccount` 只取行 0 摊平出的逐网格列账（与 docx 写侧同一份权威），`accountTotalPx`（v0.92 新立的导出纯函数，+19 行）把这份账折成一枚绝对像素数——任一网格列没账或 <1 就整表 `return null`，屏上的表宽就吃这一枚数，`baseWidths` 给没带账的列补 `max(1, floor((可用宽 − Σ已有账)/未带账列数))`（屏上那一档实测 `[248,null,null]` → 248/188.7/188.7 而 (626−248)/2 = 189，与写侧同一算法），`redistribute` 是键入一列之后的整表账（四道门：列数非零 / 列号在范围内 / 可用宽 ≥ 列数 / 键入值 ≥ 1px；键入列夹到 `min(键入值, 可用宽 − (列数−1))` 给其余列各留 1px；其余列按各自现有账**等比**分享剩下的那一份，舍入用最大余项法配平、每列至少 1px ⇒ Σ 恰等于可用宽，这是"键入值 1:1 上屏"的条件，否则浏览器按 `table-layout: auto` 把整表比例缩走），`tableTargetPx` = 版心 px − 表级 `marginLeft`（屏上写的是 `width: calc(100% - Npx)`，不扣它键入值照样被缩），`caretColumn` 给界面用（光标在哪一列 / 一共几列 / 当前显示值，没带账的列显示等分那一份与屏上一致）；`TableWidth` 扩展的 `setGridColumnWidth(px, targetPx)` **一次事务写遍该网格列的每一格**（只写行 0 会在同一次 dispatch 里被 `tableEditing` 的 `appendTransaction` 按其余各行抹回去）、先验齐再落（任一格的 `colwidth.length` 不等于它的 colspan 就整表拒绝，不写半份账进去）、**账本来就是这一份的格子跳过**（PM 的 `setNodeMarkup` 即便属性相同也推一步 ⇒ 重打同一个数字会凭空多一枚撤销步），全部跳过则返回 false 不派发
@@ -7399,6 +7496,24 @@ cargo check        # Rust 后端检查（在 src-tauri 下）
       逐边字面 ⇒ 同一份账在 docx 是六层梯子、在 ODT 只有格上那一层
 - [ ] **表格写侧第一笔账没有 dev 真机腿与纸面腿**：dev 树由另一会话持有而本轮的 dev 腿会关掉它全部标签 ⇒ 破坏性，不跑；格边距与行高在屏上的
       实际观感本轮**没有读数**，证据全在离线四头（读手往返 / ODT 字节 / Word 门面 / docx 字节）加结构、变异与编译腿
+- [ ] **同形状的漏账在 `w:spacing` / `w:shd` / `w:pBdr` 上一样成立而本轮没量**（段落读侧第一笔账）：`mergePPr`
+      现在只把 `w:ind` 那一枝改成逐属性合并，其余同名子元素仍是整枚替换；普查榜上 `pPr|spacing@afterAutospacing`
+      10404 枚/183 件那一类仍在账外
+- [ ] **编号层的 `w:ind` 没接**（段落读侧第一笔账）：`numbering.xml` 里 `w:lvl/w:pPr/w:ind` 与段落自身的 `w:ind`
+      之间同样是属性级的账，本轮只在样式链（`w:basedOn`）那一头做
+- [ ] **字符档的字号只解两档**（段落读侧第一笔账）：段标 `w:rPr/w:sz` > 样式链，取不到退 `.doc-content` 的 15px，
+      `docDefaults` 那一层的字号没接进来（c16b 量到 docDefaults 可解的有 4 枚）
+- [ ] **缇值与字符档同写那一档的组合本轮没量**（段落读侧第一笔账）：`w:left="0"` 配 `w:leftChars="200"`
+      现在按缇值 0 处理＝不上账，而门面那一头怎么裁不知道 ⇒ 不为它改闸
+- [ ] **`rightChars` 单独出现的枚数是 0**（c16b/c17）：右缩进那一档的字符写法在真件里从不单独说话 ⇒
+      本轮没有臂，`margin-right` 只从缇值那一路来（后果腿 421001 段里只落 1 枚）
+- [ ] **`w:start`/`w:end` 只在同一枚 `w:ind` 上归一**（段落读侧第一笔账）：跨层混拼（样式写 `start`
+      而段落写 `left`）没做别名合并——真件 0 例（c21），做了也没有读数证明该做
+- [ ] **写侧没动**（段落读侧第一笔账）：docx/odt 回写仍把缩进写成整枚 `w:ind`，存—重开一趟会不会把这份属性级的账
+      改写，本轮没量
+- [ ] **段落读侧第一笔账没有 dev 真机腿与纸面腿**：dev 树由另一会话持有而本轮的 dev 腿会关掉它全部标签 ⇒ 破坏性，不跑；
+      `margin-left` / `text-indent` 在屏上和纸上的观感本轮**没有读数**，证据全在离线四头（结构+变异 / 真件读手 /
+      独立字节 / 三头判据）加后果、拆分与编译腿
 - [ ] **exact 行高的裁剪语义只有一枚告警**（v0.97）：读入按 atLeast（下限），屏上内容超高时不会被裁，
       而 Word 的 exact 是真裁——这一档的观感差异只在导入时说一句，没有别的到达面
 - [ ] **v0.97 没有 dev 真机腿与纸面腿**：行高与格边距在屏上和纸上的形状本轮**没有读数**（dev 树由另一会话持有，

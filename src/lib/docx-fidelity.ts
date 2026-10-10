@@ -38,6 +38,13 @@
 // 所以它落在上面那两道门之后；真件那侧同向——首行带 pct 的 30 枚表全为「缺 w:tblLayout × 有真数表宽」，pct 折宽离
 // 声明网格 19 枚 ≤1 磅（no-op）、11 枚 2.08–65.28 磅；Word 能开的 6 枚件里 11 枚同族表有 10 枚读的就是声明网格（0.00 磅）。
 // nil 是「这格没宽」而不是「宽是 0」：把它跟 dxa 一起当数字读会造出一枚假宽（夹具 p_type_nil：Word 60|90|120＝网格，旧码 75|90|120）。
+// 段落缩进从第十七笔账起按属性名继承：样式链那枚 w:ind 上、段落没写的属性照旧说话（c19b 数出元素级替换
+// 一次扔掉 18460 枚属性、住 190 枚文件；Word 门面五枚臂 c18b 两枚字符臂 + c20 三枚纯长度臂全 verdict=keep-style），
+// 而 firstLine 与 hanging 是同一枚首行槽的正负两写法——段落写了其中任一拼法就整槽归段落（c20 两枚 drop 臂：段落的
+// w:firstLine="0" 压掉样式的 w:hanging，Word 门面 HangingIndent=0；跨层两拼法 818 枚/46 件）。w:left 与 w:start 这对
+// 别名在真件里既不同元素并存（0 枚）也不跨层混用（0 枚），故不设别名槽。字符缩进的宽度底数从硬写的 16px 换成段落
+// 自己的字号折 px，取不到才退正文 15px；负数字面、rightChars 单独臂（真件 0 枚）、编号层 w:numPr 的 w:ind 与
+// docDefaults 那一档字号仍在账外。
 
 import { all, allDesc, attr, attrL, attrNum, els, find, findDesc, findL, local, parseXml, textOf, type XEl } from './ooxml'
 import { FieldEngine, fieldLabel, parseInstr, recomputable } from './docx-fields'
@@ -246,7 +253,37 @@ function styleChain(book: StyleBook, id: string | undefined): StyleInfo[] {
   return out
 }
 
-/** 段落属性的合并视图：同名子元素后者覆盖前者（Word 的样式继承就这个语义） */
+/**
+ * 段落属性的合并视图：同名子元素后者覆盖前者——w:ind 除外，它得按属性名一枚一枚合。
+ * 第十七笔账的门面实测：段落只写 w:left 时，样式链那枚 w:ind 上的 w:firstLine 照样说话
+ * （c20 三枚跨属性臂 verdict=keep-style：样式的 103/420 缇照读），而整枚替换会把段落没写的那些
+ * 属性一次性扔掉（c19b：样式写了段落没写、被元素级替换扔掉的属性 18460 枚、住 190 枚文件）。
+ * 同名者压前者、0 是真值；firstLine 与 hanging 是 Word 同一枚首行槽的正负两写法——段落写了其中
+ * 任一拼法就整槽归段落（c20 两枚 drop 臂：显式 w:firstLine="0" 把样式的 w:hanging="283/721" 压掉，
+ * Word 门面 HangingIndent=0；跨层两拼法 818 枚/46 件，按名字各留各的就会读反）。
+ * 同形状的问题在 w:spacing/w:pBdr/w:shd 上也成立，本轮没量就不改道（账外，见路线图）。
+ */
+const IND_SLOTS: string[][] = [
+  ['firstLine', 'hanging'],
+  ['firstLineChars', 'hangingChars'],
+]
+
+/** w:ind 的属性级合并：同名后者压前者，段落没写的属性留样式那一枚，同一枚槽只认后写那层 */
+function mergeIndAttrs(base: Record<string, string>, add: Record<string, string>): Record<string, string> {
+  const out: Record<string, string> = {}
+  const slotted = new Set<string>()
+  for (const slot of IND_SLOTS) {
+    const b = Object.keys(base).filter((k) => slot.includes(local(k)))
+    const a = Object.keys(add).filter((k) => slot.includes(local(k)))
+    for (const k of a.concat(b)) slotted.add(k)
+    const from = a.length ? add : base
+    for (const k of a.length ? a : b) out[k] = from[k]
+  }
+  for (const [k, v] of Object.entries(add)) if (!slotted.has(k)) out[k] = v
+  for (const [k, v] of Object.entries(base)) if (!slotted.has(k) && out[k] === undefined) out[k] = v
+  return out
+}
+
 function mergePPr(list: (XEl | undefined)[]): XEl | undefined {
   let merged: XEl | undefined
   for (const add of list) {
@@ -258,8 +295,16 @@ function mergePPr(list: (XEl | undefined)[]): XEl | undefined {
     const next: XEl = { name: '#merged', attrs: {}, children: [...merged.children] }
     for (const c of els(add)) {
       const old = find(next, c.name)
-      if (old) next.children[next.children.indexOf(old)] = c
-      else next.children.push(c)
+      if (!old) {
+        next.children.push(c)
+        continue
+      }
+      const at = next.children.indexOf(old)
+      // w:ind 换成按属性名合，其余同名子元素仍是整枚替换；孩子仍取后写那层（与旧行为一字不差）
+      next.children[at] =
+        local(c.name) === 'ind'
+          ? { name: c.name, attrs: mergeIndAttrs(old.attrs, c.attrs), children: [...c.children] }
+          : c
     }
     merged = next
   }
@@ -731,7 +776,7 @@ class Fidelity {
     const pieces = await this.inline(el, base, inCell)
     if (view.preformatted) return prefix + `<pre><code>${escText(plainText(el))}</code></pre>`
 
-    const style = this.paraCss(effPPr, betweenCss)
+    const style = this.paraCss(effPPr, betweenCss, base.sz)
     const tag = view.level && view.level <= 4 ? `h${view.level}` : 'p'
     const body = this.layout(tag, style, pieces)
     return view.quote ? prefix + `<blockquote>${body}</blockquote>` : prefix + body
@@ -741,7 +786,7 @@ class Fidelity {
    * 段落样式 → CSS：对齐 + 缩进（lib/indent-extension.ts）+ 行距与段前后 + 底纹 + 四边边框
    * （后三项落在 lib/paragraph-style.ts 的属性上）
    */
-  private paraCss(pPr: XEl | undefined, betweenCss = ''): string {
+  private paraCss(pPr: XEl | undefined, betweenCss = '', baseSz?: number): string {
     const bits: string[] = []
     const jc = val(pPr, 'w:jc')
     const align =
@@ -757,15 +802,27 @@ class Fidelity {
     if (align) bits.push(`text-align: ${align}`)
     const ind = pPr ? find(pPr, 'w:ind') : undefined
     if (ind) {
+      // 字符那一档的宽度底数取段落自己的字号（段标 > 样式链，与正文渲染同一份账），取不到才按
+      // .doc-content 正文那 15px（src/index.css:996）：旧代码硬写的 16 在 c16b 那 282 枚字号可解的
+      // leftChars 臂上平均偏 0.15px、最大 4.00px（12 枚超 0.5px），而字号不可解、只能吃这枚底数的只有 4 枚
+      const charPx = baseSz ? Math.round(baseSz * HP_PX) : 15
+      // 缇值先说话（c13 门面九枚「缇值 × 字符数双生」臂全 verdict=literal），字符那一枚只在缇值整枚没写时
+      // 说话——缇值显式 0 时不接字符档（那一档的组合本轮没量过，不改道）；负数字面不上账
+      // （c15w：w:leftChars="-49" 在 Word 门面报 wordPt=0）
       const left = attrNum(ind, 'w:left') ?? attrNum(ind, 'w:start')
+      const leftChars = attrNum(ind, 'w:leftChars')
       const hang = attrNum(ind, 'w:hanging')
       const right = attrNum(ind, 'w:right') ?? attrNum(ind, 'w:end')
       if (left) bits.push(`margin-left: ${Math.round(left * TWIP_PX)}px`)
+      else if (left === undefined && leftChars && leftChars > 0) bits.push(`margin-left: ${Math.round((leftChars / 100) * charPx)}px`)
       if (right) bits.push(`margin-right: ${Math.round(right * TWIP_PX)}px`)
-      // firstLineChars 是"字符数×100"（Word 同时会写 firstLine 的 twips 值）；只给前者时按 16px 字宽估
       const first = attrNum(ind, 'w:firstLine')
       const firstChars = attrNum(ind, 'w:firstLineChars')
-      const firstPx = first ? Math.round(first * TWIP_PX) : firstChars ? Math.round((firstChars / 100) * 16) : 0
+      const firstPx = first
+        ? Math.round(first * TWIP_PX)
+        : first === undefined && firstChars && firstChars > 0
+          ? Math.round((firstChars / 100) * charPx)
+          : 0
       if (firstPx) bits.push(`text-indent: ${firstPx}px`)
       else if (hang) bits.push(`text-indent: ${-Math.round(hang * TWIP_PX)}px`)
     }
