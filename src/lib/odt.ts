@@ -78,6 +78,25 @@ function len2px(v: string | null | undefined): number | undefined {
   const px = lenPx(v)
   return px === undefined || px === 0 ? undefined : Math.round(px)
 }
+
+/**
+ * fo:padding 简写 → 四边各一枚 px，序为 top/right/bottom/left（就是 CELL_EDGES 那一序）。
+ * CSS 的折叠规则：1 值四边同，2 值给上下/左右，3 值中间那枚管左右。
+ * 任一段不是纯长度就整条算「没说」——混了线型或颜色的串不是边距简写。
+ */
+function expandPadding(v: string | null | undefined): number[] | undefined {
+  if (!v) return undefined
+  const parts = v.trim().split(/\s+/).filter(Boolean)
+  if (!parts.length || parts.length > 4) return undefined
+  const a: number[] = []
+  for (const p of parts) {
+    const px = lenPx(p)
+    if (px === undefined) return undefined
+    a.push(px)
+  }
+  const fold = a.length === 1 ? [0, 0, 0, 0] : a.length === 2 ? [0, 1, 0, 1] : a.length === 3 ? [0, 1, 2, 1] : [0, 1, 2, 3]
+  return fold.map((i) => a[i])
+}
 /** CSS 属性值 → ODF 的 fo:text-align（start/center/end/justify） */
 const FO_ALIGN: Record<string, string> = { left: 'start', center: 'center', right: 'end', justify: 'justify' }
 /** ODF 的 fo:text-align → CSS 值（本编辑器的 textAlign 属性吃 CSS 词） */
@@ -165,11 +184,13 @@ class OdtBuilder {
   charStyles = new Map<string, string>() // 样式键 JSON → 样式名
   paraStyles = new Map<string, string>() // 段落直接格式键 JSON → 段落自动样式名
   cellStyles = new Map<string, string>() // 单元格样式键 JSON → 自动样式名（ce1…）
+  rowStyles = new Map<string, string>() // 行样式键 JSON → 自动样式名（ro1…）
   tableStyles = new Map<string, string>() // 表格样式键 JSON → 自动样式名（TS1…）
   images = new Map<string, ImageEntry>() // src → entry
   private imageSeq = 0
   private paraSeq = 0
   private cellSeq = 0
+  private rowSeq = 0
   private tableSeq = 0
   /** 脚注/尾注各自一套编号与 text:id 前缀（ODF 的 id 要引用与正文两处对上，编号按文档顺序现算） */
   private noteSeq: Record<'footnote' | 'endnote', number> = { footnote: 0, endnote: 0 }
@@ -179,7 +200,7 @@ class OdtBuilder {
   private usedAnn = new Set<number>()
 
   /**
-   * 单元格直接格式（四边边框 + 底纹 + 竖排对齐）→ table-cell 家族自动样式。
+   * 单元格直接格式（四边边框 + 四边内边距 + 底纹 + 竖排对齐）→ table-cell 家族自动样式。
    * ODF 的表格单元格样式必须走 `style:family="table-cell"`，不能像 HTML 那样写内联。
    * 边框宽度用 pt 而不是 cm：px↔pt 是 ×4/3 的精确换算，cm 保留两位小数会把 1px 变成 1.13px。
    */
@@ -189,6 +210,13 @@ class OdtBuilder {
       const v = cell.attrs?.[bdAttr(edge)]
       if (typeof v !== 'string' || !v) continue
       o[`b${edge}`] = v === 'none' ? 'none' : odtBorder(v)
+    }
+    // 边距走 cm 三位小数：0.001cm = 0.038px，往返误差不到 0.02px，不必像边框那样换 pt。
+    // 0 是真值（Word 的上下边距常就是 0），所以那道闸按「有限非负数」而不是按真值判
+    for (const edge of CELL_EDGES) {
+      const v = cell.attrs?.[`pad${edge[0].toUpperCase()}${edge.slice(1)}`]
+      if (typeof v !== 'number' || !Number.isFinite(v) || v < 0) continue
+      o[`p${edge}`] = px2cm(v)
     }
     const bg = cell.attrs?.background
     if (typeof bg === 'string' && bg) o.bg = bg
@@ -212,9 +240,45 @@ class OdtBuilder {
       for (const edge of CELL_EDGES) {
         if (s[`b${edge}`]) tp += ` fo:border-${edge}="${esc(s[`b${edge}`])}"`
       }
+      for (const edge of CELL_EDGES) {
+        if (s[`p${edge}`]) tp += ` fo:padding-${edge}="${s[`p${edge}`]}"`
+      }
       if (s.bg) tp += ` fo:background-color="${esc(s.bg)}"`
       if (s.va) tp += ` style:vertical-align="${s.va}"`
       out += `<style:style style:name="${name}" style:family="table-cell"><style:table-cell-properties${tp}/></style:style>`
+    }
+    return out
+  }
+
+  /**
+   * 行高（tableRow 的 rowHeight，模型里就是下限语义）→ table-row 家族自动样式。
+   * 写 `style:min-row-height` 而不是 `style:row-height`：Word 读 ODT 时把后者一律折成
+   * `w:hRule="exact"`（三臂同形），exact 会把比它高的内容裁进行底下——同一段三段内容的格，
+   * 不给字面时这行占 44.8 磅，row-height="0.1cm"（=2.83 磅）把它压成 2.85 磅、41.95 磅正文
+   * 推进下一行（字节还在，屏上没了）。
+   * min-row-height 配 use-optimal-row-height="true" 落的是不带 hRule 的 w:trHeight
+   * （OOXML 缺省即 atLeast），Word 门面活口 HeightRule=1，与我们的下限语义同形且不裁。
+   */
+  private rStyle(row: PMNode): string {
+    const h = Number(row.attrs?.rowHeight)
+    if (!Number.isFinite(h) || h <= 0) return ''
+    const key = JSON.stringify({ h: Math.round(h * 100) / 100 })
+    let name = this.rowStyles.get(key)
+    if (!name) {
+      name = `ro${++this.rowSeq}`
+      this.rowStyles.set(key, name)
+    }
+    return name
+  }
+
+  private rowStyleXml(): string {
+    let out = ''
+    for (const [key, name] of this.rowStyles) {
+      const s = JSON.parse(key) as { h: number }
+      out +=
+        `<style:style style:name="${name}" style:family="table-row">` +
+        `<style:table-row-properties style:min-row-height="${px2cm(s.h)}" style:use-optimal-row-height="true"/>` +
+        `</style:style>`
     }
     return out
   }
@@ -393,7 +457,19 @@ class OdtBuilder {
           `<text:list-level-style-number text:level="${l}" style:num-suffix="." style:num-format="1"><style:list-level-properties text:list-level-position-and-space-mode="label-alignment"><style:list-level-label-alignment text:label-followed-by="listtab" fo:text-indent="-0.7cm" fo:margin-left="${(0.7 * l).toFixed(2)}cm"/></style:list-level-properties></text:list-level-style-number>`,
       )
       .join('')}</text:list-style>`
-    return this.charStyleXml() + this.cellStyleXml() + this.tableStyleXml() + headings + pc + pq + fn + aligns + lb + lo
+    return (
+      this.charStyleXml() +
+      this.cellStyleXml() +
+      this.rowStyleXml() +
+      this.tableStyleXml() +
+      headings +
+      pc +
+      pq +
+      fn +
+      aligns +
+      lb +
+      lo
+    )
   }
 
   private registerImage(src: string): ImageEntry | null {
@@ -643,7 +719,8 @@ class OdtBuilder {
         rowXml += `<table:table-cell${attrs}>${body}</table:table-cell>`
         c += sp?.cs ?? 1
       }
-      out += `<table:table-row>${rowXml}</table:table-row>`
+      const rn = this.rStyle(rows[ri])
+      out += `<table:table-row${rn ? ` table:style-name="${rn}"` : ''}>${rowXml}</table:table-row>`
     })
     out += '</table:table>'
     return out
@@ -1041,6 +1118,12 @@ export async function odtToHtml(bytes: Uint8Array): Promise<{ html: string; meta
       const bg = tp.getAttribute('fo:background-color')
       if (bg && !/^(auto|transparent|inherit)$/.test(bg.trim().toLowerCase()))
         o['background-color'] = rgb2hex(bg) ?? bg.trim()
+      // 边距：四边各一条 fo:padding-<edge>，fo:padding 简写是兜底（逐边那份压过简写）；0 也上账
+      const pd = expandPadding(tp.getAttribute('fo:padding'))
+      CELL_EDGES.forEach((edge, i) => {
+        const v = lenPx(tp.getAttribute(`fo:padding-${edge}`)) ?? pd?.[i]
+        if (v !== undefined && v >= 0) o[`padding-${edge}`] = `${v}px`
+      })
       const va = tp.getAttribute('style:vertical-align')?.trim().toLowerCase()
       if (va === 'top' || va === 'bottom') o['vertical-align'] = va
       else if (va === 'middle' || va === 'center') o['vertical-align'] = 'middle'
@@ -1057,6 +1140,30 @@ export async function odtToHtml(bytes: Uint8Array): Promise<{ html: string; meta
       if (v !== undefined) ml = v
     }
     return ml && ml > 0 ? ` style="margin-left: ${ml}px"` : ''
+  }
+
+  /**
+   * 行样式（table-row 家族）→ 行高 px，出 `<tr style="height: Npx">`（CellStyle 的 rowHeight 就吃这一枚）。
+   * ODF 这一头有四枚字面并存，全部收进模型同一枚下限，优先级 row-height > min-row-height >
+   * fo:minimum-row-height > fo:min-height（同一枚样式里取先命中的那一档，与 Word 门面
+   * 「两档并存时 row-height 压过 minimum」同形；样式链上则后代压过祖先，与其余样式通道一致）。
+   * 其中只有 style:row-height 与 style:min-row-height 是 Word 读得进的（fo: 那两枚在它门面 0 进账），
+   * 读侧仍放宽是为了第三方文件的现实；row-height 那档在 Word 侧是精确档，读进来按下限记是模型既有裁决。
+   */
+  const rowHeightPx = (name: string | null | undefined): number | undefined => {
+    let h: number | undefined
+    for (const el of styleChain(name)) {
+      const rp = pick(el, 'table-row-properties')
+      if (!rp) continue
+      for (const k of ['style:row-height', 'style:min-row-height', 'fo:minimum-row-height', 'fo:min-height']) {
+        const v = lenPx(rp.getAttribute(k))
+        if (v !== undefined && v > 0) {
+          h = v
+          break
+        }
+      }
+    }
+    return h
   }
 
   const htmlOfStyle = (si: StyleInfo, inner: string): string => {
@@ -1426,7 +1533,8 @@ export async function odtToHtml(bytes: Uint8Array): Promise<{ html: string; meta
             const attrs = `${cs > 1 ? ` colspan="${cs}"` : ''}${rs > 1 ? ` rowspan="${rs}"` : ''}${cellStyleCss(c.getAttribute('table:style-name'))}`
             cells.push(`<td${attrs}>${await renderChildrenBlocks(c)}</td>`)
           }
-          rows.push(`<tr>${cells.join('')}</tr>`)
+          const rh = rowHeightPx(r.getAttribute('table:style-name'))
+          rows.push(`<tr${rh !== undefined ? ` style="height: ${rh}px"` : ''}>${cells.join('')}</tr>`)
         }
         inCell--
         return `<table${tableStyleCss(el.getAttribute('table:style-name'))}><tbody>${rows.join('')}</tbody></table>`

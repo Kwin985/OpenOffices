@@ -4922,7 +4922,8 @@ docx 库默认的 `w="100"`（twip，≈6.7px），`w:tcW` 与 `w:tblLayout` 零
   实测形状
 - **本轮没动、量出来记着**（已开进路线图）：① **Word 的文档级默认格边距那一层**（字节里没有 `w:tblCellMar` 时 Word
   读 0.5/0.5 磅）我们不读也不铺；② **cell-clash 那一格两头次序不同**（我们跟 gridCol，Word 按 tcW/tblW 重摊）——
-  grid-first 是本轮选的，第三方那一头没有对齐判据；③ **ODT 链路没有 `pad*` / `rowHeight` 通道**（odt.ts 两头都不认）；
+  grid-first 是本轮选的，第三方那一头没有对齐判据；③ **ODT 链路的 `pad*` / `rowHeight` 通道**（v0.97 量出「两头都不认」，
+  **表格写侧第一笔账已接**：写侧逐边 `fo:padding-*` + `style:min-row-height`，读侧另收 `fo:padding` 简写与四档行高字面）；
   ④ **`w:tblLayout` 仍不读**（自动/固定布局档吃不到）；⑤ **exact 行高的裁剪语义**（读入按 atLeast，屏上不裁，只有
   一枚告警）；⑥ **行高与格边距在屏上/纸面没有读数**（本轮没有 dev 腿与纸面腿）；⑦ `w:between` 的**导出出口**
   （写回成 `w:bottom`，字节换档）；⑧ v0.96 那六枚与 v0.95/v0.94/v0.93/v0.92/v0.91 那几项原样挂着
@@ -5826,7 +5827,8 @@ Rust 一个字没动、写侧一寸没碰、模型属性一枚都不新增。**�
   同层的 `w:tblBorders` / `w:tblLayout` / `w:shd` 仍不上账；**第十四笔账记的「真件里唯一带条件层边框的 UL212 那枚表」本轮 b10 改口**——321 枚清单上有条件块 67 枚、
   带 `w:tcBorders` 的 34 枚、共 175 枚边、分布在 3 枚文件，而引用这些样式的表 17 枚分布在 2 枚文件（《T-5-2106-华大北斗OTA-升级开发指南-V1.0.5.docx》一枚就占 16 枚）
   ⇒ 条件层边框那一格更该上账，而它正压在并发会话那份「样式基座」hunk 上；屏上 / 纸面本轮没有读数（dev 树由另一会话持有而本轮的 dev 腿会关掉它全部标签 ⇒ 破坏性，不跑）；
-  `pad*` / `rowHeight` 在 ODT 两头、exact 行高的裁剪、角型同行同边、slot 水平边、图案 Texture 与 Word 文档级默认格边距仍照前几节挂着；
+  `pad*` / `rowHeight` 在 ODT 两头（表格写侧第一笔账已接）、exact 行高的裁剪、角型同行同边、slot 水平边、图案 Texture 与 Word
+  文档级默认格边距仍照前几节挂着；
   「默认行距 `line-height: normal`」那一枚拆出去的轮次仍挂着。
 
 - **收尾**：README 新增本节 + 四处就地改口（架构「覆盖」那条把格边距从**五层逐边**改成**六层逐边**并把「五层都没说的边仍不铺数」同数、文件清单 `lib/docx-fidelity.ts`
@@ -5909,7 +5911,8 @@ Rust 一个字没动、写侧一寸没碰、模型属性一枚都不新增。**�
   另一会话持有而本轮的 dev 腿会关掉它全部标签 ⇒ 破坏性，不跑）；深度不设闸而真件只到第 1 层（第 2 层往上只有合成件读数）；格内表的「整盘没账按版心等分」那一档吃的是**版心**
   而不是外层格宽（`N7` 那四档外层格宽 9927 / 4996 / 5505 / 6520 缇就躺在字节里，本轮没接）；Word 门面这一头 `Table.Nested=null` 且 `cell.Range.Tables.Count` 恒为外层
   ⇒ 内层表几何在第三方那头没有判据；格内 OLE 那一枝仍展平（内层四种形状未逐枚数）；v0.95 记的「嵌套表的表头行克隆未量」这一臂的**可达性本轮才第一次成立**（以前那 11 枚
-  压根不在 DOM 里）；`w:tblPrEx` 的写侧出口、条件层边框那一格、`pad*` / `rowHeight` 的 ODT 通道、「默认行距 `line-height: normal`」那枚拆出去的轮次仍照前几节挂着。
+  压根不在 DOM 里）；`w:tblPrEx` 的写侧出口、条件层边框那一格、「默认行距 `line-height: normal`」那枚拆出去的轮次仍照前几节挂着，
+  而该节挂着的 `pad*` / `rowHeight` 的 ODT 通道一枚由**表格写侧第一笔账**接上。
 
 - **收尾**：README 新增本节 + 四处就地改口（v0.44 那一节「嵌套表放不进 `<td>`，硬塞等于让 ProseMirror 的内容表达式把整块字丢掉」按 b5/b7/b8/x8 改口成「展平是选择而不是被迫，
   真理由是内层形状未逐枚数过」；第十三笔账那条「真件里两枚文件的 `<w:tbl>` 数与 HTML `<table>` 数不等…本轮没去归因」勾掉并归因为 3 枚文件 11 枚格内表；文件清单
@@ -5918,6 +5921,81 @@ Rust 一个字没动、写侧一寸没碰、模型属性一枚都不新增。**�
   （0.116.0 住着并发轮次的对齐号）；`tmp/xmar16` 的清单、四枚同族件副本、把手件与腿日志（形状 / 读手 / 结构 / schema / 嵌套形状 / 浏览器两枚 / 写侧 / Word 门面三枚 /
   后果 / 变异 / 判据 / 往返 / 编译 / 把手 dump / 浏览器 schema）按惯例删除；并发会话的工作树 README 此刻仍不含第四~十六笔账这几节 ⇒ 本节以 `git show HEAD:README.md`
   为底落 blob，不去动他们那一份；**dev 树全程未碰**。
+
+## 格边距与行高第一次有 ODT 的出口：写侧逐边落 `fo:padding-*`，行高走 `style:min-row-height` 而**不是** `style:row-height`，因为 Word 门面把后者无一例外读成会裁字的精确档
+
+按「不扩格式、把现有格式做深」的路线图开工，本轮取 v0.97 明写挂着的那枚——`pad*` 四条边与 `rowHeight` 在 docx 两头早有账，而 ODT 那一头两头都不认，docx → odt 再回 docx
+这两笔账必丢。窄口径：只动 `src/lib/odt.ts`（改动 12 段 / 增 112 删 4，其中 26 行是注释、86 行是代码），Rust 一个字没动、docx 两头一寸没碰、模型属性一枚都不新增。接缝本来就在：
+`pad*` 与 `rowHeight` 那五条通道沿用第五、六笔账立起来的形状，而 HTML↔属性的映射住在 `cell-style.ts` 的 `parseHTML` 里（每枚 `padding-<边>: Npx`
+换一枚 `fo:padding-<边>`、每枚 `<tr style="height: Npx">` 换一枚 `style:min-row-height`）⇒ 本轮不改模型一个字段。**本轮不占版本号**：
+`package.json` / `Cargo.toml` / `tauri.conf.json` 现在住着并发轮次的 0.119.0 ⇒ 本节按内容命名。
+
+- **前置实测（Word 16.0 当 ODT 的门面，15 臂，`w10`）**：这一档决定写侧落哪枚字面，所以先把「行高在 ODF 里有几种写法、Word 各读成什么」量死。①
+  **`style:row-height` 无一例外折成 exact**：VRHFIX `rowHeightPt=60 heightRule=2`，数尺对上了的方向 V3FIXOK 同读数，
+  而配一枚比内容矮得多的数就**真裁**——V3FIXTINY
+  `rowHeightPt=2.85 heightRule=2 paras=3 topRow1Pt=56.65 topRow2Pt=59.5 gapPt=2.85`，那 44.8 磅的三段正文被推进下一页而字节俱在 ⇒
+  精确档是**会吃内容**的那一档。② **`use-optimal-row-height="true"` 撤不回它**（VRHOPTTRUE `style:row-height` + `true` 仍报
+  `60 / heightRule=2`）⇒ 「给 `row-height` 同时声明按内容自适应」这条路在门面这一头不成立。③
+  **`style:min-row-height` 配那枚 `true` 落的是不带 `w:hRule` 的 `w:trHeight`**（VMINSTYLE `rowHeightPt=60 heightRule=1`，
+  OOXML 缺省即 atLeast，与我们「行高是下限」的语义同形），且不裁（VMINSTYLETINY `rowHeightPt=2.85 heightRule=1 gapPt=44.8`，与没有任何行高字面的基线
+  V3NONE `gapPt=44.8` 逐枚同数）⇒ 这一枚才是我们的落点。④ **`fo:minimum-row-height` 与 `fo:min-height` 在门面一头都不进账**（VRHMIN /
+  VRHFOMIN / V3MINTINY 全报 `rowHeightPt=9999999 heightRule=0`，V3MINTINY 的 `gapPt=44.8` 等同基线）⇒ 那两枚只在读侧收、写侧不发；
+  两档并存时门面按固定档裁决（VRHBOTH `style:row-height` 在场而 `fo:minimum-row-height="1.058cm"` 也在，读数 `60 / heightRule=2`）。⑤
+  **格边距逐边认**（VPAD4 首格上边 `1.058cm` 把 `topRow1Pt` 从控制臂 V0 的 56.65 推到 86.7，正合那枚 cm 的 30.03 磅）、
+  **`fo:padding` 简写也认**（VPADSH `gapPt=74.9` 对 V0 的 15.05）、**0 是真值不垫高**（VPADZERO `gapPt=15.05`，与控制臂 V0 同数）。
+  裁墨的读数用位移尺 `gapPt = Rows(2).Cells(1).Range.Information(6) − Rows(1).Cells(1).Range.Information(6)`，全程只读、自开箱
+  `Close(0)`，`GUARD|docs before=0` 与 `docs after=0` 夹住。
+
+- **架构决定（跟着门面读数走）**：写侧行高落 `style:min-row-height` + `style:use-optimal-row-height="true"` 而**绝不**落
+  `style:row-height`——② 与 ③ 合起来证明：落后者等于把「存一趟 `.odt` 再开」变成给一份本来不裁字的文档强加 exact 语义。读侧把四档字面（`style:row-height` /
+  `style:min-row-height` / `fo:minimum-row-height` / `fo:min-height`）收进同一档，按此次序取第一枚达的——**次序与门面的裁决同形**（④ 的 VRHBOTH：
+  固定档在场时下限档让位），闸门是**有限正数**（0 在这一头是「没说」而不是「零高」，与边距那道 `>= 0` 分开立）。边距逐边落 `fo:padding-top/right/bottom/left`，单位 cm
+  三位小数（0.001cm ≈ 0.038px，是这条通道的分辨率下界），闸门照 docx 那一头的老规矩：**有限非负数都上账，0 是真值**；读侧另收 `fo:padding` 简写（1/2/3/4 值的 CSS 折叠，
+  `expandPadding`）而**逐边压过简写**。
+
+- **验证（九腿，每枚数字都来自打印它的那一趟）**：**结构腿** 24 臂 `B0|file=src/lib/odt.ts|lines=1622|arms=24|fail=0`（含 W13 那枚缺席断言——写侧从不
+  emit `style:row-height="`）；**变异腿** 15 枚 `B0|SRC_LINES=1622|mutations=15|fail=0`，M04「行高落进精确档」同时咬响 W06 与 W13
+  那两枚（发与不发成对钉），M90 良性反证 `bitten=0 exit=0`；**往返腿** 34 臂 `B0|roundtrip|arms=34|fail=0`：四边距 39.99 / 60.02 / 19.99 /
+  80.01 对 40 / 60 / 20 / 80（TOL=0.03px，来自 cm 三位小数的换算上界）、0 那档 `got=0` 回得来且没把没账的两边写成 0、行高 80.01、没账那行不出 `height`、
+  简写六臂（两值 / 单值 / 三值折叠 / 逐边压过 / 混非长度整条不算而逐边仍上账）、裁决 D01「`row-height` 压过 `min-row-height`」与 D05「0 不上账」；**ODT 独立字节腿**
+  18 臂 `B0|byte-leg|file=tmp/xmar17/out/tbl1.odt|bytes=2126|arms=18|fails=0`，走自己的单位路径（cm→缇）：1.058 / 1.588 / 0.529
+  / 2.117cm 折出 599.81 / 900.28 / 299.91 / 1200.19 对 600 / 900 / 300 / 1200，行高 2.117cm＝60.0094 磅＝1200.19 个二十分之一磅对上
+  80px＝1200，而 `Z25` 在盘上数到 `rowprops=['min-row-height', 'use-optimal-row-height']`、精确档字面 0 枚；**夹具自检腿**
+  `K|tbl2|bytes=2067|trHeightPx=4.99|paras=4`（5px 的下限不被 cm 三位小数压成 0 而掉账）；**Word 门面腿**（`w11`，同两份件走 Word 自己）
+  `tbl1 tables=1 rows=2 r1HeightPt=60 r1HeightRule=1 gapPt=74.9`、
+  `tbl2 r1HeightPt=3.75 r1HeightRule=1 r1Cell1Paras=3 gapPt=44.8`——后者正是「下限不裁」的正控制：3.75 磅的下限配三段正文，`gapPt`
+  与前置实测里没有任何行高字面的 V3NONE 基线同数；**docx 独立字节腿** 16 臂 `B0|docxbyte|arms=16|fails=0`，读的是 Word 门面另存出来的那份 `.docx` 的字节：
+  `w:tcMar` 四枚边 600 / 1200 / 300 / 900 全带 `w:type="dxa"`、0 那格只落它真有账的两枚、整份恰好一枚 `w:trHeight w:val="1200"`
+  且**不带 `w:hRule`**、tbl2 那枚 `val=75` 同样不带、无账的格不落 `tcMar`、三段甲乙丙一枚不少；**编译腿**双证——先只吃提交件那一趟 `tsc --noEmit`
+  零错（成功不打印任何字，`LOG_BYTES=0`），另造一枚一次性 `__qNneg.ts` 拿
+  `src/__qNneg.ts(1,14): error TS2322: Type 'string' is not assignable to type 'number'.` 证明那趟真跑了，探针随即删掉；
+  **真件后果普查腿** `B0|corpus|files=383|cells=29652|pad=76634|rowH=6806|failed=7`：383 枚清单里 376 枚可读（7 枚失败全是 `~$` 锁文件与截断
+  zip），HEAD 的 docx 读手在 29652 枚格里落 **76634 枚 `padding-*` 字面**（逐边 18178 / 18178 / 20139 / 20139，其中
+  **0 那档 40329 枚**）、在 10075 枚行里落 **6806 枚行高字面**，带边距字面的 271 枚文件、带行高字面的 244 枚——这批账以前一旦走 `.odt` 就整批丢掉，
+  最大的那枚《D:/FAE/苏标外设与终端协议(瑞为).docx》一件就占 4644 枚边距 / 1161 枚格，行高那族以《D:/FAE/TTX/Protocol of Terminal_20230111.docx》321
+  枚行 / 762 枚行为首。
+
+- **本轮踩到的量具坑（不是产品缺陷）**：① **`w:trHeight` 的属性名是 `val` 而不是 `w`**——docx 字节腿起初拿 `.get("w")` 取值，两臂直接 FAIL 而打印出来的是
+  Element 的 repr（`attrs=<Element '{…}trHeight' at 0x…>`），先把属性名局部化（`attrs_by_local`）再断言，读数才落纸。② 同一条腿里那枚「不带
+  `w:hRule`」起初是**假绿**：`'hRule' not in tr1` 的 `in` 遍历的是 Element 的**子标签**而不是属性字典，形状一错就永远不命中——现在断言的是那枚真打印出来、
+  非空的属性字典（`X24 attrs={'val': '1200'}`）。③ **普查腿起初吃工作树的 `docx-fidelity.ts`**，而那份带着并发会话在飞的 507 行改动 ⇒ 枚数不能归到本轮账上；改成
+  `git show HEAD:src/lib/*.ts` 整层落 `tmp/xmar17/headlib/`（50 枚）再 import，并在日志第一行自证那份的
+  md5（`CTRL|HEAD件md5=c34513be4d23ba8680894ed72661fce9`）。
+
+- **本轮没动的量出来记着**（已开进路线图）：**`style:min-row-height` 的 ODF 语法合法性本机没量具**（没装 LibreOffice，v0.62 那套 RelaxNG 闸住在 Rust 侧、
+  只管 ODS 的 sheet 家族样式）——它是从 Word 门面的读数反推出来的可达写法，不是由规格校验器证明的；**exact 那一档在 ODT 两头没有落点**（读侧收 `style:row-height`
+  而写侧从不 emit ⇒ 第三方件的精确档存回来降成下限，这一档的观感差异两头都有而本轮没通道）；`fo:minimum-row-height` 与 `fo:min-height` **只进不出**；
+  **ODT 的边距只有逐格那一档**（docx 的表级 `w:tblCellMar`、条件层与行条件层在 ODT 这一头没有对应落点，表级默认铺不进逐边字面）；屏上 / 纸面本轮没有读数（dev 树由另一会话持有而本轮的
+  dev 腿会关掉它全部标签 ⇒ 破坏性，不跑）；`w:tblPrEx` 的写侧出口、条件层边框那一格、「默认行距 `line-height: normal`」那枚拆出去的轮次仍照前几节挂着。
+
+- **收尾**：README 新增本节 + 四处就地改口（v0.97 那节「本轮没动、量出来记着」里的「③ **ODT 链路没有 `pad*` / `rowHeight` 通道**」按本节改口、
+  紧邻两节（十五笔账与十六笔账）「仍照前几节挂着」清单里这一枚各标上「已接」、文件清单 `lib/odt.ts` 那条补上这两条新通道）+ 路线图**勾掉** `pad*` / `rowHeight` 在 ODT
+  两头没有通道那枚，并新开 ODF 语法合法性没量具 / exact 档两头无落点 / `fo:minimum-row-height` 与 `fo:min-height` 只进不出 / ODT 边距只有逐格那一档 / 无
+  dev 与纸面腿 五枚；历史各节「本轮没动」清单里那句「`pad*` / `rowHeight` 在 ODT 两头仍没有通道」按节保留为当时的口径（与列宽那族同例），只有紧邻本节的两处就地改口；
+  **版本文件不入本提交**（0.119.0 住着并发轮次的对齐号）；`tmp/xmar17` 的清单、臂目录、件副本、基座与腿日志（前置实测两枚 / 结构 / 变异 / 往返 / 字节两枚 / 夹具 / 门面两枚 / 普查
+  / 装配 / 编译负控制）按惯例删除；并发会话的工作树 README 此刻带着他们自己那一版改动（相对 HEAD 增 626 删 1265，且不包含第四~十六笔账这几节）⇒ 本节以
+  `git show HEAD:README.md` 为底落 blob，不去动他们那一份；**dev 树全程未碰**。
+
 
 ## 性能（v0.3）
 
@@ -6014,7 +6092,7 @@ src/                  React 前端
   lib/page-break-extension.ts TipTap pageBreak 原子块（`div[data-oo-pagebreak]`）+ insertPageBreak 命令 + Ctrl+Enter 快捷键
   lib/comment-extension.ts comment mark（cid 锚定批注）+ 加/删/定位/汇总工具
   lib/note-extension.ts 脚注/尾注的 `note` 内联原子节点（attrs kind/text，正文不摊进文档流）：`encodeNoteText`/`decodeNoteText` 管属性里的换行（XML/HTML 解析器会把属性值里的 LF 归一成空格），`notesOf`/`noteOrdinalOf`/`locateNote` 按文档顺序现算编号，命令 insertNote/setNoteText/deleteNote（只填 tr + 用给到的 dispatch，绝不自己 view.dispatch）
-  lib/odt.ts          ProseMirror JSON ↔ ODT（JSZip 打包导出 + DOMParser 导入，字符样式（字族/字号/字色/上下标 `style:text-position`，落在 content.xml 自动样式）/合并表/图片尺寸/页码域与总页数/page-layout 页面设置（纸张·四边距·style:columns 多栏）/分页符 fo:break-before/单元格自动样式 `fo:border-*`（宽度写 pt，读回走 `odfBorderCss` 保留 0.67px 这类细线不整数取整）+`fo:background-color`+`style:vertical-align`、表级 `fo:margin-left`、段落直接格式 `fo:margin-top/-bottom` + `fo:line-height`（倍数写 % + proportional、绝对值写 pt + fixed/minimum，两档在 ODF 里分得清而 CSS 分不清）+ `fo:background-color` + `fo:border-*`（宽度写 pt），读侧按名字跳过具名样式与 `office:styles` 里那批，以免把整篇默认摊成每段的直接格式；脚注/尾注写 ODF 1.2 内联 `text:footnote-reference` + 同 `text:id` 的 `text:footnote`（citation 写字面序号、段间 `text:line-break`、正文段挂 `FN` 自动样式），读侧三种外壳都收（新版两个元素名 + 旧版 `text:note`/`text:note-class`/`text:note-body`），正文表先扫全文建全表，故 id 不连续或正文排在引用之前也配得上；`draw:frame` 认三类内容（`draw:image` 位图 / `draw:text-box` 文本框展平为 `<br/>` 连成的行内文字 / `draw:object` 嵌入件——`Objects/objectN/content.xml` 里有 MathML 就线性化成文本，否则 v0.44 走 `lib/ole` 取内层内容：`<office:binary-data>` 内联 base64 与 `Objects/objN/` 目录两种形状都解，摊出的块级正文由 `tail()` 作段落兄弟块接回、单元格内压成行内文本），`content.xml` 解析失败时抛出说得出是哪份 XML（否则表现为"打开了一篇空白"），读侧统一产 `warnings`（同类聚合成「文案×N」）交状态栏显示；**批注往返（v0.86）**：读侧把 `office:annotation` 收成 DocComment（`dc:creator`/`dc:date` 按**子元素**取——当属性取那一版是往返腿自己量出来的真缺陷；`annotation-end` 名字预扫配对、点批注锚在自己段落尾、annWrap 在每个块出口续挂还开着的跨段区间），写侧照 docx 那两条老规矩（`usedAnn` 同 cid 全局只一组区间、孤儿不写回），跨段区间同名 `office:annotation-end` 收口，`xmlns:dc` 声明在根 NS 上补齐——漏了它写出的字节连自家读侧都不认）
+  lib/odt.ts          ProseMirror JSON ↔ ODT（JSZip 打包导出 + DOMParser 导入，字符样式（字族/字号/字色/上下标 `style:text-position`，落在 content.xml 自动样式）/合并表/图片尺寸/页码域与总页数/page-layout 页面设置（纸张·四边距·style:columns 多栏）/分页符 fo:break-before/单元格自动样式 `fo:border-*`（宽度写 pt，读回走 `odfBorderCss` 保留 0.67px 这类细线不整数取整）+`fo:background-color`+`style:vertical-align`、表级 `fo:margin-left`、段落直接格式 `fo:margin-top/-bottom` + `fo:line-height`（倍数写 % + proportional、绝对值写 pt + fixed/minimum，两档在 ODF 里分得清而 CSS 分不清）+ `fo:background-color` + `fo:border-*`（宽度写 pt），读侧按名字跳过具名样式与 `office:styles` 里那批，以免把整篇默认摊成每段的直接格式；脚注/尾注写 ODF 1.2 内联 `text:footnote-reference` + 同 `text:id` 的 `text:footnote`（citation 写字面序号、段间 `text:line-break`、正文段挂 `FN` 自动样式），读侧三种外壳都收（新版两个元素名 + 旧版 `text:note`/`text:note-class`/`text:note-body`），正文表先扫全文建全表，故 id 不连续或正文排在引用之前也配得上；`draw:frame` 认三类内容（`draw:image` 位图 / `draw:text-box` 文本框展平为 `<br/>` 连成的行内文字 / `draw:object` 嵌入件——`Objects/objectN/content.xml` 里有 MathML 就线性化成文本，否则 v0.44 走 `lib/ole` 取内层内容：`<office:binary-data>` 内联 base64 与 `Objects/objN/` 目录两种形状都解，摊出的块级正文由 `tail()` 作段落兄弟块接回、单元格内压成行内文本），`content.xml` 解析失败时抛出说得出是哪份 XML（否则表现为"打开了一篇空白"），读侧统一产 `warnings`（同类聚合成「文案×N」）交状态栏显示；**批注往返（v0.86）**：读侧把 `office:annotation` 收成 DocComment（`dc:creator`/`dc:date` 按**子元素**取——当属性取那一版是往返腿自己量出来的真缺陷；`annotation-end` 名字预扫配对、点批注锚在自己段落尾、annWrap 在每个块出口续挂还开着的跨段区间），写侧照 docx 那两条老规矩（`usedAnn` 同 cid 全局只一组区间、孤儿不写回），跨段区间同名 `office:annotation-end` 收口，`xmlns:dc` 声明在根 NS 上补齐——漏了它写出的字节连自家读侧都不认）；**格边距与行高（表格写侧第一笔账）**：写侧逐边落 `fo:padding-top/right/bottom/left`（cm 三位小数、0 是真值），行高走 `style:family="table-row"` 的 `style:min-row-height` + `style:use-optimal-row-height="true"`（`style:row-height` 那枚精确档 Word 门面无一例外读成会裁字的 exact，故只读不发），读侧逐边压过 `fo:padding` 简写、行高按 `style:row-height` / `style:min-row-height` / `fo:minimum-row-height` / `fo:min-height` 四档次序收
   lib/find-replace.ts 查找/替换 ProseMirror 插件：按文本块匹配存 state、装饰高亮、findNext/findPrev/replaceOne/replaceAll 命令（命中上限 FR_HIT_CAP=2000 截断并标 `N+`）
   lib/doc-feed.ts     大件"喂进编辑器"这一段的阈值与通道（v0.87，137 行，纯函数 + 一条 dispatch 通道）：三枚常数 `FEED_THRESHOLD=5000` / `FEED_FIRST=12` / `FEED_BATCH=4000` 都由 release 真机量出来——5000 块那件采样空档 ≤92ms 而 5056 块那件已要 188ms（分界），400/1500/4000 三档整趟代价持平（取 4000）；`planFeed(src, hint?)` 两型输入（html 先按串长廉价预筛、再过一道"顶层裸文本就不切"的安全闸、最后用 `DOMParser` 数顶层子节点；json 直接数 `doc.content`），**hint ≤ 阈值返回 null ⇒ 调用方原样走今天的单片 `setContent`**；`runFeed(editor, plan, src, stopped)` 只吃实测唯一与整片逐节点相同的那条通道（C2）——JS 侧累加 `Fragment`（从不读活文档）、每批 `tr.replaceWith(0, doc.content.size, acc)` + `addToHistory:false`、非末批 `preventUpdate:true`（末批才 emitUpdate）、首屏两帧 rAF、批间 `setTimeout 0` 让出主线程、`stopped()` 按**这一趟的身份**取消；**为什么不能增量追加**（legC2 十五形状 + legC5 四件 A/B 逐节点对参照）：PM 的 `appendTransaction` 会在容器块之后补一枚可编辑空段，heading / bulletList / orderedList / table / blockquote / codeBlock 六类全不等（块数 5840→5841），"追加 + 边界撤填充"也补不回来
   lib/templates.ts    首页模板注册表与纯函数 seed：11 个模板（公文/会议纪要/周报 → ProseMirror JSON+meta，记账表/库存清单 → WorkbookPayload 含公式冻结，六套演示配色 → Deck）
@@ -7307,8 +7385,20 @@ cargo check        # Rust 后端检查（在 src-tauri 下）
       （`BSUM#N|cellsScanned=76 / 63 / 379 而 cellsNotExactlyOneTable=0`），本轮判据只有自家读手 + 独立字节腿两头
 - [ ] **格内 OLE 嵌入那一枝仍展平**（第十六笔账）：`embedContent` 提出来的内层形状有 docx 递归 / xlsx→表 / CSV→表 / txt→段 四种，本轮没像那 11 枚那样逐枚数过
       ⇒ 没量过的形状不改道，注释里那句假解释已换成这条真理由
-- [ ] **`pad*` / `rowHeight` 在 ODT 两头都没有通道**（v0.97 明写）：odt.ts 不认格边距也不认行高，docx → odt 再回 docx
-      这两笔账必丢
+- [x] **`pad*` / `rowHeight` 在 ODT 两头都没有通道**（v0.97 明写、**表格写侧第一笔账接上**）：odt.ts 写侧现在逐边落 `fo:padding-*`（cm 三位小数、
+      0 是真值），行高走 `style:family="table-row"` 的 `style:min-row-height` + `style:use-optimal-row-height="true"`——`style:row-height` 那枚精确档
+      Word 门面无一例外读成会裁字的 exact（w10 的 VRHFIX / VRHOPTTRUE / V3FIXTINY 三臂）⇒ 只读不发；读侧逐边压过 `fo:padding` 简写、行高按四档
+      字面次序收，docx → odt 再回 docx 这两笔账不再丢
+- [ ] **`style:min-row-height` 的 ODF 语法合法性本机没量具**（表格写侧第一笔账）：没装 LibreOffice 而 v0.62 那套 RelaxNG 闸只管 ODS 的 sheet 家族样式
+      ⇒ 这一枚是从 Word 门面的读数反推出来的可达写法，不是规格校验器证明的；等量具到位再补校验腿
+- [ ] **exact 那一档在 ODT 两头没有落点**（表格写侧第一笔账）：读侧收 `style:row-height` 而写侧从不 emit ⇒ 第三方件的精确档存回来降成下限，
+      而这一档的裁剪差异在 ODT 两头都没有出口（v0.97 那枚告警只住在 docx 读侧）
+- [ ] **`fo:minimum-row-height` 与 `fo:min-height` 只进不出**（表格写侧第一笔账）：Word 门面这两枚一头都不进账（VRHMIN / VRHFOMIN / V3MINTINY），
+      我们读它们（收进同一档）而写侧不发 ⇒ 第三方件走 ODT 存一趟之后这一档塌成没账
+- [ ] **ODT 的边距只有逐格那一档**（表格写侧第一笔账）：docx 的表级 `w:tblCellMar`、条件层与行条件层在 ODT 这一头没有对应落点，表级默认铺不进
+      逐边字面 ⇒ 同一份账在 docx 是六层梯子、在 ODT 只有格上那一层
+- [ ] **表格写侧第一笔账没有 dev 真机腿与纸面腿**：dev 树由另一会话持有而本轮的 dev 腿会关掉它全部标签 ⇒ 破坏性，不跑；格边距与行高在屏上的
+      实际观感本轮**没有读数**，证据全在离线四头（读手往返 / ODT 字节 / Word 门面 / docx 字节）加结构、变异与编译腿
 - [ ] **exact 行高的裁剪语义只有一枚告警**（v0.97）：读入按 atLeast（下限），屏上内容超高时不会被裁，
       而 Word 的 exact 是真裁——这一档的观感差异只在导入时说一句，没有别的到达面
 - [ ] **v0.97 没有 dev 真机腿与纸面腿**：行高与格边距在屏上和纸上的形状本轮**没有读数**（dev 树由另一会话持有，
