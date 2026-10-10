@@ -254,30 +254,38 @@ function styleChain(book: StyleBook, id: string | undefined): StyleInfo[] {
 }
 
 /**
- * 段落属性的合并视图：同名子元素后者覆盖前者——w:ind 除外，它得按属性名一枚一枚合。
- * 第十七笔账的门面实测：段落只写 w:left 时，样式链那枚 w:ind 上的 w:firstLine 照样说话
- * （c20 三枚跨属性臂 verdict=keep-style：样式的 103/420 缇照读），而整枚替换会把段落没写的那些
- * 属性一次性扔掉（c19b：样式写了段落没写、被元素级替换扔掉的属性 18460 枚、住 190 枚文件）。
- * 同名者压前者、0 是真值；firstLine 与 hanging 是 Word 同一枚首行槽的正负两写法——段落写了其中
- * 任一拼法就整槽归段落（c20 两枚 drop 臂：显式 w:firstLine="0" 把样式的 w:hanging="283/721" 压掉，
- * Word 门面 HangingIndent=0；跨层两拼法 818 枚/46 件，按名字各留各的就会读反）。
- * 同形状的问题在 w:spacing/w:pBdr/w:shd 上也成立，本轮没量就不改道（账外，见路线图）。
+ * 段落属性的合并视图：同名子元素后者覆盖前者，而 PPR_ATTR_SLOTS 里那几枚要按属性名一枚一枚合。
+ * 第十七笔账（w:ind）与本轮（w:spacing）的门面实测同形：段落只写一枚属性时，样式链那枚上它没写的
+ * 属性照样说话（c20 三枚跨属性臂 verdict=keep-style；18 笔的 A1/A9/A10：段落写 before="240" 而样式的
+ * line/lineRule/after 全留，Word 门面报 lineSpacing=18pt beforePt=10pt）。整枚替换扔掉的面
+ * （c1）：spacing 多层在场 6275 段里丢账 1801 段、住 52 枚文件，其中样式链内部 170 段/12 枚，
+ * 段落层丢掉的最大头是 line 679 段（正是 A10 那一形状）。同名者压前者、0 是真值
+ * （A6/A7：段落 before="0"、after="0" 各压掉样式的 6 磅，Word 门面报 0pt）。
+ * 槽：ind 的 firstLine 与 hanging 是同一枚首行槽的正负两写法（任一拼法在场即整槽归后写层，
+ * 按名字各留各的会把号读反；c21 同槽跨层 818 枚/46 件）；spacing 的 lineRule 只是 line 的读法，
+ * 因此那一槽以 line 为主属性——后写层带 line 就整槽归它（A2：样式的 lineRule="exact" 被段落的
+ * line="360" 退回单倍档；A16 同形），后写层只带 lineRule 则整槽让给前写层（A3/A13：段落单独写的
+ * atLeast 在 Word 门面从不说话，样式的 12pt exact / 18pt auto 原样留着）。
+ * 同形状的问题在 w:pBdr/w:shd 上这批语料量不到：同一口径普查里两层都在场的段落 0 枚（可达性另立一轮）。
  */
-const IND_SLOTS: string[][] = [
-  ['firstLine', 'hanging'],
-  ['firstLineChars', 'hangingChars'],
-]
+type AttrSlot = { members: string[]; primary?: string }
 
-/** w:ind 的属性级合并：同名后者压前者，段落没写的属性留样式那一枚，同一枚槽只认后写那层 */
-function mergeIndAttrs(base: Record<string, string>, add: Record<string, string>): Record<string, string> {
+const PPR_ATTR_SLOTS: Record<string, AttrSlot[]> = {
+  ind: [{ members: ['firstLine', 'hanging'] }, { members: ['firstLineChars', 'hangingChars'] }],
+  spacing: [{ members: ['line', 'lineRule'], primary: 'line' }],
+}
+
+/** 属性级合并：同名后者压前者，后写层没写的属性留前写层那一枚；槽见 PPR_ATTR_SLOTS */
+function mergeAttrAttrs(base: Record<string, string>, add: Record<string, string>, slots: AttrSlot[]): Record<string, string> {
   const out: Record<string, string> = {}
   const slotted = new Set<string>()
-  for (const slot of IND_SLOTS) {
-    const b = Object.keys(base).filter((k) => slot.includes(local(k)))
-    const a = Object.keys(add).filter((k) => slot.includes(local(k)))
+  for (const slot of slots) {
+    const a = Object.keys(add).filter((k) => slot.members.includes(local(k)))
+    const b = Object.keys(base).filter((k) => slot.members.includes(local(k)))
     for (const k of a.concat(b)) slotted.add(k)
-    const from = a.length ? add : base
-    for (const k of a.length ? a : b) out[k] = from[k]
+    // 设了主属性的槽只认它：后写层光带附属属性（lineRule）时整槽仍归前写层
+    const speaks = a.length > 0 && (slot.primary === undefined || a.some((k) => local(k) === slot.primary))
+    for (const k of speaks ? a : b) out[k] = (speaks ? add : base)[k]
   }
   for (const [k, v] of Object.entries(add)) if (!slotted.has(k)) out[k] = v
   for (const [k, v] of Object.entries(base)) if (!slotted.has(k) && out[k] === undefined) out[k] = v
@@ -300,11 +308,11 @@ function mergePPr(list: (XEl | undefined)[]): XEl | undefined {
         continue
       }
       const at = next.children.indexOf(old)
-      // w:ind 换成按属性名合，其余同名子元素仍是整枚替换；孩子仍取后写那层（与旧行为一字不差）
-      next.children[at] =
-        local(c.name) === 'ind'
-          ? { name: c.name, attrs: mergeIndAttrs(old.attrs, c.attrs), children: [...c.children] }
-          : c
+      const slots = PPR_ATTR_SLOTS[local(c.name)]
+      // 表里那几枚换成按属性名合，其余同名子元素仍是整枚替换；孩子仍取后写那层（与旧行为一字不差）
+      next.children[at] = slots
+        ? { name: c.name, attrs: mergeAttrAttrs(old.attrs, c.attrs, slots), children: [...c.children] }
+        : c
     }
     merged = next
   }
@@ -861,16 +869,28 @@ class Fidelity {
   }
 
   /**
-   * 段前/段后：优先 twips 的 `w:before`，只有"按行"写法时退到 `w:beforeLines`（值是行数×100）。
+   * 段前/段后：按「行」的那一档（值是行数×100）只要说了话就压过缇档，同层并立压、跨层也压
+   * （A4：样式 before="120" 而段落 beforeLines="100" → Word 门面 12pt 而不是 6pt；A12：段落自己写
+   * before="200"（10 磅）而样式 beforeLines="100" → Word 仍报 12pt，缇档在哪一层都不加分；
+   * A8/A15 同层并立同理报 24pt）。两档对「0」的语义相反，不能共用一条真值判断：
+   * 行档的 0 不算说话（A18/A20/A21：beforeLines="0" 既压不住同层的缇值也压不住样式那层的，Word 退回
+   * 6pt），但它压得住同名的前写层（A19：段落 beforeLines="0" 压掉样式的 100 → Word 报 0pt），
+   * 所以行档 ≤0 且缇档整枚没写时落 0 而不是「没声明」；缇档的 0 直接是真值（A6/A7）。
    * 行的绝对高度取决于字号与行距，这里按小四（12pt）单倍行距的 19px 估，并记一条告警说明是估的。
+   * 本轮 9 枚行档臂（A4/A5/A8/A12/A14/A15/A17/A22/A23）量到 Word 的底数全是 12pt（=16px；无样式的 A17
+   * 与 line="240" exact 的 A22 也是 12pt），我们这一枚偏 3px/行——底数随字号与倍数怎么走还没量，不为它改道（见路线图）。
    */
   private spaceOf(sp: XEl, twips: string, lines: string): number | undefined {
-    const tw = attrNum(sp, twips)
-    if (tw !== undefined) return px2(tw * TWIP_PX)
     const ln = attrNum(sp, lines)
-    if (ln === undefined || ln === 0) return undefined
-    this.warn(`段前/段后按「行」计（${local(sp.name)} ${lines}），已按 19px/行 估算`)
-    return Math.round((ln / 100) * LINE_UNIT_PX * 100) / 100
+    const tw = attrNum(sp, twips)
+    if (ln !== undefined && ln > 0) {
+      this.warn(`段前/段后按「行」计（${local(sp.name)} ${lines}），已按 19px/行 估算`)
+      return Math.round((ln / 100) * LINE_UNIT_PX * 100) / 100
+    }
+    if (tw !== undefined) return px2(tw * TWIP_PX)
+    // 行档 ≤0 而缇档整枚没写：按 0 上账（A19）。负字面在这批语料里 0 枚（c4：beforeLines 正=1050/零=339/负=0，
+    // afterLines 正=845/零=338/负=0），所以 ≤0 那一枝实际只走 0
+    return ln === undefined ? undefined : 0
   }
 
   /** 行内片段落成块：块级插入物（图片/分页符）把段落切开；纯空段仍出一块以保留空行 */
