@@ -716,7 +716,7 @@
   （字号、字色、字体族、对齐、缩进、嵌套列表层级、合并单元格、批注锚点）全丢掉——中文文档的排版多数是
   直接敲出来的，走 mammoth 打开后"只剩文字 + 标题"，看着像内容少了半截。本轮手写
   `src/lib/docx-fidelity.ts`（OOXML → HTML，配 `src/lib/ooxml.ts` 迷你 XML 解析器，无 DOM 依赖故 Node 侧可直测），
-  mammoth 降级为**兜底**：保真导入器抛错或 `blocks === 0`（认不出这份文件）时才用
+  mammoth 降级为**兜底**：保真导入器抛错或 `blocks === 0`（认不出这份文件）时才用；而「保真导入器按名查过多少属性」从本轮起有一枚公开的账——见 `docs/fidelity.md`（属性级覆盖率，运行时探针生成）
 - **覆盖**：run 级 `w:rPr`（粗斜/删除线/下划线/字色/高亮 `w:highlight` 与 `w:shd`/字族（拉丁+中文拆两档）/字号半点换算）、
   段落 `w:pPr`（jc 对齐、`w:ind` 的 left/firstLine/hangingChars/firstLine/hanging、pStyle 样式链继承——**段落读侧第一笔账起
   `w:ind` 沿链按属性名合并**：同名的后写层压前写层而段落没写的属性留样式那一枚，`firstLine`/`hanging` 同一枚首行槽、字符那一档
@@ -6182,6 +6182,73 @@ Rust 一个字没动、写侧一寸没碰、模型属性一枚都不新增。**�
   `git show HEAD:…` 为底落 index-only blob，不去动他们那一份；**dev 树全程未碰**。
 
 
+## 属性级覆盖率第一次有公开的账：`docs/fidelity.md` 的分子不是「实现了多少命令」，而是「真件导入那一趟里读手按名查过哪些对」
+
+按「不扩格式、把现有格式做深」的路线图开工，但这一轮一寸产品源都不动：前十九笔账每笔都在补一枚具体的属性，
+而「还差多少」从来没有一枚可重跑的数——只有逐笔的普查。本轮把量具本身做成公开产物：`scripts/fidelity-report.mjs`
+（生成器）、`scripts/fidelity-census.py`（独立分母腿）、`docs/fidelity.md` 与 `docs/fidelity.json`（只有聚合数字，
+不含任何路径或文件名——语料是每个人本地的那些件）。口径是两枚数：**分母**＝同一批件的 7 枚部件里全部
+`元素|属性` 字面，**分子**＝读手在真实导入那一趟里按名查问过的对。分子来自运行时探针，注入只发生在
+`src/lib/ooxml.ts` 的 `attr` / `attrL` 两枚漏斗上（整条读入链按名取属性只走这两处，`attrNum = attr ?? attrL` 继承覆盖面），
+而注入的对象是从 `git show HEAD:src/lib` 整层取出的一次性副本（50 枚文件），产品工作树一个字节没改：
+`src/lib/ooxml.ts` 工作树 md5 与 HEAD 同为 `5058e526…`，`src` 里 `__PROBE` 残留文件=0。三档归因：consulted（查问过）、
+never consulted（从没查问过）、noise（`rsid*` / `paraId` / `textId` 按名字规则归零语义档）。两轴诚实话写在报告开头，
+不等别人读出来：**查问过 ≠ 落进 CSS**（`w:top/@w:space` 读了只为出一句告警），**没查问 ≠ 看得见错**
+（`w:szCs` 管复杂文种，`xml:space` 管我们分词器本来就留住的空白）。**本轮不占版本号**：`package.json` / `Cargo.toml` /
+`tauri.conf.json` 现在住着并发轮次的 0.119.0 ⇒ 本节按内容命名。
+
+- **前置实测与头条读数（313 枚本机真件，只量不改产品）**：读手 279 枚读成、34 枚抛（全是截断 zip，带探针那趟与
+  不带那趟抛的集合相同），探针查问到的对=126；同一趟用我们自己的解析器全树数属性字面 ⇒ **701 对 / 3,108,523 枚**。
+  分档：噪音 19 对 / 770,634 枚，有效宇宙 682 对 / 2,337,889 枚，已查问 120 对 / 1,184,292 枚，从没查问 562 对 /
+  1,153,597 枚 ⇒ **覆盖率按对 17.6%、按字面 50.7%**。从没查问的最大几枚：`rFonts|hint` 136,408、`szCs|val` 96,610、
+  `lsdException|name` 66,628、`rFonts|cs` 60,132、`lang|val` 41,620、`t|space` 34,771、`spacing|val` 25,271；按元素归并
+  的头几档 `rFonts` 283,998 / `lsdException` 212,720 / `szCs` 96,610 / `lang` 77,664 / `pt` 57,908。已查问那一档的头几枚
+  `rFonts|ascii` 100,937 / `sz|val` 99,708 / `rFonts|hAnsi` 92,695 / `tcW|w` 与 `tcW|type` 各 41,582——十九笔账买的属性
+  正住在这张表里，而这是它第一次有一个数。
+
+- **验证七腿，每枚数字来自打印它的那一趟**：① **真值腿**（`--selftest`，内置夹具不依赖任何语料）应看到 16 枚全命中、
+  不该看到 9 枚全落空，打印 `SELFTEST|双向断言通过`，夹具单趟 `查问对=33 查问次数=58 blocks=1`；② **等价腿**
+  （`--clean-pass`：带探针的副本与不带的那份逐字节比 html）`相同=279 不同=0 两边同错=34 只一边错=0`——观察者不扰动产品，
+  而正是「只一边错」那一格归零才逼出了下面第④条；③ **独立分母腿**（`zipfile` + `xml.etree`，完全另一条解析路）
+  `files=313 files_ok=279 files_bad=34`、`distinct_pairs=701 total_occ=3108523 noise_occ=770634 meaningful_occ=2337889`，
+  再逐对对照 `只在python=0 只在node=0 同对不同数=0`——分母不是自说自话；④⑤ **变异腿两枚**：`--mut no-attrL` ⇒
+  `注入=[attr] 探针记录对=118 按对=16.6% 按字面=50.6%`，掉出账面的 7 对枚枚是带前缀的关系 id（`blip|embed` 1,827、
+  `imagedata|id` 201、`docPartGallery|val` 10、`hyperlink|id` 26、`OLEObject|id` 3、`begChr|val` 1、`endChr|val` 1）——只有
+  `attrL` 够得着那一档，`--mut no-attr` ⇒ `注入=[attrL] 探针记录对=31 按对=4.1% 按字面=8.3%`，掉 92 对；⑥ **确定腿**：
+  同一份清单同一枚 rev 两趟逐字节相同（不带等价腿那一对 `md5=2c693733…`，带的那一对 `67b179bd…` 且与盘上 `docs/` 那份
+  `cmp` 相同）——报告里没有时钟，所以它的 diff 就是保真的 diff；⑦ **结构腿 + 编译腿**：注入锚点每枚命中一次（命中≠1
+  直接中止；三趟日志分别打 `注入=[attr,attrL]`、`[attr]`、`[attrL]`），公开产物里盘符、反斜杠、MSYS 形态、家目录痕迹、
+  真实文件名全名与主干命中**七项禁词全零**；`tsc --noEmit` 干净趟 `报错行数=0 输出字节=0`，另配一次性负控制拿到
+  `src/lib/__q19neg.ts(4,14): error TS2322: Type 'string' is not assignable to type 'number'.` 证明那趟真跑，探针随即删掉、
+  `src/lib` 残留探针=0。
+
+- **本轮踩到的量具坑（不是产品缺陷）**：① **注入的那一行绝不能以 `(` 开头**——`attrL` 的前一行是
+  `if (!el) return undefined`，而「换行 + `(`」在无分号下是上一行的续写，于是 `(__PROBE as any).note(...)` 被读成
+  `return undefined(__PROBE.note(...))` ⇒ `TypeError: undefined is not a function`；它只在 `el` 缺席那一枝求值，又只在
+  那枚件真的走到 `attrL` 时才走到 ⇒ 假象是「带探针的副本读坏了 108 枚真件」而产品读手全好。归因链：直接把那枚函数
+  拿出来调用不抛 → 两份模块层只差 `ooxml.ts` → 绝对 URL 与相对 URL 是同一枚实例（不是双份模块）→ 逐 variant 二分
+  （只撤 `as any` 就绿，把类型标注加回去不会红）⇒ 与 TypeScript 无关，是 ASI 续行；再造一枚最小夹具**复现不出来**，
+  如实记成负结果（凶器是那枚 `return undefined` 前行，不是 cast 本身）。抓住它的是等价腿的「只一边错=0」；② **诊断腿
+  自己把路径转坏了**：POSIX 形态转 Windows 形态时写 `d.toUpperCase() + '/'` 漏了冒号 ⇒ 拼出「盘符不带冒号再接绝对
+  路径」那种谁也找不到的串而全批 ENOENT，而报告脚本里那一行本来就是对的——所以**诊断腿必须自证**「清单=313 打不开=0」，否则「读不到」会被当成
+  「覆盖率低」报出去；③ 控制台是 gbk，`print` 中文与 `⇒` 直接 `UnicodeEncodeError` ⇒ 读数一律落文件再读；④ 两枚
+  `vite-node` 并行在 `node_modules/@esbuild/*` 撞 `ENOTEMPTY` ⇒ 本轮所有腿串行（一枚 `legs.sh` 顺序串五趟，每趟 19~20 秒）。
+
+- **本轮没动的量出来记着**（已开进路线图）：**分母只算读手吃进去的 7 枚部件**（`word/settings.xml`、`fontTable.xml`、
+  `theme1.xml`、`docProps/*` 一概不在账内）；**探针只吃 `attr` / `attrL` 两枚漏斗**，任何直接读 `el.attrs[...]` 的查问不进账 ⇒
+  「从没查问」那一档里可能混着「其实读了而没走漏斗」的形状；**等价腿只裁 html 逐字节**，不裁 `blocks` 与告警以外的出口；
+  **语料是本机那 313 枚**而产物不含文件名 ⇒ 换一批件数字就换一批，目前没有可复核的固定语料；**「查问过 → 落进 CSS →
+  屏上/纸面可见」的第二段没接**，这枚覆盖率是查问率而不是视觉平价率；**噪音档按名字规则归**而不证明零语义，`--mut`
+  只演示「漏注入会让覆盖率降」而没有「假注入让覆盖率虚高」的正控制。
+
+- **收尾**：README 新增本节 + 两处就地改口（v0.37 那节的 mammoth 兜底句尾挂上这枚公开的账、架构那节的 `scripts/`
+  清单补上 `fidelity-report.mjs` 与 `fidelity-census.py`）+ 路线图新开六枚（部件之外的分母 / 漏斗覆盖面 / 等价腿的裁面 /
+  语料不可复核 / 查问≠上屏的第二段 / 噪音规则与缺正控制）；**版本文件不入本提交**（0.119.0 住着并发轮次的对齐号）；
+  并发会话的工作树此刻带着他们自己那一版 `src/lib/*`（9 枚改过 + 3 枚新增，其中不含 `ooxml.ts`）与 README ⇒ 本节以
+  `git show HEAD:README.md` 为底落 index-only blob，不去动他们那一份；**dev 树全程未碰**；`tmp/fidelity-mod`、
+  `tmp/fidelity-clean` 与本轮的一次性腿件随收尾清盘。
+
+
 ## 性能（v0.3）
 
 
@@ -6387,6 +6454,9 @@ updater 里从此只剩 `fn(next)` 与 `return next`——**副作用不许住�
 scripts/              copy-pdfjs-assets.mjs（dev/build 前复制 cmaps/标准字体到 public/pdfjs） /
                       updater-release.mjs（发版：开 createUpdaterArtifacts 本机建签名包 → 读回真 .sig 与产物 →
                       出带三平台键的 latest.json → 打印要上传的清单；私钥只走子进程环境变量，`pnpm release:updater`）
+                      fidelity-report.mjs（属性级覆盖率生成器：注入探针取分子、全树普查取分母，写
+                      docs/fidelity.md 与 .json——产物只有聚合数字，不含任何路径） /
+                      fidelity-census.py（独立分母腿：zipfile + xml.etree 换一条解析路，验分母不自说自话）
 .github/workflows/    release.yml——tag v* 触发只打 Linux（1× 计费）；Windows（2×）与 cargo test 改手动 dispatch 勾选
 ```
 
@@ -7676,6 +7746,22 @@ cargo check        # Rust 后端检查（在 src-tauri 下）
       补平算法碰巧同形，不是同一份账上了屏；`accountTotalPx` 对部分账整表 `return null`，故这一档照旧走比例
 - [ ] **v0.92 没有 release A/B**：改的是 NodeView 内联样式那一半，到不了 release 的注入缝 ⇒ 屏上形状由 dev 真机腿裁、
       字节与磅值由两条独立腿裁，"release 真机上齐账表按绝对宽渲染"这一格只有形状推断
+- [ ] **覆盖率的分母只算读手吃进去的 7 枚部件**（fidelity report 本轮量出口径）：`word/settings.xml`、
+      `fontTable.xml`、`theme1.xml`、`docProps/*` 一概不在账内 ⇒ 「件里字面全集」是「读手会吃的部件」的全集，
+      不是整份包的全集；把这些部件纳进来要先决定「读手有没有打算吃它」
+- [ ] **探针只吃 `attr` / `attrL` 两枚漏斗**（变异腿反过来证明的）：`--mut no-attr` 让覆盖率从 17.6% 掉到 4.1%，
+      说明账几乎全来自 `attr` 那一枚，而任何绕过漏斗直接读 `el.attrs[...]` 的查问**不进账** ⇒ 「从没查问」那一档
+      里可能混着「其实读了而没走漏斗」的形状，本轮没逐枚排查
+- [ ] **等价腿只裁 html 逐字节**（`--clean-pass` 的裁面）：比的是整份 HTML 的 md5，`blocks` 枚数与告警只在同一趟里
+      顺带数过而没有单列 ⇒ 「观察者不扰动产品」这一句的范围就是 html 那一枚出口，别把它读成「所有出口都不扰动」
+- [ ] **语料不可复核**：报告里的数字来自本机那 313 枚真件而产物按纪律不含任何文件名或路径 ⇒ 换一台机器、换一批件
+      数字就换一批；要外部读者能复核，得有一枚公开的固定夹具包（或至少一份可发布的逐对计数），本轮没做
+- [ ] **「查问过 → 落进 CSS → 屏上/纸面可见」那第二段没接**：报告裁的是运行时按名查问，不是视觉平价 ⇒ 17.6% / 50.7%
+      既不等于「屏幕上对了多少」也不等于「错了多少」；`w:top/@w:space` 那种「读了只为出一句告警」的对在这一档里
+      与真正上屏的对同列（要分出得给每枚对配一枚后果腿，本轮只在段落两笔账上做过）
+- [ ] **噪音档按名字规则归，且变异腿缺正控制**：`rsid*` / `paraId` / `textId` 那 19 对 / 770,634 枚字面是从名字规则来的
+      而不是从「零语义」的证明来的；`--mut` 只演示「漏注入会让覆盖率降」，没有「假注入会让覆盖率虚高」的正控制 ⇒
+      分子的下界可信而上界没裁
 - [ ] macOS 打包（需签名/公证凭据）
 
 ## License
