@@ -954,8 +954,8 @@ class Fidelity {
         // 先试内容提取（v0.44）：嵌入的工作表/文档/CSV 里有真字，取到了就不该再写"内容未提取"
         const body = rel && !rel.external ? await this.embedContent(rel.target, file) : null
         if (body?.html) {
-          // 单元格放不下一张嵌套表（本读侧对嵌套表格一律"展平为段落"），硬塞等于让
-          // ProseMirror 的内容表达式把整块字丢掉；压成行文本至少字还在，并如实记一条
+          // 压成行文本至少字还在，并如实记一条。这一枝留着展平而 w:tbl 那一枝不留（第十六笔账）：
+          // 嵌入对象提出来的正文里有什么形状，本轮没像那 11 枚那样逐枚数过，没量过的形状不改道
           if (st.inCell) {
             st.pieces.push({ kind: 'inline', html: inlineFlatten(body.html) })
             this.warn('单元格里的嵌入内容已展平为文字')
@@ -1509,7 +1509,7 @@ class Fidelity {
     return s + '</table>'
   }
 
-  /** 单元格内容：段落走"格内列表"的独立栈（不与外层正文的列表串台），嵌套表格展平成段落 */
+  /** 单元格内容：段落走"格内列表"的独立栈（不与外层正文的列表串台），嵌套表格出真表 */
   private async cellBlocks(tc: XEl): Promise<string> {
     const list = new ListState()
     let html = ''
@@ -1519,8 +1519,9 @@ class Fidelity {
       const t = local(b.name)
       if (t === 'p') html += await this.paragraph(b, list, true, this.betweenOfSiblings(tc.children, i))
       else if (t === 'tbl') {
-        this.warn('嵌套表格已展平为段落')
-        for (const tr of all(b, 'w:tr')) for (const inner of all(tr, 'w:tc')) html += await this.cellBlocks(inner)
+        // table() 里「整盘没账就按版心等分」那一档在格子里吃的是版心而不是外层格宽：真件 11 枚嵌套表
+        // 枚枚带 w:tblGrid 与逐格 dxa 账（b6 的 N3/N4/N5），这一档在真件上够不着，本轮不为它改道
+        html += await this.table(b)
       } else if (t === 'sdt' || t === 'sdtContent') {
         const r = await this.sequence(b.children, list, true)
         html += r.html
