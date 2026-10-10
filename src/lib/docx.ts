@@ -35,6 +35,7 @@ import {
 import { borderParts, pxToEighths } from './cell-style'
 import { lineToOoxml, type LineRule } from './paragraph-style'
 import { decodeEnt } from './ooxml'
+import { letterSpacingToTwips } from './char-spacing'
 
 export interface PMNode {
   type: string
@@ -465,6 +466,11 @@ function inlineToChildren(node: PMNode, inherited: Inherited = {}, cs?: CommentT
       const highlight = markAttr(child, 'highlight', 'color')?.replace('#', '')
       // fontSize 内部存 px（CSS 习惯），docx 字号是半点：pt = px×0.75，half-points = pt×2
       const fsPx = parseInt(ts('fontSize') ?? '', 10)
+      // 字符间距：模型那一头存规范化 pt 串，这一层吃缇（1pt = 20 缇）。
+      // 0 落不下，两条路都量过：库的门是 `if (options.characterSpacing)` 真值闸，数字 0 整枚不写；
+      // 字符串绕开门会被 signedTwipsMeasureValue 涂成 w:val="00"，而 Word 16.0 另存时把那枚 00 整枚丢弃
+      // （同批夹具里字符串写的 w:val="200" 原样保留），所以 0 这一档只能记账不能上纸。
+      const lsTw = letterSpacingToTwips(ts('letterSpacing'))
       const runOpts = {
         text,
         bold,
@@ -472,6 +478,7 @@ function inlineToChildren(node: PMNode, inherited: Inherited = {}, cs?: CommentT
         strike,
         font: docFont(ts('fontFamily')) ?? (mono ? 'Consolas' : undefined),
         ...(Number.isFinite(fsPx) && fsPx > 0 ? { size: Math.round(fsPx * 1.5) } : {}),
+        ...(lsTw !== null && lsTw !== 0 ? { characterSpacing: lsTw } : {}),
         ...(color ? { color } : {}),
         ...(highlight ? { shading: { type: 'clear' as const, fill: highlight } } : {}),
         ...(underline ? { underline: {} } : {}),

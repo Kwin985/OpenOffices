@@ -18,6 +18,7 @@ import { bdAttr, borderParts, CELL_EDGES, cssBorder, rgb2hex, type CellEdge } fr
 import { encodeNoteText } from './note-extension'
 import { embedHtml, inlineFlatten, unwrapEmbed, type EmbedHtml } from './ole'
 import { ruleOf, type LineRule } from './paragraph-style'
+import { toLetterSpacingPt } from './char-spacing'
 
 const OD_MIME = 'application/vnd.oasis.opendocument.text'
 
@@ -423,6 +424,11 @@ class OdtBuilder {
       if (font?.cjk) tp += ` style:font-name-asian="${esc(font.cjk)}"`
       // fontSize 存 px，ODF 习惯 pt
       if (m.sz) tp += ` fo:font-size="${Math.round((Number(m.sz) * 72) / 96)}pt"`
+      // 字符间距只走 fo:letter-spacing 这一条通道：Word 16.0 门面认它（character style /
+      // paragraph style / styles.xml 具名样式三层都读得到，负数与 cm 也读得到），
+      // 而 style:letter-spacing、loext:letter-spacing、loext:letter-spacing-padding|tracking 四写全不进账。
+      // 0 在这一头写得出去且 Word 读作缺省（0pt 与无声明同形），与 docx 那一头的「0 落不下」是两笔形状差。
+      if (m.ls) tp += ` fo:letter-spacing="${esc(String(m.ls))}"`
       if (m.cl) tp += ` fo:color="${esc(String(m.cl))}"`
       if (m.bg) tp += ` fo:background-color="${esc(String(m.bg))}"`
       // 58%/-25% 是 LibreOffice 自己写上下标时用的偏移档位，跟着它才不会被判成自定义位置
@@ -533,6 +539,9 @@ class OdtBuilder {
           bg: at('highlight')?.color as string | undefined,
           fam: (at('textStyle')?.fontFamily ?? at('fontFamily')?.fontFamily) as string | undefined,
           sz: parseInt(String(at('textStyle')?.fontSize ?? at('fontSize')?.fontSize ?? ''), 10) || undefined,
+          // 字符间距：模型存规范化 pt 串，这里只认同一份闸（历史 .odoc 里可能是别的写法）。
+          // 键名用 ls —— sp 已经被上标占了，两族挤一枚键会互相顶掉。
+          ls: toLetterSpacingPt(at('textStyle')?.letterSpacing as string | null | undefined) ?? undefined,
           // ODF 的上下标是一个属性两值（style:text-position="super 58%"），故两个布尔键分开记
           sp: marks.some((k) => k.type === 'superscript'),
           sb: marks.some((k) => k.type === 'subscript'),

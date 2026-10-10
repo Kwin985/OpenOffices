@@ -43,6 +43,7 @@ import type { DocxImport } from '../lib/docx-fidelity'
 import { Toc } from '../lib/toc-extension'
 import { PageBreak } from '../lib/page-break-extension'
 import { Indent } from '../lib/indent-extension'
+import { CharSpacing } from '../lib/char-spacing'
 import {
   BORDER_STYLES,
   BORDER_WIDTH_PT,
@@ -172,6 +173,8 @@ function DocEditor({ tab }: Props) {
       // textStyle mark + 字色/字体族/字号。lineHeight 必须关掉：那是 TextStyleKit 给段落挂的同名属性，
       // 与本编辑器记 OOXML 行距的 lineHeight（ParagraphStyle）撞名字，两边只能留一个
       TextStyleKit.configure({ backgroundColor: false, lineHeight: false }),
+      // 字符间距挂同一枚 textStyle（保真导入发的 letter-spacing: Npt 靠它才进得了模型）
+      CharSpacing,
       // 上下标不在 TextStyleKit 里（它们是独立 mark，渲染成 <sup>/<sub>）
       Superscript,
       Subscript,
