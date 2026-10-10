@@ -375,6 +375,8 @@ interface RunProps {
   hl?: string
   /** 半点 */
   sz?: number
+  /** 字符间距：w:rPr/w:spacing/@w:val，单位缇（20 缇 = 1 磅），负值是紧缩 */
+  sp?: number
   fonts?: string[]
   /** w:vertAlign：superscript / subscript（其余值视为 normal） */
   va?: 'sup' | 'sub'
@@ -400,6 +402,11 @@ function readRPr(el: XEl | undefined, p: RunProps): RunProps {
   if (hlv) o.hl = HL[hlv.toLowerCase()] ?? '#ffff00'
   const sz = valNum(el, 'w:sz')
   if (sz) o.sz = sz
+  // 0 是真值：Word 门面（夹具 A7）拿样式那枚 60 缇被段内 run 的 0 压住，读回 0 磅；
+  // 而同一样式链上没账时（A3），run 写的 0 会被 Word 整枚丢弃（另存后 val=NONE）。
+  // 两头合起来只有一条口径：闸看「这一层有没有写这枚数」，写的就是它，包括 0。
+  const sp = valNum(el, 'w:spacing')
+  if (sp !== undefined) o.sp = sp
   const va = (val(el, 'w:vertAlign') ?? '').toLowerCase()
   if (va === 'superscript') o.va = 'sup'
   else if (va === 'subscript') o.va = 'sub'
@@ -421,7 +428,14 @@ function baseRunProps(chain: StyleInfo[], pPr: XEl | undefined): RunProps {
   let p = NONE
   for (const s of chain) if (s.rPr) p = readRPr(s.rPr, p)
   const paraMark = pPr ? find(pPr, 'w:rPr') : undefined
-  if (paraMark) p = readRPr(paraMark, p)
+  if (paraMark) {
+    // 段落标记那层的字符间距只描在标记自己身上，不传给段内正文：Word 门面 A8（标记 +80 缇）
+    // 量到正文 Font.Spacing=0、标记 Font.Spacing=4，而 A9（标记 4 磅 + run 5 磅）里 run 照旧赢。
+    // 其余字段维持原样（这一层的粗体/字号本来就当基准用），只把 sp 按回样式链那一枚。
+    const sp = p.sp
+    p = readRPr(paraMark, p)
+    if (valNum(paraMark, 'w:spacing') !== undefined) p.sp = sp
+  }
   return p
 }
 
@@ -431,6 +445,9 @@ function cssOf(p: RunProps): string {
   if (p.fonts?.length) bits.push(`font-family: ${p.fonts.map((f) => `'${f.replace(/'/g, '')}'`).join(', ')}`)
   if (p.sz) bits.push(`font-size: ${Math.round(p.sz * HP_PX)}px`)
   if (p.color) bits.push(`color: ${p.color}`)
+  // 缇 → 磅是整数除以 20，Word 门面在 ±20/±200 缇四臂上分别读回 ±1/±10 磅；
+  // 最短写法就够（整数除以 20 最多两位小数，JS 打出来就是最短形）
+  if (p.sp !== undefined) bits.push(`letter-spacing: ${p.sp / 20}pt`)
   return bits.join('; ')
 }
 
