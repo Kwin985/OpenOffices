@@ -835,6 +835,8 @@ interface StyleInfo {
   mono?: boolean
   fam?: string
   szPx?: number
+  /** 字符间距，规范化成 `"Npt"` */
+  ls?: string
   sup?: boolean
   sub?: boolean
 }
@@ -991,6 +993,16 @@ export async function odtToHtml(bytes: Uint8Array): Promise<{ html: string; meta
       // 导出统一写 pt；宽松兼容 cm/mm 与无前缀（px）写法
       if (Number.isFinite(v) && v > 0)
         out.szPx = /cm$/.test(sz) ? Math.round(v * 37.8) : /mm$/.test(sz) ? Math.round(v * 3.78) : /px$/.test(sz) ? Math.round(v) : Math.round((v * 96) / 72)
+    }
+    const ls = tp.getAttribute('fo:letter-spacing')
+    if (ls) {
+      // pt/px 直接进 char-spacing 那扇门（先折一趟 px 会把 0.05pt 变成 0.0525pt），其余单位走 lenPx 那枝梯子
+      let v = toLetterSpacingPt(ls)
+      if (!v) {
+        const px = lenPx(ls)
+        if (px !== undefined) v = toLetterSpacingPt(`${px}px`)
+      }
+      if (v) out.ls = v
     }
     const pos = tp.getAttribute('style:text-position')
     if (pos) {
@@ -1179,11 +1191,12 @@ export async function odtToHtml(bytes: Uint8Array): Promise<{ html: string; meta
     let html = inner
     if (si.mono) html = `<code>${html}</code>`
     if (si.bg) html = `<span style="background-color: ${si.bg}">${html}</span>`
-    // 字体族/字号/字色同挂 textStyle mark，必须合成一个 span，不能嵌套两层同类 mark
+    // 字体族/字号/字色/字距同挂 textStyle mark，必须合成一个 span，不能嵌套两层同类 mark
     const css: string[] = []
     if (si.fam) css.push(`font-family: ${si.fam}`)
     if (si.szPx) css.push(`font-size: ${si.szPx}px`)
     if (si.color) css.push(`color: ${si.color}`)
+    if (si.ls) css.push(`letter-spacing: ${si.ls}`)
     if (css.length) html = `<span style="${css.join('; ')}">${html}</span>`
     if (si.strike) html = `<s>${html}</s>`
     if (si.underline) html = `<u>${html}</u>`

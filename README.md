@@ -6397,7 +6397,7 @@ HTML 里落 `letter-spacing` 字面**0 枚**，而字节层有 25,961 枚带 `w:
   第一趟 `FileNotFoundError` 全红；两条腿各自成立不代表它们对得上。⑦ **属性名单要打发射的那份而不是词汇表**：`c5` 打的 ODT 字符样式属性名单
   （16 枚）是发射事实，照 ODF 规格猜会列出十几种这份写手从不写的属性，漏账就藏在那种名单里。
 
-- **本轮没动的量出来记着**（已开进路线图）：**ODT 读侧不吃 `fo:letter-spacing`**——我们写得出、Word 读得到，而自家 reopen 一件 `.odt` 时这一层整批丢
+- **本轮没动的量出来记着**（已开进路线图）：**ODT 读侧不吃 `fo:letter-spacing`**——我们写得出、Word 读得到，而自家 reopen 一件 `.odt` 时这一层整批丢（下一节「ODT 字符间距读侧第一笔账」已闭这一层）
   （`resolveStyle` 只认字重/斜体/下划线/删除线/字色/底色/字族/字号/上下标那九族）；**界面上没有字符间距的把手**，本轮打通的是「导入→模型→导出」这一圈，
   用户手动设这一层没有入口；**docx 的 0 要真上纸得绕开库**（自己写 `<w:spacing w:val="0"/>`）或在模型里把「0」与「没声明」分家；**屏上排版后果没量**
   （行宽、换点、是否撑出、打印分页）——那一头要 dev 树而它归并发会话；`w:styles` 里 character 样式那 25 枚经样式链传给 run 的**那一步**在写侧走的是
@@ -6409,6 +6409,79 @@ HTML 里落 `letter-spacing` 字面**0 枚**，而字节层有 25,961 枚带 `w:
   样式链传下那一步 / `w:w` 与 `w:position` 同族 / 报告同批复跑）；**本轮不占版本号**（`package.json` / `Cargo.toml` / `tauri.conf.json`
   现在住着并发轮次的 0.119.0，本节按内容命名）；并发会话在场 ⇒ 四枚件全走 index-only blob、**工作树那三份带着他们的改动一寸没碰**，
   量具吃提交件镜像（`tmp/b20/proj`）与 `git show HEAD:src/lib` 副本，dev 树全程未碰；`tmp/b20` 的夹具、日志与一次性腿件随收尾清盘。
+
+## ODT 读侧第一次吃 `fo:letter-spacing`：那份九族名单外的一整族第一次上屏，而差额一枚一枚归到名字，mm 那一档的宽度底数在这条枝上错了 10 倍
+
+上一节（字符写侧第一笔账）收尾时把「ODT 读侧不吃 `fo:letter-spacing`」写进了「本轮没动的量出来记着」：我们写得出、Word 三层门面读得到，
+而自家读手把同一件 `.odt` reopen 回来时这一层整批丢。本轮挑的就是那一句，量法照段落读侧那两笔账——先在字节层数底数，再让 HEAD 读手在真 Blink 里跑一趟
+证明「不是落不进 CSS 而是压根没查问」，最后才动那一枝。动完才发现这一枚枝底下的单位梯子自己就是错的，而那笔账不归本轮改。
+
+- **前置实测（只量不改产品）**：`c0b`/`c0c` 出 34 枚 `.odt` 夹具（A 批 12 枚走自家写手、B 批 22 枚手写各种单位与层级形状）另加 1 枚 `.docx` 对照；
+  `c1a` 静态扫 HEAD 的 `resolveStyle`——查问名单只有九枚（`fo:font-weight`、`font-style`、`text-underline`、`text-line-through`、`color`、
+  `background-color`、`font-name`、`font-size`、`text-position`），名单里没有 letter-spacing 这一族；`c1b`/`c1c` 是独立字节腿（python 自己解 zip，
+  不借 TS 那条路）数出的底数：**字节层间距字面 32 枚**（`fo:` 30、`style:` 1、`loext:` 1，住 31 枚件）；`c2` 读手对照腿（真 Blink，HEAD 装成
+  `reader_head.js`）在 34 枚件上落 `letter-spacing` 字面 **0 枚**而件件读成、抛件 0、正文一字不差 ⇒ 这一族在 ODT 那头是「整枚没查问」而不是
+  「查问了而落不进 CSS」。同一位对照另有一枚：`A04` 与 `B22` 那两件里字重与字号照旧上屏、`B15` 沿 parent 链传下的粗体照旧上屏，缺的只是查问那一句。
+
+- **可达性分派（30 枚 `fo:` 一枚一枚归类，`d1`）**：字符族 27 枚住 `resolveStyle` 一步就够得着的位置——content.xml 自动样式层 25 枚（A 批 10 枚住
+  `style:family="text"`、B 批 14 枚住 `style:family="character"`、再加 `B11` 那枚「属性直接写在 `style:style` 身上」靠 `pick() ?? el` 那一枝）
+  + styles.xml 具名样式层 2 枚（`B14` 直接引到、`B15` 沿 `style:parent-style-name` 传下）；段落族 2 枚（`B12` 自动段落样式、`B13` 具名段落样式链上传下）；
+  `style:default-style` 1 枚（`B16`）。对账 25+2+2+1=30，与字节腿那一行同数；`style:` 与 `loext:` 那两枚按上一节的门面裁定继续不吃。
+
+- **架构决定三枚纯插入 + 一处注释改口**（只动 `src/lib/odt.ts` 一枚件：4 hunk、增 14、删 1、整行替换 1，1630 行 → 1643 行、CR 枚 0）：**E1**
+  `StyleInfo` 加 `ls?: string`，注释钉「规范化成 `"Npt"`」⇒ 存的形状与 docx 那一头同一份账；**E2** `resolveStyle` 在同一个 `tp` 上查问
+  `fo:letter-spacing`——pt/px 直接进 `lib/char-spacing.ts` 的 `toLetterSpacingPt`，落不进才走 `lenPx` 那一枝折成 px 再折回来，且闸门是
+  「这一枚属性在场」而不是「值非零」，所以 `0pt` 是真值；**E3** `htmlOfStyle` 的出口 `letter-spacing: ${si.ls}`，与字族/字号/字色同一枚
+  `textStyle` 壳（那一枚壳不能嵌套两层同类 mark，注释本轮接上「字距」二字）；**E4** 读侧收的串就是写侧发的那一份形状 ⇒ reopen 一件自家
+  `.odt` 从此不必借道 Word。先折 pt 再折 px 那个次序是有读的：`0.05pt` 直取时原样过，先折成 px 再折回来会变成 `0.053pt`（三位小数），
+  `A11` 那枚最小档就是为这一枚次序立的臂。
+
+- **验证九腿，每枚数字来自打印它的那一趟**：① **结构腿 16 闸**（`e7`）——提交件对基座恰 4 hunk/增14/删1/整块替换1；`ls` 声明枚=1、读侧查问枚=1、
+  CSS 出口枚=1、直入 char-spacing 枚=1、lenPx 回折枚=1、全件 `fo:letter-spacing` 枚=3（声明注释、查问、写侧各一枚），而 head 的读侧查问枚=0、
+  写侧字面枚 head=new=1；headlib↔newlib 同名 51 枚件里逐字节相同 50，唯一不同的是 `odt.ts` ⇒ 其它 lib 一寸未碰。② **读回腿六趟**（真 Blink，`e6`）：
+  HEAD 的 odt 头=0 枚，提交件 **26 枚住 24 件**，含负（`-1.5pt`）、含 0（`0pt` 三枚）、含最小档（`0.05pt`）、含列表项/表格格/标题三种容器
+  （`B19`/`B20`/`B21` 各 1 枚）。③ **归因腿**：30（字节层 `fo:`）− 段落族 2（`B12`/`B13`）− `style:default-style` 1（`B16`）− `em` 与 `normal` 2
+  （`B06`/`B07`，`lenPx` 与把手双双拒收）= 25 枚该落，而 `A12` 那枚自动样式被两段引用故落 2 枚（+1）= 26 = 提交件读数 ⇒ 每一枚差额都有名字。
+  ④ **变异腿四枚**（`e0` 生成器逐枚打 md5、行数增减、锚点残留与新句式命中：m1/m3/m4 各「旧句式残留=0 而新句式命中=1」，m2 是删行所以新句式
+  天然为 0 而行数 −1；锚点不合件=0）：**m1** 撤 pt/px 直入那一趟 ⇒ 咬 5 件 6 枚
+  **值失真**（`A04` 2→2.003pt、`A05` 5→5.002pt 与 −2→−2.002pt、`A09` 1→0.998pt、`A10` 4→3.998pt、`A11` 0.05→0.053pt）而**枚数一毫不动**；
+  **m2** 撤 CSS 出口 ⇒ 咬 24 件 26 枚全不落（读得到而不上屏）；**m3** 把查问的名字换成 `style:letter-spacing` ⇒ 26 枚 `fo:` 全不落而 `B17` 那枚
+  `style:` 落 1 枚——**这是本轮最贵的读数**：它证明不吃 `style:`/`loext:` 是门面裁定而不是可达性限制（那两枚就住在同一枝上够得着）；
+  **m4** 把 `0pt` 当成「没说」⇒ 恰咬 `A03`/`B08`/`B10` 三枚。⑤ **docx 对照腿**：`D01` 在六趟里恒 1 枚 `3pt` ⇒ 本轮改动与四枚变异都只咬 ODT 一枝。
+  ⑥ **后果腿**：六趟正文（去标签去空白、35 件按夹具顺序串起来）sha256 前 16 位全为 `bc03a4127a7a5552`、字数合计 326 全同 ⇒ 只搬形状不丢一字。
+  ⑦ **往返腿六档**（`e9`）：`3pt`/`-1.5pt`/`0pt`/`0.05pt`/`12pt`/`1pt` 各经自家写手出件，python `zipfile` 独立数字面
+  `fo:letter-spacing@content.xml` 逐臂与输入同串，提交件读回 1 枚同值而 HEAD 读回 0 枚 ⇒ 写侧↔读侧这一圈在 ODT 那头第一次闭合（含 0 那一档：
+  它在 ODT 是「写得出去而 Word 读作缺省」，而自家读手按「在场」收）。⑧ **写侧不变腿**（`e10`/`e10b`）：同一批六档分别用 HEAD 装件与提交件装件写盘，
+  件级 md5 六臂 0/6 相同（写出时间戳必然不同，这一枚不能当不变量）⇒ 改按 XML 部件逐个比：六臂清单相同 6/6、部件逐枚相同 5/5、`content.xml`
+  逐臂 md5 相等 ⇒ 本轮对写出的字节一寸未动。⑨ **副本与编译双证**：`e2` 先自证量具吃的就是 HEAD（66 枚件剥 CR 后与 `git show HEAD:src/lib`
+  逐字节不同=0，其中 `odt.ts` md5=`570a31084e4f25349f4fb17cf277dddd`、1630 行）；`e3` 在一次性镜像工程上跑 `tsc --noEmit`，提交件与四枚变异件
+  各趟报错行数=0（五趟，含提交件复跑，每趟打 `odt_md5` 自证装进去的就是那枚件，提交件为 `2193e70b713cafd043f28b13a9b48c66`），
+  中间插一枚一次性 `__q21neg.ts` 拿到 `error TS2322` 证明那趟工具真跑过，清探针后残留=0。
+
+- **本轮踩到的量具坑（不是产品缺陷）**：① **zip 件级 md5 在写侧不是不变量**：写出时间戳使六臂件级 md5 全不同而 XML 部件逐枚相同——
+  「写侧没动」只能按部件比，同一件事 `e10` 报 0/6 而 `e10b` 报 5/5，口径必须写在日志里而不是留在脑子里。② **「写得出去而读不回来」与「够不着」
+  是两笔账**：只有 m3 那种「把查问的名字换掉」的变异能把它们分开；若只测「落不落屏」，会把「门面裁定不吃」读成「这一层根本读不到」，
+  下一轮就会去做一条本来没用的通道。③ **值失真是枚数判据的盲区**：m1 那六枚照样落屏、枚数不动，只有把逐臂的**值袋**打出来才看得见——
+  「先折一趟 px」这种改法在只数枚数的腿上永远是绿的。④ **`python -m http.server` 只吃 GET**：往返腿要把浏览器里写出的字节带回盘上，
+  POST 收到 501 而页面那边看不出来，得自写收件件（`e8_sink.py`，带 CORS 与 `do_OPTIONS`）。⑤ **Bash 工具的 cwd 跨命令持续**：上一趟留在
+  `tmp/b21` 而下一趟又写 `cd tmp/b21` 就变成 `tmp/b21/tmp/b21`（exit 2、整条腿根本没跑），路径一律写绝对正斜杠。⑥ **内联 python 的字面反斜杠
+  会被 shell 吃掉**：`'\\'.join(...)` 落到解释器是 `'\'` ⇒ `SyntaxError` 而什么都没写，改 `p.replace(os.sep, '/')`；与「含反斜杠的字面一律落 .py 文件」
+  是同一条纪律。⑦ **归因式要把「一枚样式被两处引用」的 +1 单列**：否则 25 与 26 那一枚差额看起来像漏读，而它其实是同一枚样式落进两个 span。
+
+- **本轮没动的量出来记着**（已开进路线图）：**真件 `.odt` 的 ODT 读侧覆盖面没量**——`e10` 数盘上 od 族只有本轮那 34 枚夹具，一头真件都没有
+  （docx 那两批真件清单 313 / 307 枚里没有 `.odt`）；**`lenPx` 的 mm 档与裸数档共用 37.795 这个因子** ⇒ `B03` 那枚 `1.058mm` 折成 29.993pt
+  而按 mm 该是 3.0pt（cm 那枚 `0.106cm → 3.008pt` 是对的，裸数按 cm 也自洽），同一枚梯子还被 11 处 `lenPx`/`len2px` 调用吃着（缩进、格边距、
+  段落边距、表宽、行距…）⇒ 修它是整族改道加一枚判据腿的事，不为单独一枚间距在这一轮撞它；`em` 与 `normal` 两档落不进（读成未声明）；
+  段落族那 2 枚（`resolveStyle` 从不为段落样式取任何字符属性，字重/字号/字色同样不取）；`style:default-style` 那一层整层不可达（`B16`，
+  读手 `styles` Map 只收 `localName === 'style'` 而它自己的注释写着两种都收）；屏上与纸面两头没量。
+
+- **收尾**：README 新增本节 + 两处就地改口（架构那节文件清单的 `lib/odt.ts` 那条把「读侧 `resolveStyle` 还没吃这一族」接成本轮那枚查问、
+  字符写侧那节「本轮没动的」第一句挂上「下一节已闭」的指针）+ 路线图勾掉「ODT 读侧不吃 `fo:letter-spacing`（写得出去而读不回来）」并新开六枚
+  （真件覆盖面 / `lenPx` 的 mm 档 10× 偏 / `em` 与 `normal` / 段落族那 2 枚 / `style:default-style` 那 1 枚 / 屏上纸面没量）；
+  **本轮不占版本号**（`package.json` / `Cargo.toml` / `tauri.conf.json` 住着并发轮次的 0.119.0，本节按内容命名）；并发会话在场 ⇒
+  `src/lib/odt.ts` 走 index-only blob（工作树那份落后 HEAD 九行、带着他们自己的改动，一寸没碰），README 同样以 `git show HEAD:README.md`
+  为底落 index-only blob，量具吃 `git show HEAD:src/lib` 副本（`tmp/b21/headlib`）与提交件镜像（`newlib`/`m1lib`…`m4lib`），dev 树全程未碰；
+  `tmp/b21` 的夹具、日志与一次性腿件随收尾清盘。
 
 ## 性能（v0.3）
 
@@ -6506,7 +6579,7 @@ src/                  React 前端
   lib/page-break-extension.ts TipTap pageBreak 原子块（`div[data-oo-pagebreak]`）+ insertPageBreak 命令 + Ctrl+Enter 快捷键
   lib/comment-extension.ts comment mark（cid 锚定批注）+ 加/删/定位/汇总工具
   lib/note-extension.ts 脚注/尾注的 `note` 内联原子节点（attrs kind/text，正文不摊进文档流）：`encodeNoteText`/`decodeNoteText` 管属性里的换行（XML/HTML 解析器会把属性值里的 LF 归一成空格），`notesOf`/`noteOrdinalOf`/`locateNote` 按文档顺序现算编号，命令 insertNote/setNoteText/deleteNote（只填 tr + 用给到的 dispatch，绝不自己 view.dispatch）
-  lib/odt.ts          ProseMirror JSON ↔ ODT（JSZip 打包导出 + DOMParser 导入，字符样式（字族/字号/字色/上下标 `style:text-position`，落在 content.xml 自动样式）/合并表/图片尺寸/页码域与总页数/page-layout 页面设置（纸张·四边距·style:columns 多栏）/分页符 fo:break-before/单元格自动样式 `fo:border-*`（宽度写 pt，读回走 `odfBorderCss` 保留 0.67px 这类细线不整数取整）+`fo:background-color`+`style:vertical-align`、表级 `fo:margin-left`、段落直接格式 `fo:margin-top/-bottom` + `fo:line-height`（倍数写 % + proportional、绝对值写 pt + fixed/minimum，两档在 ODF 里分得清而 CSS 分不清）+ `fo:background-color` + `fo:border-*`（宽度写 pt），读侧按名字跳过具名样式与 `office:styles` 里那批，以免把整篇默认摊成每段的直接格式；脚注/尾注写 ODF 1.2 内联 `text:footnote-reference` + 同 `text:id` 的 `text:footnote`（citation 写字面序号、段间 `text:line-break`、正文段挂 `FN` 自动样式），读侧三种外壳都收（新版两个元素名 + 旧版 `text:note`/`text:note-class`/`text:note-body`），正文表先扫全文建全表，故 id 不连续或正文排在引用之前也配得上；`draw:frame` 认三类内容（`draw:image` 位图 / `draw:text-box` 文本框展平为 `<br/>` 连成的行内文字 / `draw:object` 嵌入件——`Objects/objectN/content.xml` 里有 MathML 就线性化成文本，否则 v0.44 走 `lib/ole` 取内层内容：`<office:binary-data>` 内联 base64 与 `Objects/objN/` 目录两种形状都解，摊出的块级正文由 `tail()` 作段落兄弟块接回、单元格内压成行内文本），`content.xml` 解析失败时抛出说得出是哪份 XML（否则表现为"打开了一篇空白"），读侧统一产 `warnings`（同类聚合成「文案×N」）交状态栏显示；**批注往返（v0.86）**：读侧把 `office:annotation` 收成 DocComment（`dc:creator`/`dc:date` 按**子元素**取——当属性取那一版是往返腿自己量出来的真缺陷；`annotation-end` 名字预扫配对、点批注锚在自己段落尾、annWrap 在每个块出口续挂还开着的跨段区间），写侧照 docx 那两条老规矩（`usedAnn` 同 cid 全局只一组区间、孤儿不写回），跨段区间同名 `office:annotation-end` 收口，`xmlns:dc` 声明在根 NS 上补齐——漏了它写出的字节连自家读侧都不认）；**格边距与行高（表格写侧第一笔账）**：写侧逐边落 `fo:padding-top/right/bottom/left`（cm 三位小数、0 是真值），行高走 `style:family="table-row"` 的 `style:min-row-height` + `style:use-optimal-row-height="true"`（`style:row-height` 那枚精确档 Word 门面无一例外读成会裁字的 exact，故只读不发），读侧逐边压过 `fo:padding` 简写、行高按 `style:row-height` / `style:min-row-height` / `fo:minimum-row-height` / `fo:min-height` 四档次序收、字符间距走 `fo:letter-spacing`（character / paragraph / `styles.xml` 具名样式三层在 Word 门面都进账，而 `style:letter-spacing` 与 `loext:` 那两族八臂全报 0 ⇒ 通道由门面裁；读侧 `resolveStyle` 还没吃这一族——字符写侧第一笔账）
+  lib/odt.ts          ProseMirror JSON ↔ ODT（JSZip 打包导出 + DOMParser 导入，字符样式（字族/字号/字色/上下标 `style:text-position`，落在 content.xml 自动样式）/合并表/图片尺寸/页码域与总页数/page-layout 页面设置（纸张·四边距·style:columns 多栏）/分页符 fo:break-before/单元格自动样式 `fo:border-*`（宽度写 pt，读回走 `odfBorderCss` 保留 0.67px 这类细线不整数取整）+`fo:background-color`+`style:vertical-align`、表级 `fo:margin-left`、段落直接格式 `fo:margin-top/-bottom` + `fo:line-height`（倍数写 % + proportional、绝对值写 pt + fixed/minimum，两档在 ODF 里分得清而 CSS 分不清）+ `fo:background-color` + `fo:border-*`（宽度写 pt），读侧按名字跳过具名样式与 `office:styles` 里那批，以免把整篇默认摊成每段的直接格式；脚注/尾注写 ODF 1.2 内联 `text:footnote-reference` + 同 `text:id` 的 `text:footnote`（citation 写字面序号、段间 `text:line-break`、正文段挂 `FN` 自动样式），读侧三种外壳都收（新版两个元素名 + 旧版 `text:note`/`text:note-class`/`text:note-body`），正文表先扫全文建全表，故 id 不连续或正文排在引用之前也配得上；`draw:frame` 认三类内容（`draw:image` 位图 / `draw:text-box` 文本框展平为 `<br/>` 连成的行内文字 / `draw:object` 嵌入件——`Objects/objectN/content.xml` 里有 MathML 就线性化成文本，否则 v0.44 走 `lib/ole` 取内层内容：`<office:binary-data>` 内联 base64 与 `Objects/objN/` 目录两种形状都解，摊出的块级正文由 `tail()` 作段落兄弟块接回、单元格内压成行内文本），`content.xml` 解析失败时抛出说得出是哪份 XML（否则表现为"打开了一篇空白"），读侧统一产 `warnings`（同类聚合成「文案×N」）交状态栏显示；**批注往返（v0.86）**：读侧把 `office:annotation` 收成 DocComment（`dc:creator`/`dc:date` 按**子元素**取——当属性取那一版是往返腿自己量出来的真缺陷；`annotation-end` 名字预扫配对、点批注锚在自己段落尾、annWrap 在每个块出口续挂还开着的跨段区间），写侧照 docx 那两条老规矩（`usedAnn` 同 cid 全局只一组区间、孤儿不写回），跨段区间同名 `office:annotation-end` 收口，`xmlns:dc` 声明在根 NS 上补齐——漏了它写出的字节连自家读侧都不认）；**格边距与行高（表格写侧第一笔账）**：写侧逐边落 `fo:padding-top/right/bottom/left`（cm 三位小数、0 是真值），行高走 `style:family="table-row"` 的 `style:min-row-height` + `style:use-optimal-row-height="true"`（`style:row-height` 那枚精确档 Word 门面无一例外读成会裁字的 exact，故只读不发），读侧逐边压过 `fo:padding` 简写、行高按 `style:row-height` / `style:min-row-height` / `fo:minimum-row-height` / `fo:min-height` 四档次序收、字符间距走 `fo:letter-spacing`（character / paragraph / `styles.xml` 具名样式三层在 Word 门面都进账，而 `style:letter-spacing` 与 `loext:` 那两族八臂全报 0 ⇒ 通道由门面裁；读侧（ODT 字符间距读侧第一笔账）在同一枝上查问 `fo:letter-spacing` 并从 `htmlOfStyle` 出 `letter-spacing: Npt`——字符写侧第一笔账发的形状 reopen 吃回来了）
   lib/find-replace.ts 查找/替换 ProseMirror 插件：按文本块匹配存 state、装饰高亮、findNext/findPrev/replaceOne/replaceAll 命令（命中上限 FR_HIT_CAP=2000 截断并标 `N+`）
   lib/doc-feed.ts     大件"喂进编辑器"这一段的阈值与通道（v0.87，137 行，纯函数 + 一条 dispatch 通道）：三枚常数 `FEED_THRESHOLD=5000` / `FEED_FIRST=12` / `FEED_BATCH=4000` 都由 release 真机量出来——5000 块那件采样空档 ≤92ms 而 5056 块那件已要 188ms（分界），400/1500/4000 三档整趟代价持平（取 4000）；`planFeed(src, hint?)` 两型输入（html 先按串长廉价预筛、再过一道"顶层裸文本就不切"的安全闸、最后用 `DOMParser` 数顶层子节点；json 直接数 `doc.content`），**hint ≤ 阈值返回 null ⇒ 调用方原样走今天的单片 `setContent`**；`runFeed(editor, plan, src, stopped)` 只吃实测唯一与整片逐节点相同的那条通道（C2）——JS 侧累加 `Fragment`（从不读活文档）、每批 `tr.replaceWith(0, doc.content.size, acc)` + `addToHistory:false`、非末批 `preventUpdate:true`（末批才 emitUpdate）、首屏两帧 rAF、批间 `setTimeout 0` 让出主线程、`stopped()` 按**这一趟的身份**取消；**为什么不能增量追加**（legC2 十五形状 + legC5 四件 A/B 逐节点对参照）：PM 的 `appendTransaction` 会在容器块之后补一枚可编辑空段，heading / bulletList / orderedList / table / blockquote / codeBlock 六类全不等（块数 5840→5841），"追加 + 边界撤填充"也补不回来
   lib/templates.ts    首页模板注册表与纯函数 seed：11 个模板（公文/会议纪要/周报 → ProseMirror JSON+meta，记账表/库存清单 → WorkbookPayload 含公式冻结，六套演示配色 → Deck）
@@ -7947,9 +8020,12 @@ cargo check        # Rust 后端检查（在 src-tauri 下）
 - [ ] **只有图片/域代码这类不落文本的 run 拿不到这一枚 CSS，同族分支没穷举**（字符读侧第一笔账 v7b 归因）：那 2 枚「有声明而零字面」
       归因到 `case 'drawing'` push 一块就 `return`（run 文本长度=0，且 `val` 都是 0），但同一条早退路上还住着 `w:pict`、OLE、
       图示/图表部件这些分支——它们的 `w:rPr` 带不带间距没逐枚数过，「没量过的形状不改道」这条纪律在这里同样成立
-- [ ] **ODT 读侧不吃 `fo:letter-spacing`（写得出去而读不回来）**（字符写侧第一笔账）：`resolveStyle` 只认字重/斜体/
+- [x] **ODT 读侧不吃 `fo:letter-spacing`（写得出去而读不回来）**（字符写侧第一笔账）：`resolveStyle` 只认字重/斜体/
       下划线/删除线/字色/底色/字族/字号/上下标那九族，本轮新发的这一族不在名单里 ⇒ 我们导出的 `.odt` 里字符间距到了 Word
       那一头读得到（门面三层进账）而自家 reopen 一件时整批丢；补法照表格写侧那笔账（读侧逐边收且简写让位直接格式）
+      （ODT 字符间距读侧第一笔账已闭这一层）补法没走「简写让位直接格式」那条，而是在字号那同一个 `tp` 上加一枚查问：
+      `resolveStyle` 读 `fo:letter-spacing`、`htmlOfStyle` 出 `letter-spacing: Npt`，34 枚夹具字节层那 30 枚 `fo:` 声明里字符族落回
+      26 枚/24 件（差额逐枚归因到段落族、`style:default-style` 与 `em`）；通道仍只吃 `fo:`——b20 门面八臂对 `style:`/`loext:` 的裁定没变
 - [ ] **界面上没有字符间距的把手**（字符写侧第一笔账）：`CharSpacing` 把属性挂上了 `textStyle`，`setContent` 从此不再
       剥掉导入发的那句 `letter-spacing: Npt`，但没有命令、没有工具栏入口、没有键入框 ⇒ 用户手动设这一层仍无路径，
       本轮打通的只有「导入→模型→导出」这一圈；要接得先定「磅」还是「缇」进界面
@@ -7968,6 +8044,21 @@ cargo check        # Rust 后端检查（在 src-tauri 下）
 - [ ] **三批清单三个数（313 / 299 / 307）⇒ 跨轮的枚数不可互引**（字符写侧第一笔账 c4）：`docs/fidelity.md` 那批 313 枚、
       字符读侧那节的普查在 299 枚上、本轮供给普查与后果腿在 307 枚（可读 269、抛 38）上 ⇒ 写侧那 24,644 枚字面与 153 枚
       不同值只在 307 这批内成立；把清单钉成可发布的固定语料之前，任何「按枚数跨轮比较」都是把两笔账混成一笔
+- [ ] **ODT 字符间距读侧只在 34 枚夹具上量过（真件 `.odt` 一头没量）**（ODT 字符间距读侧第一笔账 e10）：盘上 od 族件数=34 而它们全是本轮造的夹具，
+      docx 那两批真件清单（313 / 307 枚）里一枚 `.odt` 都没有 ⇒ 「真件里这一族有多少枚、住哪一层」至今没底数；要跑得先攒一份可发布的 ODT 语料
+      （与「语料不可复核」那枚同根）
+- [ ] **`lenPx` 的 mm 档与裸数档共用 37.795 这个因子 ⇒ mm 全族 10× 偏**（ODT 字符间距读侧第一笔账 B03）：`1.058mm` 折成 29.993pt 而按 mm 该是
+      3.0pt（cm 那枚 `0.106cm → 3.008pt` 对、裸数按 cm 也自洽），而**同一枚梯子被 11 处 `lenPx`/`len2px` 调用吃着**（缩进、格边距、段落边距、
+      表宽、行距…）⇒ 修它是整族改道且要给每档配一枚字面判据腿，本轮不为单独一枚间距撞它
+- [ ] **`em` 与 `normal` 两档 ODF 合法写法落不进读侧**（ODT 字符间距读侧第一笔账 B06/B07）：`0.2em` 与 `normal` 被 `lenPx` 与 `toLetterSpacingPt`
+      双双拒收 ⇒ 读成「没声明」；要接得先定 `em` 的底数取段落自己的字号还是样式那一份（与段落读侧第一笔账那枚 `charPx` 是同一件事）
+- [ ] **段落样式身上的 `fo:letter-spacing` 那 2 枚仍不吃**（ODT 字符间距读侧第一笔账 B12/B13）：`resolveStyle` 从不为 `style:family="paragraph"`
+      取任何字符属性（字重、字号、字色同样不取）⇒ 单开一条「段落的字符属性」通道不在本轮口径；等与 docx 段落标记那层（404 枚）一起量过再定次序
+- [ ] **`style:default-style` 那一层整层不可达**（ODT 字符间距读侧第一笔账 B16）：读手 `styles` Map 只收 `localName === 'style'`，而它自己的注释
+      写着「name → style:style / default-style」⇒ 注释与代码不合，文档默认那一层的字体/字号/间距落不进任何一块；本轮量到 1 枚，整层的账要单独一轮
+- [ ] **ODT 字符间距的屏上与纸面后果没量**（ODT 字符间距读侧第一笔账）：判据是「提交件落进 HTML 的 `letter-spacing` 字面」对「字节层的
+      `fo:letter-spacing`」，而浏览器拿到它之后的行宽、换点、是否撑出与打印分页一头都没量；那一头要 dev 树而归并发会话（与字符读侧、
+      字符写侧那两枚同根）
 - [ ] macOS 打包（需签名/公证凭据）
 
 ## License
