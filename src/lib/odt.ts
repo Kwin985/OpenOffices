@@ -996,6 +996,9 @@ export async function odtToHtml(bytes: Uint8Array): Promise<{ html: string; meta
     }
     const ls = tp.getAttribute('fo:letter-spacing')
     if (ls) {
+      // normal 不是「没声明」而是「说了没有间距」：Word 门面在声明 normal 的词上读 0，整枚不写才跟着祖先那一档；
+      // 屏上 normal 与 0pt 等宽，而模型那头只留得下数（parseHTML 把 normal 整枚剥掉），所以这一档落 0pt 而不是落 normal 这个词。
+      if (ls.trim().toLowerCase() === 'normal') out.ls = '0pt'
       // pt/px 直接进 char-spacing 那扇门（先折一趟 px 会把 0.05pt 变成 0.0525pt），其余单位走 lenPx 那枝梯子
       let v = toLetterSpacingPt(ls)
       if (!v) {
