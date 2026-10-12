@@ -146,14 +146,19 @@ function splitFont(family: string): { latin: string; cjk?: string } {
   const cjk = names.find((n) => /[㐀-䶿一-鿿぀-ヿ가-힯]/.test(n))
   return { latin: names.find((n) => n !== cjk) ?? names[0] ?? '', cjk }
 }
-// ODF 长度字面量 → mm；无法解析回 undefined
+// ODF 长度字面量 → mm；无法解析回 undefined。单位榜由 Word 门面裁定：同一张纸写成 cm/mm/in/pt/px/pc 六臂纸账相同，em/ex/%、0 与负数一律按「没说」
 function cm2mm(v: string | null | undefined): number | undefined {
   if (!v) return undefined
-  const m = v.match(/^([\d.]+)\s*(cm|mm|in|")?$/)
+  const m = v.match(/^([\d.]+)\s*(cm|mm|in|"|pt|px|pc)?$/)
   if (!m) return undefined
   const n = Number(m[1])
   if (!Number.isFinite(n) || n <= 0) return undefined
-  return m[2] === 'in' ? n * 25.4 : m[2] === 'mm' ? n : n * 10
+  if (m[2] === 'in') return n * 25.4
+  if (m[2] === 'mm') return n
+  if (m[2] === 'pt') return (n * 25.4) / 72
+  if (m[2] === 'px') return (n * 25.4) / 96
+  if (m[2] === 'pc') return (n * 25.4) / 6
+  return n * 10
 }
 
 function esc(s: string): string {
