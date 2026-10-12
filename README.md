@@ -166,6 +166,9 @@
   （**v0.89 记账**：ODT 的**列宽两头都不往返**——写侧零枚 `table:table-column`、读侧不解析 `style:column`/`table:style`
   那一层的宽度；本轮明写不开：本机无 ODF 第三方应用、ODF 1.2 RelaxNG 三个源全 404 ⇒ 写出的形状无人可裁，
   见 v0.89 一节）
+  （**b28 修订**：这一档的**读侧**那一半已经接住——列宽住在列样式里（`style:table-column-properties` 的
+  `style:column-width`），读手现在按列槽把它摊到首行格子的 `colwidth` 上，判据是三头合裁；**只剩写侧那一半**：
+  自家写手仍不发 `<table:table-column>`，见「ODT 表格列宽第一笔账」一节）
 - **验证**：calamine（真实读侧实现）读回自写 ODS 值/布尔/稀疏/转义断言；zip 布局断言（mimetype 首条
   Stored）；CDP 冒烟全程走应用真实链路——打开夹具 ODS → Univer 改值 → 保存分流 → 解包断言 → 重开显新值；
   ODT 导出/导入/编辑器加载/原地写回（含图片）全链路；本机无 LibreOffice 且 WPS COM（KWPS）与 Word 一样
@@ -468,7 +471,7 @@
   （`mergeOrSplit`）、表头行切换、删除表格、**列宽输入框**（v0.91：键得出"这一列 90px"，命令 `setGridColumnWidth`
   一次写遍该网格列的每一枚真格子、其余列按现有账等比重排到可用宽，见 `lib/table-width.ts`）；导出补 `colspan/rowspan` →
   docx `gridSpan/vMerge` 与 odt `covered-table-cell`（**v0.89 起这一条通道也真写列宽**：`w:tblGrid` 真宽 + 逐格 `w:tcW` +
-  `w:tblLayout fixed`，而此前导出件里的 `w:gridCol w="100"` 是 docx 库的默认假网格；ODT 那一头的列宽两头都还不往返；
+  `w:tblLayout fixed`，而此前导出件里的 `w:gridCol w="100"` 是 docx 库的默认假网格；ODT 那一头的列宽：写侧仍不往返，而读侧自 b28 起吃列样式那层的 `style:column-width`；
   **v0.90 两半**：认账门只松「每一格都得带账」那一道 ⇒ 界面上拖一次得到的**部分账**（`[248]|null|null` 那一型）不再
   整表作废、没带账的列按剩下的版心补平，而拖列边界那条缝自这一版起才**看得见**（`.column-resize-handle` 此前一条样式
   都没有，实测装饰 rect 高 0）；**v0.91 把「每行 colspan 之和等于列数」那道门改成按占位走**（`gridShapeOf`：被竖跨
@@ -4118,7 +4121,7 @@ docx 库默认的 `w="100"`（twip，≈6.7px），`w:tcW` 与 `w:tblLayout` 零
   150.3/150.25/150.25；⑥ 界面「插入表格」新建的 2×3 每格 `colwidth` 是 null、屏上 `<col>` 空 ⇒「没有宽度账」那一档
   **真实存在**，而它现在正被写成那枚 100 twip 假网格。另两格门面：TipTap v3 命令里**没有 `setColumnWidth`**
   （只有 `addColumnBefore` 一族）而 cell schema 有 `colwidth` ⇒ 精确设宽要自己写命令，本轮不做；本机无 ODF 第三方应用
-  且 ODF 1.2 RelaxNG 三个源全 404 ⇒ **ODT 列宽写侧无人可裁，本轮不开**（ODT 导出件里 `table:table-column` 实测零枚，两头都缺）。
+  且 ODF 1.2 RelaxNG 三个源全 404 ⇒ **ODT 列宽写侧无人可裁，本轮不开**（ODT 导出件里 `table:table-column` 实测零枚，两头都缺。**b28 修订：这一句的「两头」现在只剩写侧那一头——读侧不需要第三方应用就能裁，门面对 `style:column-width` 逐臂无一例外读数**）。
 - **本轮口径（由以上实测选出）**：docx 写侧把列宽这份账写全（`w:tblGrid`/`w:gridCol` 真宽 + 逐格 `w:tcW` +
   `w:tblLayout fixed` + `w:tblW` 绝对值），没有宽度账时按版心等分写真网格、不再盖 100 twip 的默认假网格。
 - **本轮唯一的架构决定：宽度账「有就写全、没有就等分」，而这两档在字节上是刻意分开的两种形状**——四条形状都不是可选的：
@@ -4173,7 +4176,7 @@ docx 库默认的 `w="100"`（twip，≈6.7px），`w:tcW` 与 `w:tblLayout` 零
   M3/M4/M5 各坏一道认账门，而 S4 量的是 `return null` 的**枚数**（那三枚变异一枚不改）⇒ 期望里带着 S4 就是「该响未响」假 FAIL；
   ⑥ dev 腿的阈值单位混过一次（无账臂 D4 断 `v > 300` 而实际读数是 px 的 [209,209,209] ⇒ 腿自己的 FAIL 长得像产品的）。
 - **本轮没动的，量出来记着**（已开进路线图）：① **ODT 的列宽两头都不往返**（写侧零枚 `table:table-column`、读侧不解析
-  `table:style`/`table-column`），明写不开——本机无 ODF 应用且规格源全 404 ⇒ 无人可裁；② **界面上没有精确设宽的把手**
+  `table:style`/`table-column`），明写不开——本机无 ODF 应用且规格源全 404 ⇒ 无人可裁（**b28 修订**：无人可裁的是「写出的形状」；读侧那一半的门面在 b28 量到了，那一半已接住）；② **界面上没有精确设宽的把手**
   （TipTap 无 `setColumnWidth`），本轮只保证「已有的账不丢」，用户仍然拖不出"这一列 90px"；③ 读侧仍只吃 `w:gridCol`，
   **不读 `w:tblLayout` / `w:tcW` / `w:tblCellMar` / `w:trHeight`** ⇒ 第三方件里 `tcW` 与 `gridCol` 打架时以谁为准未量；
   ④ **无账的表存—重开一趟之后就变成"有账"**（等分那份真网格被读回收下 ⇒ 下一趟按固定宽写，Word 那头 prefType 2→3），
@@ -4182,7 +4185,7 @@ docx 库默认的 `w="100"`（twip，≈6.7px），`w:tcW` 与 `w:tblLayout` 零
   字节 + Word 只读 + dev 三头，"界面上看到的列宽与导出的件一致"由 dev 判；⑧ 含合并格的表在 Word COM 上 `Columns`
   集合直接抛 ⇒ 跨度那一档只能按 `Rows(1).Cells` 量（夹具与导出同尺同读数，不构成差异判据）。
 - **收尾**：README 新增本节 + 架构两处就地括号改口（v0.37「覆盖」那条的 `tblGrid` 列宽补上「读侧一直全、写侧到 v0.89
-  才写」+ v0.30 表格通道那条补上列宽写侧）+ 文件清单 `lib/docx.ts` 条目补 v0.89 段 + ODF「范围限制」明写列宽两头都不往返
+  才写」+ v0.30 表格通道那条补上列宽写侧）+ 文件清单 `lib/docx.ts` 条目补 v0.89 段 + ODF「范围限制」明写列宽两头都不往返（b28 起这一句只剩写侧那一半）
   + 路线图新立本轮已建的那条（`- [x]` docx 表格列宽真往返）并新开上述八枚未勾项，版本 0.89.0（package.json /
   tauri.conf.json / Cargo.toml 三处对齐），tmp/x89 的夹具、前置实测腿、dev 腿、字节腿、Word 腿与结构+变异腿按惯例删除
   （收摊后 1420/9222 无监听、`target/debug/openoffices.exe` 零枚残留，全程未碰已装正式版）；自动更新的源托管与
@@ -4281,7 +4284,7 @@ docx 库默认的 `w="100"`（twip，≈6.7px），`w:tcW` 与 `w:tblLayout` 零
   账不丢」，用户还是键不出"这一列 90px"，而⑤ 那条形状结论说清了这个把手该长什么样（一次写遍该网格列的所有行）；
   ② **拖拽把屏幕位移当模型 px 增量**（P1b：要 +30px 而屏上只 +26.24px，这一版没有 `.column-resize-proxy`）＝混单位；
   ③ **屏上比例 vs 字节绝对宽**那一层不一致（`IndentTableView` 写 `table.style.width = calc(100% − Npx)`）本轮只记账；
-  ④ 读侧仍不读 `w:tblLayout` / `w:tcW` / `w:tblCellMar` / `w:trHeight`；⑤ ODT 列宽两头都不往返（v0.89 明写不开）；
+  ④ 读侧仍不读 `w:tblLayout` / `w:tcW` / `w:tblCellMar` / `w:trHeight`；⑤ ODT 列宽两头都不往返（v0.89 明写不开；**b28 接住读侧那一半，写侧仍挂着**）；
   ⑥ **部分账件存—重开一趟会变成整表齐账**（v0.89 那条「无账换档」的同族）：补平出来的那份真网格被读侧逐格收下 ⇒
   下一趟人人都带账；⑦ `fixTables` 公开通道是 no-op 这一格只记读数没动（只改一行的宽度设置在下一趟被抹掉是库的行为）；
   ⑧ **本轮没有 release A/B**：把手那一半是纯 CSS、字节那一半由 dev 腿落盘的件交给字节腿与 Word 腿裁，release 上
@@ -4386,7 +4389,7 @@ docx 库默认的 `w="100"`（twip，≈6.7px），`w:tcW` 与 `w:tblLayout` 零
   那一档的算法住了两处**（`docx.ts` 的 `fill` 与 `table-width.ts` 的 `baseWidths`，同一算法两份实现，注释互相指着
   但没有合一）；⑤ 键入值超出版心时**整表不夹取**（X20 `over` 臂仍写 `[4500,4500,4500]`、表级绝对宽 13500，
   比版心宽 43%）；⑥ 读侧仍只吃 `w:gridCol`（不读 `w:tblLayout` / `w:tcW` / `w:tblCellMar` / `w:trHeight`）；
-  ⑦ ODT 列宽两头仍不往返（v0.89 明写不开）；⑧ 部分账件存—重开一趟会变成整表齐账（v0.90 那条原样挂着）；
+  ⑦ ODT 列宽两头仍不往返（v0.89 明写不开；**b28 起读侧吃 `style:column-width`，只剩写侧**）；⑧ 部分账件存—重开一趟会变成整表齐账（v0.90 那条原样挂着）；
   ⑨ 拖拽那一半仍是"屏幕位移当模型 px 增量"、屏上比例 vs 字节绝对宽那层不一致（M0 `full` 臂又量到一次）；
   ⑩ `fixTables` 公开通道 no-op 原样；⑪ **dev 腿 A5 那一路用的是 `setTextSelection` 而不是真鼠标** ⇒
   「光标在表外时这一枚不出现」是程序化判的；⑫ **本轮没有 release A/B**（界面那一半到不了 release 的注入缝，
@@ -7622,6 +7625,25 @@ pptx 完整往返（fill/outline/outlineW/几何 1e-6 全对账）、noFill/无 
 - 只本地 commit，不 push。
 
 
+## ODT 表格列宽第一笔账 — 宽度不住在 `<table:table-column>` 元素上而住在它自己的列样式里（`style:table-column-properties/@style:column-width`）：基座整层不吃而 77 枚真件里 16 件的 `colwidth` 第一次有账，判据是三头合裁（规格 + 夹具 13 臂逐臂值袋 + Word 16.0 门面无一例外）
+
+- 本轮只裁一件事并把路线图那枚挂了四轮的「ODT 的列宽两头都不往返」拆成两半：读侧这一半本轮兑现，写侧那一半原样挂着。实现只动 `src/lib/odt.ts` 一枚文件：基座 `60331969415f`/85,616 字节/1,805 行 → 提交件 `134575355692`/88,318 字节/1,852 行（`g7`：difflib opcode 总块枚=7 = 纯插入 6 块 43 行 + 纯删除 0 块 + 整行替换 1 枚 `1<->5`，@基座1706 那一行 `attrs` 换成提交件 1748..1752；净增 47 枚；`git diff --numstat HEAD` = 48/1 与此合；CR 字节=0）。docx 与 odt 写侧、Rust、界面、模型属性、版本文件一寸没碰。行枚口径先钉死：`g6` 按 `\n` 枚数报基座 1,804/提交件 1,851 而 `g7` 按 `split('\n')` 报 1,805/1,852（差一枚尾换行，与上一轮那条同族）⇒ 引行数必须报腿名，而净增 47 枚在两把口径下相同。
+- 形状账由普查给出而不是由代码读出来：`a2` 的运行时可达普查数出 `table-column-properties|column-width` 载体 271 枚、住 22 枚件、单位榜 `{cm:56, in:215}` 而「其中=0」枚=0；`a3` 按部件普查给出三袋形状 `有列元素|样式里=26 / 无列元素=26 / 有列元素|只有rel=6`（口径：清单=77 件、里有表的枚=23、两枚 XML 部件合计的表枚=58），列槽宽度字面 `样式里 column-width 53 枚 {cm:38, in:5}` 而 `只有rel 12 枚 {非长度:12}`，`style:family="table-column"` 的样式枚=55 ⇒ **「元素上挂着宽度」这一档在真件里枚=0**，读手若只查 `<table:table-column>` 自己的属性会一律读空——这就是基座那枚 no-op 的原因，也是本轮唯一要接的那一层。
+- `style:rel-column-width`（scale / proportional / 正整数百分比）不是长度 ⇒ 按「没说」记；首行那一排的账由 `a4` 给出：有宽账的表枚=26、槽数 vs 首行跨度 合=23、格多=3、首行 covered 表枚=1 计 3 枚而 =0 计 23 枚、首行格 `number-columns-repeated>1` 枚=0；「covered 吃不吃槽」由 `a5`/`a5b` 裁开：首行有 covered 的表枚=13（表总枚=39，只算 `content.xml`），其中「跨和==槽」3 枚、「跨和+cov==槽」0 枚、两头不合 10 枚，而可裁的正是那 3 枚且三枚全部给「首行 covered 是前一格 colspan 的占位填充件、自己不再占一枚槽」投票——另 10 枚按这一读法也不合也不出反证，本轮按规格 + 那三枚裁。
+- 实现三段（`g7` 把每一段作为插入块逐行打出来）：① 新尺 `columnWidthPx(name)` 走 `styleChain` 取 `pick(el, 'table-column-properties')` 的 `@style:column-width` 过 `lenPx`，`v > 0` 才记 ⇒ `styles.xml` 的 `office:styles` 具名层与 `style:parent-style-name` 祖先层自动吃到（后代压祖先）；② `case 'table'` 先把每枚 `<table:table-column>` 按 `table:number-columns-repeated` 展成同宽槽表 `slots`；③ `colwidthOf(gc, cs)` 按首行每格吃的连续 cs 枚槽出 ` colwidth="整数px"`——任一枚槽没账、或取整后 `< 1` ⇒ 该格整枚弃权（不出部分数的那个 0）。整数取整的理由是模型契约不是美观：消费侧对 `colwidth` 走 `parseInt` ⇒ 小数会被砍，所以 `Math.round` 在尺那一头先做，代价是最大 0.375 磅的舍入而门面容差给到 0.5 磅。串枚自证：`columnWidthPx 0→2`、`colwidth 0→5`、`style:column-width 0→2`、`table:number-columns-repeated 0→3`、`slots 0→3`、`colwidthOf 0→2`、`table-column-properties 0→2`、`rel-column-width 0→1`、`styleChain 6→7`、`lenPx 10→11`，而 **`covered-table-cell 基座=2 提交件=2 差=0`** 与「基座 covered `continue` 枚=1 / 提交件=1」⇒ 那一枝本轮没有新增，只是让它第一次有后果。
+- 夹具一头（`g1`，13 臂 × 8 把读手，两趟日志逐字节相同）：基座全臂 `colwidth枚=0` 而提交件逐臂打值袋——`A_norm ["113","151","189"]`、`B_rep ["76","76","76"]`（一枚 `repeated=3` 的列展成三枚同宽槽）、`C_rel []`、`D_cov ["113,151","189"]`（跨两列那格出两枚）、`E_over ["113","151"]`、`F_nocols []`、`G_missing ["113","189"]`（中间那列没账 ⇒ 那一格弃权而两头照出）、`H_units ["96","96","96","96","3628"]`（cm/in/pt/px 四档同值而 `pc` 档没账）、`I_repeatcell ["151","189"]`、`J_named ["151"]`（宽度住 `office:styles` 具名层）、`K_parent ["151","151"]`（走祖先）、`K2_child ["113","113"]`（后代压过祖先）、`L_zero ["151"]`（`0cm` 那一列按「没说」）；13/13 符合而每臂带 `壳自证=表样式定义枚=1 页布局定义枚=1`。
+- 门面一头（`g3` 两趟逐臂相同，`g3j` 把门面与读手装进同一份判据按格对）：13 臂里 12 臂门面有逐格账而 `E_over` THROWN；比法是 `px × 0.75` 折磅、容差 0.5 磅、按首行格位置逐格对，Word 的回退形状（各列全等且最大 < 20pt）单独识别而不算「读到宽度」。读数：`A_norm` 三格差 `-0.3/-0.15/0.0`、`B_rep` 三格全 `0.3`、`D_cov` 最大 0.45、`J_named`/`K_parent`/`K2_child` ≤ 0.3、`I_repeatcell` 第 1 格是取舍而其余 `-0.15/0.0`；`C_rel` 与 `F_nocols` 两头一致不出账；`G_missing`/`H_units`/`L_zero` 是三臂部分账分歧。汇总 `臂级=合 7 一致不出账 2 部分账分歧 3 拒开 1 不合 0`、`格级=合 15 不合 0 取舍 1`——**格级一枚不合都没有**，这就是「列宽该等于 Word 读到的那一枚」的第三头判据，而不是规格里的一句话。
+- 门面的严格性探针（`g3pa`…`g3pg`，本轮最贵的一枚改口）：`g3pg` 六臂逐枚撤引用——`a_none` THROWN、`b_t1only`（只留表样式、撤 `style:page-layout-name`）OPENED、`c_pm1only`（只留页布局、撤表样式引用）THROWN、`d_both` OPENED、`e_eover` THROWN、`f_eover2` OPENED ⇒ **对 `.odt` 而言必需项只有那一枚表样式定义，页布局引用悬空在这批件里照开**。先前那句「页布局悬空单独致拒」是把基件本就带悬空表样式的那批臂的拒因记错了头，本轮据撤臂读数改口；「首行格数 > 槽数拒开」（`e_eover`/`E_over` 两头各证一次）则是夹具之外的一枚独立读数。
+- 真件后果（`g2`，77 枚件 × 8 把读手 = 基座/提交件/六枚变异；两趟日志只有自证尾行不同）：八把各自 77 枚全读成、抛错 0。提交件相对基座 `变HTML件枚=16 正文不同件枚=0 变colwidth件枚=16 变表枚数件枚=0 变span枚件枚=0`；16 枚件逐一点名（ZoneMacroTest、borders_ooo33、fdo37606、fdo69862、fdo69979、feature_table、feature_table_merged-cells、feature_table_merged-cells_all、feature_table_text、incorrectsum、tdf108482、tdf123829、tdf134971b、tdf151375.ott、tdf165156、vmerge-cell-border）；逐件值袋如 `incorrectsum.odt = 72;215,174;72`、`fdo37606 = 189;378`、`borders_ooo33 = 129×5`；`colwidth` 属性枚合计 基座 0 → 提交件 35；td 枚合计 878、表枚合计 38、正文字数 17,633 八把全同；聚合 HTML md5 基座 `eaf587d7c498` → 提交件 `ebba476de664`；「表在而没变」的件枚=4 而未变形状分桶里 `无列元素=19` ⇒ 那 4 枚是「有 `<table>` 而列样式压根没宽度」的诚实不动。表枚在三枚腿上是三个数（`a3`=58 两枚部件之和 / `a5`、`g2` 全表 XML=39 只 `content.xml` / `g2` 落 HTML=38），缺口件枚=1（`fdo55814`：XML 表=1 而 HTML 表=0）住的就是下一行那一层。
+- 那枚缺口的归因腿（`g2k`，77 枚件，两趟 md5 相同）：`件枚=77 件有节枚=7 节枚=14 节内段枚=48 节内表枚=1 节内字合计=2491 整段能在HTML里找回的节枚=0 找不回的节枚=12 空节枚=2` ⇒ `renderBlock` 只有 `case 'body'`/`case 'text'` 递归而其余 `default: return ''`，`text:section` 整层不落。这与列宽是两笔账：这一层的宽度本轮接住了，而住在节里的孩子压根没走进 `renderBlock`，所以 `fdo55814` 不落 `<table>` 的真因在节不在列宽——本轮按口径不动它，新开一枚进路线图。
+- 写手一头（`g5`）：三臂 `W_tbl`/`W_row0`/`W_cell` 写出件字节=2,001 且 md5 相同、`<table:table-column` 枚=0、`style:column-width` 枚=0、走「读出 → 写回 → 解包 → 再读回」之后 `colwidth` 枚=0（提交件与基座都 0）⇒ **这条通道在自家往返里自证不了，本轮修复只对外部件生效**；正控制往同批部件注入三枚列元素后 `件字节=2073 列元素枚=3 column-width枚=3` 而提交件读回 `["113","151","189"]`、基座 `[]` ⇒ 尺看得见那个形状，那个 0 是真 0（与上一轮 mm 零档同形状）。
+- 变异六枚（`g0` 按行号钉：@1720 展槽 / @1744 covered / @1729 取整 / @1719 列样式取宽 / @1728 弃权 / @1751 槽游标推进；各与提交件差行枚=1；md5 `4a6c3e77b460`/`72c04c7f12f4`/`da038c91adfb`/`8c62c165d29f`/`fb9abe4c602c`/`85f1f6a8c760`）：`m1` 撤展槽 ⇒ 真件咬 5 枚件；`m2` 撤 covered 那一枝 ⇒ 恰 2 枚件（incorrectsum、tdf151375）；`m3` 撤整数取整 ⇒ 16 枚件的**值袋全变小数而落屏枚数一寸不动**（`colwidth` 枚合计依旧 35）；`m4` 把尺改成直读元素属性（`lenPx(c.getAttribute(...)) ?? columnWidthPx('')`，`styleChain('')` 恒空）⇒ 咬 16 枚件而聚合 HTML md5 退回基座那一枚 `eaf587d7c498`——「宽度不挂在元素上」这笔账最贵的读数；`m5` 把「没账」折成 0（撤弃权）⇒ 只咬 4 枚件（fdo60842、tdf103025、V_back、V_fwd）而 `colwidth` 枚合计从 35 涨到 212，这就是弃权与出 0 在真件上的差；`m6` 把 `gc += cs` 改成 `gc += 1`（撤槽游标推进）⇒ 2 枚件。第一轮装配时 `m1`/`m4` 是编译不过的源文（`error TS6133: 'rep' / 'columnWidthPx' is declared but its value is never read`），改成同义可编译写法后 md5 变了而 `g1` 逐臂值袋、`g2` 七档聚合 md5 与件集清单一寸没动 ⇒ 换的是腿件不是读数。
+- 编译腿（`g6`，十趟真 `tsc --noEmit`）：`git show HEAD:src` 装配一次性镜像工程（src 件数=69、ts|tsx=68、`src/lib`=55 枚、配置文件在场 3/3），装配件自证 md5 `8b10be1e7493`/CR 字节=1,804/去 CR 后 `60331969415f` 与前置腿基座合=true；趟1 基座 0 错、趟2 提交件 0 错、趟3 一次性负探针拿到 `error TS2322` 一枚（证明那一趟工具真跑过）、清探针后残留枚=0、趟4 仍 0，m1…m6 六枚变异件各 0 错（变异必须是能编译的源文），趟11 复位提交件 0 错；工作树那份 `odt.ts` 跑前跑后 `134575355692` 相同 ⇒ 编译腿没往工作树写一个字。
+- 确定性腿：`g1` 两趟逐字节相同、`g2` 两趟只有自证尾行不同、`g2k` 两趟 md5 相同、`g7` 两趟逐字节相同（md5 `4a745887f4fbc05fc5a27b2703a44f6f`，89 行）、门面 `g3` 两趟逐臂相同、写侧 `g5` 三臂件字节与 md5 两趟相同。
+- 本轮踩到的量具坑（记进 README）：① **difflib 的 insert opcode 行数在 `j` 侧不在 `i` 侧**——按 `i2 - i1` 数拿到「六块全 0」的假绿，改成 `j2 - j1` 并逐行打印插入原文才有 43 枚，而这类错的表现在日志里是一行漂亮的「纯插入 6 块 0 行」；② **变异件必须是能编译的源文**——「撤掉调用」最自然的写法被 `noUnusedLocals` 判 `TS6133`，症状与「改动错了」不同却同样不可用，正解是写成同义可编译源文并证明换写法没换读数（逐臂值袋 + 聚合 md5 + 件集清单三处不动）；③ **「悬空引用里哪一枚是必需项」要由撤臂读数给**——本轮据此把「页布局悬空单独致拒」改成「必需项是表样式定义」，凭记忆补会在 README 里留一枚错账；④ **串枚差=0 也是一种自证**——`covered-table-cell 2→2` 加「基座 covered `continue` 枚=1」把「本轮没新增这一枝，只是让它第一次有后果」写成读数；⑤ **同一件事的表枚在三枚腿上是三个数**（58 / 39 / 38 三种口径）⇒ 跨腿引数必须带腿名与口径；⑥ **只数落屏枚数的判据对「换形状」族是盲的**（`m3` 十六枚件值袋全变小数而枚数不动），延续 b25/b27 那条。
+- 本轮没动的（各开一枚进路线图）：`text:section` 整层不落（7 件 14 节 48 段 2,491 字，也是 `fdo55814` 那张表不落 `<table>` 的真因）；部分账那一档两头读成两种数（Word 整表回退等宽小宽度 ~12–14.5pt 而我们逐格弃权，`G_missing`/`H_units`/`L_zero` 三臂）；首行格数 > 槽数那一档门面整臂拒开而没有第三头；`style:rel-column-width` 与表级 `table:width`/`style:rel-width` 的比例档全按「没说」；同一载体上两把尺的单位榜还没并（`lenPx` 不收 `pc` 而 `cm2mm` 收，裸数那一档门面整臂读 0 而我们按 cm 走）；非首行格子自带的宽度账与首行打架时以谁为准没量；自家写手不发列元素 ⇒ 这条通道只对外部件生效（写侧那一半原样挂着）。
+- 收尾：README 新增本节 + 八处就地改口（架构「范围限制」那块的 `见 v0.89 一节）` 之后加三行 b28 修订、v0.30 表格通道那句、v0.89 前置实测那句「两头都缺」、v0.89「本轮没动的」①、v0.89 收尾里那句「明写列宽两头都不往返」、v0.90 的⑤、v0.91 的⑦、架构那节 `lib/odt.ts` 条目补列宽口径）+ 路线图把「ODT 的列宽两头都不往返」那枚三项块拆成勾掉的读侧一枚与未勾的写侧一枚，再新开六枚未勾；**本轮不占版本号**（`package.json`/`Cargo.toml`/`tauri.conf.json` 住着并发轮次的 0.119.0，本节按内容命名）；只本地 commit 不 push、不打 tag、不触发 CI；一次性腿件与日志留在被忽略的临时目录里。
+
 ## 性能（v0.3）
 
 
@@ -7718,7 +7740,7 @@ src/                  React 前端
   lib/page-break-extension.ts TipTap pageBreak 原子块（`div[data-oo-pagebreak]`）+ insertPageBreak 命令 + Ctrl+Enter 快捷键
   lib/comment-extension.ts comment mark（cid 锚定批注）+ 加/删/定位/汇总工具
   lib/note-extension.ts 脚注/尾注的 `note` 内联原子节点（attrs kind/text，正文不摊进文档流）：`encodeNoteText`/`decodeNoteText` 管属性里的换行（XML/HTML 解析器会把属性值里的 LF 归一成空格），`notesOf`/`noteOrdinalOf`/`locateNote` 按文档顺序现算编号，命令 insertNote/setNoteText/deleteNote（只填 tr + 用给到的 dispatch，绝不自己 view.dispatch）
-  lib/odt.ts          ProseMirror JSON ↔ ODT（JSZip 打包导出 + DOMParser 导入，字符样式（字族/字号/字色/上下标 `style:text-position`，落在 content.xml 自动样式）/合并表/图片尺寸/页码域与总页数/page-layout 页面设置（纸张·四边距·style:columns 多栏）/分页符 fo:break-before/单元格自动样式 `fo:border-*`（宽度写 pt，读回走 `odfBorderCss` 保留 0.67px 这类细线不整数取整）+`fo:background-color`+`style:vertical-align`、表级 `fo:margin-left`、段落直接格式 `fo:margin-top/-bottom` + `fo:line-height`（倍数写 % + proportional、绝对值写 pt + fixed/minimum，两档在 ODF 里分得清而 CSS 分不清）+ `fo:background-color` + `fo:border-*`（宽度写 pt），读侧按名字跳过具名样式与 `office:styles` 里那批，以免把整篇默认摊成每段的直接格式；脚注/尾注写 ODF 1.2 内联 `text:footnote-reference` + 同 `text:id` 的 `text:footnote`（citation 写字面序号、段间 `text:line-break`、正文段挂 `FN` 自动样式），读侧三种外壳都收（新版两个元素名 + 旧版 `text:note`/`text:note-class`/`text:note-body`），正文表先扫全文建全表，故 id 不连续或正文排在引用之前也配得上；`draw:frame` 认三类内容（`draw:image` 位图 / `draw:text-box` 文本框展平为 `<br/>` 连成的行内文字 / `draw:object` 嵌入件——`Objects/objectN/content.xml` 里有 MathML 就线性化成文本，否则 v0.44 走 `lib/ole` 取内层内容：`<office:binary-data>` 内联 base64 与 `Objects/objN/` 目录两种形状都解，摊出的块级正文由 `tail()` 作段落兄弟块接回、单元格内压成行内文本），`content.xml` 解析失败时抛出说得出是哪份 XML（否则表现为"打开了一篇空白"），读侧统一产 `warnings`（同类聚合成「文案×N」）交状态栏显示；**批注往返（v0.86）**：读侧把 `office:annotation` 收成 DocComment（`dc:creator`/`dc:date` 按**子元素**取——当属性取那一版是往返腿自己量出来的真缺陷；`annotation-end` 名字预扫配对、点批注锚在自己段落尾、annWrap 在每个块出口续挂还开着的跨段区间），写侧照 docx 那两条老规矩（`usedAnn` 同 cid 全局只一组区间、孤儿不写回），跨段区间同名 `office:annotation-end` 收口，`xmlns:dc` 声明在根 NS 上补齐——漏了它写出的字节连自家读侧都不认）；**格边距与行高（表格写侧第一笔账）**：写侧逐边落 `fo:padding-top/right/bottom/left`（cm 三位小数、0 是真值），行高走 `style:family="table-row"` 的 `style:min-row-height` + `style:use-optimal-row-height="true"`（`style:row-height` 那枚精确档 Word 门面无一例外读成会裁字的 exact，故只读不发），读侧逐边压过 `fo:padding` 简写、行高按 `style:row-height` / `style:min-row-height` / `fo:minimum-row-height` / `fo:min-height` 四档次序收、字符间距走 `fo:letter-spacing`（character / paragraph / `styles.xml` 具名样式三层在 Word 门面都进账，而 `style:letter-spacing` 与 `loext:` 那两族八臂全报 0 ⇒ 通道由门面裁；读侧（ODT 字符间距读侧第一笔账）在同一枝上查问 `fo:letter-spacing` 并从 `htmlOfStyle` 出 `letter-spacing: Npt`——字符写侧第一笔账发的形状 reopen 吃回来了；读侧第二笔账在同一枝上把声明为 `normal` 的那一档折成显式 `letter-spacing: 0pt`（Word 门面裁它是「说了 0」而不是「没声明」，而 `toLetterSpacingPt` 不吃那个词，所以只能在查问处折）；**长度 mm 档（ODT 长度 mm 档第一笔账）**：`lenPx` 与 `odfBorderCss` 各自的 mm 枝按每毫米 3.7795 px 折（曾与 terminal 那枝的 37.795 同值 ⇒ `Nmm` 字面全族 10× 偏），terminal 那枝（`cm` 与裸数共用）不动——改它会连两头都对的 `cm` 一起动，这一形状由一枚改 terminal 的变异臂量出来）；**页面块取哪一枚（ODT 页面块第一笔账）**：「这张纸」按 `<style:master-page>` 的 `style:page-layout-name` 选那一枚`<style:page-layout>` 的属性块——基座取 `styles.xml` 文档序第一枚，而真件 77 枚里 11 枚的第一枚住 `<style:default-page-layout>` 且六枚长度字面全缺 ⇒ 那 11 枚件的页账整枚没接住；引名查不到才回退文档序第一枚（回落那一档由夹具 G5 裁，型别闸由 G6 裁）；**页面长度单位（ODT 页面长度单位第一笔账）**：`cm2mm` 的单位榜从 `cm`/`mm`/`in`/裸数补成 `cm`/`mm`/`in`/`pt`/`px`/`pc`/裸数（pt 按 25.4/72、px 按 25.4/96、pc 按 25.4/6 折毫米）而末尾 `n * 10` 那一枝（`cm` 与裸数）一寸没动 ⇒ 页面族、图框 `svg:width`、栏间距三条通道同时吃新三档，`em`/`ex`/`%` 与 0 和负数仍按「没说」
+  lib/odt.ts          ProseMirror JSON ↔ ODT（JSZip 打包导出 + DOMParser 导入，字符样式（字族/字号/字色/上下标 `style:text-position`，落在 content.xml 自动样式）/合并表/图片尺寸/页码域与总页数/page-layout 页面设置（纸张·四边距·style:columns 多栏）/分页符 fo:break-before/单元格自动样式 `fo:border-*`（宽度写 pt，读回走 `odfBorderCss` 保留 0.67px 这类细线不整数取整）+`fo:background-color`+`style:vertical-align`、表级 `fo:margin-left`、段落直接格式 `fo:margin-top/-bottom` + `fo:line-height`（倍数写 % + proportional、绝对值写 pt + fixed/minimum，两档在 ODF 里分得清而 CSS 分不清）+ `fo:background-color` + `fo:border-*`（宽度写 pt），读侧按名字跳过具名样式与 `office:styles` 里那批，以免把整篇默认摊成每段的直接格式；脚注/尾注写 ODF 1.2 内联 `text:footnote-reference` + 同 `text:id` 的 `text:footnote`（citation 写字面序号、段间 `text:line-break`、正文段挂 `FN` 自动样式），读侧三种外壳都收（新版两个元素名 + 旧版 `text:note`/`text:note-class`/`text:note-body`），正文表先扫全文建全表，故 id 不连续或正文排在引用之前也配得上；`draw:frame` 认三类内容（`draw:image` 位图 / `draw:text-box` 文本框展平为 `<br/>` 连成的行内文字 / `draw:object` 嵌入件——`Objects/objectN/content.xml` 里有 MathML 就线性化成文本，否则 v0.44 走 `lib/ole` 取内层内容：`<office:binary-data>` 内联 base64 与 `Objects/objN/` 目录两种形状都解，摊出的块级正文由 `tail()` 作段落兄弟块接回、单元格内压成行内文本），`content.xml` 解析失败时抛出说得出是哪份 XML（否则表现为"打开了一篇空白"），读侧统一产 `warnings`（同类聚合成「文案×N」）交状态栏显示；**批注往返（v0.86）**：读侧把 `office:annotation` 收成 DocComment（`dc:creator`/`dc:date` 按**子元素**取——当属性取那一版是往返腿自己量出来的真缺陷；`annotation-end` 名字预扫配对、点批注锚在自己段落尾、annWrap 在每个块出口续挂还开着的跨段区间），写侧照 docx 那两条老规矩（`usedAnn` 同 cid 全局只一组区间、孤儿不写回），跨段区间同名 `office:annotation-end` 收口，`xmlns:dc` 声明在根 NS 上补齐——漏了它写出的字节连自家读侧都不认）；**格边距与行高（表格写侧第一笔账）**：写侧逐边落 `fo:padding-top/right/bottom/left`（cm 三位小数、0 是真值），行高走 `style:family="table-row"` 的 `style:min-row-height` + `style:use-optimal-row-height="true"`（`style:row-height` 那枚精确档 Word 门面无一例外读成会裁字的 exact，故只读不发），读侧逐边压过 `fo:padding` 简写、行高按 `style:row-height` / `style:min-row-height` / `fo:minimum-row-height` / `fo:min-height` 四档次序收、字符间距走 `fo:letter-spacing`（character / paragraph / `styles.xml` 具名样式三层在 Word 门面都进账，而 `style:letter-spacing` 与 `loext:` 那两族八臂全报 0 ⇒ 通道由门面裁；读侧（ODT 字符间距读侧第一笔账）在同一枝上查问 `fo:letter-spacing` 并从 `htmlOfStyle` 出 `letter-spacing: Npt`——字符写侧第一笔账发的形状 reopen 吃回来了；读侧第二笔账在同一枝上把声明为 `normal` 的那一档折成显式 `letter-spacing: 0pt`（Word 门面裁它是「说了 0」而不是「没声明」，而 `toLetterSpacingPt` 不吃那个词，所以只能在查问处折）；**长度 mm 档（ODT 长度 mm 档第一笔账）**：`lenPx` 与 `odfBorderCss` 各自的 mm 枝按每毫米 3.7795 px 折（曾与 terminal 那枝的 37.795 同值 ⇒ `Nmm` 字面全族 10× 偏），terminal 那枝（`cm` 与裸数共用）不动——改它会连两头都对的 `cm` 一起动，这一形状由一枚改 terminal 的变异臂量出来）；**页面块取哪一枚（ODT 页面块第一笔账）**：「这张纸」按 `<style:master-page>` 的 `style:page-layout-name` 选那一枚`<style:page-layout>` 的属性块——基座取 `styles.xml` 文档序第一枚，而真件 77 枚里 11 枚的第一枚住 `<style:default-page-layout>` 且六枚长度字面全缺 ⇒ 那 11 枚件的页账整枚没接住；引名查不到才回退文档序第一枚（回落那一档由夹具 G5 裁，型别闸由 G6 裁）；**页面长度单位（ODT 页面长度单位第一笔账）**：`cm2mm` 的单位榜从 `cm`/`mm`/`in`/裸数补成 `cm`/`mm`/`in`/`pt`/`px`/`pc`/裸数（pt 按 25.4/72、px 按 25.4/96、pc 按 25.4/6 折毫米）而末尾 `n * 10` 那一枝（`cm` 与裸数）一寸没动 ⇒ 页面族、图框 `svg:width`、栏间距三条通道同时吃新三档，`em`/`ex`/`%` 与 0 和负数仍按「没说」；**列宽（ODT 表格列宽第一笔账）**：宽度住在列样式那一层而不在 `<table:table-column>` 元素上，`style:family="table-column"` 的 `style:column-width` 按 `table:number-columns-repeated` 展成列槽、首行每格按 colspan 吃连续几枚槽并出 `colwidth="整数px"`（任一枚槽没账该格整枚弃权、`style:rel-column-width` 按「没说」、首行 covered 不占槽、只有首行出账），而写手仍不发列元素 ⇒ 这条通道只对外部件生效
   lib/find-replace.ts 查找/替换 ProseMirror 插件：按文本块匹配存 state、装饰高亮、findNext/findPrev/replaceOne/replaceAll 命令（命中上限 FR_HIT_CAP=2000 截断并标 `N+`）
   lib/doc-feed.ts     大件"喂进编辑器"这一段的阈值与通道（v0.87，137 行，纯函数 + 一条 dispatch 通道）：三枚常数 `FEED_THRESHOLD=5000` / `FEED_FIRST=12` / `FEED_BATCH=4000` 都由 release 真机量出来——5000 块那件采样空档 ≤92ms 而 5056 块那件已要 188ms（分界），400/1500/4000 三档整趟代价持平（取 4000）；`planFeed(src, hint?)` 两型输入（html 先按串长廉价预筛、再过一道"顶层裸文本就不切"的安全闸、最后用 `DOMParser` 数顶层子节点；json 直接数 `doc.content`），**hint ≤ 阈值返回 null ⇒ 调用方原样走今天的单片 `setContent`**；`runFeed(editor, plan, src, stopped)` 只吃实测唯一与整片逐节点相同的那条通道（C2）——JS 侧累加 `Fragment`（从不读活文档）、每批 `tr.replaceWith(0, doc.content.size, acc)` + `addToHistory:false`、非末批 `preventUpdate:true`（末批才 emitUpdate）、首屏两帧 rAF、批间 `setTimeout 0` 让出主线程、`stopped()` 按**这一趟的身份**取消；**为什么不能增量追加**（legC2 十五形状 + legC5 四件 A/B 逐节点对参照）：PM 的 `appendTransaction` 会在容器块之后补一枚可编辑空段，heading / bulletList / orderedList / table / blockquote / codeBlock 六类全不等（块数 5840→5841），"追加 + 边界撤填充"也补不回来
   lib/templates.ts    首页模板注册表与纯函数 seed：11 个模板（公文/会议纪要/周报 → ProseMirror JSON+meta，记账表/库存清单 → WorkbookPayload 含公式冻结，六套演示配色 → Deck）
@@ -8706,9 +8728,29 @@ inverse/visible，整根没说话的轴不进载荷（朴素图表载荷与之�
       表级 `9390` dxa + 逐格 `w:tcW`，Word 读回 `186 / 141.75 / 141.75` 磅且行宽之和正好 = 版心 469.5 磅；把手做成
       绝对定位的 6px `col-resize` 缝（实测 rect 从 `188 × 0` 变 `6 × 50`）、悬停才亮、拖拽中用 `outline` 不压底纹、
       `@media print` 里不上纸
-- [ ] **ODT 的列宽两头都不往返**（v0.89 明写不开）：写侧 `content.xml` 零枚 `table:table-column`（前置实测数出来的），
-      读侧也不解析 `style:column`/`table:style` 那一层的宽度；理由是**无人可裁**——本机无 ODF 第三方应用，而 ODF 1.2
-      RelaxNG 的三个源全 404 ⇒ 写出的形状只有自家两头互证。这一档在 docx 那头已补（v0.89），ODT 缺的是同一层的另一半
+- [x] **ODT 的列宽读侧**（v0.89 那枚「两头都不往返」里读侧的一半，b28 建）：宽度不挂在 `<table:table-column>`
+      元素上而挂在它自己的列样式里，`style:table-column-properties/@style:column-width`（含 `office:styles` 具名层
+      与 `style:parent-style-name` 祖先）按 `table:number-columns-repeated` 展成列槽，首行每格按 colspan 吃连续槽并
+      出 `colwidth`（整数 px，消费侧 `parseInt` 会砍小数）；77 枚真件里 16 件第一次有账、`colwidth` 属性 35 枚，
+      正文与表枚数一寸不动；三头格级合 15 / 不合 0 / 取舍 1（Word 16.0 门面无一例外给逐格宽度）
+- [ ] **ODT 的列宽写侧**（同一档剩下的另一半）：写手 `content.xml` 仍零枚 `<table:table-column>`、不吃 `colwidth`
+      ⇒ 这条通道在自家往返里自证不了，只能靠外部件进（前置的注入臂裁出「补三枚列元素后读回 `[113,151,189]`」）；
+      理由原样挂着——本机无 ODF 第三方应用而 ODF 1.2 RelaxNG 三个源全 404 ⇒ 写出的形状无人可裁
+- [ ] **`text:section` 整层不落**（b28 量到，与列宽两笔账）：`renderBlock` 只有 `case 'body'`/`case 'text'` 递归而
+      其余 `default: return ''` ⇒ 77 枚件里 7 件 14 枚节的 48 段 2,491 字一个字不上屏（整段能找回的节枚=0）；
+      `fdo55814.odt` 那枚「`content.xml` 里有表而 HTML 里没表」的真因在这一层而不是列宽
+- [ ] **列宽的部分账那一档两头读成两种数**（b28 三臂量到而取舍未定）：`G_missing`/`H_units`/`L_zero` 里某一列没
+      可用宽度时 Word 整表回退成等宽小宽度（~12–14.5pt），我们则只让那一格弃权而其余照出——两头形状不同，谁更
+      接近原稿没量
+- [ ] **首行格数 > 槽数那一档没有第三头**（b28 的 `E_over`）：Word 对这种件整臂拒开 ⇒ 只剩规格 + 夹具两头，
+      「多出来的格子该不该出账」无人可裁
+- [ ] **比例档全按「没说」**（b28 记下而未做）：`style:rel-column-width`（scale / proportional / 正整数百分比）与
+      表级 `table:width`/`style:rel-width` 都不进账；真件普查里「有列元素而只有 rel」的形状是 6 张表 / 12 枚槽，
+      这一族要有账得先定「相对谁的比例」
+- [ ] **同一载体上两把尺的单位榜还没并**（b25/b26/b27/b28 同族）：`lenPx` 不收 `pc`（本轮 `H_units` 的 pc 槽因此
+      没账）而 `cm2mm` 收；ODF 裸数那一档 Word 门面整臂读 0 而我们按 cm 走——并档是设计账不是 bug 账
+- [ ] **非首行那一层的宽度账没量**（b28 只让首行出账）：模型契约把 `colwidth` 记在网格列上而网格列由首行摊出，
+      非首行格子自带的宽度与首行打架时以谁为准没在夹具或门面上摆过
 - [x] **键入精确列宽**（v0.90 只结掉"把手可见 + 拖出来的账不丢"那一半，剩下这一半在 v0.91 建）：TipTap v3 命令里
       没有 `setColumnWidth`（只有 `addColumnBefore` 一族），而 v0.90 前置实测量清了它该长什么样的那一格在 v0.91 兑现——
       **一次事务写遍该网格列的所有行**（M2 实测只改行 0 那一枚在同一次 dispatch 里就被 `tableEditing` 的

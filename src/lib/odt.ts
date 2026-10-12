@@ -1315,6 +1315,22 @@ export async function odtToHtml(bytes: Uint8Array): Promise<{ html: string; meta
   }
 
   /**
+   * 列样式（table-column 家族）→ 列宽 px。ODF 的列宽不挂在 `<table:table-column>` 元素上，
+   * 而是挂在它自己的自动样式里（`style:table-column-properties/@style:column-width`）。
+   * 同层的 `style:rel-column-width`（scale / proportional / 正整数百分比）不是长度 ⇒ 按「没说」记，
+   * 宽度留给模型与浏览器自己分配。
+   */
+  const columnWidthPx = (name: string | null | undefined): number | undefined => {
+    let w: number | undefined
+    for (const el of styleChain(name)) {
+      const cp = pick(el, 'table-column-properties')
+      const v = lenPx(cp?.getAttribute('style:column-width'))
+      if (v !== undefined && v > 0) w = v
+    }
+    return w
+  }
+
+  /**
    * 行样式（table-row 家族）→ 行高 px，出 `<tr style="height: Npx">`（CellStyle 的 rowHeight 就吃这一枚）。
    * ODF 这一头有四枚字面并存，全部收进模型同一枚下限，优先级 row-height > min-row-height >
    * fo:minimum-row-height > fo:min-height（同一枚样式里取先命中的那一档，与 Word 门面
@@ -1694,18 +1710,49 @@ export async function odtToHtml(bytes: Uint8Array): Promise<{ html: string; meta
       }
       case 'table': {
         const rows: string[] = []
+        // 列宽槽表：一枚 `<table:table-column>` 按 `table:number-columns-repeated` 占连续多槽，
+        // 首行每格按 colspan 吃同宽度的那几枚槽 ⇒ 宽度出在首行格子的 colwidth 上（docx 侧同名属性）。
+        const slots: (number | undefined)[] = []
+        for (const c of Array.from(el.children)) {
+          if (c.localName !== 'table-column') continue
+          const rep = Math.max(1, Math.round(Number(c.getAttribute('table:number-columns-repeated') ?? 1)) || 1)
+          const w = columnWidthPx(c.getAttribute('table:style-name'))
+          for (let k = 0; k < rep; k++) slots.push(w)
+        }
+        /** 这格那一刀的宽度账：连续 cs 枚槽全有账才出这一刀（抵出槽外的槽按「没账」走）；出整数 px（模型取 colwidth 用 parseInt，小数会被砍） */
+        const colwidthOf = (gc: number, cs: number): string => {
+          if (cs < 1) return ''
+          const out: number[] = []
+          for (let k = 0; k < cs; k++) {
+            const v = slots[gc + k]
+            if (v === undefined) return ''
+            const px = Math.round(v)
+            if (px < 1) return ''
+            out.push(px)
+          }
+          return ` colwidth="${out.join(',')}"`
+        }
         inCell++ // 单元格里放不下第二层表：嵌入正文改压成行内文本，别让它整块被内容表达式丢掉
+        let ri = 0
         for (const r of Array.from(el.children)) {
           if (r.localName !== 'table-row') continue
           const cells: string[] = []
+          let gc = 0
           for (const c of Array.from(r.children)) {
+            // 首行的 covered 是前一格 colspan 的占位填充件（真件三张可裁的表上「跨度之和==槽数」而「跨度之和+covered」多出，
+            // 见 a5b），它自己不再占一枚槽；首行之上没有行，所以这一行里的 covered 不可能来自纵向合并。
             if (c.localName === 'covered-table-cell') continue
             if (c.localName !== 'table-cell') continue
             const cs = Number(c.getAttribute('table:number-columns-spanned') ?? 1)
             const rs = Number(c.getAttribute('table:number-rows-spanned') ?? 1)
-            const attrs = `${cs > 1 ? ` colspan="${cs}"` : ''}${rs > 1 ? ` rowspan="${rs}"` : ''}${cellStyleCss(c.getAttribute('table:style-name'))}`
+            // 首行的重复格（number-columns-repeated>1）在这一排被压成一枚 td，HTML 网格压根没有那些槽 ⇒ 不出账
+            const rep = Number(c.getAttribute('table:number-columns-repeated') ?? 1)
+            const cw = ri === 0 && rep === 1 ? colwidthOf(gc, cs) : ''
+            gc += cs
+            const attrs = `${cs > 1 ? ` colspan="${cs}"` : ''}${rs > 1 ? ` rowspan="${rs}"` : ''}${cw}${cellStyleCss(c.getAttribute('table:style-name'))}`
             cells.push(`<td${attrs}>${await renderChildrenBlocks(c)}</td>`)
           }
+          ri += 1
           const rh = rowHeightPx(r.getAttribute('table:style-name'))
           rows.push(`<tr${rh !== undefined ? ` style="height: ${rh}px"` : ''}>${cells.join('')}</tr>`)
         }
