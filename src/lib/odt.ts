@@ -1604,7 +1604,17 @@ export async function odtToHtml(bytes: Uint8Array): Promise<{ html: string; meta
       if (foot) meta.footerText = foot
     }
     // 页面设置：page-layout-properties 的纸张与四边距 + style:columns 的分栏
-    const plp = Array.from(sdoc.getElementsByTagName('*')).find((x) => x.localName === 'page-layout-properties')
+    // 「这张纸」取哪一枚：ODF 由 master-page 的 style:page-layout-name 指定，而 styles.xml 文档序的第一枚
+    // page-layout-properties 常是 <style:default-page-layout> 的孩子（真件 77 枚里 11 枚如此，那一枚六枚长度字面全缺）。
+    // 引名查不到才回退旧行为（文档序第一枚）：缺引名的外部件不会因此从有账变没账。
+    const firstPlp = Array.from(sdoc.getElementsByTagName('*')).find((x) => x.localName === 'page-layout-properties')
+    const plpName = master?.getAttribute('style:page-layout-name')
+    const plpEl = plpName
+      ? Array.from(sdoc.getElementsByTagName('*')).find(
+          (x) => x.localName === 'page-layout' && x.getAttribute('style:name') === plpName
+        )
+      : undefined
+    const plp = (plpEl ? pick(plpEl, 'page-layout-properties') : null) ?? firstPlp
     const pw = cm2mm(plp?.getAttribute('fo:page-width') ?? null)
     const ph = cm2mm(plp?.getAttribute('fo:page-height') ?? null)
     const page: PageSetup = {}
