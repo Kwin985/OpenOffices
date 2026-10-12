@@ -52,7 +52,7 @@ function odfBorderCss(v: string | null | undefined): string | null {
   const n = Number(m[1])
   const unit = m[2] ?? ''
   const px =
-    unit === 'mm' ? n * 37.795
+    unit === 'mm' ? n * 3.7795
     : unit === 'in' || unit === '"' ? n * 96
     : unit === 'pt' ? (n * 96) / 72
     : unit === 'px' ? n
@@ -67,7 +67,7 @@ function lenPx(v: string | null | undefined): number | undefined {
   const n = Number(m[1])
   if (!Number.isFinite(n)) return undefined
   const px =
-    m[2] === 'mm' ? n * 37.795
+    m[2] === 'mm' ? n * 3.7795
     : m[2] === 'in' || m[2] === '"' ? n * 96
     : m[2] === 'pt' ? (n * 96) / 72
     : m[2] === 'px' ? n
