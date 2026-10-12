@@ -50,10 +50,23 @@ import { all, allDesc, attr, attrL, attrNum, els, find, findDesc, findL, local, 
 import { FieldEngine, fieldLabel, parseInstr, recomputable } from './docx-fields'
 import { embedHtml, inlineFlatten, unwrapEmbed, type EmbedHtml } from './ole'
 import { chartToHtml, smartArtToHtml } from './ooxml-graphics'
-import { CELL_EDGES, CSS_BORDER_STYLE, eighthsToPx, rgb2hex } from './cell-style'
+import { CELL_EDGES, CSS_BORDER_STYLE, eighthsToPx, rgb2hex, type CellEdge } from './cell-style'
 import { ooxmlLine } from './paragraph-style'
-import { commentRowsOf, type DocComment } from './docx'
+import {
+  asTableCondType,
+  commentRowsOf,
+  type DocComment,
+  type DocxStyleInfo,
+  type TableCond,
+  type TableCondType,
+} from './docx'
 import { encodeNoteText } from './note-extension'
+import {
+  condLadderAppearance,
+  condLadderMargin,
+  condLadderRowHeight,
+  LOOK_BITS,
+} from './table-cond'
 
 export interface DocxImport {
   html: string
@@ -61,6 +74,8 @@ export interface DocxImport {
   /** 拆出的顶层块数；0 表示这份文件没认出来，调用方应回退 mammoth */
   blocks: number
   warnings: string[]
+  /** 文档带进来的段落样式清单（v0.102）：摊平快照，编辑器下拉与导出样式表共用 */
+  styles?: DocxStyleInfo[]
 }
 
 /** jszip 部件的最小视图（不为一次只读导入把 JSZip 的完整类型面拉进来） */
@@ -380,6 +395,10 @@ interface RunProps {
   fonts?: string[]
   /** w:vertAlign：superscript / subscript（其余值视为 normal） */
   va?: 'sup' | 'sub'
+  /** 修订标记：这一段文字是 w:ins 包着的（插入）还是 w:del 包着的（删除，文字在 w:delText 里） */
+  rev?: { kind: 'ins' | 'del'; author: string; date: string }
+  /** 字符级命名样式标签（v0.113）：w:rStyle 的 styleId，随 run 输出 data-rstyle；不继承，无即清 */
+  rstyle?: string
 }
 
 const NONE: RunProps = {}
@@ -451,6 +470,11 @@ function cssOf(p: RunProps): string {
   return bits.join('; ')
 }
 
+/** 属性值用的转义：esc 只管 <>&，作者名里出现引号会截断属性，这里一起防 */
+function attrEsc(s: string): string {
+  return esc(s).replace(/"/g, '&quot;')
+}
+
 /** 套 marks：从内到外 样式属性 → 高亮 → 删除线 → 下划线 → 斜体 → 粗体 */
 function marked(inner: string, p: RunProps): string {
   if (!inner) return ''
@@ -465,6 +489,12 @@ function marked(inner: string, p: RunProps): string {
   // 上下标是最外层：Word 把 vertAlign 记在 rPr 里，与粗斜体同级，套在外面读回来不改变含义
   if (p.va === 'sup') s = `<sup>${s}</sup>`
   else if (p.va === 'sub') s = `<sub>${s}</sub>`
+  // 字符样式标签（v0.113）：在修订壳之内、格式 marks 之外——Word 里 rStyle 与 vertAlign 同级，
+  // 编辑器侧由 rStyle mark（span[data-rstyle]）接住，样式表按它统一呈现
+  if (p.rstyle) s = `<span data-rstyle="${attrEsc(p.rstyle)}">${s}</span>`
+  // 修订壳在最外：正文格式包在修订里（Word 的层级关系正是如此），span[data-rev] 由
+  // lib/revision-extension.ts 的两个 mark 接住——不用原生 <ins>/<del> 标签，<del> 已被删除线 mark 占用
+  if (p.rev) s = `<span data-rev="${p.rev.kind}" data-rev-author="${attrEsc(p.rev.author)}" data-rev-date="${attrEsc(p.rev.date)}">${s}</span>`
   return s
 }
 
@@ -790,6 +820,12 @@ class Fidelity {
     const { pPr, effPPr } = this.effPPrOf(el)
     const view = styleView(this.book, pPr ? val(pPr, 'w:pStyle') : undefined)
     const base = baseRunProps(view.chain, effPPr)
+    // 段落标记自身的修订（v0.100）：pPr/w:ins = 这是新插入的段落（接受后留下来）；文字若没被
+    // w:ins 单独包住，段落级插入就是它唯一的变化，按普通段落读不丢内容。pPr/rPr/w:del =
+    // 段落标记被删（接受后本段并入下一段），这一层意思模型里没有承载，如实记账
+    if (pPr && find(pPr, 'w:ins')) this.warn('段落级修订（新插入的段落标记）按接受后的状态读入')
+    if (pPr && find(pPr, 'w:rPr') && find(find(pPr, 'w:rPr') as XEl, 'w:del'))
+      this.warn('段落级修订（段落标记被删除）未处理：Word 接受后本段会并入下一段')
 
     let prefix = ''
     const num = inCell ? { level: 0 } : this.numOf(el)
@@ -802,7 +838,16 @@ class Fidelity {
     if (view.preformatted) return prefix + `<pre><code>${escText(plainText(el))}</code></pre>`
 
     const style = this.paraCss(effPPr, betweenCss, base.sz)
-    const tag = view.level && view.level <= 4 ? `h${view.level}` : 'p'
+    // 命名样式标签（v0.102）：非标题段落把 pStyle 随标签带出去。h1-h4 的标题语义已由
+    // heading 层级承载（导出走 HeadingLevel）；Heading5+ 与自定义样式落 p 标签时靠这一笔，
+    // 导出按它写回 w:pStyle。preformatted 分支上面已返回（code 语义优先，不带样式标签）
+    const pstyleId = pPr ? val(pPr, 'w:pStyle') : undefined
+    const tag =
+      view.level && view.level <= 4
+        ? `h${view.level}`
+        : pstyleId
+          ? `p data-pstyle="${attrEsc(pstyleId)}"`
+          : 'p'
     const body = this.layout(tag, style, pieces)
     return view.quote ? prefix + `<blockquote>${body}</blockquote>` : prefix + body
   }
@@ -910,6 +955,237 @@ class Fidelity {
     return ln === undefined ? undefined : 0
   }
 
+  /**
+   * 命名样式清单（v0.102 段落 / v0.113 字符 / v0.114 表格）：styles.xml 里
+   * type="paragraph|character|table" 的每一枚，沿 basedOn 链摊平成结构化快照——
+   * run 层逐层 readRPr，para 层取合并视图 pPr 的各枚值（与 paraCss 同一套读取口径），
+   * table 层取表级 tblPr 与自身 tcPr（见下面那一支）。字符样式只有 run 层，编号样式不进清单。
+   * 段前后按「行」计时这里不 warn（warn 是给正文段落路径的；清单读的是样式定义本身，
+   * 19px/行 的估算值就是快照的一部分，不算「未保留」）。
+   */
+  styleList(): DocxStyleInfo[] {
+    const lineSpace = (sp: XEl, twips: string, lines: string): number | undefined => {
+      const tw = attrNum(sp, twips)
+      if (tw !== undefined) return px2(tw * TWIP_PX)
+      const ln = attrNum(sp, lines)
+      return ln === undefined || ln === 0 ? undefined : Math.round((ln / 100) * LINE_UNIT_PX * 100) / 100
+    }
+    const runSnapshot = (rp: RunProps): DocxStyleInfo['run'] => {
+      const run: DocxStyleInfo['run'] = {}
+      if (rp.fonts?.length) run.font = rp.fonts.join(', ')
+      if (rp.sz) run.sizePx = Math.round(rp.sz * HP_PX * 100) / 100
+      if (rp.b) run.bold = true
+      if (rp.i) run.italic = true
+      if (rp.u) run.underline = true
+      if (rp.strike) run.strike = true
+      if (rp.color) run.color = rp.color
+      return run
+    }
+    const out: DocxStyleInfo[] = []
+    for (const info of this.book.byId.values()) {
+      if (!info.name || !['paragraph', 'character', 'table'].includes(info.type)) continue
+      // 定义被 Word 换掉的那几枚（TableNormal）不进清单：再往前走一步它会以「用户声明」的面目出现
+      if (SUBSTITUTED_TABLE_STYLES.has(info.id)) continue
+      const view = styleView(this.book, info.id)
+      let rp: RunProps = NONE
+      for (const s of view.chain) if (s.rPr) rp = readRPr(s.rPr, rp)
+      const run = runSnapshot(rp)
+      /**
+       * 表样式（v0.114）：只摊"表级那一层"说了什么——外框四边与内部横竖线、默认格边距、
+       * 整表对齐、默认格底纹，以及应用到表内文字的那份 run。
+       * 沿 basedOn 链自根向下合并的纪律与样式注册内部的五层来历一致：
+       * 后来者逐条盖（含显式 `nil` 与 `fill="auto"` 这两种"压掉"的说法），
+       * 而 Word 会换掉自己那份定义的 `TableNormal`（`SUBSTITUTED_TABLE_STYLES`）
+       * 压根不进链——往它身上写的数从不落地，照抄就是把别家的默认写成用户的声明。
+       * 条件层（`w:tblStylePr`：首行/隔行那些带）从 v0.116 起也进快照——不再是只读也不可editor的一个洞；
+       * 它同时还按位置逐格塌进 `<td>` 的内联样式（那一笔较早，落在它自己那一格里）。
+       */
+      if (info.type === 'table') {
+        const bd: Record<string, string | undefined> = {}
+        let mar: Record<string, number> = {}
+        let shdEl: XEl | undefined
+        let jc: string | undefined
+        const cond: Partial<Record<TableCondType, TableCond>> = {}
+        for (const anc of styleChain(this.book, info.id)) {
+          if (SUBSTITUTED_TABLE_STYLES.has(anc.id)) continue
+          const raw = borderEdges(find(anc.tblPr, 'w:tblBorders'))
+          // start/end 与 left/right 是同一条边的两种写法，先归一再合并，否则叶层的 start 盖不住祖先的 left
+          const put = (canon: string, names: string[]) => {
+            for (const n of names) if (raw[n] !== undefined) bd[canon] = raw[n]
+          }
+          put('top', ['top'])
+          put('bottom', ['bottom'])
+          put('left', ['left', 'start'])
+          put('right', ['right', 'end'])
+          put('insideH', ['insideH'])
+          put('insideV', ['insideV'])
+          mar = { ...mar, ...marginsOf(find(anc.tblPr, 'w:tblCellMar')) }
+          const s = find(anc.tcPr, 'w:shd')
+          if (s) shdEl = s
+          const j = val(anc.tblPr, 'w:jc')
+          if (j) jc = j.toLowerCase()
+          // 条件层（v0.116）进快照：同型后出现的块**整套替换**前一块——Word 量的那一账
+          // （r_dup_type_firstRow_L3：A{left,top} 之后 B{left,bottom}，落的是 B 的 two 条，
+          // A 那条 top 一次都没出现），所以四边先清干净再按这一块重写，而不是逐边合并。
+          // mar / shd / bold 三样各自成一回合互不 related：一块没说的那一样不牵动前者。
+          // 只认 `w:tcPr` 那一格：`w:tblPr/w:tblCellMar` 那一格本轮不 snapshot（它会被 tcPr 盖）。
+          for (const pr of anc.tblStylePr ?? []) {
+            const key = asTableCondType(attr(pr, 'w:type'))
+            if (!key) continue
+            const tcPr = find(pr, 'w:tcPr')
+            const cm = marginsOf(find(tcPr, 'w:tcMar'))
+            const bgEl = find(tcPr, 'w:shd')
+            const bEl = find(find(pr, 'w:rPr'), 'w:b')
+            // 条件格边框（v0.117）：`w:tcBorders` 也住 `w:tcPr` 内
+            const bcRaw = borderEdges(find(tcPr, 'w:tcBorders'))
+            const bc: Partial<Record<CellEdge, string>> = {}
+            for (const e of CELL_EDGES) {
+              const v = bcRaw[e]
+              if (v) bc[e] = v
+            }
+            // 条件行高（v0.117）：`w:trPr`/`w:trHeight` 是这枚条件块的兄弟节点，不是 tcPr 的孩子
+            const trPr = find(pr, 'w:trPr')
+            const thEl = trPr ? find(trPr, 'w:trHeight') : undefined
+            const thv = attrNum(thEl, 'w:val')
+            const thExact = (attr(thEl, 'w:hRule') ?? 'atLeast').toLowerCase() === 'exact'
+            if (
+              !Object.keys(cm).length &&
+              !bgEl &&
+              !bEl &&
+              !Object.keys(bc).length &&
+              thv === undefined
+            )
+              continue
+            const cur: TableCond = { ...(cond[key] ?? {}) }
+            if (Object.keys(cm).length) {
+              delete cur.padTopPx
+              delete cur.padRightPx
+              delete cur.padBottomPx
+              delete cur.padLeftPx
+              if (cm.top !== undefined) cur.padTopPx = cm.top
+              if (cm.right !== undefined) cur.padRightPx = cm.right
+              if (cm.bottom !== undefined) cur.padBottomPx = cm.bottom
+              if (cm.left !== undefined) cur.padLeftPx = cm.left
+            }
+            if (Object.keys(bc).length) {
+              delete cur.borders
+              cur.borders = bc
+            }
+            if (thv !== undefined && thv > 0) {
+              cur.rowHeightPx = px2(thv * TWIP_PX)
+              cur.rowHeightExact = thExact
+            } else {
+              delete cur.rowHeightPx
+              delete cur.rowHeightExact
+            }
+            const bg = bgEl ? shadingHex(bgEl) : null
+            if (bg) cur.background = bg
+            if (bEl) cur.bold = !['0', 'false', 'off'].includes((attr(bEl, 'w:val') ?? 'true').toLowerCase())
+            cond[key] = cur
+          }
+        }
+        const tbl: NonNullable<DocxStyleInfo['table']> = {}
+        const setBd = (key: keyof NonNullable<DocxStyleInfo['table']>, v: string | undefined) => {
+          if (v) (tbl as Record<string, unknown>)[key] = v
+        }
+        setBd('bdTop', bd.top)
+        setBd('bdRight', bd.right)
+        setBd('bdBottom', bd.bottom)
+        setBd('bdLeft', bd.left)
+        setBd('bdInsideH', bd.insideH)
+        setBd('bdInsideV', bd.insideV)
+        if (mar.top !== undefined) tbl.padTopPx = mar.top
+        if (mar.right !== undefined) tbl.padRightPx = mar.right
+        if (mar.bottom !== undefined) tbl.padBottomPx = mar.bottom
+        if (mar.left !== undefined) tbl.padLeftPx = mar.left
+        if (jc === 'left' || jc === 'center' || jc === 'right') tbl.align = jc
+        const bg = shadingHex(shdEl)
+        if (bg) tbl.background = bg
+        // 一块载荷都没有的那几个型不进快照（点了又清空的部位不该在文件里留下痕迹）
+        if (Object.keys(cond).length) tbl.cond = cond
+        out.push({
+          id: info.id,
+          name: info.name,
+          kind: 'table',
+          ...(info.basedOn ? { basedOn: info.basedOn } : {}),
+          run,
+          para: {},
+          table: tbl,
+        })
+        continue
+      }
+      if (info.type === 'character') {
+        out.push({
+          id: info.id,
+          name: info.name,
+          kind: 'character',
+          ...(info.basedOn ? { basedOn: info.basedOn } : {}),
+          run,
+          para: {},
+        })
+        continue
+      }
+      const para: DocxStyleInfo['para'] = {}
+      const pPr = view.pPr
+      if (pPr) {
+        const jc = val(pPr, 'w:jc')
+        const align =
+          jc === 'center'
+            ? 'center'
+            : jc === 'right'
+              ? 'right'
+              : jc === 'both' || jc === 'distribute'
+                ? 'justify'
+                : jc === 'left'
+                  ? 'left'
+                  : undefined
+        if (align) para.align = align
+        const ind = find(pPr, 'w:ind')
+        if (ind) {
+          const left = attrNum(ind, 'w:left') ?? attrNum(ind, 'w:start')
+          const right = attrNum(ind, 'w:right') ?? attrNum(ind, 'w:end')
+          const first = attrNum(ind, 'w:firstLine')
+          const firstChars = attrNum(ind, 'w:firstLineChars')
+          const hang = attrNum(ind, 'w:hanging')
+          if (left) para.marginLeftPx = px2(left * TWIP_PX)
+          if (right) para.marginRightPx = px2(right * TWIP_PX)
+          // 与 paraCss 同一套优先级：firstLine(twips) → firstLineChars（按 16px 字宽估）→ hanging 负缩进
+          const firstPx = first ? px2(first * TWIP_PX) : firstChars ? Math.round((firstChars / 100) * 16) : 0
+          if (firstPx) para.textIndentPx = firstPx
+          else if (hang) para.textIndentPx = -px2(hang * TWIP_PX)
+        }
+        const sp = find(pPr, 'w:spacing')
+        if (sp) {
+          const ln = ooxmlLine(attrNum(sp, 'w:line'), attr(sp, 'w:lineRule'), (n) => px2(n * TWIP_PX))
+          if (ln.length === 2) {
+            para.lineHeight = ln[0]
+            para.lineRule = ln[1]
+          }
+          const before = lineSpace(sp, 'w:before', 'w:beforeLines')
+          const after = lineSpace(sp, 'w:after', 'w:afterLines')
+          if (before !== undefined) para.spaceBeforePx = before
+          if (after !== undefined) para.spaceAfterPx = after
+        }
+        const outline = valNum(pPr, 'w:outlineLvl')
+        if (view.level !== undefined) para.outlineLevel = view.level - 1
+        else if (outline !== undefined && outline >= 0 && outline <= 8) para.outlineLevel = outline
+      }
+      out.push({
+        id: info.id,
+        name: info.name,
+        ...(info.basedOn ? { basedOn: info.basedOn } : {}),
+        ...(view.level !== undefined ? { level: view.level } : {}),
+        run,
+        para,
+      })
+    }
+    // Normal 恒排最前（它是「正文」），段落样式随后、字符样式再后、表样式垫底，组内按名字排
+    const rank = (s: DocxStyleInfo) =>
+      s.id === 'Normal' ? 0 : s.kind === 'table' ? 3 : s.kind === 'character' ? 2 : 1
+    out.sort((a, b) => rank(a) - rank(b) || a.name.localeCompare(b.name, 'zh'))
+    return out
+  }
+
   /** 行内片段落成块：块级插入物（图片/分页符）把段落切开；纯空段仍出一块以保留空行 */
   private layout(tag: string, style: string, pieces: Piece[]): string {
     let out = ''
@@ -954,6 +1230,7 @@ class Fidelity {
     const t = local(node.name)
     switch (t) {
       // 段落属性、书签、校对标记、已删除内容：都不产出可见文字
+      // （w:del / w:moveFrom 不在这里——它们在下面有各自的修订分支）
       case 'pPr':
       case 'proofErr':
       case 'bookmarkStart':
@@ -962,8 +1239,6 @@ class Fidelity {
       case 'lastRenderedPageBreak':
       case 'delInstrText':
       case 'delText':
-      case 'del':
-      case 'moveFrom':
         return
       case 'instrText': {
         // 域代码原文本身不显示，但 SEQ/REF 要靠它才知道该现算什么
@@ -1048,8 +1323,8 @@ class Fidelity {
         // 先试内容提取（v0.44）：嵌入的工作表/文档/CSV 里有真字，取到了就不该再写"内容未提取"
         const body = rel && !rel.external ? await this.embedContent(rel.target, file) : null
         if (body?.html) {
-          // 压成行文本至少字还在，并如实记一条。这一枝留着展平而 w:tbl 那一枝不留（第十六笔账）：
-          // 嵌入对象提出来的正文里有什么形状，本轮没像那 11 枚那样逐枚数过，没量过的形状不改道
+          // 单元格放不下一张嵌套表（本读侧对嵌套表格一律"展平为段落"），硬塞等于让
+          // ProseMirror 的内容表达式把整块字丢掉；压成行文本至少字还在，并如实记一条
           if (st.inCell) {
             st.pieces.push({ kind: 'inline', html: inlineFlatten(body.html) })
             this.warn('单元格里的嵌入内容已展平为文字')
@@ -1147,21 +1422,41 @@ class Fidelity {
       // 容器类：原样下钻
       case 'sdt':
       case 'sdtContent':
-      case 'ins':
       case 'customXml':
       case 'smartTag':
-      case 'moveTo':
       case 'bdo':
       case 'dir':
         await this.children(node, props, st)
         return
+      case 'ins':
+      case 'del': {
+        // 修订壳（v0.100）：插入的文字照常读但带上插入标记，删除的文字从 w:delText 里
+        // 读出来并带上删除标记——以前前者被静默并入正文、后者整块消失，打开带修订的
+        // 件等于强制"接受全部修订"且不告知。壳上的作者/日期原样带走，往返要认得出是谁改的
+        const rev = {
+          kind: t as 'ins' | 'del',
+          author: attr(node, 'w:author') ?? '',
+          date: attr(node, 'w:date') ?? '',
+        }
+        await this.children(node, { ...props, rev }, st)
+        return
+      }
+      case 'moveTo':
+        await this.children(node, props, st)
+        this.warn('移动型修订（moveTo）按接受后的状态读入：落点文字保留，没有移动标记')
+        return
+      case 'moveFrom':
+        this.warn('移动型修订（moveFrom）按接受后的状态读入：出发点文字不再保留')
+        return
       case 'r': {
         const rPr = find(node, 'w:rPr')
-        let rp = props
+        // rstyle 不继承：每个 run 只认自己 rPr 上的 w:rStyle，先清掉从父层带下来的
+        let rp: RunProps = { ...props, rstyle: undefined }
         if (rPr) {
           const cs = val(rPr, 'w:rStyle')
           for (const s of styleChain(this.book, cs)) if (s.rPr) rp = readRPr(s.rPr, rp)
           rp = readRPr(rPr, rp)
+          if (cs) rp.rstyle = cs
         }
         // 一个 run 里文字与图片/域标记可以穿插，所以先攒文字、遇到非文字构件就落盘
         let text = ''
@@ -1185,7 +1480,11 @@ class Fidelity {
             text += '\u0001'
           } else if (ct === 'tab') text += '\u00a0\u00a0\u00a0\u00a0'
           else if (ct === 'noBreakHyphen') text += '-'
-          else {
+          else if (ct === 'delText') {
+            // 被删除的文字住在 w:delText 里（w:t 的位置被它顶替）：只在修订壳里才当文字读，
+            // 裸露的 delText（脱离 w:del 的非法写法）仍按不存在处理
+            if (rp.rev?.kind === 'del') text += textOf(c)
+          } else {
             flush()
             await this.visit(c, rp, st)
           }
@@ -1525,7 +1824,12 @@ class Fidelity {
     const acctKnown = gridKnown || !!tblTotal
     // 记账完成后才出 HTML：rowspan 要等所有行的 continue 都数完
     const tblStyle = tblInd ? tableIndentCss(Math.round(tblInd * TWIP_PX)) : ''
-    let s = `<table${tblStyle ? ` style="${tblStyle}"` : ''}>`
+    // 表样式身份（v0.114）：样式 id 认得出才挂标签——认不出的 id 我们既没带定义、也没创同名
+    // 引用（挂上去就是一枚指向不存在的 w:tblStyle）；表样式的**外观**不受影响，它早已逐格塌进
+    // 内联样式（`styleId` 那五层合并的输出），挂标签多的是"改一处全表跟着变"的能力
+    const owner = styleId && this.book.byId.has(styleId) && !SUBSTITUTED_TABLE_STYLES.has(styleId) ? styleId : ''
+    const ownerAttr = owner ? ` data-tstyle="${escAttr(owner)}"` : ''
+    let s = `<table${tblStyle ? ` style="${tblStyle}"` : ''}${ownerAttr}>`
     for (let ri = 0; ri < plan.length; ri++) {
       const trPr = find(rows[ri], 'w:trPr')
       // 表头由 w:trPr/w:tblHeader 决定，不限首行（Word 里可以声明第 2 行起重复表头）
@@ -1536,12 +1840,20 @@ class Fidelity {
       let trStyle = ''
       const th = trPr ? find(trPr, 'w:trHeight') : undefined
       const thv = attrNum(th, 'w:val')
+      const last = plan.length - 1
       if (thv !== undefined && thv > 0) {
         if ((attr(th, 'w:hRule') ?? 'atLeast').toLowerCase() === 'exact')
           this.warn('固定行高（exact）按最小行高读入，超高内容不再裁剪')
         trStyle = `height: ${px2(thv * TWIP_PX)}px`
       }
-      const last = plan.length - 1
+      // 条件行高（v0.117）：行上没直接写 w:trHeight 时才认条件层（direct > 条件）
+      if (thv === undefined) {
+        const ch = condRowHeightFor(look, conds, ri, ri === last)
+        if (ch) {
+          if (ch.exact) this.warn('固定行高（exact）按最小行高读入，超高内容不再裁剪')
+          trStyle = `height: ${px2(ch.px)}px`
+        }
+      }
       // 行条件层 w:tblPrEx 的格边距：它是 w:tr 的首子（排在 w:trPr 之前），只说边距这一样上账
       const exMar = marginsOf(find(find(rows[ri], 'w:tblPrEx'), 'w:tblCellMar'))
       const rowEnd = plan[ri].reduce((m, c) => Math.max(m, c.gc + c.colspan), 0)
@@ -1550,6 +1862,8 @@ class Fidelity {
         if (c.cont) continue
         const tcPr = find(c.el, 'w:tcPr')
         const cb = borderEdges(tcPr ? find(tcPr, 'w:tcBorders') : undefined)
+        // 条件层边框（v0.117）：direct（上面 cb）> 条件层 > 表级（下面那枚 inside/outside 落点）
+        const cb2 = condBordersFor(look, conds, ri, ri === last, c.gc, c.colspan, acct.length)
         const attrs: string[] = []
         if (c.colspan > 1) attrs.push(`colspan="${c.colspan}"`)
         const sp = spanAt[c.gc]
@@ -1590,10 +1904,10 @@ class Fidelity {
         const pat = patternVal(shd)
         if (pat) this.warn(`图案底纹（w:shd @w:val=${pat}）按纯色读入，图案那一半没铺`)
         const style = [cellStyleCss(tcPr, {
-          top: cb.top ?? (ri === 0 ? tb.top : tb.insideH),
-          bottom: cb.bottom ?? (ri === last ? tb.bottom : tb.insideH),
-          left: cb.left ?? (c.gc === 0 ? tb.left : tb.insideV),
-          right: cb.right ?? (c.gc + c.colspan >= rowEnd ? tb.right : tb.insideV),
+          top: cb.top ?? cb2.top ?? (ri === 0 ? tb.top : tb.insideH),
+          bottom: cb.bottom ?? cb2.bottom ?? (ri === last ? tb.bottom : tb.insideH),
+          left: cb.left ?? cb2.left ?? (c.gc === 0 ? tb.left : tb.insideV),
+          right: cb.right ?? cb2.right ?? (c.gc + c.colspan >= rowEnd ? tb.right : tb.insideV),
         }, shadingHex(shd)), mar].filter(Boolean).join('; ')
         if (style) attrs.push(`style="${style}"`)
         s += `<${tag}${attrs.length ? ' ' + attrs.join(' ') : ''}>${await this.cellBlocks(c.el)}</${tag}>`
@@ -1603,7 +1917,7 @@ class Fidelity {
     return s + '</table>'
   }
 
-  /** 单元格内容：段落走"格内列表"的独立栈（不与外层正文的列表串台），嵌套表格出真表 */
+  /** 单元格内容：段落走"格内列表"的独立栈（不与外层正文的列表串台），嵌套表格展平成段落 */
   private async cellBlocks(tc: XEl): Promise<string> {
     const list = new ListState()
     let html = ''
@@ -1613,9 +1927,8 @@ class Fidelity {
       const t = local(b.name)
       if (t === 'p') html += await this.paragraph(b, list, true, this.betweenOfSiblings(tc.children, i))
       else if (t === 'tbl') {
-        // table() 里「整盘没账就按版心等分」那一档在格子里吃的是版心而不是外层格宽：真件 11 枚嵌套表
-        // 枚枚带 w:tblGrid 与逐格 dxa 账（b6 的 N3/N4/N5），这一档在真件上够不着，本轮不为它改道
-        html += await this.table(b)
+        this.warn('嵌套表格已展平为段落')
+        for (const tr of all(b, 'w:tr')) for (const inner of all(tr, 'w:tc')) html += await this.cellBlocks(inner)
       } else if (t === 'sdt' || t === 'sdtContent') {
         const r = await this.sequence(b.children, list, true)
         html += r.html
@@ -1776,35 +2089,24 @@ function tcWpx(tcPr: XEl | undefined): number | null {
 }
 
 /**
- * 表级的 w:tblW → 整张表的宽（px）。auto/nil/0/没说都交回 null（那本来就是"没账"）。
+ * 表级的 w:tblW → 整张表的宽（px）。auto/0/没说都交回 null（那本来就是"没账"）。
  * pct 那一档的口径是五十分之一百分点（5000 = 100%），基数是版心宽：三臂实测
  * （tb_pct30_nogrid 3000 → Word 总宽 361.87px、tb_pct50_auto 与 tb_pct50_fixed 5000 → 603.07px，
  * 版心 601.73px）只有这一档撞得上，按"百分之几"折的那档全都差着一倍。
- * nil 那一档归入 auto（第十二笔账 b4 实测，37 臂）：带正数的 nil 在 Word 门面报 pwtype=1 pw=0.00，
- * 与 auto/没写/空字面/负数逐格同形（fixed 落 18.00 磅、autofit 与缺 layout 落 11.80 磅，两把内容重排尺），
- * 那枚 w 上的数字从不进账；规格外（w:type=foo）与缺 w:type 在表级 Word 复用数字（pwtype=3 pw=225.65 磅），
- * 所以这一层只把 nil 取出去、不设 dxa 白名单——方向与第十一笔账的格级闸相反。
- * w:w 还允许写成 "100%" 这种字面，且真件（含我们自己的写侧）把它落在带前缀的 w:w 属性名上——
- * 第十三笔账 b1 之前这一行只读无前缀的 w，那枚字面在真件上永远够不着（真件字节腿 b1：
- * 1154 表枚全带 tblW，百分号字面 0 枚），所以这一档只在自家写侧的往返与第三方件上兑现。
- * 两档口径不同、Word 门面各自说话（合并判据腿 b1，23 臂）：数值按五十分之一百分点
- * （2500 → pw=50、3000 → 60），字面按百分之几（"30%" → pw=30、"100%" → 100、"50%" → 50），
- * 按"百分之几"折字面这一档才撞得上（"100%" 两臂等严、总差 −0.05 磅，"30%"/"50%"/窄版心在松尺内）。
- * 字面只吃紧跟百分号的十进制："30 %" 在 Word 报 pw=0（无宽）故不上账，与 abc%/空/"0%"/"-10%" 同归账外。
- * 缺 w:type 而字面带百分号时 Word 仍推断成 pct（pw=30、45.2 磅）而我们按 dxa 落空——本轮不动。
+ * @w:w 还允许写成 "100%" 字面（我们的写侧无账时就是这么落的），两种形状都吃。
  */
 function tblWpx(tblPr: XEl | undefined, contentTw: number): number | null {
   const tblW = tblPr ? find(tblPr, 'w:tblW') : undefined
   if (!tblW) return null
   const type = (attr(tblW, 'w:type') ?? 'dxa').toLowerCase()
-  if (type === 'auto' || type === 'nil') return null
+  if (type === 'auto') return null
   if (type === 'pct') {
     if (contentTw <= 0) return null
     const num = attrNum(tblW, 'w')
-    const raw = attr(tblW, 'w') ?? attrL(tblW, 'w')
+    const raw = attr(tblW, 'w')
     let ratio: number | null = null
     if (num !== undefined) ratio = num / 5000
-    else if (raw && /^-?\d+(?:\.\d+)?%$/.test(raw)) ratio = Number(raw.slice(0, -1)) / 100
+    else if (raw && raw.endsWith('%')) ratio = Number(raw.slice(0, -1)) / 100
     if (ratio === null || !(ratio > 0)) return null
     const px = Math.round(contentTw * ratio * TWIP_PX)
     return px > 0 ? px : null
@@ -1909,14 +2211,21 @@ function styleCellShading(book: StyleBook, id: string | undefined): XEl | undefi
   return out
 }
 
-/** `w:tblLook` 上那四位闸门：条件层的落点全从这几位取闸（`w:val` 那位十六进制数从不被 consult） */
-const LOOK_BITS = ['firstRow', 'lastRow', 'firstColumn', 'lastColumn'] as const
+// `w:tblLook` 上那四位闸门（LOOK_BITS）与三条型别梯子都在 table-cond 里定义一次：
+// CSS 层（doc-style-css）与 ODT 出口（odt）按位置裁决时用的是同一批函数，三处不会各跑一套尊卑。
 
 /**
  * 一块条件里说的格载荷：`w:tcPr` 那一格同时说格边距与格底纹（两族共用同一份"同型整块替换"的账），
  * `w:tblPr/w:tblCellMar` 那一格只说格边距，且它归的是样式那一层而不是条件那一层（见 styleCellMargins）
  */
-type CondCell = { mar: Margins; tblMar: Margins; shd?: XEl }
+type CondCell = {
+  mar: Margins
+  tblMar: Margins
+  shd?: XEl
+  borders?: Partial<Record<CellEdge, string>>
+  rowHeightPx?: number
+  rowHeightExact?: boolean
+}
 
 /**
  * 条件层 `w:tblStylePr` 说的格载荷：型名 → 那一块的账。
@@ -1944,7 +2253,37 @@ function styleCondCells(book: StyleBook, id: string | undefined): Record<string,
       const mar = marginsOf(find(tcPr, 'w:tcMar'))
       const tblMar = marginsOf(prTbl ? find(prTbl, 'w:tblCellMar') : undefined)
       const shd = find(tcPr, 'w:shd')
-      if (Object.keys(mar).length || Object.keys(tblMar).length || shd) out[type.toLowerCase()] = { mar, tblMar, shd }
+      // 条件格边框（v0.117）：`w:tcBorders` 也住 `w:tcPr` 内
+      const bcRaw = borderEdges(find(tcPr, 'w:tcBorders'))
+      const borders: Partial<Record<CellEdge, string>> = {}
+      for (const e of CELL_EDGES) {
+        const v = bcRaw[e]
+        if (v) borders[e] = v
+      }
+      // 条件行高（v0.117）：`w:trPr`/`w:trHeight` 是这枚条件块的兄弟节点
+      const trPr = find(pr, 'w:trPr')
+      const thEl = trPr ? find(trPr, 'w:trHeight') : undefined
+      const thv = attrNum(thEl, 'w:val')
+      const thExact = (attr(thEl, 'w:hRule') ?? 'atLeast').toLowerCase() === 'exact'
+      if (
+        Object.keys(mar).length ||
+        Object.keys(tblMar).length ||
+        shd ||
+        Object.keys(borders).length ||
+        thv !== undefined
+      ) {
+        const k = asTableCondType(type)
+        if (k)
+          out[k] = {
+            mar,
+            tblMar,
+            shd,
+            ...(Object.keys(borders).length ? { borders } : {}),
+            ...(thv !== undefined && thv > 0
+              ? { rowHeightPx: px2(thv * TWIP_PX), rowHeightExact: thExact }
+              : {}),
+          }
+      }
     }
   }
   return out
@@ -1977,23 +2316,6 @@ function tblLookOn(tbl: XEl): Record<string, boolean> {
 }
 
 /**
- * 这一格吃条件层的哪几型：列型按全表、行型按本行、角型按它所在那一整行（不按那一角，见 condMarginsFor），
- * 自低向高排——角型要那一角的两枚位都开才入梯。
- */
-function condMarginLadder(look: Record<string, boolean>, ri: number, isLastRow: boolean): string[] {
-  const ladder: string[] = []
-  if (look.firstColumn) ladder.push('firstcol')
-  if (look.lastColumn) ladder.push('lastcol')
-  if (ri === 0 && look.firstRow && look.firstColumn) ladder.push('nwcell')
-  if (ri === 0 && look.firstRow && look.lastColumn) ladder.push('necell')
-  if (isLastRow && look.lastRow && look.firstColumn) ladder.push('swcell')
-  if (isLastRow && look.lastRow && look.lastColumn) ladder.push('secell')
-  if (isLastRow && look.lastRow) ladder.push('lastrow')
-  if (ri === 0 && look.firstRow) ladder.push('firstrow')
-  return ladder
-}
-
-/**
  * 这一格的条件层账：行型按行落，列型按全表落，**角型也按行落而不按那一角**。
  *
  * 首列/末列那两型的 tcMar 在 Word 眼里落到**全表每一格**（g_firstCol 的 22px、g_lastCol 的 34px
@@ -2018,8 +2340,63 @@ function condMarginsFor(
   key: 'mar' | 'tblMar',
 ): Margins {
   const out: Margins = {}
-  for (const t of condMarginLadder(look, ri, isLastRow)) Object.assign(out, conds[t]?.[key])
+  // 共享梯子从高到低排，故逐边「先到先得」（原来是从低到高、整块后写覆盖，两者逐边等价）
+  for (const t of condLadderMargin(look, ri, isLastRow)) {
+    const m = conds[t]?.[key]
+    if (!m) continue
+    for (const e of CELL_EDGES) {
+      const v = m[e]
+      if (v !== undefined && out[e] === undefined) out[e] = v
+    }
+  }
   return out
+}
+
+/**
+ * 这一格的条件层边框：与底纹同一族——**真按位置**落（首列只落第 0 列、首行只落第 0 行、四角只落那一角），
+ * 跟上面那族格边距"列型铺满全表"不是一种作用域。
+ * 逐边取一：梯子先说话的那一型把某条边定了，后面同边的型就改不动——角型在最前，于是角格的边框压住行型与列型。
+ * 不同边互不 related（首行说 bottom、首列说 left，两枚各落各的）。
+ */
+function condBordersFor(
+  look: Record<string, boolean>,
+  conds: Record<string, CondCell>,
+  ri: number,
+  isLastRow: boolean,
+  gc: number,
+  colspan: number,
+  cols: number,
+): Partial<Record<string, string>> {
+  const ladder = condLadderAppearance(look, ri, isLastRow, gc, colspan, cols)
+  const out: Record<string, string> = {}
+  for (const t of ladder) {
+    const b = conds[t]?.borders
+    if (!b) continue
+    for (const e of CELL_EDGES) {
+      const v = b[e]
+      if (v && out[e] === undefined) out[e] = v
+    }
+  }
+  return out
+}
+
+/**
+ * 这一行吃条件层的哪枚行高：只有行型条件（band*Horz / firstRow / lastRow）带行高，
+ * 且行型间尊卑是 firstRow > lastRow > band（与底纹行型那序一致）——同一行既踩 band 又踩首行时首行赢。
+ * 直接写在行上的 `w:trHeight` 优先于这里（调用处先认 direct 再认条件），所以这里只在没 direct 时上场。
+ */
+function condRowHeightFor(
+  look: Record<string, boolean>,
+  conds: Record<string, CondCell>,
+  ri: number,
+  isLastRow: boolean,
+): { px: number; exact: boolean } | undefined {
+  const ladder = condLadderRowHeight(look, ri, isLastRow)
+  for (const t of ladder) {
+    const c = conds[t]
+    if (c?.rowHeightPx !== undefined) return { px: c.rowHeightPx, exact: !!c.rowHeightExact }
+  }
+  return undefined
 }
 
 /**
@@ -2046,18 +2423,7 @@ function condShadingFor(
   colspan: number,
   cols: number,
 ): XEl | undefined {
-  const first = ri === 0
-  const at0 = gc === 0
-  const atEnd = gc + colspan >= cols
-  const ladder: string[] = []
-  if (first && at0 && look.firstRow && look.firstColumn) ladder.push('nwcell')
-  if (first && atEnd && look.firstRow && look.lastColumn) ladder.push('necell')
-  if (isLastRow && at0 && look.lastRow && look.firstColumn) ladder.push('swcell')
-  if (isLastRow && atEnd && look.lastRow && look.lastColumn) ladder.push('secell')
-  if (first && look.firstRow) ladder.push('firstrow')
-  if (isLastRow && look.lastRow) ladder.push('lastrow')
-  if (at0 && look.firstColumn) ladder.push('firstcol')
-  if (atEnd && look.lastColumn) ladder.push('lastcol')
+  const ladder = condLadderAppearance(look, ri, isLastRow, gc, colspan, cols)
   for (const t of ladder) {
     const shd = conds[t]?.shd
     if (shd) return shd
@@ -2154,5 +2520,5 @@ export async function docxToHtmlFidelity(bytes: Uint8Array, depth = 0): Promise<
   f.setNotes(await read('word/footnotes.xml'), await read('word/endnotes.xml'))
   f.setComments(await read('word/comments.xml'), await read('word/commentsExtended.xml'))
   const { html, blocks } = await f.run(documentXml)
-  return { html, comments: f.comments, blocks, warnings: f.warningList() }
+  return { html, comments: f.comments, blocks, warnings: f.warningList(), styles: f.styleList() }
 }

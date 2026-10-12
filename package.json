@@ -36,6 +36,7 @@
     "@visactor/vchart": "^2.1.7",
     "docx": "^9.7.1",
     "jszip": "^3.10.2",
+    "xml-js": "1.6.11",
     "mammoth": "^1.12.3",
     "pdf-lib": "^1.17.1",
     "pdfjs-dist": "4.10.38",

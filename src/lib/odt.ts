@@ -10,11 +10,20 @@ import {
   resolvePage,
   type DocMeta,
   type DocComment,
+  type DocxStyleInfo,
   type PageMargin,
   type PageSetup,
   type PMNode,
 } from './docx'
 import { bdAttr, borderParts, CELL_EDGES, cssBorder, rgb2hex, type CellEdge } from './cell-style'
+import {
+  condLadderAppearance,
+  condLadderMargin,
+  condLadderRowHeight,
+  condLookBits,
+  mergedTableOf,
+  tableEdgeFor,
+} from './table-cond'
 import { encodeNoteText } from './note-extension'
 import { embedHtml, inlineFlatten, unwrapEmbed, type EmbedHtml } from './ole'
 import { ruleOf, type LineRule } from './paragraph-style'
@@ -186,6 +195,28 @@ const NS =
   'xmlns:table="urn:oasis:names:tc:opendocument:xmlns:table:1.0" ' +
   'xmlns:dc="http://purl.org/dc/elements/1.1/"'
 
+/**
+ * 命名表样式按位置展开后给到某一格的那一层（v0.122）。
+ * 格子自己的直接格式压在它上面（见 cStyle），所以这里只填"没人喊价"的那些槽。
+ * 边框是 CSS 边框串（与节点上的直接格式同格式），边距是 px，bg 是 #rrggbb。
+ */
+interface CellStyleBase {
+  bTop?: string
+  bRight?: string
+  bBottom?: string
+  bLeft?: string
+  pTop?: number
+  pRight?: number
+  pBottom?: number
+  pLeft?: number
+  bg?: string
+}
+
+/** 表样式的格边距四槽 ↔ 四边：`padTopPx` 那一族键名按边拼 */
+const PAD_KEY = { top: 'padTopPx', right: 'padRightPx', bottom: 'padBottomPx', left: 'padLeftPx' } as const
+/** 边名 → 首字母大写（拼 `bTop`/`pTop` 那一族键，别拼出 `btop`） */
+const capEdge = (e: CellEdge) => (e[0].toUpperCase() + e.slice(1)) as 'Top' | 'Right' | 'Bottom' | 'Left'
+
 class OdtBuilder {
   charStyles = new Map<string, string>() // 样式键 JSON → 样式名
   paraStyles = new Map<string, string>() // 段落直接格式键 JSON → 段落自动样式名
@@ -210,21 +241,28 @@ class OdtBuilder {
    * ODF 的表格单元格样式必须走 `style:family="table-cell"`，不能像 HTML 那样写内联。
    * 边框宽度用 pt 而不是 cm：px↔pt 是 ×4/3 的精确换算，cm 保留两位小数会把 1px 变成 1.13px。
    */
-  private cStyle(cell: PMNode): string {
+  private cStyle(cell: PMNode, base?: CellStyleBase): string {
     const o: Record<string, string> = {}
     for (const edge of CELL_EDGES) {
-      const v = cell.attrs?.[bdAttr(edge)]
+      // 逐格直接格式优先于表样式展开出来的那一层（与 Word「直接格式压样式」同一条纪律）
+      const own = cell.attrs?.[bdAttr(edge)]
+      const v = typeof own === 'string' && own ? own : base?.[`b${capEdge(edge)}` as keyof CellStyleBase]
       if (typeof v !== 'string' || !v) continue
       o[`b${edge}`] = v === 'none' ? 'none' : odtBorder(v)
     }
     // 边距走 cm 三位小数：0.001cm = 0.038px，往返误差不到 0.02px，不必像边框那样换 pt。
     // 0 是真值（Word 的上下边距常就是 0），所以那道闸按「有限非负数」而不是按真值判
     for (const edge of CELL_EDGES) {
-      const v = cell.attrs?.[`pad${edge[0].toUpperCase()}${edge.slice(1)}`]
+      const own = cell.attrs?.[`pad${edge[0].toUpperCase()}${edge.slice(1)}`]
+      const v =
+        typeof own === 'number' && Number.isFinite(own) && own >= 0
+          ? own
+          : base?.[`p${capEdge(edge)}` as keyof CellStyleBase]
       if (typeof v !== 'number' || !Number.isFinite(v) || v < 0) continue
       o[`p${edge}`] = px2cm(v)
     }
-    const bg = cell.attrs?.background
+    const ownBg = cell.attrs?.background
+    const bg = typeof ownBg === 'string' && ownBg ? ownBg : base?.bg
     if (typeof bg === 'string' && bg) o.bg = bg
     const va = cell.attrs?.vAlign
     if (va === 'top' || va === 'middle' || va === 'bottom') o.va = va
@@ -265,8 +303,10 @@ class OdtBuilder {
    * min-row-height 配 use-optimal-row-height="true" 落的是不带 hRule 的 w:trHeight
    * （OOXML 缺省即 atLeast），Word 门面活口 HeightRule=1，与我们的下限语义同形且不裁。
    */
-  private rStyle(row: PMNode): string {
-    const h = Number(row.attrs?.rowHeight)
+  private rStyle(row: PMNode, condH?: number): string {
+    // 行上没写直接行高时才认条件层那一档（与 docx 侧"先认 direct 再认条件"同序）
+    let h = Number(row.attrs?.rowHeight)
+    if (!Number.isFinite(h) || h <= 0) h = condH ?? Number.NaN
     if (!Number.isFinite(h) || h <= 0) return ''
     const key = JSON.stringify({ h: Math.round(h * 100) / 100 })
     let name = this.rowStyles.get(key)
@@ -294,10 +334,11 @@ class OdtBuilder {
    * ODF 里整张表的左边距就是 `fo:margin-left`，表宽本应用不锁（版式表恒为满宽减缩进），
    * 所以只写 margin-left，导入侧按同一属性读回。
    */
-  private tStyle(node: PMNode): string {
+  private tStyle(node: PMNode, al?: string): string {
     const ml = Number(node.attrs?.marginLeft)
-    if (!Number.isFinite(ml) || ml <= 0) return ''
-    const key = JSON.stringify({ ml: Math.round(ml * 100) / 100 })
+    const align = al === 'center' || al === 'right' ? al : ''
+    if ((!Number.isFinite(ml) || ml <= 0) && !align) return ''
+    const key = JSON.stringify({ ml: Math.round(ml * 100) / 100, al: align })
     let name = this.tableStyles.get(key)
     if (!name) {
       name = `TS${++this.tableSeq}`
@@ -309,15 +350,102 @@ class OdtBuilder {
   private tableStyleXml(): string {
     let out = ''
     for (const [key, name] of this.tableStyles) {
-      const s = JSON.parse(key) as { ml: number }
+      const s = JSON.parse(key) as { ml: number; al: string }
+      // 表样式带了 align 就用它（center/right），否则维持 margins；缩进为 0 时不写 margin-left
+      const align = s.al ? `table:align="${s.al}"` : 'table:align="margins"'
+      const ml = s.ml > 0 ? ` fo:margin-left="${px2cm(s.ml)}"` : ''
       out +=
         `<style:style style:name="${name}" style:family="table">` +
-        `<style:table-properties table:align="margins" fo:margin-left="${px2cm(s.ml)}"/></style:style>`
+        `<style:table-properties ${align}${ml}/></style:style>`
     }
     return out
   }
 
   constructor(private meta?: DocMeta) {}
+
+  /**
+   * 命名表样式 → 这一格的展开结果（v0.122）。
+   *
+   * ODF 没有 Word 那种「条件层」概念，命名表样式的定义（表级六边 / 格边距 / 默认格底纹，
+   * 加 `w:tblStylePr` 那十二型）只能在出口这一层**按位置摊成逐格硬格式**再写出去。
+   * 阶梯与尊卑一律走 `table-cond` 那批共享函数——与 docx 渲染（docx-fidelity）、CSS 层（doc-style-css）
+   * 同源，不会三处各跑一套算法而慢慢跑偏。
+   * 这里只填"样式说了话"的槽，格子自己的直接格式由 cStyle 压在上面。
+   */
+  private cellBase(
+    t: NonNullable<DocxStyleInfo['table']>,
+    look: Record<string, boolean>,
+    ri: number,
+    isLastRow: boolean,
+    gc: number,
+    colspan: number,
+    cols: number,
+  ): CellStyleBase {
+    const cond = t.cond
+    const o: Record<string, string | number> = {}
+    const app = condLadderAppearance(look, ri, isLastRow, gc, colspan, cols)
+    // 边框：表级六边先按位置落（首行吃 bdTop、其余行吃 bdInsideH，竖线同理），条件边框再逐边压上去
+    const edges = tableEdgeFor(t, ri, isLastRow, gc, colspan, cols)
+    const cEdge: Partial<Record<CellEdge, string>> = {}
+    for (const ty of app) {
+      const b = cond?.[ty]?.borders
+      if (!b) continue
+      for (const e of CELL_EDGES) {
+        const v = b[e]
+        if (v && cEdge[e] === undefined) cEdge[e] = v
+      }
+    }
+    for (const e of CELL_EDGES) {
+      const v = cEdge[e] ?? edges[e]
+      if (v) o[`b${capEdge(e)}`] = v
+    }
+    // 底纹：默认格底纹打底，条件底纹取梯子上第一枚说话的那一型（角型压一切）
+    let bg = t.background
+    for (const ty of app) {
+      const c = cond?.[ty]?.background
+      if (c) {
+        bg = c
+        break
+      }
+    }
+    if (bg) o.bg = bg
+    // 边距：条件层压表级（表级是样式基座、条件层是再压一层），故先算条件层再让表级兜底。
+    // 条件层内部按边距族梯子（行>角>列）逐边先到先得。
+    const basePad: Partial<Record<CellEdge, number>> = {}
+    if (t.padTopPx !== undefined) basePad.top = t.padTopPx
+    if (t.padRightPx !== undefined) basePad.right = t.padRightPx
+    if (t.padBottomPx !== undefined) basePad.bottom = t.padBottomPx
+    if (t.padLeftPx !== undefined) basePad.left = t.padLeftPx
+    const cPad: Partial<Record<CellEdge, number>> = {}
+    for (const ty of condLadderMargin(look, ri, isLastRow)) {
+      const c = cond?.[ty]
+      if (!c) continue
+      for (const e of CELL_EDGES) {
+        const v = c[PAD_KEY[e]]
+        if (v !== undefined && cPad[e] === undefined) cPad[e] = v
+      }
+    }
+    for (const e of CELL_EDGES) {
+      const v = cPad[e] ?? basePad[e]
+      if (v !== undefined) o[`p${capEdge(e)}`] = v
+    }
+    return o as CellStyleBase
+  }
+
+  /** 这一行的条件行高（仅行型条件带；行上没写直接行高时这一档才上场） */
+  private condRowHeight(
+    t: NonNullable<DocxStyleInfo['table']>,
+    look: Record<string, boolean>,
+    ri: number,
+    isLastRow: boolean,
+  ): number | undefined {
+    if (!t.cond || !Object.keys(t.cond).length) return undefined
+    for (const ty of condLadderRowHeight(look, ri, isLastRow)) {
+      const v = t.cond[ty]?.rowHeightPx
+      if (v !== undefined && v > 0) return v
+    }
+    return undefined
+  }
 
   /**
    * 段落直接格式（对齐 + 缩进 + 行距段距 + 底纹边框）→ 派生自动样式名。
@@ -700,7 +828,20 @@ class OdtBuilder {
       grid.push(line)
     })
     // 后续行可能只写到部分列：补齐 covered 占位由 while+set 逻辑自然处理
-    const ts = this.tStyle(node)
+    // 列数按"最右那一格的右缘"算（跨列的格把右缘推远），条件层的末列判据吃的是这个数
+    let cols = 0
+    for (const line of grid)
+      for (const it of line) {
+        const cs = Number(it.cell.attrs?.colspan ?? 1) || 1
+        cols = Math.max(cols, it.col + cs)
+      }
+    // 命名表样式（v0.122）：表节点上的 tStyle 是 w:tblStyle 的身份，样式定义随 meta 带进来。
+    // 没套样式时 mergedTableOf 返回空对象，下面的展开自然全空，与改版前逐字同形。
+    const t = mergedTableOf(this.meta?.styles, String(node.attrs?.tStyle ?? ''))
+    const look = condLookBits(t.cond)
+    const hasT = Object.keys(t).length > 0
+    const last = grid.length - 1
+    const ts = this.tStyle(node, t.align)
     let out = `<table:table${ts ? ` table:style-name="${ts}"` : ''}>`
     grid.forEach((line, ri) => {
       let rowXml = ''
@@ -719,7 +860,9 @@ class OdtBuilder {
           continue
         }
         const sp = spans.get(`${ri},${c}`)
-        const cellStyle = this.cStyle(item.cell)
+        const colspan = sp?.cs ?? 1
+        const base = hasT ? this.cellBase(t, look, ri, ri === last, c, colspan, cols) : undefined
+        const cellStyle = this.cStyle(item.cell, base)
         const attrs = `${sp ? ` table:number-columns-spanned="${sp.cs}" table:number-rows-spanned="${sp.rs}"` : ''}${
           cellStyle ? ` table:style-name="${cellStyle}"` : ''
         }`
@@ -733,7 +876,7 @@ class OdtBuilder {
         rowXml += `<table:table-cell${attrs}>${body}</table:table-cell>`
         c += sp?.cs ?? 1
       }
-      const rn = this.rStyle(rows[ri])
+      const rn = this.rStyle(rows[ri], hasT ? this.condRowHeight(t, look, ri, ri === last) : undefined)
       out += `<table:table-row${rn ? ` table:style-name="${rn}"` : ''}>${rowXml}</table:table-row>`
     })
     out += '</table:table>'

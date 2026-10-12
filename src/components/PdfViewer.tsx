@@ -5,12 +5,13 @@ import type { PDFDocumentLoadingTask, PDFDocumentProxy, RenderTask } from 'pdfjs
 import workerUrl from 'pdfjs-dist/build/pdf.worker.min.mjs?url'
 import type { Tab } from '../store'
 import { useApp } from '../store'
-import { readBytes, writeBytes, pickDirectory, pickPdfFiles, pickSaveFile, baseName } from '../lib/fs'
+import { readBytes, writeBytes, pickDirectory, pickPdfFiles, pickSaveFile, pickStampImage, baseName } from '../lib/fs'
 import { preparePdfSource } from '../lib/pdf-range'
 import { takePdf } from '../lib/open-prefetch'
 import { registerSaver } from '../lib/registry'
 import { saveBusyTimer, saveDoneTimer } from '../lib/save-status'
 import { failRaw, failStatus, statusText, statusTip } from '../lib/fail-msg'
+import { exportPdfWithOverlay } from '../lib/pdfprint'
 import { PWD_MEMORY_NOTE, pwdCancelledText, pwdPromptText, pwdReason, type PwdReason } from '../lib/pdf-password'
 import { findCountText, shouldPublish, type FindStatus } from '../lib/pdf-search'
 import { PDF_OBJECTS_PER_TICK } from '../lib/pdf-ticks'
@@ -29,6 +30,15 @@ import {
   rotatePagesInPlace,
   splitPdf,
 } from '../lib/pdf-pages'
+import {
+  applyFormValues,
+  bytesToBase64,
+  dataUrlToBytes,
+  groupWidgets,
+  widgetFromAnnotation,
+  type FormWidget,
+  type RawAnno,
+} from '../lib/pdf-forms'
 
 pdfjsLib.GlobalWorkerOptions.workerSrc = workerUrl
 
@@ -84,7 +94,7 @@ interface AnnoRect {
 
 interface PdfAnno {
   id: string
-  kind: 'highlight' | 'note' | 'rect' | 'ellipse' | 'line' | 'ink'
+  kind: 'highlight' | 'note' | 'rect' | 'ellipse' | 'line' | 'ink' | 'stamp'
   page: number
   rects: AnnoRect[]
   // 形状几何：line=[[p1,p2]]、ink=多笔折线；rect/ellipse 只存 rects[0] 包围盒
@@ -92,11 +102,15 @@ interface PdfAnno {
   color: string
   text?: string
   content?: string
+  // 图章的图片（dataURL，png/jpg）；尺寸在 rects[0] 里
+  data?: string
 }
 
 const SHAPE_KINDS = new Set(['rect', 'ellipse', 'line', 'ink'])
 const isShape = (a: PdfAnno) => SHAPE_KINDS.has(a.kind)
 const SHAPE_LABEL: Record<string, string> = { rect: '▭ 矩形', ellipse: '◯ 椭圆', line: '↗ 直线', ink: '✏ 手绘' }
+// 图章落章默认宽度（pt）：A4 上约半指宽，落完还能拖
+const STAMP_W_PT = 140
 
 // 点集 → 左上原点包围盒
 function bboxOf(pts: number[][][]): AnnoRect {
@@ -204,7 +218,7 @@ function PdfViewer({ tab }: Props) {
   const [pop, setPop] = useState<AnnoPop | null>(null)
   const [noteOpen, setNoteOpen] = useState('')
   const [tool, setTool] = useState<'text' | 'anno'>('text')
-  type DrawKind = 'rect' | 'ellipse' | 'line' | 'ink'
+  type DrawKind = 'rect' | 'ellipse' | 'line' | 'ink' | 'stamp'
   const [drawTool, setDrawTool] = useState<DrawKind | null>(null)
   const [draft, setDraft] = useState<{ kind: DrawKind; page: number; polys: number[][][] } | null>(null)
   const drawToolRef = useRef(drawTool)
@@ -236,6 +250,25 @@ function PdfViewer({ tab }: Props) {
     | null
   >(null)
   const suppressClick = useRef('')
+  // —— 表单（AcroForm）：widget 账 + 值账 ——
+  // widget 从标注那趟逐页扫描里顺路收（同一次 getAnnotations，不为表单多付一趟全量解析）
+  const [formWidgets, setFormWidgets] = useState<FormWidget[]>([])
+  const formWidgetsRef = useRef(formWidgets)
+  formWidgetsRef.current = formWidgets
+  // 值账：全限定名 → 当前值。初值来自文件，之后以用户的编辑为准；
+  // 写回只写 touched 里点过名的字段——文件里的值 pdf.js 读不全的（密码框、富文本）一个字节都不动
+  const [formValues, setFormValues] = useState<Record<string, string | boolean | string[]>>({})
+  const formValuesRef = useRef(formValues)
+  formValuesRef.current = formValues
+  const touchedFormRef = useRef<Set<string>>(new Set())
+  // 写回时攒下的账（表单失败、图章跳过），保存完成那句带着说
+  const saveNotesRef = useRef<string[]>([])
+  // —— 图章：装填好的图片（dataURL + 宽高比），drawTool='stamp' 时点页面即落章 ——
+  const [stampImg, setStampImg] = useState<{ src: string; ratio: number } | null>(null)
+  const stampImgRef = useRef(stampImg)
+  stampImgRef.current = stampImg
+  // —— 打印：在途门（栅格化大文档期间禁用再按）——
+  const [printing, setPrinting] = useState(false)
   const markDirty = useApp((s) => s.markDirty)
   const scrollRef = useRef<HTMLDivElement>(null)
   const thumbsRef = useRef<HTMLDivElement>(null)
@@ -493,6 +526,8 @@ function PdfViewer({ tab }: Props) {
     if (announce) setStatus('正在重新导入标注…')
     ;(async () => {
       const out: PdfAnno[] = []
+      // widget（AcroForm 的字段块）与标注同一次 getAnnotations 就有：顺路收，不为表单多付一趟
+      const wOut: FormWidget[] = []
       for (let n = 1; n <= d.numPages && !run.cancelled; n++) {
         page = n
         const p = await d.getPage(n)
@@ -511,6 +546,7 @@ function PdfViewer({ tab }: Props) {
           contentsObj?: { str?: string }
           lineCoordinates?: number[]
           inkLists?: ArrayLike<ArrayLike<number>>
+          hidden?: boolean
         }[]
         for (const a of list) {
           if (!Array.isArray(a.rect) || a.rect.length < 4) continue
@@ -547,12 +583,32 @@ function PdfViewer({ tab }: Props) {
               return dispPts(s)
             })
             out.push({ id: nid(), kind: 'ink', page: n, rects: [bboxOf(pts)], polys: pts, color: rgbHex(a.color) })
+          } else if (a.subtype === 'Widget' && a.hidden !== true) {
+            // 表单字段块：读不出名字/类型的在 helper 里就丢弃（hidden 的不给渲染）
+            const w = widgetFromAnnotation(a as RawAnno, n, rot, base)
+            if (w) wOut.push(w)
           }
         }
       }
       if (!run.cancelled) {
         // 收尾是「并」不是「替」：窗口内用户新画的那几枚已经在内存里，整片替换就把它们抹掉了
         setAnnos((cur) => [...out, ...cur])
+        // 表单：widget 账整片替换；值账以文件为准重建、但用户点过名的字段保留他改的值
+        // （与标注「并」的同一句天理：合并那半拍里用户的输入不许被旧文件洗掉）
+        const ws = groupWidgets(wOut)
+        setFormWidgets(ws)
+        setFormValues((prev) => {
+          const next: Record<string, string | boolean | string[]> = {}
+          for (const w of ws) {
+            if (w.type === 'radio') {
+              if (w.value === true && next[w.name] === undefined) next[w.name] = w.onValue ?? ''
+            } else if (w.type !== 'signature') {
+              next[w.name] = w.value
+            }
+          }
+          for (const nm of touchedFormRef.current) if (prev[nm] !== undefined) next[nm] = prev[nm]
+          return next
+        })
         // 从这一刻起这本账才认这一份 doc（写回那一处比的就是这个对象）；与上面那一句同批提交 ⇒ 账开的时候内存已经是整片
         setAnnosRead(d)
         // 只有重试那一路说这一句（自动那一趟成功时界面本来就没什么可宣布的）。它是**状态栏**上的话，
@@ -1152,6 +1208,42 @@ function PdfViewer({ tab }: Props) {
     markDirty(tab.id, true)
   }
 
+  // 表单值编辑：进了 touched 账才会在保存时写回文件
+  const setFormValue = (name: string, v: string | boolean | string[]) => {
+    touchedFormRef.current.add(name)
+    setFormValues((s) => ({ ...s, [name]: v }))
+    markDirty(tab.id, true)
+  }
+
+  // 图章装填：选图 → 读成 dataURL → 量宽高比 → 进入落章模式（再按一次或 Esc 收起）
+  const pickStampAndArm = async () => {
+    if (drawTool === 'stamp') {
+      setDrawTool(null)
+      setStampImg(null)
+      return
+    }
+    const p = await pickStampImage()
+    if (!p) return
+    try {
+      const bytes = await readBytes(p)
+      const ext = p.toLowerCase().split('.').pop() ?? ''
+      const mime = ext === 'jpg' || ext === 'jpeg' ? 'image/jpeg' : 'image/png'
+      const src = `data:${mime};base64,${bytesToBase64(bytes)}`
+      const ratio = await new Promise<number>((res, rej) => {
+        const im = new Image()
+        im.onload = () => res(im.naturalWidth > 0 && im.naturalHeight > 0 ? im.naturalWidth / im.naturalHeight : 1)
+        im.onerror = () => rej(new Error('图片解码不出来'))
+        im.src = src
+      })
+      setStampImg({ src, ratio })
+      setTool('anno')
+      setDrawTool('stamp')
+      setStatus('图章已装填：在页面上点击落章，可连盖多枚；Esc 收起')
+    } catch (e) {
+      setStatus(failStatus(e, '图章图片读不出来'))
+    }
+  }
+
   // 标注工具：pointerdown 即选中并预备拖移；位移超阈值才算拖（否则视作点击）
   const startAnnoDrag = (e: React.PointerEvent, id: string) => {
     if (tool !== 'anno' || e.button !== 0 || drawTool) return
@@ -1170,7 +1262,7 @@ function PdfViewer({ tab }: Props) {
     }
   }
 
-  // 形状绘制：在页面上按下起点，拖到终点抬手成一条标注（ink 逐点采样）
+  // 形状绘制：在页面上按下起点，拖到终点抬手成一条标注（ink 逐点采样）；图章是点击即落，不拖
   const drawPointerDown = (e: React.PointerEvent) => {
     const kind = drawToolRef.current
     if (!kind || tool !== 'anno' || e.button !== 0) return
@@ -1180,6 +1272,18 @@ function PdfViewer({ tab }: Props) {
     const pr = pe.getBoundingClientRect()
     const sc = scaleRef.current
     const pt = [(e.clientX - pr.left) / sc, (e.clientY - pr.top) / sc]
+    if (kind === 'stamp') {
+      const img = stampImgRef.current
+      if (!img) return
+      // 落在点击点居中；宽固定、高按原图比例，落完可拖可删
+      const w = STAMP_W_PT
+      const h = w / img.ratio
+      const r = { x: pt[0] - w / 2, y: pt[1] - h / 2, w, h }
+      setAnnos((list) => [...list, { id: nid(), kind: 'stamp', page: n, rects: [r], color: ANNO_COLORS[0], data: img.src }])
+      markDirty(tab.id, true)
+      e.stopPropagation()
+      return
+    }
     draftRef.current = { kind, page: n, sx: pt[0], sy: pt[1], polys: [[[...pt]]] }
     setDraft({ kind, page: n, polys: [[[...pt]]] })
     setPop(null)
@@ -1291,7 +1395,7 @@ function PdfViewer({ tab }: Props) {
       if (!d || annosReadRef.current !== d) throw new Error('标注还没读全，这一趟没写文件（现在存会抹掉还没读进来的标注），等读全再存')
       const list = annosRef.current
       // pdf-lib 1.17 无高层标注 API：用 context 手建 /Annot 字典（Highlight/Text 标准注解，其他阅读器可见）
-      const { PDFDocument, PDFName, PDFDict, PDFHexString } = await import('pdf-lib')
+      const { PDFDocument, PDFName, PDFDict, PDFHexString, PDFBool } = await import('pdf-lib')
       const bytes = await readBytes(path)
       const pdoc = await PDFDocument.load(bytes, { updateMetadata: false, parseSpeed: PDF_OBJECTS_PER_TICK })
       const pages = pdoc.getPages()
@@ -1311,6 +1415,7 @@ function PdfViewer({ tab }: Props) {
         parseInt(h.slice(3, 5), 16) / 255,
         parseInt(h.slice(5, 7), 16) / 255,
       ]
+      const stampAccounts: string[] = []
       for (const a of list) {
         const pg = pages[a.page - 1]
         if (!pg) continue
@@ -1410,9 +1515,60 @@ function PdfViewer({ tab }: Props) {
               ),
             )
           }
+        } else if (a.kind === 'stamp') {
+          // 图章：图片直接烙进页面内容流（embedPng/Jpg + drawImage），不是注解——
+          // 其他阅读器打开就是页面上的一幅图，没有「注解层」可丢
+          const r = rects[0]
+          const payload = dataUrlToBytes(a.data ?? '')
+          if (!payload || !payload.bytes.length) {
+            stampAccounts.push('有一枚图章的图片数据读不出来，没写进文件')
+          } else {
+            try {
+              const isPng = payload.mime === 'image/png'
+              const embedded = isPng ? await pdoc.embedPng(payload.bytes) : await pdoc.embedJpg(payload.bytes)
+              // 位置用未旋转包围盒（fromDisplayRect 已换算）；旋转页上图章按未旋转方向画，
+              // 与屏幕方向可能差 90°/180°——这格账说出去，不让用户对着屏幕找不齐
+              pg.drawImage(embedded, { x: r.x, y: height - r.y - r.h, width: r.w, height: r.h })
+              if (rot !== 0) stampAccounts.push(`第 ${a.page} 页是旋转页：图章按未旋转方向画入，方向可能与屏幕差 ${rot}°`)
+            } catch {
+              stampAccounts.push('有一枚图章的图片编码不对（既不是有效 PNG 也不是 JPEG），没写进文件')
+            }
+          }
         }
       }
-      const out = await pdoc.save({ addDefaultPage: false, objectsPerTick: PDF_OBJECTS_PER_TICK })
+      // —— 表单值写回：只写用户点过名的字段（touched）——文件里的值 pdf.js 读不全的
+      //（密码框、富文本、签名域）一个字节都不动。没有 AcroForm / 单字段失败都记账，不让整趟保存失败
+      const accounts: string[] = [...stampAccounts]
+      const touched = touchedFormRef.current
+      if (touched.size) {
+        try {
+          const form = pdoc.getForm()
+          const vals = formValuesRef.current
+          const patch: Record<string, unknown> = {}
+          for (const nm of touched) if (vals[nm] !== undefined) patch[nm] = vals[nm]
+          for (const x of applyFormValues(form, patch)) accounts.push(`表单「${x.name}」没写进文件：${x.why}`)
+          if (Object.keys(patch).length) {
+            try {
+              form.updateFieldAppearances()
+            } catch {
+              // 字段字体嵌不进（中文值遇上只认 WinAnsi 的内置字体是常态，验证腿实抓）：翻
+              // NeedAppearances 开关，让打开文件的阅读器自己重画外观——值在文件里是准的
+              form.acroForm.dict.set(PDFName.of('NeedAppearances'), PDFBool.True)
+            }
+          }
+        } catch (e) {
+          accounts.push(`表单值没写进文件：${e instanceof Error ? e.message : String(e)}`)
+        }
+      }
+      saveNotesRef.current = accounts
+      // updateFieldAppearances 必须关：调过 getForm() 之后 pdf-lib 的 save() 默认会给**所有**字段
+      // 重画外观，字段值里有中文就抛 WinAnsi 编码错，连保存都过不去。外观由上面那段自己管：
+      // ASCII 值当场画好，画不动的翻 NeedAppearances 交给阅读器
+      const out = await pdoc.save({
+        addDefaultPage: false,
+        objectsPerTick: PDF_OBJECTS_PER_TICK,
+        updateFieldAppearances: false,
+      })
       await writeBytes(path, out)
       markDirty(tab.id, false)
   }
@@ -1422,6 +1578,166 @@ function PdfViewer({ tab }: Props) {
   // 「已保存」那句的收尾时钟（与表格头共用 lib/save-status.ts 那一份）
   const doneRef = useRef<ReturnType<typeof saveDoneTimer> | null>(null)
   if (!doneRef.current) doneRef.current = saveDoneTimer(setStatus)
+
+  // —— 打印：逐页栅格化（144 DPI）→ 内存标注/图章/表单值画进位图（所见即所得）→
+  // PrintToPdf 落盘一份打印版 PDF。逐张 canvas 立刻转 JPEG 释放位图，大文档才不至于攒爆内存 ——
+  const doPrint = async () => {
+    const d = docRef.current
+    if (!d || printing) return
+    const path = await pickSaveFile(`${baseName(tab.path ?? '') || 'document'}-打印版.pdf`, ['pdf'])
+    if (!path) return
+    setPrinting(true)
+    setStatus('正在渲染页面用于打印…')
+    const PRINT_SCALE = 2
+    try {
+      const overlay = document.createElement('div')
+      overlay.className = 'pdf-print-overlay'
+      const stampCache = new Map<string, HTMLImageElement>()
+      const loadStamp = (src: string) =>
+        stampCache.get(src) ??
+        new Promise<HTMLImageElement>((res, rej) => {
+          const im = new Image()
+          im.onload = () => res(im)
+          im.onerror = () => rej(new Error('图章图片解码不出来'))
+          im.src = src
+        }).then((im) => {
+          stampCache.set(src, im)
+          return im
+        })
+      let sizeMismatch = 0
+      for (let n = 1; n <= d.numPages; n++) {
+        const p = await d.getPage(n)
+        // 显示方向（含 /Rotate）：打印出的就是屏幕上看到的方向
+        const vp1 = p.getViewport({ scale: 1 })
+        const vp = p.getViewport({ scale: PRINT_SCALE })
+        if (n === 1) {
+          // 纸张按首页定（一次打印作业只有一份 @page）：后面页尺寸不同的记一笔账
+          if (Math.abs(vp1.width - sizes[1].w) > 0.5 || Math.abs(vp1.height - sizes[1].h) > 0.5) sizeMismatch++
+        } else if (Math.abs(vp1.width - sizes[1].w) > 0.5 || Math.abs(vp1.height - sizes[1].h) > 0.5) {
+          sizeMismatch++
+        }
+        const cv = document.createElement('canvas')
+        cv.width = Math.floor(vp.width)
+        cv.height = Math.floor(vp.height)
+        const ctx = cv.getContext('2d')!
+        ctx.fillStyle = '#fff'
+        ctx.fillRect(0, 0, cv.width, cv.height)
+        await p.render({ canvasContext: ctx, viewport: vp }).promise
+        // 内存标注画进位图：屏幕坐标 × PRINT_SCALE，就是打印版上的位置
+        const k = PRINT_SCALE
+        for (const a of annosRef.current) {
+          if (a.page !== n) continue
+          ctx.save()
+          if (a.kind === 'highlight') {
+            ctx.globalAlpha = 0.35
+            ctx.fillStyle = a.color
+            for (const r of a.rects) ctx.fillRect(r.x * k, r.y * k, r.w * k, r.h * k)
+          } else if (a.kind === 'note') {
+            ctx.globalAlpha = 0.9
+            ctx.fillStyle = a.color
+            const r = a.rects[0]
+            ctx.fillRect(r.x * k, r.y * k, r.w * k, r.h * k)
+          } else if (isShape(a)) {
+            ctx.strokeStyle = a.color
+            ctx.lineWidth = 2 * k
+            ctx.lineJoin = 'round'
+            ctx.lineCap = 'round'
+            if (a.kind === 'rect') {
+              const r = a.rects[0]
+              ctx.strokeRect(r.x * k, r.y * k, r.w * k, r.h * k)
+            } else if (a.kind === 'ellipse') {
+              const r = a.rects[0]
+              ctx.beginPath()
+              ctx.ellipse((r.x + r.w / 2) * k, (r.y + r.h / 2) * k, (r.w / 2) * k, (r.h / 2) * k, 0, 0, Math.PI * 2)
+              ctx.stroke()
+            } else {
+              for (const s of a.polys ?? []) {
+                if (s.length < 2) continue
+                ctx.beginPath()
+                ctx.moveTo(s[0][0] * k, s[0][1] * k)
+                for (const [x, y] of s.slice(1)) ctx.lineTo(x * k, y * k)
+                ctx.stroke()
+              }
+            }
+          } else if (a.kind === 'stamp' && a.data) {
+            try {
+              const im = await loadStamp(a.data)
+              const r = a.rects[0]
+              ctx.drawImage(im, r.x * k, r.y * k, r.w * k, r.h * k)
+            } catch {
+              // 解不出来的图章跳过：少一枚章不能让整趟打印失败
+            }
+          }
+          ctx.restore()
+        }
+        // 表单值画进位图：只画用户改过/文件里有的值；签名域只有虚线框
+        ctx.textBaseline = 'middle'
+        for (const w of formWidgetsRef.current) {
+          if (w.page !== n) continue
+          const r = w.rect
+          ctx.save()
+          if (w.type === 'text') {
+            const v = formValuesRef.current[w.name]
+            if (typeof v === 'string' && v) {
+              ctx.fillStyle = '#111'
+              ctx.font = `${Math.min(11, r.h * 0.62) * k}px "Segoe UI", sans-serif`
+              const lines = w.multiline ? v.split(/\r?\n/) : [v]
+              const lh = Math.min(11, r.h * 0.62) * k * 1.25
+              lines.forEach((ln, i) => {
+                const y = r.y * k + r.h * k * 0.5 + (i - (lines.length - 1) / 2) * lh
+                if (y > 0 && y < cv.height) ctx.fillText(ln, r.x * k + 2, y, Math.max(r.w * k - 4, 1))
+              })
+            }
+          } else if (w.type === 'checkbox' || w.type === 'radio') {
+            if (formValuesRef.current[w.name] === true || (w.type === 'radio' && formValuesRef.current[w.name] === w.onValue)) {
+              ctx.fillStyle = '#111'
+              ctx.font = `${Math.min(r.h * k * 0.8, 16)}px sans-serif`
+              ctx.textAlign = 'center'
+              ctx.fillText('✓', (r.x + r.w / 2) * k, (r.y + r.h / 2) * k)
+              ctx.textAlign = 'start'
+            }
+          } else if (w.type === 'dropdown' || w.type === 'list') {
+            const v = formValuesRef.current[w.name]
+            const vs = Array.isArray(v) ? v : typeof v === 'string' && v ? [v] : []
+            if (vs.length) {
+              const labels = vs.map((val) => w.options?.find((o) => o.v === val)?.label ?? val)
+              ctx.fillStyle = '#111'
+              ctx.font = `${Math.min(11, r.h * 0.62) * k}px "Segoe UI", sans-serif`
+              ctx.fillText(labels.join('; '), r.x * k + 2, (r.y + r.h / 2) * k, Math.max(r.w * k - 4, 1))
+            }
+          }
+          ctx.restore()
+        }
+        // 位图立刻转 JPEG 进 <img>，canvas 释放——300 页 A4@2x 的位图全留着要两三个 GB
+        const img = document.createElement('img')
+        img.src = cv.toDataURL('image/jpeg', 0.92)
+        // 页间分页由页盒自己声明，A4 一页一张
+        const box = document.createElement('div')
+        box.className = 'pdf-print-page'
+        box.style.width = `${vp1.width}pt`
+        box.style.height = `${vp1.height}pt`
+        img.style.width = '100%'
+        img.style.height = '100%'
+        box.appendChild(img)
+        overlay.appendChild(box)
+        cv.width = 0
+        if (n % 10 === 0) setStatus(`正在渲染第 ${n}/${d.numPages} 页…`)
+      }
+      await exportPdfWithOverlay(path, overlay, {
+        pageSizeInches: [sizes[1].w / 72, sizes[1].h / 72],
+        marginsSides: [0, 0, 0, 0],
+      })
+      setStatus(
+        sizeMismatch
+          ? `打印版已导出：${baseName(path)}（注意：${sizeMismatch} 页尺寸与首页不同，被缩放到了首页那张纸上）`
+          : `打印版已导出：${baseName(path)}，可直接用打印机打印这份文件`,
+      )
+    } catch (e) {
+      setStatus(failStatus(e, '打印失败'))
+    } finally {
+      setPrinting(false)
+    }
+  }
 
   // 三句话挂在 saver 这一层，不挂进 writeAnnosTo：工具条的页面操作（pageOp）自己有「旋转…」那一句，
   // 装进共用的函数里就成了两头发话
@@ -1439,7 +1755,8 @@ function PdfViewer({ tab }: Props) {
       try {
         await writeAnnosRef.current(path)
         busy.cancel()
-        done.show([])
+        // 账本（图章/表单写回的没做成项）随「已保存」那句一起说
+        done.show(saveNotesRef.current)
       } catch (e) {
         // 失败那句必须顶掉「正在保存…」：这一趟已经停了，留着就是界面在说没在做的事。
         // 这一路原本连这句都没有——writeAnnosTo 不 catch，而 registry 的在途锁把抛错咽了下去
@@ -1783,7 +2100,7 @@ function PdfViewer({ tab }: Props) {
         <span className="editor-status" title={statusTip(status)}>
           {statusText(status)}
         </span>
-        <span className="editor-hint">PDF · 选文字加高亮/便签（Ctrl+S 存回文件） · ✎ 标注工具：点选/拖移/改色/删除，▭◯↗✏ 拖拽绘制形状 · Ctrl+滚轮缩放 · Ctrl+F 搜索 · ☰ 侧栏</span>
+        <span className="editor-hint">PDF · 选文字加高亮/便签（Ctrl+S 存回文件，表单值与图章一并写回） · ✎ 标注：拖移/改色/删除，▭◯↗✏ 拖拽绘制，🖼 图章点击落章 · 🖨 打印 · Ctrl+滚轮缩放 · Ctrl+F 搜索 · ☰ 侧栏</span>
       </div>
       <div className="pdf-toolbar">
         {btn('◀', () => gotoPage(Math.max(1, curPage - 1)), curPage <= 1, '上一页')}
@@ -1832,19 +2149,30 @@ function PdfViewer({ tab }: Props) {
           >
             ✎
           </button>
-          {tool === 'anno' &&
-            (['rect', 'ellipse', 'line', 'ink'] as const).map((k) => (
+          {tool === 'anno' && (
+            <>
+              {(['rect', 'ellipse', 'line', 'ink'] as const).map((k) => (
+                <button
+                  key={k}
+                  className={`pdf-tool${drawTool === k ? ' on' : ''}`}
+                  title={`${SHAPE_LABEL[k]}（在页面拖拽绘制，Esc 退出）`}
+                  onClick={() => setDrawTool(drawTool === k ? null : k)}
+                >
+                  {k === 'rect' ? '▭' : k === 'ellipse' ? '◯' : k === 'line' ? '↗' : '✏'}
+                </button>
+              ))}
               <button
-                key={k}
-                className={`pdf-tool${drawTool === k ? ' on' : ''}`}
-                title={`${SHAPE_LABEL[k]}（在页面拖拽绘制，Esc 退出）`}
-                onClick={() => setDrawTool(drawTool === k ? null : k)}
+                className={`pdf-tool${drawTool === 'stamp' ? ' on' : ''}`}
+                title="图章：选一张图片，在页面上点击落章（可连盖，Esc 收起）"
+                onClick={() => void pickStampAndArm()}
               >
-                {k === 'rect' ? '▭' : k === 'ellipse' ? '◯' : k === 'line' ? '↗' : '✏'}
+                🖼
               </button>
-            ))}
+            </>
+          )}
         </span>
         <span className="tb-sep" />
+        {btn('🖨', () => void doPrint(), !doc || printing, printing ? '正在渲染打印版…' : '打印（导出一份带标注/表单值的打印版 PDF）')}
         {btn('🔍', () => {
           setSearchOpen((v) => !v)
           if (!searchOpen) searchInputRef.current?.focus()
@@ -2065,8 +2393,9 @@ function PdfViewer({ tab }: Props) {
         >
           {doc &&
             Array.from({ length: numPages }, (_, i) => i + 1).map((n) => {
-              const sz = sizes[n] ?? est
-              const pageAnnos = annos.filter((a) => a.page === n)
+            const sz = sizes[n] ?? est
+            const pageAnnos = annos.filter((a) => a.page === n)
+            const pageForms = formWidgets.filter((w) => w.page === n)
               return (
                 <div
                   key={n}
@@ -2120,8 +2449,113 @@ function PdfViewer({ tab }: Props) {
                           </div>
                         )}
                       </div>
+                    ) : a.kind === 'stamp' ? (
+                      <img
+                        key={a.id}
+                        src={a.data}
+                        alt="图章"
+                        draggable={false}
+                        data-anno={a.id}
+                        className={`pdf-anno-stamp${selAnno === a.id ? ' sel' : ''}`}
+                        style={{
+                          left: a.rects[0].x * scale,
+                          top: a.rects[0].y * scale,
+                          width: a.rects[0].w * scale,
+                          height: a.rects[0].h * scale,
+                        }}
+                        onPointerDown={(e) => startAnnoDrag(e, a.id)}
+                      />
                     ) : null,
                   )}
+                  {pageForms.map((w, wi) => {
+                    const v = formValues[w.name]
+                    const st = {
+                      left: w.rect.x * scale,
+                      top: w.rect.y * scale,
+                      width: w.rect.w * scale,
+                      height: w.rect.h * scale,
+                    }
+                    const key = `${w.name}@${w.page}#${wi}`
+                    const cls = `pdf-form${w.readOnly ? ' ro' : ''}`
+                    if (w.type === 'text') {
+                      const common = {
+                        style: st,
+                        value: typeof v === 'string' ? v : '',
+                        maxLength: w.maxLen,
+                        readOnly: w.readOnly,
+                        onChange: (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) =>
+                          setFormValue(w.name, e.target.value),
+                        onPointerDown: (e: React.PointerEvent) => e.stopPropagation(),
+                      }
+                      return w.multiline ? (
+                        <textarea key={key} className={`${cls} pdf-form-ta`} {...common} />
+                      ) : (
+                        <input key={key} type="text" className={`${cls} pdf-form-tx`} {...common} />
+                      )
+                    }
+                    if (w.type === 'checkbox')
+                      return (
+                        <input
+                          key={key}
+                          type="checkbox"
+                          className={`${cls} pdf-form-chk`}
+                          style={st}
+                          checked={v === true}
+                          disabled={w.readOnly}
+                          onChange={(e) => setFormValue(w.name, e.target.checked)}
+                          onPointerDown={(e) => e.stopPropagation()}
+                        />
+                      )
+                    if (w.type === 'radio')
+                      return (
+                        <input
+                          key={key}
+                          type="radio"
+                          name={`frm-${w.name}`}
+                          className={`${cls} pdf-form-chk`}
+                          style={st}
+                          checked={v === w.onValue}
+                          disabled={w.readOnly}
+                          onChange={() => setFormValue(w.name, w.onValue ?? '')}
+                          onPointerDown={(e) => e.stopPropagation()}
+                        />
+                      )
+                    if (w.type === 'dropdown' || w.type === 'list') {
+                      const opts = w.options ?? []
+                      const vs = Array.isArray(v) ? v : typeof v === 'string' && v ? [v] : []
+                      // 自定义输入的当前值不在选项里时补一个 option 兜住，不然 select 显示不出来
+                      const items = [...opts, ...vs.filter((x) => !opts.some((o) => o.v === x)).map((x) => ({ v: x, label: x }))]
+                      return (
+                        <select
+                          key={key}
+                          className={`${cls} pdf-form-sel`}
+                          style={st}
+                          multiple={w.type === 'list'}
+                          disabled={w.readOnly}
+                          value={w.type === 'list' ? vs : (vs[0] ?? '')}
+                          onChange={(e) => {
+                            if (w.type === 'list') setFormValue(w.name, Array.from(e.target.selectedOptions).map((o) => o.value))
+                            else setFormValue(w.name, e.target.value)
+                          }}
+                          onPointerDown={(e) => e.stopPropagation()}
+                        >
+                          {w.type === 'dropdown' && <option value="" />}
+                          {items.map((o) => (
+                            <option key={o.v} value={o.v}>
+                              {o.label}
+                            </option>
+                          ))}
+                        </select>
+                      )
+                    }
+                    if (w.type === 'signature')
+                      return (
+                        <div key={key} className="pdf-form-sig" style={st}>
+                          签名域
+                        </div>
+                      )
+                    return null
+                  })}
                   {(pageAnnos.some(isShape) || (draft && draft.page === n)) && (
                     <svg
                       className={`pdf-anno-svg${drawTool ? ' drawing' : ''}`}

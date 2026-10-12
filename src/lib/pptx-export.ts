@@ -1,12 +1,15 @@
 import type PptxGenJS from 'pptxgenjs'
 import {
   bodyLines,
+  revealAnimOf,
+  revealExits,
+  revealOrder,
   themeOf,
   ANIM_DIR_SUBTYPE,
   type AnimDir,
   type BulletAnim,
-  type BulletExit,
   type MasterRect,
+  type RevealItem,
   type Slide,
   type SlideTransition,
   type Deck,
@@ -66,9 +69,16 @@ function addBody(slide: IPptxSlide, s: Slide, fg: string, bodyRect?: MasterRect)
   )
 }
 
+/** 落盘形状的反查名：idx 是它在 slide.shapes 里的下标（导出序与数组序可能不同——空形状不落盘） */
+interface ShapeName {
+  idx: number
+  name: string
+}
+
 export async function deckToPptxBytes(deck: Deck): Promise<Uint8Array> {
   const { default: PptxGenJS } = await import('pptxgenjs')
   const pptx = new PptxGenJS()
+  const shapeNames: ShapeName[][] = [] // 逐页：形状动画注入时按它反查 spid（v0.111）
   pptx.title = deck.title
   pptx.layout = 'LAYOUT_16x9'
   const theme = themeOf(deck.theme)
@@ -141,33 +151,83 @@ export async function deckToPptxBytes(deck: Deck): Promise<Uint8Array> {
       addTitleBar(pptx, slide, s, accent, m?.titleRect)
       addBody(slide, s, fg, m?.bodyRect)
     }
+
+    // 自由形状层（v0.107）：分数坐标 → 英寸原位导出；文字样式直接落 run 级属性；
+    // v0.108 起盒子的底色/边框随 spPr 的 fill/line 落盘（边框宽 pptxgenjs 收磅值）。
+    // v0.111：每个真落盘的形状起一个 objectName（`ooShapeN`），注入动画时按它反查 spid——
+    // pptxgenjs 不给形状可预测的 id，按序号猜会在「形状没落盘」时整体错位
+    const names: ShapeName[] = []
+    for (const [idx, sh] of (s.shapes ?? []).entries()) {
+      const r = { x: sh.x * W, y: sh.y * H, w: sh.w * W, h: sh.h * H }
+      const objectName = `ooShape${names.length}`
+      if (sh.kind === 'image' && sh.image) {
+        slide.addImage({ data: sh.image, ...r, objectName })
+        names.push({ idx, name: objectName })
+      } else if (sh.kind === 'text' && sh.text?.trim()) {
+        slide.addText(sh.text, {
+          ...r,
+          objectName,
+          fontSize: sh.sizePt ?? 18,
+          ...(sh.bold ? { bold: true } : {}),
+          color: (sh.color ?? fg).replace('#', ''),
+          ...(sh.align ? { align: sh.align } : {}),
+          ...(sh.fill ? { fill: { color: sh.fill.replace('#', '') } } : {}),
+          ...(sh.outline
+            ? { line: { color: sh.outline.replace('#', ''), width: sh.outlineW ?? 1 } }
+            : {}),
+          valign: 'top',
+        })
+        names.push({ idx, name: objectName })
+      }
+    }
+    shapeNames.push(names)
   }
 
   const out = (await pptx.write({ outputType: 'arraybuffer' })) as ArrayBuffer
 
   // pptxgenjs 不支持动画/换页计时：解包后向 slideN.xml 注入 <p:transition> 与 <p:timing>（schema 顺序：transition 在 timing 前）
-  if (deck.slides.some((s) => s.transition || s.autoAdvance || s.anim)) {
+  const needsTiming = (s: Slide) =>
+    !!s.transition || !!s.autoAdvance || !!s.anim || (s.shapes ?? []).some((sh) => sh.anim)
+  if (deck.slides.some(needsTiming)) {
     const { default: JSZip } = await import('jszip')
     const zip = await JSZip.loadAsync(out)
     for (let i = 0; i < deck.slides.length; i++) {
       const s = deck.slides[i]
-      if (!s.transition && !s.autoAdvance && !s.anim) continue
+      if (!needsTiming(s)) continue
       const name = `ppt/slides/slide${i + 1}.xml`
       const file = zip.file(name)
       if (!file) continue
       let xml = await file.async('string')
       let inject = transitionXml(s.transition, s.autoAdvance)
-      if (s.anim) {
-        const lines = bodyLines(s)
-        const spid = lines.length ? findBodySpid(xml, lines[0]) : undefined
-        if (spid) inject += timingXml(s.anim, s.animDir ?? 'bottom', s.exitAnim, spid, lines.length)
+      const lines = bodyLines(s)
+      const spid = s.anim && lines.length ? findBodySpid(xml, lines[0]) : undefined
+      // 形状：按 objectName 反查 spid，认不出的形状不落动画（宁可少一段，也不指向错的形状）
+      const shapeSpid = new Map<number, string>()
+      for (const n of shapeNames[i] ?? []) {
+        const found = findSpidByName(xml, n.name)
+        if (found) shapeSpid.set(n.idx, found)
       }
-      zip.file(name, xml.replace('</p:sld>', `${inject}</p:sld>`))
+      const order = revealOrder(s)
+      if (order.length) {
+        const spidOf = (it: RevealItem) => (it.kind === 'line' ? spid : shapeSpid.get(it.idx))
+        inject += timingXml(s, order, spidOf)
+      }
+      if (inject) zip.file(name, xml.replace('</p:sld>', `${inject}</p:sld>`))
     }
     const buf = (await zip.generateAsync({ type: 'arraybuffer' })) as ArrayBuffer
     return new Uint8Array(buf)
   }
   return new Uint8Array(out)
+}
+
+// 形状 spid：objectName 落在 <p:cNvPr name="ooShapeN"> 上，同标签里读 id
+function findSpidByName(xml: string, objectName: string): string | undefined {
+  const i = xml.indexOf(`name="${objectName}"`)
+  if (i < 0) return undefined
+  const open = xml.lastIndexOf('<p:cNvPr', i)
+  const gt = xml.indexOf('>', i)
+  if (open < 0 || gt < 0) return undefined
+  return xml.slice(open, gt).match(/id="(\d+)"/)?.[1]
 }
 
 function transitionXml(tr: SlideTransition | undefined, autoAdvance: number | undefined): string {
@@ -239,38 +299,58 @@ function clickParXml(
   )
 }
 
-// PowerPoint 原生 timing 树：mainSeq 内每段一个 entr clickEffect（set 可见性 + 入场行为），
-// 设了出场再按段追加 exit clickEffect；bldP build="p" 驱动逐段构建
+// PowerPoint 原生 timing 树：mainSeq 内每个 clickEffect 一段——正文逐段（bldP build="p"
+// 驱动逐段构建），形状每个一段（整形状入场，不写 bldP）；出场按同序追加 exit clickEffect。
+// 段落顺序即 PowerPoint 的播放序：v0.115 起由 revealOrder（默认正文在前、形状按层叠序在后）
+// 逐项产出，认不出 spid 的那一项整段跳过（宁可少一段，也不指向错的形状）
 function timingXml(
-  anim: BulletAnim,
-  dir: AnimDir,
-  exit: BulletExit | undefined,
-  spid: string,
-  count: number,
+  slide: Slide,
+  order: RevealItem[],
+  spidOf: (it: RevealItem) => string | undefined,
 ): string {
-  const preset = anim === 'fade' ? 10 : anim === 'wipe' ? 22 : 2
-  const subtype = anim === 'fade' ? 0 : ANIM_DIR_SUBTYPE[dir]
   let id = 10
   const nid = () => String(id++)
   const pars: string[] = []
-  for (let i = 0; i < count; i++) {
-    const setVisible = `<p:set><p:cBhvr><p:cTn id="${nid()}" dur="1" fill="hold"><p:stCondLst><p:cond delay="0"/></p:stCondLst></p:cTn><p:tgtEl><p:spTgt spid="${spid}"/></p:tgtEl><p:attrNameLst><p:attrName>style.visibility</p:attrName></p:attrNameLst></p:cBhvr><p:to><p:strVal val="visible"/></p:to></p:set>`
+  const setVisible = (spid: string) =>
+    `<p:set><p:cBhvr><p:cTn id="${nid()}" dur="1" fill="hold"><p:stCondLst><p:cond delay="0"/></p:stCondLst></p:cTn><p:tgtEl><p:spTgt spid="${spid}"/></p:tgtEl><p:attrNameLst><p:attrName>style.visibility</p:attrName></p:attrNameLst></p:cBhvr><p:to><p:strVal val="visible"/></p:to></p:set>`
+  const fadeOut = (spid: string) =>
+    `<p:animEffect transition="out" filter="fade"><p:cBhvr><p:cTn id="${nid()}" dur="500"/><p:tgtEl><p:spTgt spid="${spid}"/></p:tgtEl></p:cBhvr></p:animEffect>`
+  const preset = (a: BulletAnim) => (a === 'fade' ? 10 : a === 'wipe' ? 22 : 2)
+  const subtype = (a: BulletAnim, d: AnimDir) => (a === 'fade' ? 0 : ANIM_DIR_SUBTYPE[d])
+  // 入场：揭示序逐项各一枚 clickEffect；正文那一项额外由下面那枚 bldP 驱动逐段构建
+  for (const it of order) {
+    const t = spidOf(it)
+    const eff = revealAnimOf(slide, it)
+    if (!t || !eff) continue
     pars.push(
-      clickParXml(preset, 'entr', subtype, setVisible + enterEffectXml(anim, dir, spid, nid), nid),
+      clickParXml(
+        preset(eff.anim),
+        'entr',
+        subtype(eff.anim, eff.dir),
+        setVisible(t) + enterEffectXml(eff.anim, eff.dir, t, nid),
+        nid,
+      ),
     )
   }
-  if (exit) {
-    for (let i = 0; i < count; i++) {
-      const fadeOut = `<p:animEffect transition="out" filter="fade"><p:cBhvr><p:cTn id="${nid()}" dur="500"/><p:tgtEl><p:spTgt spid="${spid}"/></p:tgtEl></p:cBhvr></p:animEffect>`
-      pars.push(clickParXml(10, 'exit', 0, fadeOut, nid))
-    }
+  // 出场：揭示序里会出场的那几项，按同一支次序依次淡出
+  for (const it of revealExits(slide, order)) {
+    const t = spidOf(it)
+    if (!t) continue
+    pars.push(clickParXml(10, 'exit', 0, fadeOut(t), nid))
   }
+  const firstLine = order.find((it) => it.kind === 'line')
+  const bodySpid = firstLine ? spidOf(firstLine) : undefined
+  const bld =
+    bodySpid
+      ? `<p:bldLst><p:bldP spid="${bodySpid}" grpId="0" build="p"/></p:bldLst>`
+      : ''
   return (
     `<p:timing><p:tnLst><p:par><p:cTn id="1" dur="indefinite" restart="never" nodeType="tmRoot"><p:childTnLst>` +
     `<p:seq concurrent="1" nextAc="seek"><p:cTn id="2" dur="indefinite" nodeType="mainSeq"><p:childTnLst>${pars.join('')}</p:childTnLst></p:cTn>` +
     `<p:prevCondLst><p:cond evt="onPrev" delay="0"><p:tgtEl><p:sldTgt/></p:tgtEl></p:cond></p:prevCondLst>` +
     `<p:nextCondLst><p:cond evt="onNext" delay="0"><p:tgtEl><p:sldTgt/></p:tgtEl></p:cond></p:nextCondLst>` +
     `</p:seq></p:childTnLst></p:cTn></p:par></p:tnLst>` +
-    `<p:bldLst><p:bldP spid="${spid}" grpId="0" build="p"/></p:bldLst></p:timing>`
+    bld +
+    `</p:timing>`
   )
 }

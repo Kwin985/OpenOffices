@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react'
 import { emit, listen } from '@tauri-apps/api/event'
 import { getCurrentWindow } from '@tauri-apps/api/window'
 import type { Deck } from '../lib/ppt'
-import { exitCount } from '../lib/ppt'
+import { revealAt, revealSteps } from '../lib/ppt'
 import StaticSlide from './StaticSlide'
 
 interface Snap {
@@ -63,11 +63,7 @@ export default function Presenter() {
             slide={cur}
             themeId={deck.theme}
             master={deck.master}
-            visibleLines={cur.anim ? snap.revealed : undefined}
-            anim={cur.anim}
-            animDir={cur.animDir}
-            exitCount={exitCount(cur, snap.revealed ?? 1)}
-            exitAnim={cur.exitAnim}
+            reveal={revealSteps(cur) > 0 ? revealAt(cur, snap.revealed ?? 1) : undefined}
           />
         </div>
         <div className="presenter-side">

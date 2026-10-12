@@ -8,12 +8,18 @@ import { useApp } from '../store'
 import { readBytes, readText, writeBytes, writeText, pickSaveFile, baseName } from '../lib/fs'
 import {
   emptyDeck,
-  exitCount,
+  bodyLines,
+  newId,
   newSlide,
   parseDeck,
+  revealAt,
+  revealItemKey,
+  revealItemShape,
+  revealOrder,
   revealSteps,
   serializeDeck,
   themeOf,
+  writeAnimOrder,
   LAYOUT_NAMES,
   TRANSITION_NAMES,
   BULLET_ANIM_NAMES,
@@ -24,8 +30,10 @@ import {
   type BulletAnim,
   type BulletExit,
   type Deck,
+  type RevealItem,
   type Slide,
   type SlideLayout,
+  type SlideShape,
   type SlideTransition,
 } from '../lib/ppt'
 import { deckToPptxBytes } from '../lib/pptx-export'
@@ -53,6 +61,17 @@ async function fileToDataUri(file: File): Promise<string> {
   return `data:${file.type || 'image/png'};base64,${btoa(bin)}`
 }
 
+/** 揭示序里一票在面板上的名字（v0.115）：排这一列时得认得出它是哪一条 */
+function revealName(s: Slide, it: RevealItem): string {
+  const cut = (t: string, n: number) => (t.length > n ? `${t.slice(0, n)}…` : t)
+  if (it.kind === 'line') return `要点 ${it.idx + 1} · ${cut(bodyLines(s)[it.idx] ?? '', 14)}`
+  const sh = revealItemShape(s, it)
+  if (!sh) return `形状 ${it.idx + 1}`
+  const tag = sh.kind === 'image' ? '图片' : '文本框'
+  const head = sh.kind === 'image' ? '' : cut((sh.text ?? '').split('\n')[0] ?? '', 12)
+  return `${tag} ${it.idx + 1}${head ? ` · ${head}` : ''}`
+}
+
 function PptEditor({ tab }: Props) {
   const [deck, setDeck] = useState<Deck>(() => (tab.template ? pptTemplate(tab.template) : emptyDeck()))
   const [cur, setCur] = useState(0)
@@ -61,6 +80,7 @@ function PptEditor({ tab }: Props) {
   const [revealed, setRevealed] = useState(1) // 逐条揭示：当前页已显示的要点数
   const revealedRef = useRef(1)
   const [showNotes, setShowNotes] = useState(false)
+  const [showSequence, setShowSequence] = useState(false) // v0.115：播放顺序面板
   const [status, setStatus] = useState<string>(tab.path ? '正在加载…' : '')
   const [loaded, setLoaded] = useState(!tab.path)
   const [autoSavedAt, setAutoSavedAt] = useState<Date | null>(null)
@@ -85,6 +105,22 @@ function PptEditor({ tab }: Props) {
   const done = doneRef.current
   const deckRef = useRef(deck)
   deckRef.current = deck
+
+  // 自由形状层（v0.107）：选中/文字编辑两态 + 拖动账（move 改 x/y、resize 改 w/h，都按舞台尺寸折分数）
+  const stageRef = useRef<HTMLDivElement>(null)
+  const [selShape, setSelShape] = useState<string | null>(null)
+  const [editingShape, setEditingShape] = useState<string | null>(null)
+  const dragRef = useRef<{
+    id: string
+    mode: 'move' | 'resize'
+    sx: number
+    sy: number
+    ox: number
+    oy: number
+    ow: number
+    oh: number
+    stage: DOMRect
+  } | null>(null)
 
   useEffect(() => {
     if (!tab.path) return
@@ -134,7 +170,8 @@ function PptEditor({ tab }: Props) {
   const revealNext = () => {
     const s = snapRef.current.deck.slides[snapRef.current.idx]
     const stepMax = s ? revealSteps(s) : 0
-    if (s?.anim && stepMax > 0 && revealedRef.current < stepMax) {
+    // 正文逐条与形状逐条共用一个步序（v0.111）：步数没用完就揭示下一步，用尽才翻页
+    if (stepMax > 0 && revealedRef.current < stepMax) {
       revealedRef.current += 1
       setRevealed(revealedRef.current)
       return
@@ -425,6 +462,114 @@ function PptEditor({ tab }: Props) {
     }
   }
 
+  // ── 自由形状层编辑（v0.107）──
+  const patchShape = (sid: string, p: Partial<SlideShape>) =>
+    editSlide(cur, (s) => {
+      s.shapes = (s.shapes ?? []).map((sh) => (sh.id === sid ? { ...sh, ...p } : sh))
+    })
+
+  const addTextBox = () => {
+    const id = newId()
+    editSlide(cur, (s) => {
+      s.shapes = [
+        ...(s.shapes ?? []),
+        { id, kind: 'text', x: 0.3, y: 0.4, w: 0.4, h: 0.2, text: '文本框', sizePt: 18 },
+      ]
+    })
+    setSelShape(id)
+    setEditingShape(id)
+  }
+
+  const removeShape = (sid: string) => {
+    editSlide(cur, (s) => {
+      s.shapes = (s.shapes ?? []).filter((sh) => sh.id !== sid)
+    })
+    setSelShape(null)
+    setEditingShape(null)
+  }
+
+  // 层级（v0.108）：数组序 = 层叠序（后画在上），与 pptx spTree 文档序同语义；
+  // 「上一层」即向数组尾挪一格
+  const moveShape = (sid: string, dir: -1 | 1) =>
+    editSlide(cur, (s) => {
+      const arr = [...(s.shapes ?? [])]
+      const i = arr.findIndex((x) => x.id === sid)
+      const j = i + dir
+      if (i < 0 || j < 0 || j >= arr.length) return
+      ;[arr[i], arr[j]] = [arr[j], arr[i]]
+      s.shapes = arr
+    })
+
+  // 播放顺序（v0.115）：揭示序是独立的一列外键，拖动它不必动形状数组——
+  // 层叠序（数组序）与揭示序在 PowerPoint 里本来就是两件事，这里第一次分开记
+  const moveRevealItem = (from: number, delta: number) =>
+    editSlide(cur, (s) => {
+      const items = revealOrder(s)
+      const to = from + delta
+      if (to < 0 || to >= items.length) return
+      ;[items[from], items[to]] = [items[to], items[from]]
+      s.animOrder = writeAnimOrder(s, items)
+    })
+
+  const resetRevealOrder = () => editSlide(cur, (s) => (s.animOrder = undefined))
+
+  const shapePointerDown = (e: React.PointerEvent, sh: SlideShape, mode: 'move' | 'resize') => {
+    if (editingShape === sh.id) return // 正在改文字的框不拖
+    e.stopPropagation()
+    const el = stageRef.current
+    if (!el) return
+    dragRef.current = {
+      id: sh.id,
+      mode,
+      sx: e.clientX,
+      sy: e.clientY,
+      ox: sh.x,
+      oy: sh.y,
+      ow: sh.w,
+      oh: sh.h,
+      stage: el.getBoundingClientRect(),
+    }
+    setSelShape(sh.id)
+    ;(e.currentTarget as HTMLElement).setPointerCapture(e.pointerId)
+  }
+
+  const shapePointerMove = (e: React.PointerEvent) => {
+    const d = dragRef.current
+    if (!d) return
+    const cl = (v: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, Math.round(v * 1000) / 1000))
+    const dx = (e.clientX - d.sx) / d.stage.width
+    const dy = (e.clientY - d.sy) / d.stage.height
+    if (d.mode === 'move') patchShape(d.id, { x: cl(d.ox + dx, -0.5, 1.5), y: cl(d.oy + dy, -0.5, 1.5) })
+    else patchShape(d.id, { w: cl(d.ow + dx, 0.03, 2), h: cl(d.oh + dy, 0.02, 2) })
+  }
+
+  const shapePointerUp = () => {
+    dragRef.current = null
+  }
+
+  // 选中形状时 Del/Backspace 删除（焦点在输入框里时不劫持按键）
+  useEffect(() => {
+    if (!selShape) return
+    const onKey = (e: KeyboardEvent) => {
+      const tag = (document.activeElement?.tagName ?? '').toLowerCase()
+      if (tag === 'input' || tag === 'textarea') return
+      if (e.key === 'Delete' || e.key === 'Backspace') {
+        removeShape(selShape)
+        e.preventDefault()
+      }
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+    // removeShape 只依赖 cur（editSlide 走函数式更新），不依赖 deck 快照
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selShape, cur])
+
+  // 换页/换选中页时收起形状选区与文字编辑态
+  useEffect(() => {
+    setSelShape(null)
+    setEditingShape(null)
+  }, [cur])
+
   if (!loaded) {
     return (
       <div className="editor-pane">
@@ -454,6 +599,9 @@ function PptEditor({ tab }: Props) {
         color: fgColor,
       }
     : { background: slide.bg ?? m?.bg ?? t.bg, color: fgColor }
+
+  // 播放顺序那一列（v0.115）：正文逐条与带动画的形状各一票，次序在这一份数组里
+  const seqItems = slide ? revealOrder(slide) : []
 
   return (
     <div className="editor-pane">
@@ -489,6 +637,9 @@ function PptEditor({ tab }: Props) {
         <button className="tool-btn" onClick={() => moveSlide(-1)} title="上移">↑</button>
         <button className="tool-btn" onClick={() => moveSlide(1)} title="下移">↓</button>
         <button className="tool-btn" onClick={removeSlide} title="删除本页">删页</button>
+        <button className="tool-btn" onClick={addTextBox} title="在页面上加一个可自由拖动/缩放的文本框（画布层，随 pptx 往返）">
+          ＋文本框
+        </button>
         <span className="tool-sep" />
         <select
           className="tool-select"
@@ -568,6 +719,16 @@ function PptEditor({ tab }: Props) {
             ))}
           </select>
         )}
+        {/* v0.115：揭示序可调。只有 ≥2 项时才给入口——一项的次序没有可排的东西 */}
+        {seqItems.length > 1 && (
+          <button
+            className={`tool-btn${showSequence ? ' tool-btn-primary' : ''}`}
+            onClick={() => setShowSequence((v) => !v)}
+            title="调整本页逐条播放的先后（正文逐条与形状各占一票，随 pptx 往返）"
+          >
+            播放顺序 {seqItems.length}
+          </button>
+        )}
         <label className="tool-num" title="放映时到秒自动换页；随 pptx advTm 往返">
           换页
           <input
@@ -610,6 +771,38 @@ function PptEditor({ tab }: Props) {
         <span className="editor-hint">存档 .opd · 导入/导出 pptx (ECMA-376) · 生成: pptxgenjs (MIT)</span>
       </div>
 
+      {showSequence && seqItems.length > 0 && (
+        <div className="ppt-seq-panel">
+          <span className="ppt-seq-label">播放顺序</span>
+          {seqItems.map((it, i) => (
+            <span className="ppt-seq-item" key={revealItemKey(it)}>
+              <span className="ppt-seq-no">{i + 1}</span>
+              <span className="ppt-seq-name" title="这一票在放映第几击上出场">{revealName(slide, it)}</span>
+              <button
+                className="tool-btn tool-btn-mini"
+                title="提前一击"
+                disabled={i === 0}
+                onClick={() => moveRevealItem(i, -1)}
+              >
+                ↑
+              </button>
+              <button
+                className="tool-btn tool-btn-mini"
+                title="推后一击"
+                disabled={i === seqItems.length - 1}
+                onClick={() => moveRevealItem(i, 1)}
+              >
+                ↓
+              </button>
+            </span>
+          ))}
+          <button className="tool-btn tool-btn-mini" onClick={resetRevealOrder} title="退回默认序（正文逐条在前、形状按层叠序在后）">
+            默认序
+          </button>
+          <span className="ppt-seq-hint">放映按这一列先后揭示，导出各占 PowerPoint 一枚 clickEffect</span>
+        </div>
+      )}
+
       <div className="ppt-body">
         <div className="ppt-sidebar">
           {deck.slides.map((s, i) => (
@@ -627,7 +820,15 @@ function PptEditor({ tab }: Props) {
         </div>
 
         <div className="ppt-stage-wrap">
-          <div className="ppt-stage" style={stageStyle}>
+          <div
+            ref={stageRef}
+            className="ppt-stage"
+            style={stageStyle}
+            onPointerDown={() => {
+              setSelShape(null)
+              setEditingShape(null)
+            }}
+          >
             {slide.layout === 'title' ? (
               <div className="ppt-edit-title-wrap">
                 <textarea
@@ -690,6 +891,217 @@ function PptEditor({ tab }: Props) {
                 </div>
               </>
             )}
+            {/* 自由形状层（v0.107）：点选/拖动/右下角手柄缩放，双击改文字；字号与放映同一 18pt≡1em 比例；
+                v0.108 起盒子带底色/边框（边框宽按舞台实宽折 px，10 英寸页 = 720pt） */}
+            {(slide.shapes ?? []).map((sh) => {
+              const selected = selShape === sh.id
+              const pxPerPt = (stageRef.current?.clientWidth ?? 960) / 720
+              const box: CSSProperties = {
+                left: `${(sh.x * 100).toFixed(2)}%`,
+                top: `${(sh.y * 100).toFixed(2)}%`,
+                width: `${(sh.w * 100).toFixed(2)}%`,
+                height: `${(sh.h * 100).toFixed(2)}%`,
+                background: sh.fill,
+                border: sh.outline
+                  ? `${((sh.outlineW ?? 1) * pxPerPt).toFixed(2)}px solid ${sh.outline}`
+                  : undefined,
+                boxSizing: 'border-box',
+              }
+              const textStyle: CSSProperties = {
+                color: sh.color ?? fgColor,
+                fontSize: `${(sh.sizePt ?? 18) / 18}em`,
+                fontWeight: sh.bold ? 700 : undefined,
+                textAlign: sh.align,
+              }
+              return (
+                <div
+                  key={sh.id}
+                  className={`ppt-shape-box${selected ? ' ppt-shape-sel' : ''}`}
+                  style={box}
+                  onPointerDown={(e) => shapePointerDown(e, sh, 'move')}
+                  onPointerMove={shapePointerMove}
+                  onPointerUp={shapePointerUp}
+                  onDoubleClick={() => sh.kind === 'text' && setEditingShape(sh.id)}
+                >
+                  {sh.kind === 'image' ? (
+                    <img className="ppt-shape-img" src={sh.image} alt="" draggable={false} />
+                  ) : editingShape === sh.id ? (
+                    <textarea
+                      className="ppt-shape-textedit"
+                      style={textStyle}
+                      value={sh.text ?? ''}
+                      autoFocus
+                      onChange={(e) => patchShape(sh.id, { text: e.target.value })}
+                      onBlur={() => setEditingShape(null)}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Escape') setEditingShape(null)
+                        e.stopPropagation()
+                      }}
+                      onPointerDown={(e) => e.stopPropagation()}
+                    />
+                  ) : (
+                    <div className="ppt-shape-text" style={textStyle}>
+                      {sh.text}
+                    </div>
+                  )}
+                  {selected && (
+                    <>
+                      <span
+                        className="ppt-shape-handle"
+                        onPointerDown={(e) => shapePointerDown(e, sh, 'resize')}
+                        onPointerMove={shapePointerMove}
+                        onPointerUp={shapePointerUp}
+                      />
+                      <div className="ppt-shape-bar" onPointerDown={(e) => e.stopPropagation()}>
+                        {sh.kind === 'text' && (
+                          <>
+                            <input
+                              className="tool-num-input"
+                              type="number"
+                              min={4}
+                              max={400}
+                              value={sh.sizePt ?? 18}
+                              title="字号（磅）"
+                              onChange={(e) =>
+                                patchShape(sh.id, {
+                                  sizePt: Math.min(400, Math.max(4, Number(e.target.value) || 18)),
+                                })
+                              }
+                            />
+                            <button
+                              className={`tool-btn tool-btn-mini${sh.bold ? ' tool-btn-primary' : ''}`}
+                              onClick={() => patchShape(sh.id, { bold: !sh.bold })}
+                              title="粗体"
+                            >
+                              B
+                            </button>
+                            <input
+                              type="color"
+                              className="ppt-shape-color"
+                              title="文字颜色"
+                              value={/^#[0-9a-fA-F]{6}$/.test(sh.color ?? '') ? sh.color! : '#333333'}
+                              onChange={(e) => patchShape(sh.id, { color: e.target.value })}
+                            />
+                            <select
+                              className="tool-select"
+                              value={sh.align ?? ''}
+                              title="对齐"
+                              onChange={(e) =>
+                                patchShape(sh.id, {
+                                  align: (e.target.value || undefined) as SlideShape['align'],
+                                })
+                              }
+                            >
+                              <option value="">对齐</option>
+                              <option value="left">左</option>
+                              <option value="center">中</option>
+                              <option value="right">右</option>
+                            </select>
+                            <input
+                              type="color"
+                              className="ppt-shape-color"
+                              title="底色（随 pptx 往返）"
+                              value={/^#[0-9a-fA-F]{6}$/.test(sh.fill ?? '') ? sh.fill! : '#ffffff'}
+                              onChange={(e) => patchShape(sh.id, { fill: e.target.value })}
+                            />
+                            {sh.fill && (
+                              <button
+                                className="tool-btn tool-btn-mini"
+                                title="去掉底色"
+                                onClick={() => patchShape(sh.id, { fill: undefined })}
+                              >
+                                ×
+                              </button>
+                            )}
+                            <input
+                              type="color"
+                              className="ppt-shape-color"
+                              title="边框色（宽随导入，缺省 1 磅）"
+                              value={/^#[0-9a-fA-F]{6}$/.test(sh.outline ?? '') ? sh.outline! : '#333333'}
+                              onChange={(e) => patchShape(sh.id, { outline: e.target.value })}
+                            />
+                            {sh.outline && (
+                              <button
+                                className="tool-btn tool-btn-mini"
+                                title="去掉边框"
+                                onClick={() => patchShape(sh.id, { outline: undefined })}
+                              >
+                                ×
+                              </button>
+                            )}
+                          </>
+                        )}
+                        <button
+                          className="tool-btn tool-btn-mini"
+                          title="上一层（后画在上）"
+                          onClick={() => moveShape(sh.id, 1)}
+                        >
+                          ↑
+                        </button>
+                        <button
+                          className="tool-btn tool-btn-mini"
+                          title="下一层"
+                          onClick={() => moveShape(sh.id, -1)}
+                        >
+                          ↓
+                        </button>
+                        {/* 形状自己的逐条动画（v0.111）：放映时排在正文逐条之后，按形状数组序逐个揭示 */}
+                        <select
+                          className="tool-select"
+                          value={sh.anim ?? ''}
+                          title="形状入场动画（放映顺序见工具栏「播放顺序」，默认排在正文逐条之后）"
+                          onChange={(e) => {
+                            const v = (e.target.value || undefined) as BulletAnim | undefined
+                            patchShape(sh.id, {
+                              anim: v,
+                              animDir: v && v !== 'fade' ? (sh.animDir ?? 'bottom') : undefined,
+                              exitAnim: v ? sh.exitAnim : undefined,
+                            })
+                          }}
+                        >
+                          <option value="">动画 · 无</option>
+                          {(Object.entries(BULLET_ANIM_NAMES) as [BulletAnim, string][]).map(([k, n]) => (
+                            <option key={k} value={k}>动画 · {n}</option>
+                          ))}
+                        </select>
+                        {sh.anim && sh.anim !== 'fade' && (
+                          <select
+                            className="tool-select"
+                            value={sh.animDir ?? 'bottom'}
+                            title="入场方向"
+                            onChange={(e) => patchShape(sh.id, { animDir: e.target.value as AnimDir })}
+                          >
+                            {(Object.entries(ANIM_DIR_NAMES) as [AnimDir, string][]).map(([k, n]) => (
+                              <option key={k} value={k}>{n}</option>
+                            ))}
+                          </select>
+                        )}
+                        {sh.anim && (
+                          <select
+                            className="tool-select"
+                            value={sh.exitAnim ?? ''}
+                            title="出场（揭示满之后每击退一个形状）"
+                            onChange={(e) =>
+                              patchShape(sh.id, {
+                                exitAnim: (e.target.value || undefined) as BulletExit | undefined,
+                              })
+                            }
+                          >
+                            <option value="">出场 · 无</option>
+                            {(Object.entries(BULLET_EXIT_NAMES) as [BulletExit, string][]).map(([k, n]) => (
+                              <option key={k} value={k}>出场 · {n}</option>
+                            ))}
+                          </select>
+                        )}
+                        <button className="tool-btn tool-btn-mini" onClick={() => removeShape(sh.id)}>
+                          删除
+                        </button>
+                      </div>
+                    </>
+                  )}
+                </div>
+              )
+            })}
             <span className="ppt-stage-no">{cur + 1} / {deck.slides.length}</span>
           </div>
         </div>
@@ -718,11 +1130,11 @@ function PptEditor({ tab }: Props) {
               slide={deck.slides[presentIdx]}
               themeId={deck.theme}
               master={deck.master}
-              visibleLines={deck.slides[presentIdx]?.anim ? revealed : undefined}
-              anim={deck.slides[presentIdx]?.anim}
-              animDir={deck.slides[presentIdx]?.animDir}
-              exitCount={deck.slides[presentIdx] ? exitCount(deck.slides[presentIdx]!, revealed) : 0}
-              exitAnim={deck.slides[presentIdx]?.exitAnim}
+              reveal={
+                deck.slides[presentIdx] && revealSteps(deck.slides[presentIdx]!) > 0
+                  ? revealAt(deck.slides[presentIdx]!, revealed)
+                  : undefined
+              }
             />
           </div>
           {showNotes && deck.slides[presentIdx]?.notes && (

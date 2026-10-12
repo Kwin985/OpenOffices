@@ -7,6 +7,7 @@ use std::path::Path;
 
 use crate::xlsx_cell_side;
 use crate::xlsx_chart;
+use crate::xlsx_names;
 use crate::xlsx_print;
 use crate::xlsx_style;
 
@@ -141,9 +142,71 @@ pub struct ChartSeries {
     pub val: RangeRef,
     pub cats: Vec<Value>,
     pub vals: Vec<f64>,
+    /// 组合图：本系列自己的图型。仅在**与主图型不同**时填（`None` = 随主图型），
+    /// 于是「单一图型」的载荷与 v0.123 之前逐字同形，只有真组合图才多出这个字段
+    #[serde(default)]
+    pub chart_type: Option<String>,
+    /// 组合图次轴：本系列画在右值轴上（量纲差得远的那条）。读侧由 `<c:axId>` 引用的第几根值轴定
+    #[serde(default)]
+    pub secondary_axis: bool,
 }
 
-/// 图表载荷：column|bar|line|pie|doughnut|area 六类；grouping 为 standard|stacked|percentStacked
+/// 一根轴（`c:valAx`/`c:catAx`/`c:dateAx`）。只记"说了话"的字段，没说的留给写侧/渲染侧各自的默认
+#[derive(Serialize, Deserialize, Clone, Debug, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct ChartAxis {
+    /// `<c:axId>`：与 chart 元素引用的 id 对得上，主/次就是按值轴出现次序定的
+    pub id: String,
+    /// "cat"（含 dateAx）| "val"
+    pub kind: String,
+    /// `<c:axPos>`：b|l|r|t。散点图两根都是值轴，靠它分出哪根是 X、哪根是 Y
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub pos: String,
+    /// 轴标题（轴自己的 `<c:title>`，不是图表标题）
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub min: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max: Option<f64>,
+    /// `<c:logBase>`，Excel 通常 10；有它就是对数刻度
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub log_base: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub major_unit: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub minor_unit: Option<f64>,
+    /// 显示单位：`<c:builtInUnit>` 的 thousands/millions…，或 `<c:custUnit>` 的自定义数字串
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub display_unit: Option<String>,
+    /// `<c:numFmt formatCode>`（sourceLinked=1 时是"跟随源数据"，不算数）
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub num_format: Option<String>,
+    /// `<c:orientation val="maxMin">`：刻度倒着走
+    #[serde(default)]
+    pub reverse: bool,
+    /// `<c:delete val="1">`：整根轴不显示
+    #[serde(default)]
+    pub hidden: bool,
+}
+
+impl ChartAxis {
+    /// 这根轴有没有"说了话"：全默认的轴不进载荷，免得给朴素图表平白多出一串字段
+    pub(crate) fn speaks(&self) -> bool {
+        self.title.is_some()
+            || self.min.is_some()
+            || self.max.is_some()
+            || self.log_base.is_some()
+            || self.major_unit.is_some()
+            || self.minor_unit.is_some()
+            || self.display_unit.is_some()
+            || self.num_format.is_some()
+            || self.reverse
+            || self.hidden
+    }
+}
+
+/// 图表载荷：column|bar|line|pie|doughnut|area|radar|scatter|stock 九类；grouping 为 standard|stacked|percentStacked
 #[derive(Serialize, Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
 pub struct ChartPayload {
@@ -152,10 +215,19 @@ pub struct ChartPayload {
     pub grouping: String,
     #[serde(default)]
     pub title: String,
+    /// 仅 radar 用：radarStyle 的 standard|marker|filled（其余类型为 None）
+    #[serde(default)]
+    pub radar_style: Option<String>,
+    /// 仅 scatter 用：scatterStyle 的 marker|line|lineMarker|smooth|smoothMarker（其余类型为 None）
+    #[serde(default)]
+    pub scatter_style: Option<String>,
     pub anchor_row: u32,
     pub anchor_col: u32,
     pub width: u32,
     pub height: u32,
+    /// 轴：类目轴与值轴各按出现次序排（值轴第 0 根是主、之后是次）。整根没说话就不带这一项
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub axes: Vec<ChartAxis>,
     pub series: Vec<ChartSeries>,
 }
 
@@ -651,6 +723,14 @@ pub struct WorkbookPayload {
     /// 所以它由侧通道留住，供打印那一层当底数用
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub default_font: Option<DefaultFont>,
+    /// 盘上原件的路径（xlsx→xlsx 保存时由前端带上）：保留式写回据此把读侧不认的部件
+    /// 按表名映射搬进产物；新建簿/转存其他格式不带，走纯整包重建
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub src_path: Option<String>,
+    /// 用户定义名称（v0.103，v0.98 挂账项）：公式引用名字，写回不带名字公式全断链。
+    /// Univer 装不下这一层走侧通道——前端原样带回，写侧在 workbook.xml 定点补写
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub defined_names: Vec<xlsx_names::DefinedName>,
 }
 
 #[derive(Debug)]
@@ -761,6 +841,15 @@ pub fn read_xlsx_sync(path: String) -> Result<WorkbookPayload, Error> {
         Default::default()
     };
     rule_notes.append(&mut prints.accounts);
+    // 用户定义名称（v0.103）：print 两条之外的名字都在这里，也只走 xlsx 这条路
+    let (defined_names, dn_notes) = if path.to_ascii_lowercase().ends_with(".xlsx") {
+        let mut r = xlsx_names::read_defined_names(&path);
+        let notes = std::mem::take(&mut r.accounts);
+        (r.names, notes)
+    } else {
+        (Vec::new(), Vec::new())
+    };
+    rule_notes.extend(dn_notes);
     // 一格值同时进 cells 和"图表取数"用的网格；后者只在簿子真含图表时才需要（多数没有）
     let keep_grid = xlsx_chart::has_charts(&path);
     let mut grids: std::collections::HashMap<String, xlsx_chart::Grid> =
@@ -870,6 +959,7 @@ pub fn read_xlsx_sync(path: String) -> Result<WorkbookPayload, Error> {
         sheets,
         warnings: rule_notes,
         default_font,
+        defined_names,
         ..Default::default()
     })
 }
@@ -985,7 +1075,18 @@ pub(crate) fn cell_text(v: &Value) -> String {
     }
 }
 
-fn chart_type_for(t: &str, grouping: &str) -> Option<rust_xlsxwriter::ChartType> {
+/// 取该图型的「专属样式」：各图型的样式枚举彼此独立，故按 chart_type 分流
+/// （radar→radarStyle、scatter→scatterStyle，其余类型没有）
+fn chart_style_of(c: &ChartPayload) -> Option<&str> {
+    match c.chart_type.as_str() {
+        "radar" => c.radar_style.as_deref(),
+        "scatter" => c.scatter_style.as_deref(),
+        _ => None,
+    }
+}
+
+/// style 是 chart_style_of 给出的该型专属枚举，None／认不出即取该型的 Excel 默认形态
+fn chart_type_for(t: &str, grouping: &str, style: Option<&str>) -> Option<rust_xlsxwriter::ChartType> {
     use rust_xlsxwriter::ChartType as C;
     let stacked = grouping == "stacked";
     let percent = grouping == "percentStacked";
@@ -1004,6 +1105,19 @@ fn chart_type_for(t: &str, grouping: &str) -> Option<rust_xlsxwriter::ChartType>
         ("area", _, _) => C::Area,
         ("pie", _, _) => C::Pie,
         ("doughnut", _, _) => C::Doughnut,
+        ("stock", _, _) => C::Stock,
+        ("radar", _, _) => match style {
+            Some("marker") => C::RadarWithMarkers,
+            Some("filled") => C::RadarFilled,
+            _ => C::Radar,
+        },
+        ("scatter", _, _) => match style {
+            Some("line") => C::ScatterStraight,
+            Some("lineMarker") => C::ScatterStraightWithMarkers,
+            Some("smooth") => C::ScatterSmooth,
+            Some("smoothMarker") => C::ScatterSmoothWithMarkers,
+            _ => C::Scatter, // marker（Excel 默认）：只有点、不连线
+        },
         _ => return None,
     })
 }
@@ -1011,6 +1125,124 @@ fn chart_type_for(t: &str, grouping: &str) -> Option<rust_xlsxwriter::ChartType>
 /// px → 图表尺寸（rust_xlsxwriter 以厘米计）
 fn px_to_cm(px: u32) -> u32 {
     ((px as f64) * 2.54 / 96.0).round().max(2.0) as u32
+}
+
+/// 往一个 Chart 上挂一条系列（主图与组合图的副图共用，免得两处跑偏）
+fn add_chart_series(ch: &mut rust_xlsxwriter::Chart, s: &ChartSeries, sheet_name: &str) {
+    let ser = ch.add_series();
+    if !s.name.is_empty() {
+        ser.set_name(s.name.as_str());
+    }
+    let host = if s.val.sheet.is_empty() {
+        sheet_name
+    } else {
+        s.val.sheet.as_str()
+    };
+    let v = &s.val;
+    ser.set_values((host, v.r1, v.c1 as u16, v.r2, v.c2 as u16));
+    if let Some(c) = &s.cat {
+        let csheet = if c.sheet.is_empty() { host } else { c.sheet.as_str() };
+        ser.set_categories((csheet, c.r1, c.c1 as u16, c.r2, c.c2 as u16));
+    }
+    // 只在真次轴时喊话：默认 false 写不写都一样，省得给非组合图平白多出一份轴定义
+    if s.secondary_axis {
+        ser.set_secondary_axis(true);
+    }
+}
+
+/// 显示单位：`<c:builtInUnit>` 的内置十档。`<c:custUnit>` 的自定义数字 crate 没这个枚举 ⇒ 写不进去，记账
+fn display_unit_of(s: &str) -> Option<rust_xlsxwriter::ChartAxisDisplayUnitType> {
+    use rust_xlsxwriter::ChartAxisDisplayUnitType as U;
+    match s.trim() {
+        "hundreds" => Some(U::Hundreds),
+        "thousands" => Some(U::Thousands),
+        "tenThousands" => Some(U::TenThousands),
+        "hundredThousands" => Some(U::HundredThousands),
+        "millions" => Some(U::Millions),
+        "tenMillions" => Some(U::TenMillions),
+        "hundredMillions" => Some(U::HundredMillions),
+        "billions" => Some(U::Billions),
+        "trillions" => Some(U::Trillions),
+        _ => None,
+    }
+}
+
+/// 把一根轴的字段倒进 crate 的轴对象：只喊"说了话"的那几项，没说的留给 crate 自己的默认
+fn apply_axis(axis: &mut rust_xlsxwriter::ChartAxis, a: &ChartAxis, notes: &mut Vec<String>) {
+    if let Some(t) = a.title.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+        axis.set_name(t);
+    }
+    if let Some(v) = a.min {
+        axis.set_min(v);
+    }
+    if let Some(v) = a.max {
+        axis.set_max(v);
+    }
+    if let Some(b) = a.log_base {
+        if b >= 2.0 {
+            axis.set_log_base(b.round() as u16);
+        } else {
+            notes.push(format!("对数底 {b} 小于 2，轴没按对数刻度写"));
+        }
+    }
+    if let Some(v) = a.major_unit {
+        axis.set_major_unit(v);
+    }
+    if let Some(v) = a.minor_unit {
+        axis.set_minor_unit(v);
+    }
+    if let Some(u) = a.display_unit.as_deref() {
+        match display_unit_of(u) {
+            Some(t) => {
+                axis.set_display_unit_type(t);
+            }
+            None => notes
+                .push(format!("显示单位「{u}」crate 只认内置十档，自定义数字没写进去")),
+        }
+    }
+    if let Some(f) = a.num_format.as_deref().filter(|s| !s.is_empty()) {
+        axis.set_num_format(f);
+    }
+    if a.reverse {
+        axis.set_reverse();
+    }
+    if a.hidden {
+        axis.set_hidden(true);
+    }
+}
+
+/// 轴落进图表：类目轴 → x_axis，值轴按出现次序（第 0 根主、第 1 根次）
+/// 次值轴要真有系列走次轴才接，否则凭空多一份 `<c:valAx>` 反而把图弄歪
+fn apply_chart_axes(
+    ch: &mut rust_xlsxwriter::Chart,
+    axes: &[ChartAxis],
+    has_secondary: bool,
+) -> Vec<String> {
+    let mut notes = Vec::new();
+    let (mut val_seen, mut cat_seen) = (0usize, 0usize);
+    for a in axes {
+        if a.kind == "val" {
+            let i = val_seen;
+            val_seen += 1;
+            match i {
+                0 => apply_axis(ch.y_axis(), a, &mut notes),
+                1 if has_secondary => apply_axis(ch.y2_axis(), a, &mut notes),
+                1 => notes.push("次值轴有刻度设置，但没有系列走次轴，没写进去".to_string()),
+                _ => notes.push(format!(
+                    "第 {} 根值轴的刻度设置没写进去：xlsx 只认主/次两根值轴",
+                    i + 1
+                )),
+            }
+        } else {
+            let i = cat_seen;
+            cat_seen += 1;
+            match i {
+                0 => apply_axis(ch.x_axis(), a, &mut notes),
+                _ => notes.push(format!("第 {} 根类目轴的刻度设置没写进去", i + 1)),
+            }
+        }
+    }
+    notes
 }
 
 pub fn write_xlsx_sync(path: String, workbook: WorkbookPayload) -> Result<Vec<String>, Error> {
@@ -1171,33 +1403,55 @@ pub fn write_xlsx_sync(path: String, workbook: WorkbookPayload) -> Result<Vec<St
         }
         // 原生图表：系列引用直接映射为单元格区域公式，Excel 打开即活图
         for chart in &sheet.charts {
-            let Ok(ctype) = chart_type_for(&chart.chart_type, &chart.grouping).ok_or(()) else {
+            let Ok(ctype) = chart_type_for(&chart.chart_type, &chart.grouping, chart_style_of(chart))
+                .ok_or(())
+            else {
                 continue;
             };
             let Ok(col) = u16::try_from(chart.anchor_col) else { continue };
+            // 组合图：与主图型不同的系列走「主图 + 一副图」。crate 的 combine 只有一个副图槽位，
+            // 所以副图型按首次出现定一种；真出现两种以上副图型时按第一种回写并记账（不静默丢系列）
+            let mut subs: Vec<&str> = Vec::new();
+            for s in &chart.series {
+                if let Some(t) = s.chart_type.as_deref() {
+                    if !subs.contains(&t) {
+                        subs.push(t);
+                    }
+                }
+            }
+            if subs.len() > 1 {
+                notes.push(format!(
+                    "图表「{}」有 {} 种副图型（{}），xlsx 写侧只支持主图 + 一种副图，其余暂按「{}」回写",
+                    if chart.title.is_empty() { "(无标题)" } else { chart.title.as_str() },
+                    subs.len(),
+                    subs.join("/"),
+                    subs[0]
+                ));
+            }
+            let sub_ctype = subs
+                .first()
+                // 副图的「专属样式」（radar/scatter 那一族）不跨元素继承，故传 None
+                .and_then(|t| chart_type_for(t, &chart.grouping, None));
             let mut ch = rust_xlsxwriter::Chart::new(ctype);
             if !chart.title.is_empty() {
                 ch.title().set_name(chart.title.as_str());
             }
             ch.set_width(px_to_cm(chart.width));
             ch.set_height(px_to_cm(chart.height));
+            let mut sub: Option<rust_xlsxwriter::Chart> = sub_ctype.map(rust_xlsxwriter::Chart::new);
             for s in &chart.series {
-                let ser = ch.add_series();
-                if !s.name.is_empty() {
-                    ser.set_name(s.name.as_str());
-                }
-                let host = if s.val.sheet.is_empty() {
-                    sheet.name.as_str()
-                } else {
-                    s.val.sheet.as_str()
-                };
-                let v = &s.val;
-                ser.set_values((host, v.r1, v.c1 as u16, v.r2, v.c2 as u16));
-                if let Some(c) = &s.cat {
-                    let csheet = if c.sheet.is_empty() { host } else { c.sheet.as_str() };
-                    ser.set_categories((csheet, c.r1, c.c1 as u16, c.r2, c.c2 as u16));
+                match (s.chart_type.as_deref(), sub.as_mut()) {
+                    (Some(_), Some(c2)) => add_chart_series(c2, s, &sheet.name),
+                    // 副图型写不进去（如 pie 那类不支持组合的）时退回主图，总比丢一条系列好
+                    _ => add_chart_series(&mut ch, s, &sheet.name),
                 }
             }
+            if let Some(c2) = sub {
+                ch.combine(&c2);
+            }
+            // 轴要在 combine 之后设：combine 会把副图的轴并进来，先设再并有被盖掉的风险
+            let has_secondary = chart.series.iter().any(|s| s.secondary_axis);
+            notes.extend(apply_chart_axes(&mut ch, &chart.axes, has_secondary));
             let _ = ws.insert_chart(chart.anchor_row, col, &ch);
         }
         // 三类规则（筛选 / 数据验证 / 条件格式）：写不进去的东西带回来记账，不在存盘时静默少给
@@ -1220,13 +1474,35 @@ pub fn write_xlsx_sync(path: String, workbook: WorkbookPayload) -> Result<Vec<St
     }
     // 批注的作者表可能要和产物对一次账（crate 把那张表按名字排序写了，编号却是格子序），
     // 所以对不上时不只是记账——先重排，重排不了的才记账；同一趟里补上打印设置的半边
-    notes.extend(xlsx_cell_side::save_workbook(
-        path.as_str(),
+    // 与用户定义名称（crate 只认 print 两条，名字按当前表序重算 localSheetId 补进 workbook.xml）
+    let sheet_order: Vec<String> = workbook.sheets.iter().map(|s| s.name.clone()).collect();
+    let (bytes, save_notes) = xlsx_cell_side::save_workbook_bytes(
         &mut wb,
         tables.as_slice(),
         print_patches.as_slice(),
+        workbook.defined_names.as_slice(),
+        sheet_order.as_slice(),
     )
-    .map_err(Error)?);
+    .map_err(Error)?;
+    notes.extend(save_notes);
+    // 保留式写回：原件还是 xlsx（且载荷带了路径）时，把读侧不认的部件（图片、表格……）
+    // 按表名映射搬进产物再落盘。守卫不过/原件读不开就记账退回整包重建，不让保存失败
+    let mut bytes = bytes;
+    if let Some(src) = workbook
+        .src_path
+        .as_deref()
+        .filter(|p| p.to_ascii_lowercase().ends_with(".xlsx"))
+    {
+        let names: Vec<String> = workbook.sheets.iter().map(|s| s.name.clone()).collect();
+        match crate::xlsx_preserve::carry(src, &bytes, &names) {
+            Ok(out) => {
+                notes.extend(out.notes);
+                bytes = out.bytes;
+            }
+            Err(why) => notes.push(format!("保留式写回没启用：{why}，按整包重写保存")),
+        }
+    }
+    std::fs::write(&path, bytes).map_err(|e| Error(format!("保存失败: {e}")))?;
     Ok(notes)
 }
 
@@ -1512,6 +1788,8 @@ mod tests {
                         chart_type: "column".into(),
                         grouping: "standard".into(),
                         title: "季度业绩".into(),
+                        radar_style: None,
+                        scatter_style: None,
                         anchor_row: 0,
                         anchor_col: 5,
                         width: 480,
@@ -1523,6 +1801,8 @@ mod tests {
                                 val: rf("图表", 1, 1, 3, 1),
                                 cats: vec![],
                                 vals: vec![],
+                                chart_type: None,
+                                secondary_axis: false,
                             },
                             ChartSeries {
                                 name: "利润".into(),
@@ -1530,13 +1810,18 @@ mod tests {
                                 val: rf("图表", 1, 2, 3, 2),
                                 cats: vec![],
                                 vals: vec![],
+                                chart_type: None,
+                                secondary_axis: false,
                             },
                         ],
+                        axes: vec![],
                     },
                     ChartPayload {
                         chart_type: "pie".into(),
                         grouping: "standard".into(),
                         title: "".into(),
+                        radar_style: None,
+                        scatter_style: None,
                         anchor_row: 16,
                         anchor_col: 5,
                         width: 400,
@@ -1547,7 +1832,10 @@ mod tests {
                             val: rf("图表", 1, 1, 3, 1),
                             cats: vec![],
                             vals: vec![],
+                            chart_type: None,
+                            secondary_axis: false,
                         }],
+                        axes: vec![],
                     },
                 ],
                 ..Default::default()
@@ -1782,6 +2070,8 @@ mod tests {
                         chart_type: "column".into(),
                         grouping: "standard".into(),
                         title: "季度业绩".into(),
+                        radar_style: None,
+                        scatter_style: None,
                         anchor_row: 0,
                         anchor_col: 5,
                         width: 480,
@@ -1793,6 +2083,8 @@ mod tests {
                                 val: rf("销售", 1, 1, 4, 1),
                                 cats: vec![],
                                 vals: vec![],
+                                chart_type: None,
+                                secondary_axis: false,
                             },
                             ChartSeries {
                                 name: "利润".into(),
@@ -1800,13 +2092,18 @@ mod tests {
                                 val: rf("销售", 1, 2, 4, 2),
                                 cats: vec![],
                                 vals: vec![],
+                                chart_type: None,
+                                secondary_axis: false,
                             },
                         ],
+                        axes: vec![],
                     },
                     ChartPayload {
                         chart_type: "pie".into(),
                         grouping: "standard".into(),
                         title: "".into(),
+                        radar_style: None,
+                        scatter_style: None,
                         anchor_row: 8,
                         anchor_col: 5,
                         width: 400,
@@ -1817,7 +2114,10 @@ mod tests {
                             val: rf("销售", 1, 1, 4, 1),
                             cats: vec![],
                             vals: vec![],
+                            chart_type: None,
+                            secondary_axis: false,
                         }],
+                        axes: vec![],
                     },
                 ],
                 col_widths: [(0u32, 140.0)].into_iter().collect(),
@@ -1951,16 +2251,21 @@ mod tests {
                     chart_type: "column".into(),
                     grouping: "standard".into(),
                     title: "色阶与排名".into(),
+                    radar_style: None,
+                    scatter_style: None,
                     anchor_row: 1,
                     anchor_col: 9,
                     width: 360,
                     height: 240,
+                    axes: vec![],
                     series: vec![ChartSeries {
                         name: "E".into(),
                         cat: Some(rf("条件格式", 0, 0, 5, 0)),
                         val: rf("条件格式", 0, 4, 5, 4),
                         cats: vec![],
                         vals: vec![],
+                        chart_type: None,
+                        secondary_axis: false,
                     }],
                 }],
                 ..Default::default()

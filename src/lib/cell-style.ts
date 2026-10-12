@@ -172,6 +172,11 @@ declare module '@tiptap/core' {
     cellStyle: {
       /** 给选中的一格或多格设底纹色；传 null 清除 */
       setCellBackground: (color: string | null) => ReturnType
+      /**
+       * 给光标所在的整张表套/摘命名表样式（w:tblStyle）；传 null 清除回到「未套样式」。
+       * 与段落那个套路一致：只挂标签，呈现由样式表驱动，逐格手调的格式天然压过样式层。
+       */
+      setTableStyle: (id: string | null) => ReturnType
       /** 给选中的单元格设竖排对齐（top/middle/bottom）；传 null 清除 */
       setCellVAlign: (align: string | null) => ReturnType
       /**
@@ -280,6 +285,16 @@ export const CellStyle = Extension.create({
       {
         types: ['table'],
         attributes: {
+          /**
+           * 命名表样式标签（v0.114）：表的 `w:tblStyle` 身份，data-tstyle 随导入 HTML 进出。
+           * 同样只挂标签不摊格式——样式定义改一处，挂它的每张表屏幕即时变。
+           */
+          tStyle: {
+            default: null as string | null,
+            parseHTML: (el: HTMLElement) => el.getAttribute('data-tstyle'),
+            renderHTML: (attrs: Record<string, unknown>) =>
+              typeof attrs.tStyle === 'string' && attrs.tStyle ? { 'data-tstyle': attrs.tStyle } : {},
+          },
           /** Word 的 `w:tblInd`：整张表离版心左边距多远 */
           marginLeft: {
             default: null as number | null,
@@ -315,6 +330,7 @@ export const CellStyle = Extension.create({
       setCellBackground: (color: string | null) => setCell({ background: color }),
       setCellVAlign: (align: string | null) => setCell({ vAlign: align }),
       setCellBorder: (edges: readonly CellEdge[], value: string | null) => setCell(edgeAttrs(edges, value)),
+      setTableStyle: (id) => ({ commands }: CommandProps) => commands.updateAttributes('table', { tStyle: id }),
     }
   },
 })

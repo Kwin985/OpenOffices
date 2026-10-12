@@ -53,13 +53,53 @@ export interface ChartSeriesPayload {
   val: ChartRangeRef
   cats: (string | number | boolean | null)[]
   vals: number[]
+  /**
+   * 组合图：本系列自己的图型。仅在**与主图型不同**时才有值（`undefined` = 随主图型），
+   * 于是单一图型的载荷与 v0.123 之前同形，只有真组合图才多这个字段
+   */
+  chartType?: string
+  /**
+   * 组合图次轴：本系列画在右值轴上（量纲差得远的那条）。读侧由 `<c:axId>` 引用的是第几根值轴定
+   */
+  secondaryAxis?: boolean
 }
 
-// 图表载荷：column|bar|line|pie|doughnut|area；grouping 为 standard|stacked|percentStacked
+/** 一根轴：只带"说了话"的字段；整根没说话的轴不进载荷 */
+export interface ChartAxisPayload {
+  /** `<c:axId>`：值轴按出现次序第 0 根是主、第 1 根是次 */
+  id: string
+  /** 'cat'（含 dateAx）| 'val' */
+  kind: string
+  /** `<c:axPos>`：b|l|r|t。散点图两根都是值轴，靠它分出哪根是 X、哪根是 Y */
+  pos?: string
+  /** 轴标题（轴自己的 `<c:title>`，不是图表标题） */
+  title?: string
+  min?: number
+  max?: number
+  /** `<c:logBase>`：有它就是对数刻度（Excel 通常 10） */
+  logBase?: number
+  majorUnit?: number
+  minorUnit?: number
+  /** 显示单位：内置档 thousands/millions…，自定义档是数字串 */
+  displayUnit?: string
+  numFormat?: string
+  /** 刻度倒着走（`<c:orientation val="maxMin">`） */
+  reverse?: boolean
+  /** 整根轴不显示（`<c:delete val="1">`） */
+  hidden?: boolean
+}
+
+// 图表载荷：column|bar|line|pie|doughnut|area|radar|scatter|stock；grouping 为 standard|stacked|percentStacked
 export interface ChartPayload {
   chartType: string
   grouping: string
   title: string
+  /** 仅 radar 用：radarStyle 的 standard|marker|filled（其余类型为 undefined） */
+  radarStyle?: string
+  /** 仅 scatter 用：scatterStyle 的 marker|line|lineMarker|smooth|smoothMarker（其余类型为 undefined） */
+  scatterStyle?: string
+  /** 轴：类目轴与值轴按出现次序排。整根没说话的轴不带，于是朴素图表的载荷与 v0.124 之前同形 */
+  axes?: ChartAxisPayload[]
   anchorRow: number
   anchorCol: number
   width: number
@@ -310,11 +350,27 @@ export interface DefaultFont {
   fs?: number | null
 }
 
+/** 定义名称（v0.103）：名字管理器里的用户名字，公式引用它——写回不带名字公式全断链 */
+export interface DefinedNamePayload {
+  name: string
+  /** 元素文本原文（区域/公式/常量），原样搬回 */
+  value: string
+  /** 工作表作用域的名字带表名；workbook 级的没有 */
+  sheet?: string
+  hidden?: boolean
+  comment?: string
+}
+
 export interface WorkbookPayload {
   sheets: SheetPayload[]
   /** 读侧的边界账：格式里认出来但界面/模型装不下的东西，打开时要说得出 */
   warnings?: string[]
   defaultFont?: DefaultFont | null
+  /** 盘上原件路径（xlsx→xlsx 保存时带上）：写侧据此把读侧不认的部件按表名映射搬进产物。
+   *  新建簿/转存其他格式不带，走纯整包重建 */
+  srcPath?: string
+  /** 用户定义名称（Univer 装不下，侧通道原样带回；xlsx 读侧才填） */
+  definedNames?: DefinedNamePayload[]
 }
 
 const SHEET_EXTS = ['xlsx', 'xls', 'ods', 'csv']
@@ -363,6 +419,15 @@ export async function pickPdfFiles(multiple: boolean): Promise<string[]> {
 /** 选目录（页面拆分输出） */
 export async function pickDirectory(): Promise<string | null> {
   const selected = await open({ directory: true })
+  return typeof selected === 'string' ? selected : null
+}
+
+/** 选一张图（PDF 图章）：png/jpg，路径交给 readBytes */
+export async function pickStampImage(): Promise<string | null> {
+  const selected = await open({
+    multiple: false,
+    filters: [{ name: '图片', extensions: ['png', 'jpg', 'jpeg'] }],
+  })
   return typeof selected === 'string' ? selected : null
 }
 

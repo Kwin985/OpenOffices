@@ -25,12 +25,19 @@ import {
   contentPxOf,
   MM_PX,
   PAGE_NUMBER_FORMATS,
+  BUILTIN_STYLE_IDS,
+  TABLE_COND_LABEL,
+  TABLE_COND_TYPES,
   type DocComment,
   type DocMeta,
+  type DocxStyleInfo,
   type PageNumberFormat,
   type PMNode,
+  type TableCond,
+  type TableCondType,
 } from '../lib/docx'
 import { Comment, addCommentMark, findCommentAnchor, removeCommentMark } from '../lib/comment-extension'
+import { RevDel, RevIns, RevMode, acceptRevisions, deleteAsRevision, rejectRevisions, revModeOnState, toggleRevMode } from '../lib/revision-extension'
 import {
   Note,
   NOTE_LABEL,
@@ -40,6 +47,7 @@ import {
   type NoteKind,
 } from '../lib/note-extension'
 import type { DocxImport } from '../lib/docx-fidelity'
+import { nextStyleId, styleCssOf } from '../lib/doc-style-css'
 import { Toc } from '../lib/toc-extension'
 import { PageBreak } from '../lib/page-break-extension'
 import { Indent } from '../lib/indent-extension'
@@ -56,7 +64,7 @@ import {
   borderParts,
   type CellEdge,
 } from '../lib/cell-style'
-import { ParagraphStyle, ruleOf, type LineRule } from '../lib/paragraph-style'
+import { ParagraphStyle, RStyleMark, ruleOf, type LineRule } from '../lib/paragraph-style'
 import { TableWidth, caretColumn, tableTargetPx } from '../lib/table-width'
 import { FindReplace, frPluginKey, activeIndexOf } from '../lib/find-replace'
 import { docTemplate } from '../lib/templates'
@@ -75,6 +83,21 @@ interface Props {
 const ODOC_HEADER = { app: 'openoffices', kind: 'doc', version: 1 }
 
 const HL_COLORS = ['#fff59d', '#a5d6a7', '#90caf9', '#f48fb1']
+
+/**
+ * 表样式的六条边（v0.114）：外框四边（`w:tblBorders` 的 top/left/bottom/right）
+ * 加内部横竖线（insideH/insideV）——表有别于单元格的一侧就在这里。
+ */
+const TABLE_BD_KEYS = ['bdTop', 'bdRight', 'bdBottom', 'bdLeft', 'bdInsideH', 'bdInsideV'] as const
+type TableBdKey = (typeof TABLE_BD_KEYS)[number]
+const TABLE_BD_LABEL: Record<TableBdKey, string> = {
+  bdTop: '上边',
+  bdRight: '右边',
+  bdBottom: '下边',
+  bdLeft: '左边',
+  bdInsideH: '横线',
+  bdInsideV: '竖线',
+}
 
 // 字体族候选（与 docx/odt 导出同一串名字，Word/LibreOffice 按本机字体回退）
 const FONT_FAMILIES = [
@@ -122,6 +145,8 @@ function DocEditor({ tab }: Props) {
   const [linkDraft, setLinkDraft] = useState<string | null>(null)
   const [meta, setMeta] = useState<DocMeta>({})
   const [hfOpen, setHfOpen] = useState(false)
+  // 样式表面板（v0.106）：清单在 meta.styles 上，编辑即回写——渲染层与导出共用这一份
+  const [styleEdOpen, setStyleEdOpen] = useState(false)
   const [pgOpen, setPgOpen] = useState(false)
   const [docH, setDocH] = useState(0)
   const [cmOpen, setCmOpen] = useState(false)
@@ -129,6 +154,9 @@ function DocEditor({ tab }: Props) {
   const [noteDraft, setNoteDraft] = useState<{ kind: NoteKind; text: string } | null>(null)
   // 边框的待用档位（线型/磅/颜色）：点哪条边才把它写下去，所以这一份不进文档、只是工具条上的"笔"
   const [bdSel, setBdSel] = useState({ style: 'solid', pt: 0.5, hex: '#000000' })
+  // 条件层面板（v0.116）：一次只放行一枚表样式，挑部位的下拉也算这一层的小状态
+  const [condOpenId, setCondOpenId] = useState<string | null>(null)
+  const [condType, setCondType] = useState<TableCondType>('firstRow')
   const [, setTick] = useState(0)
   const [frOpen, setFrOpen] = useState(false)
   const [frQ, setFrQ] = useState('')
@@ -184,11 +212,18 @@ function DocEditor({ tab }: Props) {
       TableWidth,
       // 段落行距/段前后/底纹/四边：docx 的 w:spacing、w:shd、w:pBdr 读进来就靠这一层接住
       ParagraphStyle,
+      // 字符级命名样式标签（v0.113）：w:rStyle 读进来落 span[data-rstyle]，导出写回 w:rStyle
+      RStyleMark,
       Highlight.configure({ multicolor: true }),
       CharacterCount,
       Toc,
       PageBreak,
       Comment,
+      // 修订标记（v0.100）：docx 的 w:ins/w:del 读进来落在这里，接受/拒绝在工具栏
+      RevIns,
+      RevDel,
+      // 修订模式（v0.101）：本应用里改字留痕，插入自动挂 revIns、删除转 revDel
+      RevMode,
       // 脚注/尾注：行内原子节点，正文存在节点属性上（三条保存链路都从这一份事实出发）
       Note,
       FindReplace,
@@ -197,12 +232,32 @@ function DocEditor({ tab }: Props) {
     onUpdate: () => markDirty(tab.id, true),
     editorProps: {
       attributes: { class: 'doc-content' },
-      handleKeyDown: (_view, event) => {
+      handleKeyDown: (view, event) => {
         if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'f' && !event.shiftKey) {
           event.preventDefault()
           setFrOpen(true)
           setTimeout(() => frInputRef.current?.focus(), 0)
           return true
+        }
+        // 修订模式下的删除键：转成删除线标记而不是真删（IME 组合中的退格不拦，那是输入法在改拼字）
+        if (!event.isComposing && revModeOnState(view.state)) {
+          const key = event.key
+          const isBack = key === 'Backspace'
+          const isDel = key === 'Delete'
+          const isCut = (event.ctrlKey || event.metaKey) && key.toLowerCase() === 'x'
+          if (isBack || isDel || isCut) {
+            const { from, to, empty } = view.state.selection
+            const range = !empty ? [from, to] : isBack && from > 0 ? [from - 1, from] : isDel ? [from, Math.min(from + 1, view.state.doc.content.size)] : null
+            if (range) {
+              const tr = deleteAsRevision(view.state, range[0], range[1])
+              if (tr) {
+                view.dispatch(tr)
+                markDirty(tab.id, true)
+                return true
+              }
+              // null：区间全是未定稿的插入（真删正好抵消）或纯段落缝（结构不追踪）——放行原生行为
+            }
+          }
         }
         return false
       },
@@ -448,7 +503,12 @@ function DocEditor({ tab }: Props) {
           if (!disposed) {
             if (fid) {
               await applyContent({ kind: 'html', html: fid.html, emitUpdate: true }, fid.blocks)
-              setMeta(fid.comments.length ? { ...m, comments: fid.comments } : m)
+              // 样式清单随 meta 走（v0.102）：.odoc 的 metaJson 存它，导出 docx 也从 meta 拿
+              setMeta({
+                ...m,
+                ...(fid.styles?.length ? { styles: fid.styles } : {}),
+                ...(fid.comments.length ? { comments: fid.comments } : {}),
+              })
               if (fid.comments.length) setCmOpen(true)
               if (fid.warnings.length)
                 note = `保真导入：${fid.warnings.length} 项未保留（${fid.warnings[0]}${fid.warnings.length > 1 ? '…' : ''}）`
@@ -659,6 +719,116 @@ function DocEditor({ tab }: Props) {
     markDirty(tab.id, true)
   }
 
+  /** 文档带进来的命名样式（v0.102 读侧 / v0.106 渲染层）：套用只挂标签，呈现走样式表 */
+  const styleList = meta.styles ?? []
+  const applyDocStyle = (info: DocxStyleInfo | null) => {
+    if (!editor) return
+    if (!info) {
+      // 清除只摘标签：标题节点不转回段落（节点类型的变更交给用户，这里不越权）
+      // 三个维度一起摘：下拉显示的是"优先那一个"，只摘它会让用户点掉之后下拉还显示着原文
+      editor.chain().focus().setPstyle(null).setRStyle(null).setTableStyle(null).run()
+      return
+    }
+    // 表样式（v0.114）：套到光标所在那张表，同样只挂标签不摊格式
+    if (info.kind === 'table') {
+      if (!editor.isActive('table')) {
+        setStatus('表样式要套到表上：把光标放进表格再选')
+        return
+      }
+      editor.chain().focus().setTableStyle(info.id).run()
+      return
+    }
+    // 字符级样式（v0.113）：套到选区文字上，同样只挂标签不摊格式
+    if (info.kind === 'character') {
+      editor.chain().focus().setRStyle(info.id).run()
+      return
+    }
+    const ch = editor.chain().focus()
+    // 标题级样式转节点类型：编辑器里标题是节点类型而非属性，pStyle 由导出的 heading 分支
+    // 承担（style 与 heading 并存会被库写出两枚 w:pStyle），所以标签这里反而要清掉
+    if (info.level && info.level <= 4) {
+      ch.setNode('heading', { level: info.level }).setPstyle(null).run()
+      return
+    }
+    // 只挂标签、不摊格式（v0.106）：段落的对齐/行距/字号由样式表按标签统一渲染，
+    // 改样式定义全文跟着变。段落上已有的直接格式（inline style）天然压过样式层——
+    // 正是 Word「直接格式覆盖样式」的语义，套用不清用户手调的格式也不越权
+    ch.setPstyle(info.id).run()
+  }
+
+  /** 样式定义回写：渲染层（<style> 注入）与导出（styles.paragraphStyles）吃的是同一份 meta.styles */
+  const patchStyle = (id: string, p: Partial<DocxStyleInfo>) => {
+    patchMeta({ styles: styleList.map((s) => (s.id === id ? { ...s, ...p } : s)) })
+  }
+
+  const addDocStyle = () => {
+    const id = nextStyleId(styleList)
+    patchMeta({ styles: [...styleList, { id, name: `新样式 ${id.slice(3)}`, run: {}, para: {} }] })
+  }
+
+  const addCharStyle = () => {
+    const id = nextStyleId(styleList)
+    patchMeta({ styles: [...styleList, { id, name: `新字符样式 ${id.slice(3)}`, kind: 'character', run: {}, para: {} }] })
+  }
+
+  const addTableStyle = () => {
+    const id = nextStyleId(styleList)
+    patchMeta({
+      styles: [...styleList, { id, name: `新表格样式 ${id.slice(3)}`, kind: 'table', run: {}, para: {}, table: {} }],
+    })
+  }
+
+  const removeDocStyle = (id: string) => {
+    if (!editor) return
+    const removed = styleList.find((s) => s.id === id)
+    if (removed?.kind === 'table') {
+      // 摘掉全文引用：表节点上的 tStyle 属性，样式没了还指着就悬空
+      let count = 0
+      const tr = editor.state.tr
+      editor.state.doc.descendants((node, pos) => {
+        if (node.type.name === 'table' && node.attrs.tStyle === id) {
+          tr.setNodeMarkup(pos, undefined, { ...node.attrs, tStyle: null })
+          count++
+        }
+        return true
+      })
+      if (count) editor.view.dispatch(tr)
+      patchMeta({ styles: styleList.filter((s) => s.id !== id) })
+      if (count) setStatus(`已删除表格样式并摘除 ${count} 处引用`)
+      return
+    }
+    if (removed?.kind === 'character') {
+      // 摘掉全文的 rStyle 引用：样式没了还挂着 mark，屏幕失去呈现、导出也是悬空 w:rStyle
+      let count = 0
+      const tr = editor.state.tr
+      editor.state.doc.descendants((node, pos) => {
+        const m = node.marks.find((x) => x.type.name === 'rStyle' && x.attrs.id === id)
+        if (m) {
+          tr.removeMark(pos, pos + node.nodeSize, m.type)
+          count++
+        }
+        return true
+      })
+      editor.view.dispatch(tr)
+      patchMeta({ styles: styleList.filter((s) => s.id !== id) })
+      if (count) setStatus(`已删除字符样式并摘除 ${count} 处引用`)
+      return
+    }
+    // 摘掉全文引用：样式没了还挂着标签，屏幕失去呈现、导出也是悬空 pStyle——一起清干净
+    const positions: Array<{ from: number; to: number }> = []
+    editor.state.doc.descendants((node, pos) => {
+      if (node.type.name === 'paragraph' && node.attrs.pStyle === id) {
+        positions.push({ from: pos, to: pos + node.content.size })
+      }
+      return true
+    })
+    let chain = editor.chain().focus()
+    for (const r of positions) chain = chain.setTextSelection(r).setPstyle(null)
+    chain.setTextSelection(editor.state.selection.from).run()
+    patchMeta({ styles: styleList.filter((s) => s.id !== id) })
+    if (positions.length) setStatus(`已删除样式并摘除 ${positions.length} 处引用`)
+  }
+
   const pg = meta.page ?? {}
   const setPg = (p: Partial<typeof pg>) => patchMeta({ page: { ...pg, ...p } })
 
@@ -863,6 +1033,22 @@ function DocEditor({ tab }: Props) {
     markDirty(tab.id, true)
   }
 
+  // 修订裁决：接受/拒绝。空选区管全文，有选区只动选区里的——逐段定稿时用选区
+  const runRevision = (verdict: 'accept' | 'reject') => {
+    if (!editor) return
+    const n = verdict === 'accept' ? acceptRevisions(editor) : rejectRevisions(editor)
+    if (!n) {
+      setStatus('没有待裁决的修订标记')
+      setTimeout(() => setStatus(''), 1800)
+      return
+    }
+    markDirty(tab.id, true)
+    setStatus(`已${verdict === 'accept' ? '接受' : '拒绝'} ${n} 处修订`)
+    setTimeout(() => setStatus(''), 2400)
+  }
+  // 修订模式开关的镜像：按钮高亮跟着 React 态走，真实开关在插件状态里
+  const [revOn, setRevOn] = useState(false)
+
   const confirmDraft = () => {
     if (!editor || !draft) return
     const text = draft.text.trim()
@@ -1025,6 +1211,14 @@ function DocEditor({ tab }: Props) {
         {btn('页面设置', () => setPgOpen((v) => !v), pgOpen || !!meta.page, '纸张与页边距：同步应用到视图、打印与 docx/odt 导出')}
         {btn('批注', () => setCmOpen((v) => !v), cmOpen || comments.length > 0, '批注侧栏：选中文字后可添加批注，导出为 docx 原生批注')}
         {btn('新建批注', startComment, !!draft, '选中正文文字后点击，为其添加一条批注')}
+        {btn('接受修订', () => runRevision('accept'), false, '接受修订（docx 修订/批注模式读入的 w:ins/w:del）：有选区只裁决选区内的，否则全文；插入文字转正、删除文字移除')}
+        {btn('拒绝修订', () => runRevision('reject'), false, '拒绝修订：有选区只裁决选区内的，否则全文；插入文字移除、删除文字恢复')}
+        {btn('修订模式', () => {
+          if (!editor) return
+          setRevOn(toggleRevMode(editor))
+          setStatus(revModeOnState(editor.state) ? '修订模式已开：插入会标记为插入、删除变成删除线留原位' : '修订模式已关')
+          setTimeout(() => setStatus(''), 2400)
+        }, revOn, '本应用里改字留痕：开着时打字/粘贴标记为插入（w:ins），退格/删除/剪切变成删除线标记（w:del），署名「我」；用上面的接受/拒绝定稿')}
         {btn('脚注', () => startNote('footnote'), noteDraft?.kind === 'footnote', '在光标处插入脚注：正文写在文末脚注区，导出 docx/odt 为原生脚注')}
         {btn('尾注', () => startNote('endnote'), noteDraft?.kind === 'endnote', '在光标处插入尾注：编号与脚注各排各的')}
         {noteDraft && (
@@ -1220,8 +1414,71 @@ function DocEditor({ tab }: Props) {
             const presets = ['', '1', '1.15', '1.5', '2']
             const off = rule === 'auto' && lh && !presets.includes(String(lh)) ? String(lh) : ''
             const sel = rule === 'exact' || rule === 'atLeast' ? rule : rule === 'auto' ? (off ? `x${lh}` : String(lh)) : ''
+            // 当前段落的样式标签：heading 节点没挂 pStyle 时按层级映射显示（导出正是按 Heading N 写）
+            const hl = editor.getAttributes('heading').level
+            const curStyle =
+              typeof pa.pStyle === 'string' && pa.pStyle
+                ? pa.pStyle
+                : editor.isActive('heading') && !pa.pStyle
+                  ? `Heading${typeof hl === 'number' ? hl : 1}`
+                  : ''
+            const knownStyle = styleList.some((s) => s.id === curStyle)
+            // 当前选区压着的字符样式：段落样式与字符样式是两个维度，字符优先展示
+            const curRStyle = (editor.state.selection.$from.marks().find((m) => m.type.name === 'rStyle')?.attrs.id as string | undefined) ?? ''
+            // 光标所在那张表的样式标签（v0.114）：三种身份是三个维度，展示优先级 字符 > 表格 > 段落
+            const curTStyle = (String(editor.getAttributes('table').tStyle ?? '') || '') as string
+            const paraStyles = styleList.filter((s) => s.kind !== 'character' && s.kind !== 'table')
+            const charStyles = styleList.filter((s) => s.kind === 'character')
+            const tableStyles = styleList.filter((s) => s.kind === 'table')
             return (
               <>
+                {styleList.length > 0 && (
+                  <>
+                    <span className="editor-status">样式：</span>
+                    <select
+                      className="tb-select"
+                      value={curRStyle || curTStyle || curStyle}
+                      title="文档带进来的命名样式：套用只挂样式标签，呈现与导出由样式定义统一驱动（改定义全文跟着变）"
+                      onChange={(e) => applyDocStyle(styleList.find((s) => s.id === e.target.value) ?? null)}
+                    >
+                      <option value="">（无样式）</option>
+                      {/* heading 映射出来的 id 不在清单里时临时补一枚，别让下拉显示成空白 */}
+                      {curStyle && !knownStyle && <option value={curStyle}>{curStyle}</option>}
+                      <optgroup label="段落样式">
+                        {paraStyles.map((s) => (
+                          <option key={s.id} value={s.id}>
+                            {s.name}
+                          </option>
+                        ))}
+                      </optgroup>
+                      {charStyles.length > 0 && (
+                        <optgroup label="字符样式（套到选中文字）">
+                          {charStyles.map((s) => (
+                            <option key={s.id} value={s.id}>
+                              {s.name}
+                            </option>
+                          ))}
+                        </optgroup>
+                      )}
+                      {tableStyles.length > 0 && (
+                        <optgroup label="表格样式（套到光标所在的表）">
+                          {tableStyles.map((s) => (
+                            <option key={s.id} value={s.id}>
+                              {s.name}
+                            </option>
+                          ))}
+                        </optgroup>
+                      )}
+                    </select>
+                  </>
+                )}
+                <button
+                  className="tb-btn"
+                  title="样式表：查看/编辑文档的命名样式定义（字号、粗斜、颜色、对齐、行距、段距），改动全文即时生效并随存盘导出"
+                  onClick={() => setStyleEdOpen(!styleEdOpen)}
+                >
+                  样式表{styleList.length ? ` (${styleList.length})` : ''}
+                </button>
                 <span className="editor-status">段落：</span>
                 <select
                   className="tb-select"
@@ -1585,6 +1842,373 @@ function DocEditor({ tab }: Props) {
           )}
         </div>
       )}
+      {styleEdOpen && (
+        <div className="doc-style-panel">
+          <div className="doc-style-head">
+            <span className="editor-hint">
+              命名样式：定义一改，挂着该样式的段落/表格全文即时变；存盘导出写入 Word 样式表。
+              段落/字符/表格三类各在自己的维度上，手调格式（行距、逐格边框等）永远优先于样式，套用不清手调。
+            </span>
+            <button className="tb-btn" onClick={addDocStyle} title="新建一枚本文档的段落样式（自动命名 ooS1…），编辑后可在「样式」下拉里套用">
+              新建段落样式
+            </button>
+            <button className="tb-btn" onClick={addCharStyle} title="新建一枚字符样式（v0.113）：套到选中的文字上，只改字号/粗斜/颜色这类文字外观">
+              新建字符样式
+            </button>
+            <button className="tb-btn" onClick={addTableStyle} title="新建一枚表格样式（v0.114）：套到整张表上，管表线型/默认格边距/格底纹与表内文字，逐格手调仍优先">
+              新建表格样式
+            </button>
+          </div>
+          {styleList.length === 0 && (
+            <span className="editor-status">这份文档还没有命名样式——「新建样式」起一枚，或用带样式表的 docx 导入自动带进来</span>
+          )}
+          {styleList.map((s) => {
+            const builtin = BUILTIN_STYLE_IDS.test(s.id)
+            const num = (v: string) => (v === '' ? undefined : Number(v))
+            const conds = s.kind === 'table' ? (s.table?.cond ?? {}) : {}
+            const condKeys = TABLE_COND_TYPES.filter((t) => conds[t])
+            /** 条件层改动（v0.116）：动某一块只动那一块，不动同级其它部位 */
+            const patchCond = (type: TableCondType, p: Partial<TableCond> | null) =>
+              patchStyle(s.id, {
+                table: {
+                  ...(s.table ?? {}),
+                  cond: p === null ? { ...conds, [type]: undefined } : { ...conds, [type]: { ...(conds[type] ?? {}), ...p } },
+                },
+              })
+            return (
+              <>
+              <div
+                key={s.id}
+                className="doc-style-row"
+                title={builtin ? `${s.name}（${s.id}）：库内置样式，屏幕呈现与导出都走 Word 内置定义，这里只读` : `${s.id}${s.basedOn ? `，基于 ${s.basedOn}` : ''}`}
+              >
+                {builtin ? (
+                  <span className="doc-style-name">
+                    {s.name}
+                    <i className="doc-style-tag">内置</i>
+                  </span>
+                ) : (
+                  <>
+                    <input
+                      className="tb-input doc-style-name"
+                      value={s.name}
+                      onChange={(e) => patchStyle(s.id, { name: e.target.value.trim() || s.id })}
+                    />
+                    <label className="doc-style-field" title="字号（像素，1px=0.75pt）">
+                      <input
+                        className="tb-input doc-style-num"
+                        type="number"
+                        step="0.5"
+                        min="5"
+                        value={s.run.sizePx ?? ''}
+                        placeholder="字号"
+                        onChange={(e) => patchStyle(s.id, { run: { ...s.run, sizePx: num(e.target.value) } })}
+                      />
+                    </label>
+                    <label className="doc-style-chk" title="粗体">
+                      <input
+                        type="checkbox"
+                        checked={!!s.run.bold}
+                        onChange={(e) => patchStyle(s.id, { run: { ...s.run, bold: e.target.checked || undefined } })}
+                      />
+                      粗
+                    </label>
+                    <label className="doc-style-chk" title="斜体">
+                      <input
+                        type="checkbox"
+                        checked={!!s.run.italic}
+                        onChange={(e) => patchStyle(s.id, { run: { ...s.run, italic: e.target.checked || undefined } })}
+                      />
+                      斜
+                    </label>
+                    <input
+                      className="doc-style-color"
+                      type="color"
+                      title="文字颜色"
+                      value={/^#[0-9a-f]{6}$/i.test(s.run.color ?? '') ? s.run.color! : '#000000'}
+                      onChange={(e) => patchStyle(s.id, { run: { ...s.run, color: e.target.value } })}
+                    />
+                    {s.kind === 'character' ? (
+                      <i className="doc-style-tag">字符</i>
+                    ) : s.kind === 'table' ? (
+                      <>
+                        <i className="doc-style-tag">表格</i>
+                        <span className="tb-sep" />
+                        {(() => {
+                          const t = s.table ?? {}
+                          const patchT = (p: Partial<NonNullable<DocxStyleInfo['table']>>) =>
+                            patchStyle(s.id, { table: { ...t, ...p } })
+                          const css = borderCss(bdSel.style, bdSel.pt, bdSel.hex)
+                          const on = (k: TableBdKey) => borderParts(t[k]) !== null
+                          const toggle = (k: TableBdKey) => patchT({ [k]: on(k) ? undefined : css })
+                          const padNum = (k: 'padTopPx' | 'padRightPx' | 'padBottomPx' | 'padLeftPx', v: string) => {
+                            const n = Number(v)
+                            patchT({ [k]: v === '' || !Number.isFinite(n) || n < 0 ? undefined : n })
+                          }
+                          return (
+                            <>
+                              <select
+                                className="tb-select"
+                                value={bdSel.style}
+                                title="边框线型：先选它，再点要加的边"
+                                onChange={(e) => setBdSel({ ...bdSel, style: e.target.value })}
+                              >
+                                {BORDER_STYLES.map((o) => (
+                                  <option key={o.css} value={o.css}>
+                                    {o.label}
+                                  </option>
+                                ))}
+                              </select>
+                              <select
+                                className="tb-select"
+                                value={String(bdSel.pt)}
+                                title="边框粗细（磅，Word 边框对话框的那几档）"
+                                onChange={(e) => setBdSel({ ...bdSel, pt: Number(e.target.value) })}
+                              >
+                                {BORDER_WIDTH_PT.map((p) => (
+                                  <option key={p} value={String(p)}>
+                                    {p} 磅
+                                  </option>
+                                ))}
+                              </select>
+                              <label className="tb-color" title="边框颜色">
+                                色
+                                <input type="color" value={bdSel.hex} onChange={(e) => setBdSel({ ...bdSel, hex: e.target.value })} />
+                              </label>
+                              {TABLE_BD_KEYS.map((k) =>
+                                btn(
+                                  TABLE_BD_LABEL[k],
+                                  () => toggle(k),
+                                  on(k),
+                                  `${on(k) ? '去掉' : '加上'}${TABLE_BD_LABEL[k]}（表级那一层，逐格手调的边框压得住它）`,
+                                ),
+                              )}
+                              <select
+                                className="tb-select"
+                                value={t.align ?? ''}
+                                title="整张表的水平位置（w:jc）"
+                                onChange={(e) => patchT({ align: e.target.value || undefined })}
+                              >
+                                <option value="">表位置</option>
+                                <option value="left">左</option>
+                                <option value="center">居中</option>
+                                <option value="right">右</option>
+                              </select>
+                              <label className="tb-color" title="默认格底纹（样式自己的 w:tcPr/w:shd，逐格底纹优先）">
+                                格底
+                                <input
+                                  type="color"
+                                  value={/^#[0-9a-f]{6}$/i.test(t.background ?? '') ? t.background! : '#ffffff'}
+                                  onChange={(e) => patchT({ background: e.target.value })}
+                                />
+                              </label>
+                              {btn('无底', () => patchT({ background: undefined }), false, '清掉默认格底纹')}
+                              {(['上', '右', '下', '左'] as const).map((lab, i) => {
+                                const key = (['padTopPx', 'padRightPx', 'padBottomPx', 'padLeftPx'] as const)[i]
+                                return (
+                                  <label key={key} className="doc-style-field" title={`格边距·${lab}（像素）`}>
+                                    <input
+                                      className="tb-input doc-style-num"
+                                      type="number"
+                                      step="1"
+                                      min="0"
+                                      value={t[key] ?? ''}
+                                      placeholder={`边${lab}`}
+                                      onChange={(e) => padNum(key, e.target.value)}
+                                    />
+                                  </label>
+                                )
+                              })}
+                              {btn(
+                                `条件 ${condKeys.length}`,
+                                () => setCondOpenId(condOpenId === s.id ? null : s.id),
+                                condOpenId === s.id,
+                                '条件层（v0.116）：按部位再压一层——首行加粗、奇偶行底纹、四角这一类',
+                              )}
+                            </>
+                          )
+                        })()}
+                      </>
+                    ) : (
+                      <>
+                    <select
+                      className="tb-select"
+                      value={s.para.align ?? ''}
+                      title="对齐"
+                      onChange={(e) => patchStyle(s.id, { para: { ...s.para, align: e.target.value || undefined } })}
+                    >
+                      <option value="">对齐</option>
+                      <option value="left">左</option>
+                      <option value="center">中</option>
+                      <option value="right">右</option>
+                      <option value="justify">两端</option>
+                    </select>
+                    <input
+                      className="tb-input doc-style-num"
+                      type="number"
+                      step="0.05"
+                      min="0"
+                      value={s.para.lineHeight ?? ''}
+                      placeholder="行距"
+                      title={s.para.lineRule === 'exact' || s.para.lineRule === 'atLeast' ? '绝对行距（像素）' : '行距倍数'}
+                      onChange={(e) => patchStyle(s.id, { para: { ...s.para, lineHeight: num(e.target.value) } })}
+                    />
+                    <select
+                      className="tb-select"
+                      value={s.para.lineRule ?? 'auto'}
+                      title="行距规则"
+                      onChange={(e) => patchStyle(s.id, { para: { ...s.para, lineRule: (e.target.value || 'auto') as DocxStyleInfo['para']['lineRule'] } })}
+                    >
+                      <option value="auto">倍</option>
+                      <option value="exact">固定</option>
+                      <option value="atLeast">最小</option>
+                    </select>
+                    <input
+                      className="tb-input doc-style-num"
+                      type="number"
+                      step="1"
+                      min="0"
+                      value={s.para.spaceBeforePx ?? ''}
+                      placeholder="段前"
+                      title="段前距（像素）"
+                      onChange={(e) => patchStyle(s.id, { para: { ...s.para, spaceBeforePx: num(e.target.value) } })}
+                    />
+                    <input
+                      className="tb-input doc-style-num"
+                      type="number"
+                      step="1"
+                      min="0"
+                      value={s.para.spaceAfterPx ?? ''}
+                      placeholder="段后"
+                      title="段后距（像素）"
+                      onChange={(e) => patchStyle(s.id, { para: { ...s.para, spaceAfterPx: num(e.target.value) } })}
+                    />
+                      </>
+                    )}
+                    <button                       className="tb-btn doc-style-del" onClick={() => removeDocStyle(s.id)} title="删除此样式，并摘掉全文对它的引用">
+                      删
+                    </button>
+                  </>
+                )}
+              </div>
+              {!builtin && s.kind === 'table' && condOpenId === s.id && (
+                <div className="doc-tblcond-panel">
+                  <div className="doc-tblcond-row">
+                    <select
+                      className="tb-select"
+                      value={condType}
+                      title="要加哪个部位"
+                      onChange={(e) => setCondType(e.target.value as TableCondType)}
+                    >
+                      {TABLE_COND_TYPES.filter((t) => !conds[t]).map((t) => (
+                        <option key={t} value={t}>
+                          {TABLE_COND_LABEL[t]}
+                        </option>
+                      ))}
+                    </select>
+                    <button
+                      className="tb-btn"
+                      disabled={!condType || !!conds[condType]}
+                      onClick={() => condType && patchCond(condType, {})}
+                      title="加一块条件：Word 的「表样式」对话框里也是先勾部位再调样子"
+                    >
+                      加这个部位
+                    </button>
+                    <span className="editor-hint">
+                      按部位压一层：位置由行列现算（奇数行就是第 1、3、5…行），手调的逐格格式永远在上面。
+                      导出时连带给表写上 <code>w:tblLook</code> 这枚闸门：没有它，Word 认不出这些部位。
+                    </span>
+                  </div>
+                  {condKeys.length === 0 && <span className="editor-status">还没有条件层；上面选一个部位加上</span>}
+                  {condKeys.map((type) => {
+                    const c = conds[type]!
+                    const patchC = (p: Partial<TableCond>) => patchCond(type, p)
+                    const padNumC = (k: keyof TableCond, v: string) => {
+                      const n = Number(v)
+                      patchC({ [k]: v === '' || !Number.isFinite(n) || n < 0 ? undefined : n })
+                    }
+                    return (
+                      <div key={type} className="doc-tblcond-row">
+                        <span className="doc-tblcond-name" title={`w:tblStylePr w:type="${type}"`}>
+                          {TABLE_COND_LABEL[type]}
+                        </span>
+                        <label className="tb-color" title="这一部位的格底纹">
+                          底
+                          <input
+                            type="color"
+                            value={/^#[0-9a-f]{6}$/i.test(c.background ?? '') ? c.background! : '#ffffff'}
+                            onChange={(e) => patchC({ background: e.target.value })}
+                          />
+                        </label>
+                        <button className="tb-btn" onClick={() => patchC({ background: undefined })} title="不给底纹">
+                          无底
+                        </button>
+                        <label className="doc-style-chk" title="这一部位的文字加粗">
+                          <input type="checkbox" checked={!!c.bold} onChange={(e) => patchC({ bold: e.target.checked || undefined })} />
+                          粗
+                        </label>
+                        {(['上', '右', '下', '左'] as const).map((lab, i) => {
+                          const key = (['padTopPx', 'padRightPx', 'padBottomPx', 'padLeftPx'] as const)[i]
+                          return (
+                            <label key={key} className="doc-style-field" title={`格边距·${lab}（像素）`}>
+                              <input
+                                className="tb-input doc-style-num"
+                                type="number"
+                                step="1"
+                                min="0"
+                                value={c[key] ?? ''}
+                                placeholder={`边${lab}`}
+                                onChange={(e) => padNumC(key, e.target.value)}
+                              />
+                            </label>
+                          )
+                        })}
+                        <span className="tb-sep" />
+                        {CELL_EDGES.map((edge) => {
+                          const on = borderParts(c.borders?.[edge] ?? '') !== null
+                          const toggleBd = () => {
+                            const css = borderCss(bdSel.style, bdSel.pt, bdSel.hex)
+                            const next = { ...(c.borders ?? {}) }
+                            if (on) delete next[edge]
+                            else next[edge] = css
+                            patchC({ borders: next })
+                          }
+                          return btn(
+                            EDGE_LABEL[edge] ?? edge,
+                            toggleBd,
+                            on,
+                            `${on ? '去掉' : '加上'}${EDGE_LABEL[edge] ?? edge}的边框（线型/粗细/颜色按上方「表格」那支笔来）`,
+                          )
+                        })}
+                        <label className="doc-style-field" title="这一部位的行高（px，仅行型条件 firstRow/lastRow/奇数行/偶数行 在 Word 里生效）">
+                          <input
+                            className="tb-input doc-style-num"
+                            type="number"
+                            step="1"
+                            min="0"
+                            value={c.rowHeightPx ?? ''}
+                            placeholder="行高"
+                            onChange={(e) => {
+                              const n = Number(e.target.value)
+                              patchC({
+                                rowHeightPx: e.target.value === '' || !Number.isFinite(n) || n < 0 ? undefined : n,
+                              })
+                            }}
+                          />
+                        </label>
+                        <button className="tb-btn doc-style-del" onClick={() => patchCond(type, null)} title="去掉这一部位">
+                          删
+                        </button>
+                      </div>
+                    )
+                  })}
+                </div>
+              )}
+              </>
+            )
+          })}
+        </div>
+      )}
       <div className="doc-body">
         <div className="doc-scroll">
           <div
@@ -1607,6 +2231,8 @@ function DocEditor({ tab }: Props) {
                   : undefined
               }
             >
+              {/* 命名样式渲染层（v0.106）：样式定义在这里编译成规则，挂着 data-pstyle 的段落全文跟着它走 */}
+              <style>{styleCssOf(styleList)}</style>
               <EditorContent editor={editor} />
             </div>
             {notes.length > 0 && (

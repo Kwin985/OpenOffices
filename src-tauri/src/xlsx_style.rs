@@ -129,15 +129,31 @@ pub(crate) fn a1_to_rc(s: &str) -> Option<(u32, u32)> {
     Some((row.checked_sub(1)?, col.checked_sub(1)?))
 }
 
-pub(crate) fn read_entry(zip: &mut zip::ZipArchive<File>, name: &str) -> Option<String> {
+pub(crate) fn read_entry<R: std::io::Read + std::io::Seek>(
+    zip: &mut zip::ZipArchive<R>,
+    name: &str,
+) -> Option<String> {
     let mut f = zip.by_name(name).ok()?;
     let mut buf = Vec::new();
     f.read_to_end(&mut buf).ok()?;
     String::from_utf8(buf).ok()
 }
 
+/// 读出部件的原始字节（搬部件用：XML 以外的部件如图片经不起 String 往返）
+pub(crate) fn read_entry_bytes<R: std::io::Read + std::io::Seek>(
+    zip: &mut zip::ZipArchive<R>,
+    name: &str,
+) -> Option<Vec<u8>> {
+    let mut f = zip.by_name(name).ok()?;
+    let mut buf = Vec::new();
+    f.read_to_end(&mut buf).ok()?;
+    Some(buf)
+}
+
 /// xl/workbook.xml + rels → [(sheetName, zip 内 sheet 路径)]，按 workbook 声明顺序
-pub(crate) fn sheet_paths(zip: &mut zip::ZipArchive<File>) -> Vec<(String, String)> {
+pub(crate) fn sheet_paths<R: std::io::Read + std::io::Seek>(
+    zip: &mut zip::ZipArchive<R>,
+) -> Vec<(String, String)> {
     let mut out = Vec::new();
     let Some(wb) = read_entry(zip, "xl/workbook.xml") else {
         return out;

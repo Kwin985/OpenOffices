@@ -24,6 +24,7 @@ import type {
   SheetPrintPayload,
   WorkbookPayload,
 } from '../lib/fs'
+import type { DefinedNamePayload } from '../lib/fs'
 import { renderChartPng } from '../lib/chart'
 import { registerSaver } from '../lib/registry'
 import { saveBusyTimer, saveDoneTimer } from '../lib/save-status'
@@ -79,7 +80,11 @@ const CHART_TYPES = [
   ['area', '面积图'],
   ['pie', '饼图'],
   ['doughnut', '环形图'],
+  ['radar', '雷达图'],
+  ['scatter', '散点图'],
+  ['stock', '股价图'],
 ] as const
+// 走 x/y 双值轴、有堆叠分组的类型；散点与股价图都不涉及堆叠，故不在此列
 const CARTESIAN = ['column', 'bar', 'line', 'area']
 
 function num(v: unknown): number {
@@ -261,6 +266,14 @@ function SheetEditor({ tab }: Props) {  const containerRef = useRef<HTMLDivEleme
   // IWorksheetData.defaultRowHeight 是**活口**（喂进去界面就真按它排），而实测 Excel 自己并不用它排版。
   // 所以这一层只留一份原样字节给存盘回贴，不喂界面——喂了就是让界面去听一个文件里说了但纸面不认的数
   const sheetFormatRef = useRef(new Map<string, SheetFormat>())
+  // 用户定义名称（v0.103）是**簿级**的一档：Univer 的模型装不下（界面上也没有名字管理器），
+  // 读侧按簿原样留一份，存盘前原样回贴——公式里引用的名字写回才不断链
+  const namesRef = useRef<DefinedNamePayload[]>([])
+  // 定义名称管理器（v0.104）：namesRef 是真相源，弹层里编辑的是草稿态——「应用」才回贴，
+  // 取消就是什么都没发生（与页面设置面板同一套心智）
+  const [namesOpen, setNamesOpen] = useState(false)
+  const [namesView, setNamesView] = useState<DefinedNamePayload[]>([])
+  const [namesErr, setNamesErr] = useState('')
   const [status, setStatus] = useState<string>(tab.path ? '正在加载…' : '')
   const [chartCount, setChartCount] = useState(0)
   const [dialogOpen, setDialogOpen] = useState(false)
@@ -321,6 +334,7 @@ function SheetEditor({ tab }: Props) {  const containerRef = useRef<HTMLDivEleme
     printRef.current = new Map()
     defaultFontRef.current = null
     sheetFormatRef.current = new Map()
+    namesRef.current = []
     setChartCount(0)
     const worker = new Worker(new URL('../univer-worker.ts', import.meta.url), {
       type: 'module',
@@ -358,6 +372,8 @@ function SheetEditor({ tab }: Props) {  const containerRef = useRef<HTMLDivEleme
         )
         // 工作簿默认字体是簿级的一档，Univer 的 defaultStyle 是死槽装不下 ⇒ 原样留一份
         defaultFontRef.current = dump.defaultFont ?? null
+        // 定义名称同是簿级的一档：Univer 装不下，原样留一份给存盘回贴
+        namesRef.current = dump.definedNames ?? []
         // 缺省行高是**表级**的一档，同上原样留一份：这一层不喂界面（Univer 那边是活口，喂了界面就听一个纸面不认的数）
         sheetFormatRef.current = new Map(
           dump.sheets
@@ -652,6 +668,53 @@ function SheetEditor({ tab }: Props) {  const containerRef = useRef<HTMLDivEleme
     flash(`已清除「${draftSheet}」的页面设置（存盘后文件里不再声明纸面）`)
   }
 
+  // ---- 定义名称管理器 ------------------------------------------------------
+  const openNames = () => {
+    if (!namesOpen) {
+      setNamesView(namesRef.current.map((d) => ({ ...d })))
+      setNamesErr('')
+    }
+    setNamesOpen((v) => !v)
+  }
+  const patchName = (i: number, p: Partial<DefinedNamePayload>) =>
+    setNamesView((v) => v.map((d, k) => (k === i ? { ...d, ...p } : d)))
+  const removeName = (i: number) => setNamesView((v) => v.filter((_, k) => k !== i))
+  const addName = () => setNamesView((v) => [...v, { name: '', value: '' }])
+
+  /** Excel 同款校验：合法名字 = 非空、不以数字开头、无空格、不像单元格地址、不占 C/R 保留字 */
+  const nameProblem = (nm: string): string => {
+    if (nm.startsWith('_xlnm.')) return `「${nm}」是系统保留名（_xlnm.* 前缀归 Excel 内部用）`
+    if (/^[0-9]/.test(nm)) return `「${nm}」不能以数字开头`
+    if (/\s/.test(nm)) return `「${nm}」不能含空格（要分隔用下划线）`
+    if (/^[A-Za-z]{1,3}[0-9]{1,7}$/.test(nm) || /^[CR]$/i.test(nm))
+      return `「${nm}」长得像单元格地址或 R/C 保留字，Excel 不收`
+    return ''
+  }
+  const applyNames = () => {
+    const seen = new Set<string>()
+    for (const d of namesView) {
+      const nm = d.name.trim()
+      if (!nm) return setNamesErr('有名字还没起名')
+      const prob = nameProblem(nm)
+      if (prob) return setNamesErr(prob)
+      if (!d.value.trim()) return setNamesErr(`「${nm}」还指着空——名字必须有所指（区域/公式/常量）`)
+      const key = `${d.sheet ?? ''}|${nm}`
+      if (seen.has(key)) return setNamesErr(`同一作用域里「${nm}」重名了`)
+      seen.add(key)
+    }
+    namesRef.current = namesView.map((d) => ({
+      ...d,
+      name: d.name.trim(),
+      value: d.value.trim(),
+      sheet: d.sheet || undefined,
+      hidden: d.hidden || undefined,
+      comment: d.comment?.trim() || undefined,
+    }))
+    markDirty(tab.id, true)
+    setNamesOpen(false)
+    flash(`定义名称已更新（${namesRef.current.length} 枚），保存后随 xlsx 一起出去`)
+  }
+
   // 图表侧通道：Univer 只把图表当一张浮动图片，载荷里的图表靠这份账本附着。
   // 保存与导出 PDF 吃的是同一份产物，否则"文件里有图、打印里没图"又会各说一次话
   const payloadWithCharts = (wb: FWorkbook, snapshot: IWorkbookData): WorkbookPayload => {
@@ -669,6 +732,8 @@ function SheetEditor({ tab }: Props) {  const containerRef = useRef<HTMLDivEleme
     // 工作簿默认字体也是 Univer 快照装不下的东西（它的 defaultStyle 是死槽），从侧通道回贴；
     // 快照里读不出这一层，所以这一笔就是存盘与导出共吃的唯一来源
     payload.defaultFont = defaultFontRef.current
+    // 定义名称同理：名字管理器那一层只有侧通道知道，回贴后写侧才补得回 workbook.xml
+    payload.definedNames = namesRef.current.length ? namesRef.current : undefined
     // 缺省行高同理按表名回贴：快照里那一层是 Univer 自己的排版数值，不是文件那一层的字节
     for (const sheet of payload.sheets) {
       const f = sheetFormatRef.current.get(sheet.name)
@@ -730,6 +795,9 @@ function SheetEditor({ tab }: Props) {  const containerRef = useRef<HTMLDivEleme
     try {
       const snapshot = wb.save() as IWorkbookData
       const payload = payloadWithCharts(wb, snapshot)
+      // 保留式写回：盘上还是 xlsx 原件（且这一轮目标也是 xlsx）就把原件路径交给写侧，
+      // 让「读侧不认的部件」（图片、表格…）按表名映射搬进产物。新建簿没有原件，天然不带
+      if (tab.path?.toLowerCase().endsWith('.xlsx')) payload.srcPath = tab.path
       let path = asNew ? undefined : tab.path
       if (!path) {
         // 挑路径那一段是等用户的手、不是等我们写盘 ⇒ 撤掉那扇门，选完了再挂回来
@@ -1084,6 +1152,13 @@ function SheetEditor({ tab }: Props) {  const containerRef = useRef<HTMLDivEleme
         <button className="tool-btn" onClick={() => setDialogOpen((v) => !v)}>插入图表</button>
         <button className="tool-btn" onClick={() => void exportPdf()} title="自绘网格，纸面照文件的页面设置">导出 PDF</button>
         <button className="tool-btn" onClick={openPrintPanel} title="这一张表该怎么摆到纸上：纸张/边距/页眉页脚/分页">页面设置</button>
+        <button
+          className="tool-btn"
+          onClick={openNames}
+          title="公式引用的名字账本：区域/公式/常量都可以起名，写回随 xlsx 出去"
+        >
+          定义名称{namesRef.current.length > 0 ? ` (${namesRef.current.length})` : ''}
+        </button>
         {chartCount > 0 && (
           <button className="tool-btn" onClick={refreshCharts}>刷新图表 ({chartCount})</button>
         )}
@@ -1400,6 +1475,60 @@ function SheetEditor({ tab }: Props) {  const containerRef = useRef<HTMLDivEleme
             {!panelWs && <div className="print-pop-errs">「{draftSheet}」这张表已经不在了，先关掉这个面板</div>}
           </div>
         )}
+        {namesOpen &&
+          (() => {
+            const sheetOpts = apiRef.current?.getActiveWorkbook()?.getSheets().map((s) => s.getSheetName()) ?? []
+            return (
+              <div className="names-pop">
+                <div className="print-pop-title">
+                  定义名称
+                  <span className="print-pop-sub">
+                    公式引用的名字账本（如 =税率*金额）。删掉被公式引用的名字，公式会变 #NAME?——应用前都可「取消」反悔
+                  </span>
+                </div>
+                {namesView.length === 0 && (
+                  <div className="names-pop-empty">这个文件还没有用户定义名称——新增一枚，给常用区域或公式起个名字</div>
+                )}
+                {namesView.map((d, i) => (
+                  <div className="names-row" key={i}>
+                    <input
+                      className="names-name"
+                      value={d.name}
+                      placeholder="名字"
+                      title={d.comment || undefined}
+                      onChange={(e) => patchName(i, { name: e.target.value })}
+                    />
+                    <input
+                      className="names-value"
+                      value={d.value}
+                      placeholder="所指：区域如 参数!$A$1，或公式如 SUM(Sheet1!$B$2:$B$9)"
+                      onChange={(e) => patchName(i, { value: e.target.value })}
+                    />
+                    <select
+                      value={d.sheet ?? ''}
+                      title="作用域：工作簿级全簿可见；表级只在该表可见"
+                      onChange={(e) => patchName(i, { sheet: e.target.value || undefined })}
+                    >
+                      <option value="">工作簿级</option>
+                      {sheetOpts.map((n) => (
+                        <option key={n} value={n}>{n}</option>
+                      ))}
+                    </select>
+                    <button className="tool-btn" title="移除这枚（应用前可取消反悔）" onClick={() => removeName(i)}>
+                      ×
+                    </button>
+                  </div>
+                ))}
+                <div className="names-pop-actions">
+                  <button className="tool-btn" onClick={addName}>新增一枚</button>
+                  {namesErr && <span className="names-pop-err">{namesErr}</span>}
+                  <span className="names-pop-spring" />
+                  <button className="tool-btn tool-btn-primary" onClick={applyNames}>应用</button>
+                  <button className="tool-btn" onClick={() => setNamesOpen(false)}>取消</button>
+                </div>
+              </div>
+            )
+          })()}
         {status && (
           <span className="editor-status" title={statusTip(status)}>
             {statusText(status)}

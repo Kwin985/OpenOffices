@@ -7,7 +7,7 @@ use std::fs::File;
 use quick_xml::events::Event;
 use quick_xml::Reader;
 
-use crate::xlsx::{ChartPayload, ChartSeries, RangeRef};
+use crate::xlsx::{ChartAxis, ChartPayload, ChartSeries, RangeRef};
 use crate::xlsx_style::{a1_to_rc, attr_str, read_entry, sheet_paths};
 use serde_json::Value;
 
@@ -37,7 +37,7 @@ pub(crate) fn rels_of(path: &str) -> String {
     format!("{dir}/_rels/{file}.rels")
 }
 
-fn parse_rels(xml: &str) -> HashMap<String, String> {
+pub(crate) fn parse_rels(xml: &str) -> HashMap<String, String> {
     let mut out = HashMap::new();
     let mut reader = Reader::from_str(xml);
     while let Ok(ev) = reader.read_event() {
@@ -112,24 +112,74 @@ struct SerParse {
     name_lit: String,
     cat_ref: Option<String>,
     val_ref: Option<String>,
+    /// 本系列落在 plotArea 里的第几个 chart 元素上（组合图按它定本系列的图型）
+    elem: usize,
+}
+
+/// plotArea 里的一个 chart 元素（`<c:barChart>`/`<c:lineChart>`/…）。组合图就是同一 plotArea 里并排放多个
+#[derive(Default)]
+struct ElemCtx {
+    ty: String,
+    bar_dir: String,
+    grouping: String,
+    radar_style: String,
+    scatter_style: String,
+    /// 本元素引用的轴 id（`<c:axId>`，通常两根：一根类目轴、一根值轴）
+    ax_ids: Vec<String>,
+    /// 本元素的系列走次值轴（组合图里量纲差得远的那条）
+    secondary: bool,
+}
+
+impl ElemCtx {
+    /// barChart 的 barDir 才分 column/bar（OOXML：barDir=col 是垂直柱形图）
+    fn resolved(&self) -> String {
+        if self.ty == "bar" {
+            return if self.bar_dir == "bar" { "bar".into() } else { "column".into() };
+        }
+        self.ty.clone()
+    }
 }
 
 struct ChartCore {
     chart_type: String,
     grouping: String,
+    /// 仅 radar 用：<c:radarStyle> 的 standard|marker|filled
+    radar_style: String,
+    /// 仅 scatter 用：<c:scatterStyle> 的 marker|line|lineMarker|smooth|smoothMarker
+    scatter_style: String,
     title: String,
+    /// 轴（按 XML 出现次序）：类目轴与值轴混在里面，值轴的第 0 根是主、第 1 根是次
+    axes: Vec<ChartAxis>,
     series: Vec<ChartSeries>,
 }
 
-/// 解析 chartN.xml；None 表示不支持的类型或无有效系列（radar/scatter/stock 等归此类）
+/// 解析 chartN.xml；None 表示不支持的类型或无有效系列（surface/bubble 等仍归此类）
 fn parse_chart(xml: &str, host: &str, grids: &HashMap<String, Grid>) -> Option<ChartCore> {
-    const TYPES: [&str; 5] = ["barChart", "lineChart", "pieChart", "doughnutChart", "areaChart"];
-    let mut ctype = String::new();
-    let mut bar_dir = String::new();
-    let mut grouping = String::new();
+    const TYPES: [&str; 8] = [
+        "barChart",
+        "lineChart",
+        "pieChart",
+        "doughnutChart",
+        "areaChart",
+        "radarChart",
+        "scatterChart",
+        "stockChart",
+    ];
+    // 同一 plotArea 里可能并排多个 chart 元素（组合图，如 barChart + lineChart）：
+    // 每个元素自带 barDir/grouping/样式与若干 ser，所以这些都按元素记，不能像 v0.122 之前那样全局覆盖
+    let mut elems: Vec<ElemCtx> = Vec::new();
+    // 值轴按出现次序编号：第 0 根是主轴，之后都是次轴（Excel 只认主/次两根值轴，第三根起归到次轴并记账）
+    let mut val_ax_ids: Vec<String> = Vec::new();
+    // 当前是否在某个轴定义元素里（轴定义内部也有 <c:axId>，那是"声明"，不是 chart 元素的"引用"）
+    let mut ax_kind = "";
+    // 轴定义按出现次序收集，散在 plotArea 的 chart 元素之后
+    let mut axes: Vec<ChartAxis> = Vec::new();
     let mut title = String::new();
     let mut in_title = false;
     let mut in_t = false;
+    // 轴自己的标题（<c:valAx><c:title>…），与图表标题是两回事
+    let mut ax_title = false;
+    let mut in_ax_t = false;
     let mut in_plot = false;
     let mut field = 0u8; // 1=tx 2=cat 3=val
     let mut want = 0u8; // 1=抓 <f> 2=抓 <v>
@@ -146,26 +196,129 @@ fn parse_chart(xml: &str, host: &str, grids: &HashMap<String, Grid>) -> Option<C
                     "title" if !in_plot && matches!(&ev, Event::Start(_)) => in_title = true,
                     "t" if in_title && matches!(&ev, Event::Start(_)) => in_t = true,
                     "plotArea" => in_plot = true,
-                    "barDir" => bar_dir = attr_str(e, "val").unwrap_or_default(),
+                    "valAx" if matches!(&ev, Event::Start(_)) => {
+                        ax_kind = "val";
+                        axes.push(ChartAxis { kind: "val".into(), ..Default::default() });
+                    }
+                    "catAx" | "dateAx" if matches!(&ev, Event::Start(_)) => {
+                        ax_kind = "cat";
+                        axes.push(ChartAxis { kind: "cat".into(), ..Default::default() });
+                    }
+                    // 轴定义里的是"声明"（记进 val_ax_ids 定序），chart 元素里的是"引用"（记进该元素）
+                    "axId" => {
+                        let v = attr_str(e, "val").unwrap_or_default();
+                        if v.is_empty() {
+                        } else if !ax_kind.is_empty() {
+                            if let Some(a) = axes.last_mut() {
+                                a.id = v.clone();
+                            }
+                            if ax_kind == "val" {
+                                val_ax_ids.push(v)
+                            }
+                        } else if let Some(cur) = elems.last_mut() {
+                            cur.ax_ids.push(v)
+                        }
+                    }
+                    // 轴的刻度：min/max/logBase 住 <c:scaling>，major/minorUnit 直接在轴下
+                    "min" | "max" | "logBase" | "majorUnit" | "minorUnit" if !ax_kind.is_empty() => {
+                        let v = attr_str(e, "val").and_then(|s| s.trim().parse::<f64>().ok());
+                        if let (Some(v), Some(a)) = (v, axes.last_mut()) {
+                            match nm {
+                                "min" => a.min = Some(v),
+                                "max" => a.max = Some(v),
+                                "logBase" => a.log_base = Some(v),
+                                "majorUnit" => a.major_unit = Some(v),
+                                _ => a.minor_unit = Some(v),
+                            }
+                        }
+                    }
+                    "delete" if !ax_kind.is_empty() => {
+                        if let Some(a) = axes.last_mut() {
+                            a.hidden = matches!(attr_str(e, "val").as_deref(), Some("1" | "true"));
+                        }
+                    }
+                    "axPos" if !ax_kind.is_empty() => {
+                        if let Some(a) = axes.last_mut() {
+                            a.pos = attr_str(e, "val").unwrap_or_default();
+                        }
+                    }
+                    // orientation 只有 maxMin（倒序）与 minMax（默认）两档
+                    "orientation" if !ax_kind.is_empty() => {
+                        if let Some(a) = axes.last_mut() {
+                            a.reverse = attr_str(e, "val").as_deref() == Some("maxMin");
+                        }
+                    }
+                    // sourceLinked=1 是"跟随源数据的格式"，等于这根轴自己没说话
+                    "numFmt" if !ax_kind.is_empty() => {
+                        let linked = attr_str(e, "sourceLinked").as_deref() == Some("1");
+                        if !linked {
+                            if let (Some(f), Some(a)) = (attr_str(e, "formatCode"), axes.last_mut())
+                            {
+                                if !f.is_empty() {
+                                    a.num_format = Some(f);
+                                }
+                            }
+                        }
+                    }
+                    // 显示单位：内置档给的是 thousands 这类词，自定义档给的是 10000 这种数字串
+                    "builtInUnit" | "custUnit" if !ax_kind.is_empty() => {
+                        if let (Some(u), Some(a)) = (attr_str(e, "val"), axes.last_mut()) {
+                            if !u.is_empty() {
+                                a.display_unit = Some(u);
+                            }
+                        }
+                    }
+                    "title" if !ax_kind.is_empty() && matches!(&ev, Event::Start(_)) => {
+                        ax_title = true
+                    }
+                    "t" if ax_title && matches!(&ev, Event::Start(_)) => in_ax_t = true,
+                    "barDir" => {
+                        if let Some(cur) = elems.last_mut() {
+                            cur.bar_dir = attr_str(e, "val").unwrap_or_default()
+                        }
+                    }
                     "grouping" if ser.is_none() => {
-                        grouping = attr_str(e, "val").unwrap_or_default()
+                        if let Some(cur) = elems.last_mut() {
+                            cur.grouping = attr_str(e, "val").unwrap_or_default()
+                        }
+                    }
+                    "radarStyle" if ser.is_none() => {
+                        if let Some(cur) = elems.last_mut() {
+                            cur.radar_style = attr_str(e, "val").unwrap_or_default()
+                        }
+                    }
+                    "scatterStyle" if ser.is_none() => {
+                        if let Some(cur) = elems.last_mut() {
+                            cur.scatter_style = attr_str(e, "val").unwrap_or_default()
+                        }
                     }
                     t if TYPES.contains(&t) && matches!(&ev, Event::Start(_)) => {
-                        ctype = match t {
-                            "lineChart" => "line".into(),
-                            "pieChart" => "pie".into(),
-                            "doughnutChart" => "doughnut".into(),
-                            "areaChart" => "area".into(),
-                            _ => "bar".into(), // barChart，barDir 稍后区分 column/bar
-                        };
+                        elems.push(ElemCtx {
+                            ty: match t {
+                                "lineChart" => "line".into(),
+                                "pieChart" => "pie".into(),
+                                "doughnutChart" => "doughnut".into(),
+                                "areaChart" => "area".into(),
+                                "radarChart" => "radar".into(),
+                                "scatterChart" => "scatter".into(),
+                                "stockChart" => "stock".into(),
+                                _ => "bar".into(), // barChart，barDir 稍后区分 column/bar
+                            },
+                            ..Default::default()
+                        });
                     }
                     "ser" if matches!(&ev, Event::Start(_)) => {
-                        ser = Some(SerParse::default());
+                        let mut s = SerParse::default();
+                        s.elem = elems.len().saturating_sub(1);
+                        ser = Some(s);
                         field = 0;
                     }
                     "tx" if ser.is_some() => field = 1,
                     "cat" if ser.is_some() => field = 2,
                     "val" if ser.is_some() => field = 3,
+                    // scatterChart 的系列用 xVal/yVal（两轴都是数值），分别落进 cat/val 槽
+                    "xVal" if ser.is_some() => field = 2,
+                    "yVal" if ser.is_some() => field = 3,
                     "f" if field > 0 && ser.is_some() => want = 1,
                     "v" if field == 1 => want = 2,
                     _ => {}
@@ -175,6 +328,10 @@ fn parse_chart(xml: &str, host: &str, grids: &HashMap<String, Grid>) -> Option<C
                 let text = t.as_ref().to_string();
                 if in_t {
                     title.push_str(&text);
+                } else if in_ax_t {
+                    if let Some(a) = axes.last_mut() {
+                        a.title.get_or_insert_with(String::new).push_str(&text);
+                    }
                 } else if want == 1 {
                     if let Some(s) = ser.as_mut() {
                         match field {
@@ -205,6 +362,10 @@ fn parse_chart(xml: &str, host: &str, grids: &HashMap<String, Grid>) -> Option<C
                 if let Some(text) = resolved {
                     if in_t {
                         title.push_str(&text);
+                    } else if in_ax_t {
+                        if let Some(a) = axes.last_mut() {
+                            a.title.get_or_insert_with(String::new).push_str(&text);
+                        }
                     } else if want == 2 {
                         if let Some(s) = ser.as_mut() {
                             s.name_lit.push_str(&text);
@@ -222,10 +383,23 @@ fn parse_chart(xml: &str, host: &str, grids: &HashMap<String, Grid>) -> Option<C
                         }
                         field = 0;
                     }
-                    "tx" | "cat" | "val" => field = 0,
+                    "tx" | "cat" | "val" | "xVal" | "yVal" => field = 0,
+                    "valAx" | "catAx" | "dateAx" => ax_kind = "",
                     "v" => want = 0,
-                    "title" => in_title = false,
-                    "t" => in_t = false,
+                    "title" => {
+                        if ax_title {
+                            if let Some(a) = axes.last_mut() {
+                                let s = a.title.as_deref().unwrap_or("").trim().to_string();
+                                a.title = if s.is_empty() { None } else { Some(s) };
+                            }
+                        }
+                        in_title = false;
+                        ax_title = false;
+                    }
+                    "t" => {
+                        in_t = false;
+                        in_ax_t = false;
+                    }
                     _ => {}
                 }
             }
@@ -234,14 +408,38 @@ fn parse_chart(xml: &str, host: &str, grids: &HashMap<String, Grid>) -> Option<C
         }
     }
 
-    if ctype.is_empty() {
+    if elems.is_empty() {
         return None;
     }
-    if ctype == "bar" && bar_dir != "bar" {
-        ctype = "column".into(); // OOXML：barDir=col 是垂直柱形图
+    // 值轴按出现次序定序后回看每个 chart 元素引用了第几根：第 0 根是主轴，之后皆为次轴
+    let val_idx: HashMap<&str, usize> = val_ax_ids
+        .iter()
+        .enumerate()
+        .map(|(i, a)| (a.as_str(), i))
+        .collect();
+    for e in elems.iter_mut() {
+        let hits: Vec<usize> = e
+            .ax_ids
+            .iter()
+            .filter_map(|a| val_idx.get(a.as_str()).copied())
+            .collect();
+        e.secondary = match hits.as_slice() {
+            // 引用的两根都是值轴 ⇒ 散点图（X/Y 皆数值轴），无所谓主次
+            [_, _, ..] => false,
+            [i] => *i >= 1,
+            _ => false,
+        };
     }
+    // 主图型 = 第一个 chart 元素（Excel 组合图里它承载主轴与共享的类别轴）
+    let ctype = elems[0].resolved();
     let mut series: Vec<ChartSeries> = Vec::new();
     for s in sers {
+        // 组合图里这一系列可能属于后面的 chart 元素：只有与主图型不同才记（同型就留 None 随主图型）
+        let own = elems
+            .get(s.elem)
+            .map(|e| e.resolved())
+            .unwrap_or_else(|| ctype.clone());
+        let chart_type = if own == ctype { None } else { Some(own) };
         let val = match s.val_ref.as_deref().and_then(parse_ref) {
             Some(v) => v,
             None => continue,
@@ -263,12 +461,16 @@ fn parse_chart(xml: &str, host: &str, grids: &HashMap<String, Grid>) -> Option<C
             },
             None => s.name_lit,
         };
+        // 次轴随系列走：它和"本系列的图型"一样是由所属的 chart 元素决定的
+        let secondary_axis = elems.get(s.elem).map(|e| e.secondary).unwrap_or(false);
         series.push(ChartSeries {
             name,
             cat,
             val,
             cats,
             vals,
+            chart_type,
+            secondary_axis,
         });
     }
     if series.is_empty() {
@@ -276,8 +478,12 @@ fn parse_chart(xml: &str, host: &str, grids: &HashMap<String, Grid>) -> Option<C
     }
     Some(ChartCore {
         chart_type: ctype,
-        grouping,
+        grouping: elems[0].grouping.clone(),
+        radar_style: elems[0].radar_style.trim().to_string(),
+        scatter_style: elems[0].scatter_style.trim().to_string(),
         title: title.trim().to_string(),
+        // 整根轴没说话就不进载荷：朴素图表的载荷与 v0.124 之前逐字同形
+        axes: axes.into_iter().filter(|a| a.speaks()).collect(),
         series,
     })
 }
@@ -442,10 +648,21 @@ pub fn read_xlsx_charts(
                         chart_type: core.chart_type,
                         grouping: map_grouping(&core.grouping),
                         title: core.title,
+                        radar_style: if core.radar_style.is_empty() {
+                            None
+                        } else {
+                            Some(core.radar_style.clone())
+                        },
+                        scatter_style: if core.scatter_style.is_empty() {
+                            None
+                        } else {
+                            Some(core.scatter_style.clone())
+                        },
                         anchor_row: anchor.row,
                         anchor_col: anchor.col,
                         width: anchor.width.max(120),
                         height: anchor.height.max(90),
+                        axes: core.axes,
                         series: core.series,
                     });
                 }
@@ -513,16 +730,329 @@ mod tests {
     }
 
     #[test]
-    fn unsupported_types_and_missing_series_drop() {
+    fn unsupported_and_missing_series_drop() {
         let grid: HashMap<String, Grid> = HashMap::new();
-        let radar = r#"<c:chartSpace><c:chart><c:plotArea><c:radarChart><c:ser>
-          <c:val><c:numRef><c:f>S!$A$1</c:f></c:numRef></c:val></c:ser></c:radarChart>
+        // surface 不在支持的八型之内 → None
+        let surface = r#"<c:chartSpace><c:chart><c:plotArea><c:surfaceChart><c:ser>
+          <c:val><c:numRef><c:f>S!$A$1</c:f></c:numRef></c:val></c:ser></c:surfaceChart>
         </c:plotArea></c:chart></c:chartSpace>"#;
-        assert!(parse_chart(radar, "S", &grid).is_none());
+        assert!(parse_chart(surface, "S", &grid).is_none());
+        // 缺少 val 引用的系列 → None
         let noval = r#"<c:chartSpace><c:chart><c:plotArea><c:pieChart><c:ser>
           <c:cat><c:strRef><c:f>S!$A$1</c:f></c:strRef></c:cat></c:ser></c:pieChart>
         </c:plotArea></c:chart></c:chartSpace>"#;
         assert!(parse_chart(noval, "S", &grid).is_none());
+    }
+
+    #[test]
+    fn radar_chart_parses_with_style() {
+        let grid: HashMap<String, Grid> = HashMap::from([(
+            "S".to_string(),
+            Grid::from([
+                ((0, 0), Value::String("指标".into())),
+                ((0, 1), Value::String("A".into())),
+                ((1, 0), Value::String("速度".into())),
+                ((1, 1), Value::from(3)),
+                ((2, 0), Value::String("稳定".into())),
+                ((2, 1), Value::from(5.5)),
+            ]),
+        )]);
+        let xml = r#"<c:chartSpace xmlns:c="c"><c:chart>
+          <c:title><c:tx><c:rich><a:p><a:r><a:t>雷达图</a:t></a:r></a:p></c:rich></c:tx></c:title>
+          <c:plotArea><c:radarChart><c:radarStyle val="filled"/>
+            <c:ser><c:tx><c:strRef><c:f>S!$B$1</c:f></c:strRef></c:tx>
+              <c:cat><c:strRef><c:f>S!$A$2:$A$3</c:f></c:strRef></c:cat>
+              <c:val><c:numRef><c:f>S!$B$2:$B$3</c:f></c:numRef></c:val>
+            </c:ser>
+          </c:radarChart></c:plotArea></c:chart></c:chartSpace>"#;
+        let core = parse_chart(xml, "S", &grid).expect("radar 图表");
+        assert_eq!(core.chart_type, "radar");
+        assert_eq!(core.radar_style, "filled");
+        assert_eq!(core.title, "雷达图");
+        let s = &core.series[0];
+        assert_eq!(s.name, "A", "系列名从网格取，不信缓存");
+        assert_eq!(s.vals, vec![3.0, 5.5]);
+    }
+
+    #[test]
+    fn scatter_chart_parses_x_y_and_style() {
+        let grid: HashMap<String, Grid> = HashMap::from([(
+            "S".to_string(),
+            Grid::from([
+                ((0, 0), Value::String("Y系列".into())),
+                ((1, 0), Value::from(1)),
+                ((1, 1), Value::from(2.5)),
+                ((2, 0), Value::from(2)),
+                ((2, 1), Value::from(5.5)),
+                ((3, 0), Value::from(3)),
+                ((3, 1), Value::from(9)),
+            ]),
+        )]);
+        // A 列是 X 值（xVal）、B 列是 Y 值（yVal）；scatter 两轴都是数值，故没有类别列
+        let xml = r#"<c:chartSpace xmlns:c="c"><c:chart>
+          <c:plotArea><c:scatterChart><c:scatterStyle val="lineMarker"/>
+            <c:ser><c:tx><c:strRef><c:f>S!$B$1</c:f></c:strRef></c:tx>
+              <c:xVal><c:numRef><c:f>S!$A$2:$A$4</c:f></c:numRef></c:xVal>
+              <c:yVal><c:numRef><c:f>S!$B$2:$B$4</c:f></c:numRef></c:yVal>
+            </c:ser>
+          </c:scatterChart>
+          <c:valAx><c:axId val="11"/><c:axPos val="b"/><c:title><c:tx><c:rich><a:p><a:r><a:t>X 轴</a:t></a:r></a:p></c:rich></c:tx></c:title></c:valAx>
+          <c:valAx><c:axId val="22"/><c:axPos val="l"/><c:title><c:tx><c:rich><a:p><a:r><a:t>Y 轴</a:t></a:r></a:p></c:rich></c:tx></c:title></c:valAx>
+        </c:plotArea></c:chart></c:chartSpace>"#;
+        let core = parse_chart(xml, "S", &grid).expect("scatter 图表");
+        assert_eq!(core.chart_type, "scatter");
+        assert_eq!(core.scatter_style, "lineMarker");
+        assert_eq!(core.radar_style, "", "scatter 不带 radarStyle");
+        // 散点两根都是值轴：X/Y 靠 axPos 分，标题各回各的轴
+        assert_eq!(core.axes.len(), 2);
+        assert_eq!(core.axes[0].pos, "b");
+        assert_eq!(core.axes[0].title.as_deref(), Some("X 轴"));
+        assert_eq!(core.axes[1].pos, "l");
+        assert_eq!(core.axes[1].title.as_deref(), Some("Y 轴"));
+        let s = &core.series[0];
+        assert_eq!(s.vals, vec![2.5, 5.5, 9.0], "yVal → vals");
+        assert_eq!(
+            s.cats.iter().map(num_of).collect::<Vec<_>>(),
+            vec![1.0, 2.0, 3.0],
+            "xVal → cats"
+        );
+        let cat = s.cat.as_ref().expect("xVal 引用落到 cat");
+        assert_eq!((cat.r1, cat.c1, cat.r2, cat.c2), (1, 0, 3, 0));
+    }
+
+    #[test]
+    fn axes_parse_title_scale_display_unit() {
+        let grid: HashMap<String, Grid> = HashMap::from([(("S".to_string(), Grid::from([((1, 1), Value::from(3)), ((2, 1), Value::from(5))])))]);
+        let xml = r#"<c:chartSpace xmlns:c="c" xmlns:a="a"><c:chart><c:plotArea>
+          <c:barChart><c:barDir val="col"/>
+            <c:ser><c:val><c:numRef><c:f>S!$B$2:$B$3</c:f></c:numRef></c:val></c:ser>
+          </c:barChart>
+          <c:catAx>
+            <c:axId val="111"/><c:axPos val="b"/>
+            <c:title><c:tx><c:rich><a:p><a:r><a:t>月份</a:t></a:r></a:p></c:rich></c:tx></c:title>
+          </c:catAx>
+          <c:valAx>
+            <c:axId val="222"/><c:axPos val="l"/>
+            <c:scaling><c:logBase val="10"/><c:orientation val="maxMin"/><c:max val="100"/><c:min val="1"/></c:scaling>
+            <c:delete val="1"/>
+            <c:numFmt formatCode="0.0%" sourceLinked="0"/>
+            <c:title><c:tx><c:rich><a:p><a:r><a:t>销售额</a:t></a:r></a:p></c:rich></c:tx></c:title>
+            <c:dispUnits><c:builtInUnit val="thousands"/></c:dispUnits>
+            <c:majorUnit val="20"/><c:minorUnit val="4"/>
+          </c:valAx>
+        </c:plotArea></c:chart></c:chartSpace>"#;
+        let core = parse_chart(xml, "S", &grid).expect("柱状图");
+        assert_eq!(core.axes.len(), 2, "两根轴都说了话");
+        let cat = &core.axes[0];
+        assert_eq!((cat.kind.as_str(), cat.id.as_str(), cat.pos.as_str()), ("cat", "111", "b"));
+        assert_eq!(cat.title.as_deref(), Some("月份"), "轴标题取轴内 <c:title> 的文本");
+        assert!(!cat.hidden);
+        assert_eq!(cat.min, None, "类目轴没有 min/max 那一套");
+        let val = &core.axes[1];
+        assert_eq!((val.kind.as_str(), val.id.as_str(), val.pos.as_str()), ("val", "222", "l"));
+        assert_eq!(val.title.as_deref(), Some("销售额"));
+        assert_eq!(val.min, Some(1.0));
+        assert_eq!(val.max, Some(100.0));
+        assert_eq!(val.log_base, Some(10.0));
+        assert_eq!(val.major_unit, Some(20.0));
+        assert_eq!(val.minor_unit, Some(4.0));
+        assert_eq!(val.display_unit.as_deref(), Some("thousands"));
+        assert_eq!(val.num_format.as_deref(), Some("0.0%"));
+        assert!(val.reverse, "orientation=maxMin → 刻度倒着走");
+        assert!(val.hidden, "delete=1 → 整根轴不显示");
+    }
+
+    #[test]
+    fn axis_with_no_settings_is_dropped() {
+        let grid: HashMap<String, Grid> = HashMap::from([(("S".to_string(), Grid::from([((1, 1), Value::from(3))])))]);
+        // 轴定义在（id/pos 都有）但啥都没说 ⇒ 不进载荷，朴素图表的形状与 v0.124 逐字相同
+        let xml = r#"<c:chartSpace xmlns:c="c"><c:chart><c:plotArea>
+          <c:barChart><c:barDir val="col"/>
+            <c:ser><c:val><c:numRef><c:f>S!$B$2</c:f></c:numRef></c:val></c:ser>
+          </c:barChart>
+          <c:catAx><c:axId val="111"/><c:axPos val="b"/></c:catAx>
+          <c:valAx><c:axId val="222"/><c:axPos val="l"/></c:valAx>
+        </c:plotArea></c:chart></c:chartSpace>"#;
+        let core = parse_chart(xml, "S", &grid).expect("柱状图");
+        assert!(core.axes.is_empty(), "没说话的轴不进载荷");
+        // sourceLinked=1 的数字格式是"跟随源数据"，同样不算说话
+        let xml2 = xml.replace(
+            "<c:axId val=\"222\"/>",
+            "<c:axId val=\"222\"/><c:numFmt formatCode=\"0\" sourceLinked=\"1\"/>",
+        );
+        let core2 = parse_chart(&xml2, "S", &grid).expect("柱状图2");
+        assert!(core2.axes.is_empty(), "sourceLinked=1 不算轴自己说话");
+    }
+
+    #[test]
+    fn stock_chart_parses_multi_series_shared_categories() {
+        let grid: HashMap<String, Grid> = HashMap::from([(
+            "S".to_string(),
+            Grid::from([
+                ((0, 1), Value::String("开盘".into())),
+                ((0, 2), Value::String("收盘".into())),
+                ((1, 0), Value::String("1月2日".into())),
+                ((1, 1), Value::from(10)),
+                ((1, 2), Value::from(12)),
+                ((2, 0), Value::String("1月3日".into())),
+                ((2, 1), Value::from(12)),
+                ((2, 2), Value::from(11)),
+            ]),
+        )]);
+        // 股价图的 ser 结构与折线图同构（cat + val），四段 OHLC 就是四个共享类别的系列
+        let xml = r#"<c:chartSpace xmlns:c="c"><c:chart>
+          <c:title><c:tx><c:rich><a:p><a:r><a:t>股价</a:t></a:r></a:p></c:rich></c:tx></c:title>
+          <c:plotArea><c:stockChart>
+            <c:ser><c:tx><c:strRef><c:f>S!$B$1</c:f></c:strRef></c:tx>
+              <c:cat><c:strRef><c:f>S!$A$2:$A$3</c:f></c:strRef></c:cat>
+              <c:val><c:numRef><c:f>S!$B$2:$B$3</c:f></c:numRef></c:val>
+            </c:ser>
+            <c:ser><c:tx><c:strRef><c:f>S!$C$1</c:f></c:strRef></c:tx>
+              <c:cat><c:strRef><c:f>S!$A$2:$A$3</c:f></c:strRef></c:cat>
+              <c:val><c:numRef><c:f>S!$C$2:$C$3</c:f></c:numRef></c:val>
+            </c:ser>
+            <c:upDownBars><c:gapWidth val="100"/></c:upDownBars>
+          </c:stockChart></c:plotArea></c:chart></c:chartSpace>"#;
+        let core = parse_chart(xml, "S", &grid).expect("stock 图表");
+        assert_eq!(core.chart_type, "stock");
+        assert_eq!(core.title, "股价");
+        assert_eq!(core.series.len(), 2);
+        assert_eq!(core.series[0].name, "开盘");
+        assert_eq!(core.series[0].vals, vec![10.0, 12.0]);
+        assert_eq!(core.series[1].name, "收盘");
+        assert_eq!(core.series[1].vals, vec![12.0, 11.0]);
+    }
+
+    #[test]
+    fn combo_chart_keeps_per_series_type() {
+        let grid: HashMap<String, Grid> = HashMap::from([(
+            "S".to_string(),
+            Grid::from([
+                ((1, 1), Value::from(3)),
+                ((2, 1), Value::from(5)),
+                ((1, 2), Value::from(7)),
+                ((2, 2), Value::from(9)),
+                ((1, 3), Value::from(2)),
+                ((2, 3), Value::from(4)),
+            ]),
+        )]);
+        // 柱形图（两条系列）+ 折线图（一条）：v0.123 之前只认最后命中的 line，柱形那两条被当成 line
+        let xml = r#"<c:chartSpace><c:chart><c:plotArea>
+          <c:barChart><c:barDir val="col"/><c:grouping val="clustered"/>
+            <c:ser><c:val><c:numRef><c:f>S!$B$2:$B$3</c:f></c:numRef></c:val></c:ser>
+            <c:ser><c:val><c:numRef><c:f>S!$C$2:$C$3</c:f></c:numRef></c:val></c:ser>
+          </c:barChart>
+          <c:lineChart><c:grouping val="standard"/>
+            <c:ser><c:val><c:numRef><c:f>S!$D$2:$D$3</c:f></c:numRef></c:val></c:ser>
+          </c:lineChart>
+        </c:plotArea></c:chart></c:chartSpace>"#;
+        let core = parse_chart(xml, "S", &grid).expect("组合图");
+        assert_eq!(core.chart_type, "column", "主图型取第一个 chart 元素");
+        assert_eq!(core.grouping, "clustered", "grouping 取主元素那一档");
+        assert_eq!(core.series.len(), 3, "三个系列一条都不能丢");
+        assert_eq!(core.series[0].chart_type, None, "与主图同型的系列不重复记");
+        assert_eq!(core.series[1].chart_type, None);
+        assert_eq!(core.series[2].chart_type.as_deref(), Some("line"), "副图型落在系列上");
+        assert_eq!(core.series[2].vals, vec![2.0, 4.0]);
+
+        // 两个 barChart、barDir 不同：前 col 后 bar ⇒ 后者是真正的副图（同一名却不同型）
+        let two = r#"<c:chartSpace><c:chart><c:plotArea>
+          <c:barChart><c:barDir val="col"/>
+            <c:ser><c:val><c:numRef><c:f>S!$B$2:$B$3</c:f></c:numRef></c:val></c:ser>
+          </c:barChart>
+          <c:barChart><c:barDir val="bar"/>
+            <c:ser><c:val><c:numRef><c:f>S!$C$2:$C$3</c:f></c:numRef></c:val></c:ser>
+          </c:barChart>
+        </c:plotArea></c:chart></c:chartSpace>"#;
+        let c2 = parse_chart(two, "S", &grid).expect("双 barChart");
+        assert_eq!(c2.chart_type, "column");
+        assert_eq!(c2.series[0].chart_type, None);
+        assert_eq!(c2.series[1].chart_type.as_deref(), Some("bar"), "barDir 按元素各判");
+    }
+
+    #[test]
+    fn combo_chart_secondary_axis_from_ax_id() {
+        let grid: HashMap<String, Grid> = HashMap::from([(
+            "S".to_string(),
+            Grid::from([
+                ((1, 1), Value::from(3)),
+                ((1, 2), Value::from(7)),
+                ((1, 3), Value::from(900)),
+            ]),
+        )]);
+        // 柱形（两系列）+ 折线（一条，量纲差得远）：柱形引用第一根值轴，折线引用第二根 ⇒ 折线走次轴
+        let xml = r#"<c:chartSpace><c:chart><c:plotArea>
+          <c:barChart><c:barDir val="col"/>
+            <c:axId val="111"/><c:axId val="222"/>
+            <c:ser><c:val><c:numRef><c:f>S!$B$2</c:f></c:numRef></c:val></c:ser>
+            <c:ser><c:val><c:numRef><c:f>S!$C$2</c:f></c:numRef></c:val></c:ser>
+          </c:barChart>
+          <c:lineChart>
+            <c:axId val="111"/><c:axId val="333"/>
+            <c:ser><c:val><c:numRef><c:f>S!$D$2</c:f></c:numRef></c:val></c:ser>
+          </c:lineChart>
+          <c:catAx><c:axId val="111"/><c:crossAx val="222"/></c:catAx>
+          <c:valAx><c:axId val="222"/><c:crossAx val="111"/></c:valAx>
+          <c:valAx><c:axId val="333"/><c:crossAx val="111"/></c:valAx>
+        </c:plotArea></c:chart></c:chartSpace>"#;
+        let core = parse_chart(xml, "S", &grid).expect("带次轴的组合图");
+        assert_eq!(core.series.len(), 3);
+        assert!(!core.series[0].secondary_axis, "柱形走主轴");
+        assert!(!core.series[1].secondary_axis, "柱形走主轴");
+        assert!(
+            core.series[2].secondary_axis,
+            "折线引用第二根值轴 ⇒ 次轴"
+        );
+        assert_eq!(core.series[2].chart_type.as_deref(), Some("line"));
+
+        // 散点图两根都是值轴（X/Y 皆数值），无所谓主次 ⇒ 不能被判成次轴
+        let scatter = r#"<c:chartSpace><c:chart><c:plotArea>
+          <c:scatterChart><c:scatterStyle val="marker"/>
+            <c:axId val="111"/><c:axId val="222"/>
+            <c:ser>
+              <c:xVal><c:numRef><c:f>S!$B$2</c:f></c:numRef></c:xVal>
+              <c:yVal><c:numRef><c:f>S!$C$2</c:f></c:numRef></c:yVal>
+            </c:ser>
+          </c:scatterChart>
+          <c:valAx><c:axId val="111"/></c:valAx>
+          <c:valAx><c:axId val="222"/></c:valAx>
+        </c:plotArea></c:chart></c:chartSpace>"#;
+        let sc = parse_chart(scatter, "S", &grid).expect("散点图");
+        assert!(!sc.series[0].secondary_axis, "散点两根值轴无主次");
+
+        // 单一图型（一根值轴）⇒ 系列全是主轴，且载荷与 v0.123 之前同形
+        let single = r#"<c:chartSpace><c:chart><c:plotArea>
+          <c:barChart><c:barDir val="col"/>
+            <c:axId val="111"/><c:axId val="222"/>
+            <c:ser><c:val><c:numRef><c:f>S!$B$2</c:f></c:numRef></c:val></c:ser>
+          </c:barChart>
+          <c:catAx><c:axId val="111"/></c:catAx>
+          <c:valAx><c:axId val="222"/></c:valAx>
+        </c:plotArea></c:chart></c:chartSpace>"#;
+        let sg = parse_chart(single, "S", &grid).expect("单一图型");
+        assert!(!sg.series[0].secondary_axis, "单一图型无次轴");
+        assert_eq!(sg.series[0].chart_type, None);
+    }
+
+    #[test]
+    fn combo_chart_primary_is_first_element() {
+        let grid: HashMap<String, Grid> = HashMap::from([(
+            "S".to_string(),
+            Grid::from([((1, 1), Value::from(3)), ((1, 2), Value::from(7))]),
+        )]);
+        // 顺序反过来：折线在前 ⇒ 主图型是 line，柱形那条才是副图
+        let xml = r#"<c:chartSpace><c:chart><c:plotArea>
+          <c:lineChart>
+            <c:ser><c:val><c:numRef><c:f>S!$B$2</c:f></c:numRef></c:val></c:ser>
+          </c:lineChart>
+          <c:barChart><c:barDir val="col"/>
+            <c:ser><c:val><c:numRef><c:f>S!$C$2</c:f></c:numRef></c:val></c:ser>
+          </c:barChart>
+        </c:plotArea></c:chart></c:chartSpace>"#;
+        let core = parse_chart(xml, "S", &grid).expect("组合图");
+        assert_eq!(core.chart_type, "line");
+        assert_eq!(core.series[0].chart_type, None);
+        assert_eq!(core.series[1].chart_type.as_deref(), Some("column"));
     }
 
     #[test]

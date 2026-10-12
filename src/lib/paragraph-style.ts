@@ -1,4 +1,4 @@
-import { Extension, type CommandProps, type Editor } from '@tiptap/core'
+import { Extension, Mark, type CommandProps, type Editor } from '@tiptap/core'
 import { CELL_EDGES, bdAttr, edgeAttrs, inlineBorder, rgb2hex, type CellEdge } from './cell-style'
 
 /**
@@ -103,6 +103,10 @@ declare module '@tiptap/core' {
     paragraphStyle: {
       /** 绝对设定：导入与批量套用走这里；传 null 清除该项回到未声明 */
       setParagraphStyle: (attrs: Partial<ParaStyleAttrs>) => ReturnType
+      /** 命名样式标签（w:styleId）：传 null 清除回到「未套样式」 */
+      setPstyle: (id: string | null) => ReturnType
+      /** 字符级命名样式标签（w:rStyleId，v0.113）：传 null 清除 */
+      setRStyle: (id: string | null) => ReturnType
       /** 段落底纹色；传 null 清除 */
       setParaBackground: (color: string | null) => ReturnType
       /** 行距：倍数（rule=auto）或像素（exact/atLeast）；传 null 清除 */
@@ -137,6 +141,14 @@ export const ParagraphStyle = Extension.create({
       {
         types: this.options.types,
         attributes: {
+          // 命名样式标签（v0.102）：段落的 w:styleId 身份，data-pstyle 随导入 HTML 进出。
+          // 不进 ParaStyleAttrs——那是排版属性集；样式身份是另一回事，独立命令 setPstyle
+          pStyle: {
+            default: null as string | null,
+            parseHTML: (el: HTMLElement) => el.getAttribute('data-pstyle'),
+            renderHTML: (attrs: Record<string, unknown>) =>
+              typeof attrs.pStyle === 'string' && attrs.pStyle ? { 'data-pstyle': attrs.pStyle } : {},
+          },
           lineHeight: {
             default: null as number | null,
             parseHTML: (el: HTMLElement) => parseLineHeight(el.style.getPropertyValue('line-height')),
@@ -187,8 +199,9 @@ export const ParagraphStyle = Extension.create({
       return any
     }
 
+    // 排版属性集之外还有 pStyle（样式身份标签）也走这一条 updateAttributes 通道，类型放宽到 attrs 本形
     const set =
-      (attrs: Partial<ParaStyleAttrs>) =>
+      (attrs: Record<string, unknown>) =>
       ({ editor, commands }: CommandProps): boolean => {
         if (!hits(editor)) return false
         return this.options.types.map((type: string) => commands.updateAttributes(type, attrs)).some(Boolean)
@@ -196,11 +209,50 @@ export const ParagraphStyle = Extension.create({
 
     return {
       setParagraphStyle: (attrs) => set(attrs),
+      setPstyle: (id) => set({ pStyle: id }),
       setParaBackground: (color) => set({ background: color }),
       setLineSpacing: (value, rule) =>
         set({ lineHeight: value, lineRule: value === null ? null : (rule ?? 'auto') }),
       setSpaceAround: (before, after) => set({ spaceBefore: before, spaceAfter: after }),
       setParaBorders: (edges, value) => set(edgeAttrs(edges, value)),
+    }
+  },
+})
+
+/**
+ * 字符级命名样式标签（v0.113）：run 的 w:styleId 身份，data-rstyle 随导入 HTML 进出。
+ * 与段落 pStyle 同一套纪律：套用只挂标签，呈现由样式表（doc-style-css 编译出的
+ * span[data-rstyle] 规则）统一驱动，run 上的直接格式（inline style、粗斜等 mark）
+ * 天然压过样式层——Word「直接格式覆盖样式」的语义不需要任何特判。
+ */
+export const RStyleMark = Mark.create({
+  name: 'rStyle',
+
+  addAttributes() {
+    return {
+      id: {
+        default: null as string | null,
+        parseHTML: (el: HTMLElement) => el.getAttribute('data-rstyle'),
+        renderHTML: (attrs: Record<string, unknown>) =>
+          typeof attrs.id === 'string' && attrs.id ? { 'data-rstyle': attrs.id } : {},
+      },
+    }
+  },
+
+  parseHTML() {
+    return [{ tag: 'span[data-rstyle]' }]
+  },
+
+  renderHTML({ mark }) {
+    return ['span', { 'data-rstyle': String(mark.attrs.id ?? '') }, 0]
+  },
+
+  addCommands() {
+    return {
+      setRStyle:
+        (id: string | null) =>
+        ({ commands }) =>
+          id ? commands.setMark(this.name, { id }) : commands.unsetMark(this.name),
     }
   },
 })

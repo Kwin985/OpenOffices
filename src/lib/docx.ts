@@ -5,6 +5,7 @@ import {
   CommentRangeStart,
   CommentReference,
   Document,
+  DeletedTextRun,
   EndnoteReferenceRun,
   ExternalHyperlink,
   Footer,
@@ -13,9 +14,15 @@ import {
   HeadingLevel,
   HeightRule,
   type IBorderOptions,
+  type ICharacterStyleOptions,
   type IFontAttributesProperties,
+  type ILevelParagraphStylePropertiesOptions,
+  type IParagraphStyleOptions,
+  type IRunStylePropertiesOptions,
   type ISpacingProperties,
   ImageRun,
+  ImportedXmlComponent,
+  InsertedTextRun,
   LevelFormat,
   LineRuleType,
   PageBreak,
@@ -32,9 +39,11 @@ import {
   VerticalAlignTable,
   WidthType,
 } from 'docx'
-import { borderParts, pxToEighths } from './cell-style'
+import { xml2js } from 'xml-js'
+import { borderParts, pxToEighths, CELL_EDGES, type CellEdge } from './cell-style'
 import { lineToOoxml, type LineRule } from './paragraph-style'
 import { decodeEnt } from './ooxml'
+import { condLookBits } from './table-cond'
 import { letterSpacingToTwips } from './char-spacing'
 
 export interface PMNode {
@@ -150,6 +159,133 @@ export function contentPxOf(pg: ResolvedPage): number {
   return Math.floor(contentTwipsOf(pg) / PX_TWIP)
 }
 
+/**
+ * 表样式的条件层（v0.116）：`w:tblStylePr` 的 `@w:type`（ST_TblStyleOverrideType）。
+ * 列出了 ST_TblStyleOverrideType 里 Word 真会落出来的十二型。`wholeTable` 不收：
+ * 实测它换哪一格写都不落（见 docx-fidelity 里 styleCondCells 那条注），收进来只是给用户
+ * 一个按下没反应的旋钮。
+ */
+export const TABLE_COND_TYPES = [
+  'firstRow',
+  'lastRow',
+  'firstColumn',
+  'lastColumn',
+  'band1Vert',
+  'band2Vert',
+  'band1Horz',
+  'band2Horz',
+  'nwCell',
+  'neCell',
+  'swCell',
+  'seCell',
+] as const
+export type TableCondType = (typeof TABLE_COND_TYPES)[number]
+
+/** 一块条件里本体支持的那几样：默认格底纹与格边距住 `w:tcPr`，粗体住 `w:rPr` */
+export interface TableCond {
+  background?: string
+  bold?: boolean
+  padTopPx?: number
+  padRightPx?: number
+  padBottomPx?: number
+  padLeftPx?: number
+  /** 条件格边框（`w:tcBorders`，住 `w:tcPr` 内）：每条边是 CSS 边框串，与表级 `bdTop` 同格式 */
+  borders?: Partial<Record<CellEdge, string>>
+  /** 条件行高（`w:trPr`/`w:trHeight`，仅行型条件 firstRow/lastRow/band*Horz 有效）：px；
+   *  Word 的 exact（超高裁内容）CSS 表达不了，按最小行高读入并标记 */
+  rowHeightPx?: number
+  rowHeightExact?: boolean
+}
+
+/** 条件格的中文名（Word「表样式」对话框那十二个勾位，band 就是"镶边"） */
+export const TABLE_COND_LABEL: Record<TableCondType, string> = {
+  firstRow: '首行',
+  lastRow: '末行',
+  firstColumn: '首列',
+  lastColumn: '末列',
+  band1Vert: '奇数列',
+  band2Vert: '偶数列',
+  band1Horz: '奇数行',
+  band2Horz: '偶数行',
+  nwCell: '左上角',
+  neCell: '右上角',
+  swCell: '左下角',
+  seCell: '右下角',
+}
+
+/** 认 `w:type` 那串：Word 写的是 `firstRow` 这种驼峰，大小写差一级也算同一型，返回规范（驼峰）那枚 */
+export function asTableCondType(v: string | undefined): TableCondType | undefined {
+  if (!v) return undefined
+  const low = v.trim().toLowerCase()
+  return TABLE_COND_TYPES.find((t) => t.toLowerCase() === low)
+}
+
+/**
+ * 命名样式（v0.102）：导入时从 styles.xml 读出的段落样式清单。
+ * run/para 是沿 basedOn 链摊平后的快照（读侧 readRPr/styleView 现成的合并语义），
+ * 单位与编辑器内部一致：字号/间距/缩进 px、行距倍数或 px、颜色 #rrggbb。
+ * 快照只当「这份文档的样式长什么样」用——编辑器内不提供样式表编辑（改一处全文变），
+ * 套用样式是把快照摊进段落直接格式 + 挂 pStyle 标签，导出时标签与样式表一起写回。
+ */
+export interface DocxStyleInfo {
+  /** OOXML 的 w:styleId；导出按它写回 w:pStyle/w:rStyle，样式表定义也按它命名 */
+  id: string
+  name: string
+  basedOn?: string
+  /** 样式种类（v0.113）：'paragraph'（缺省，旧 meta 无此键）/ 'character' / 'table'（v0.114） */
+  kind?: 'paragraph' | 'character' | 'table'
+  /** 标题级别（1..9，outlineLvl+1），非标题没有 */
+  level?: number
+  run: {
+    font?: string
+    sizePx?: number
+    bold?: boolean
+    italic?: boolean
+    underline?: boolean
+    strike?: boolean
+    color?: string
+  }
+  para: {
+    align?: string
+    marginLeftPx?: number
+    marginRightPx?: number
+    textIndentPx?: number
+    lineHeight?: number
+    lineRule?: 'auto' | 'exact' | 'atLeast'
+    spaceBeforePx?: number
+    spaceAfterPx?: number
+    /** 大纲级别 0..8：level 存在时恒为 level-1，单列出来是给没有标题名分级的自定义样式用 */
+    outlineLevel?: number
+  }
+  /**
+   * 表样式快照（v0.114，仅 kind='table'）：表级那一层说了什么。
+   * 边框沿用单元格那套规范串（`"0.67px solid #8899aa"`，`'none'` 是显式无边，缺省是没声明），
+   * 六条边分别是外框四边与内部横竖线（`w:tblBorders` 的六个槽）；格边距是 px；
+   * align 是整张表的水平位置（`w:jc`），background 是**默认格底纹**（样式自己的 `w:tcPr/w:shd`，
+   * 逐格 w:shd 仍优先——与任意层直接格式压样式同一条纪律）。
+   */
+  table?: {
+    bdTop?: string
+    bdRight?: string
+    bdBottom?: string
+    bdLeft?: string
+    bdInsideH?: string
+    bdInsideV?: string
+    padTopPx?: number
+    padRightPx?: number
+    padBottomPx?: number
+    padLeftPx?: number
+    align?: string
+    background?: string
+    /**
+     * 条件层（v0.116）：按部位再压一层——首行/末行/首列/末列/奇行偶行/四个角。
+     * 每块只管格底纹、格边距与粗体这三样（`w:tcPr/w:shd`、`w:tcPr/w:tcMar`、`w:rPr/w:b`）；
+     * 落到哪一格按位置算（见 doc-style-css 的 condRules）。空对象等于没开票：不写它那枚 `w:tblStylePr`。
+     */
+    cond?: Partial<Record<TableCondType, TableCond>>
+  }
+}
+
 // 页眉页脚设置 + 批注列表 + 页面设置：随 .odoc meta 存储，导出写入 OOXML
 export interface DocMeta {
   headerText?: string
@@ -158,6 +294,8 @@ export interface DocMeta {
   pageNumberFormat?: PageNumberFormat
   comments?: DocComment[]
   page?: PageSetup
+  /** 文档带进来的段落样式清单（v0.102）：随 meta 持久化，导出时重建样式表 */
+  styles?: DocxStyleInfo[]
 }
 
 export async function docxToHtml(bytes: Uint8Array): Promise<string> {
@@ -431,6 +569,8 @@ function openComment(out: ParagraphChildLike[], cs: CommentTrack, cid: number) {
 
 type ParagraphChildLike =
   | TextRun
+  | InsertedTextRun
+  | DeletedTextRun
   | ExternalHyperlink
   | CommentRangeStart
   | CommentRangeEnd
@@ -464,6 +604,8 @@ function inlineToChildren(node: PMNode, inherited: Inherited = {}, cs?: CommentT
       const ts = (attr: string) => markAttr(child, 'textStyle', attr) ?? markAttr(child, 'color', attr)
       const color = ts('color')?.replace('#', '')
       const highlight = markAttr(child, 'highlight', 'color')?.replace('#', '')
+      // 字符级命名样式标签（v0.113）：rStyle mark 的 id 写回 w:rStyle
+      const rstyle = markAttr(child, 'rStyle', 'id')
       // fontSize 内部存 px（CSS 习惯），docx 字号是半点：pt = px×0.75，half-points = pt×2
       const fsPx = parseInt(ts('fontSize') ?? '', 10)
       // 字符间距：模型那一头存规范化 pt 串，这一层吃缇（1pt = 20 缇）。
@@ -482,15 +624,28 @@ function inlineToChildren(node: PMNode, inherited: Inherited = {}, cs?: CommentT
         ...(color ? { color } : {}),
         ...(highlight ? { shading: { type: 'clear' as const, fill: highlight } } : {}),
         ...(underline ? { underline: {} } : {}),
+        ...(rstyle ? { style: rstyle } : {}),
         ...vertAlignOf(child),
       }
       if (href) {
+        // 超链接里的文字不包修订壳（docx 库的链接子元素类型不收 Inserted/DeletedTextRun）：
+        // 链接文字带修订是罕见写法，内容保住、标记丢失，这层边界在 README 里如实记着
         out.push(
           new ExternalHyperlink({
             link: href,
             children: [new TextRun({ ...runOpts, style: 'Hyperlink' })],
           }),
         )
+      } else if (dt && (hasMark(child, 'revDel') || hasMark(child, 'revIns'))) {
+        // 修订壳（v0.100）：del 优先于 ins（一个文字段同时挂两种修订是病态件，删除裁决更保守）。
+        // 作者/日期从标记属性原样带走；本应用里没有修订模式，读进来的件一定带着署名，
+        // 兜底值只为手造文档不炸。DeletedTextRun 会把 w:t 自动写成 w:delText
+        const isDel = hasMark(child, 'revDel')
+        const markName = isDel ? 'revDel' : 'revIns'
+        const author = markAttr(child, markName, 'author') || '未知'
+        const date = markAttr(child, markName, 'date') || new Date().toISOString()
+        const revOpts = { ...runOpts, id: dt.revId++, author, date }
+        out.push(isDel ? new DeletedTextRun(revOpts) : new InsertedTextRun(revOpts))
       } else {
         out.push(new TextRun(runOpts))
       }
@@ -581,41 +736,314 @@ function ownedPx(v: unknown): number | undefined {
   return typeof v === 'number' && Number.isFinite(v) ? v : undefined
 }
 
+/** 段落上挂的命名样式标签（w:styleId，v0.102）；没有或空串都不写 */
+function pstyleOf(node: PMNode): string | undefined {
+  const v = node.attrs?.pStyle
+  return typeof v === 'string' && v ? v : undefined
+}
+
+/** CSS 对齐词 → OOXML（导入侧已归一到这几个词） */
+const STYLE_ALIGN: Record<string, (typeof AlignmentType)[keyof typeof AlignmentType]> = {
+  left: AlignmentType.LEFT,
+  center: AlignmentType.CENTER,
+  right: AlignmentType.RIGHT,
+  justify: AlignmentType.JUSTIFIED,
+}
+
+/**
+ * docx 库 DefaultStylesFactory 每次构造都会生成这批定义并与外部样式合并：同 id 再写一枚
+ * 会出两个 w:style 节点（Word 行为未定义），这些 id 的快照不落样式表——库内置定义的语义
+ * （标题层级等）与原文档一致，够用。注意 Normal 不在库内置清单里，它的定义照写。
+ * 原文档里对这些内置样式的定制（比如改过 Heading1 的字号）会丢，如实挂账。
+ */
+export const BUILTIN_STYLE_IDS = /^(Heading[1-6]|Title|Strong|ListParagraph|FootnoteText|EndnoteText|Hyperlink)$/i
+
+/**
+ * 样式快照 → 样式表定义（v0.102）。run/paragraph 写的是沿 basedOn 链摊平后的全量值
+ * （basedOn 照抄原链，值重复无害），Word 打开的渲染结果正确；代价是样式面板里每层
+ * 都看着是全量格式，父样式一改子样式不跟——摊平架构下这是诚实的选择，样式表的
+ * 逐条保真不是这一轮的目标。
+ */
+function styleDefOf(info: DocxStyleInfo): IParagraphStyleOptions | ICharacterStyleOptions | undefined {
+  if (BUILTIN_STYLE_IDS.test(info.id)) return undefined
+  const r = info.run
+  const run: IRunStylePropertiesOptions = {
+    ...(r.font ? { font: docFont(r.font) } : {}),
+    // px → 半点（1px = 0.75pt = 1.5 半点）；快照生成时已按同样精度取整，这里能精确往返
+    ...(r.sizePx !== undefined ? { size: Math.round(r.sizePx * 1.5) } : {}),
+    ...(r.bold ? { bold: true } : {}),
+    ...(r.italic ? { italics: true } : {}),
+    ...(r.underline ? { underline: {} } : {}),
+    ...(r.strike ? { strike: true } : {}),
+    ...(r.color ? { color: r.color.replace('#', '').toUpperCase() } : {}),
+  }
+  // 字符样式（v0.113）：只有 run 层，没有段落排版属性可言
+  if (info.kind === 'character') {
+    return {
+      id: info.id,
+      name: info.name,
+      ...(info.basedOn ? { basedOn: info.basedOn } : {}),
+      run,
+    }
+  }
+  const p = info.para
+  const spacing = spacingVals(p.lineHeight ?? null, p.lineRule ?? null, p.spaceBeforePx, p.spaceAfterPx)
+  const indent =
+    p.marginLeftPx !== undefined || p.marginRightPx !== undefined || p.textIndentPx !== undefined
+      ? {
+          ...(p.marginLeftPx !== undefined ? { left: Math.round(p.marginLeftPx * PX_TWIP) } : {}),
+          ...(p.marginRightPx !== undefined ? { right: Math.round(p.marginRightPx * PX_TWIP) } : {}),
+          // 负缩进读侧记成 hanging 的语义，回程按 firstLine 负值走（docx 库没有 firstLine 负值形态，
+          // w:ind 的 firstLine 本就允许负值，Word 读作 hanging）
+          ...(p.textIndentPx !== undefined ? { firstLine: Math.round(p.textIndentPx * PX_TWIP) } : {}),
+        }
+      : undefined
+  const paragraph: ILevelParagraphStylePropertiesOptions = {
+    ...(p.align && STYLE_ALIGN[p.align] ? { alignment: STYLE_ALIGN[p.align] } : {}),
+    ...(spacing ? { spacing } : {}),
+    ...(indent ? { indent } : {}),
+    ...(p.outlineLevel !== undefined ? { outlineLevel: Math.max(0, Math.min(8, p.outlineLevel)) } : {}),
+  }
+  return {
+    id: info.id,
+    name: info.name,
+    ...(info.basedOn ? { basedOn: info.basedOn } : {}),
+    run,
+    paragraph,
+  }
+}
+
+/** meta 里带的样式清单 → Document 的样式表参数；一条都落不下时整条不给（不给库就走默认样式表） */
+function paragraphStylesOf(meta: DocMeta | undefined): { paragraphStyles: readonly IParagraphStyleOptions[] } | {} {
+  const defs = (meta?.styles ?? [])
+    .filter((s) => s.kind !== 'character' && s.kind !== 'table')
+    .map(styleDefOf)
+    .filter((d): d is IParagraphStyleOptions => !!d)
+  return defs.length ? { paragraphStyles: defs } : {}
+}
+
+/** 字符样式（v0.113）→ styles.characterStyles：与段落样式同库、同 id 命名空间，分开两桶装 */
+function characterStylesOf(meta: DocMeta | undefined): { characterStyles: readonly ICharacterStyleOptions[] } | {} {
+  const defs = (meta?.styles ?? [])
+    .filter((s) => s.kind === 'character')
+    .map(styleDefOf)
+    .filter((d): d is ICharacterStyleOptions => !!d)
+  return defs.length ? { characterStyles: defs } : {}
+}
+
+/** XML 属性值转义：样式名是用户能改的自由文本，引号与 & 必须先处理 */
+function xmlAttr(s: string): string {
+  return s
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+}
+
+/** 规范边框串 → `w:tblBorders` 一条边的 XML；没给值（或读不懂）返回空 */
+function tblBorderXml(tag: string, v: string | undefined): string {
+  const b = cellBorder(v)
+  if (!b) return ''
+  const color = b.color ?? 'auto'
+  return `<w:${tag} w:val="${b.style}" w:sz="${b.size ?? 0}" w:space="0" w:color="${color.toUpperCase()}"/>`
+}
+
+/** 一个方向的格边距（px → twips）；0 是真值（`w:w="0"` 就是 Word 自己写的) */
+function tblMarXml(tag: string, px: number | undefined): string {
+  if (typeof px !== 'number' || !Number.isFinite(px) || px < 0) return ''
+  return `<w:${tag} w:w="${Math.round(px * PX_TWIP)}" w:type="dxa"/>`
+}
+
+/** 条件格边框 → `w:tcBorders`：四条边各调一次 `tblBorderXml`（它吃 CSS 边框串），一条都没有就不写 */
+function bordersXml(borders: Partial<Record<CellEdge, string>> | undefined): string {
+  if (!borders) return ''
+  let out = ''
+  for (const edge of CELL_EDGES) {
+    const v = borders[edge]
+    if (v) out += tblBorderXml(edge, v)
+  }
+  return out ? `<w:tcBorders>${out}</w:tcBorders>` : ''
+}
+
+/**
+ * 表样式定义（v0.114）→ 一片 `w:style` XML。
+ *
+ * docx 库的 Document 只认段落与字符两类定义（`IStylesOptions` 里没有 tableStyles 这个槽），
+ * 而 `styles.importedStyles` 是它留的那道「原样收一片 XML」的门——表样式走这道门进去，
+ * 与 `w:tblStyle` 那一边的**引用**合起来才算完整：这两样缺一样，`word/styles.xml` 里就
+ * 只有半套账（要么一张空壳定义没人指，要么一个悬空引用）。节点内部顺序按 CT_Style /
+ * CT_TblPrBase 的 schema 排（name → basedOn → rPr → tblPr → tcPr），乱序会被 Word 判损坏件。
+ */
+function tableStyleXml(s: DocxStyleInfo): string | undefined {
+  const t = s.table
+  if (!t) return undefined
+  let head = `<w:style w:type="table" w:styleId="${xmlAttr(s.id)}"><w:name w:val="${xmlAttr(s.name)}"/>`
+  if (s.basedOn) head += `<w:basedOn w:val="${xmlAttr(s.basedOn)}"/>`
+  let rPr = ''
+  const font = docFont(s.run.font)
+  if (font) {
+    rPr +=
+      typeof font === 'string'
+        ? `<w:rFonts w:ascii="${xmlAttr(font)}" w:hAnsi="${xmlAttr(font)}"/>`
+        : `<w:rFonts${font.ascii ? ` w:ascii="${xmlAttr(font.ascii)}"` : ''}${
+            font.hAnsi ? ` w:hAnsi="${xmlAttr(font.hAnsi)}"` : ''
+          }${font.eastAsia ? ` w:eastAsia="${xmlAttr(font.eastAsia)}"` : ''}${
+            font.cs ? ` w:cs="${xmlAttr(font.cs)}"` : ''
+          }${font.hint ? ` w:hint="${xmlAttr(font.hint)}"` : ''}/>`
+  }
+  if (s.run.bold) rPr += '<w:b/>'
+  if (s.run.italic) rPr += '<w:i/>'
+  if (s.run.strike) rPr += '<w:strike/>'
+  if (s.run.color) rPr += `<w:color w:val="${s.run.color.replace('#', '').toUpperCase()}"/>`
+  if (s.run.sizePx !== undefined) rPr += `<w:sz w:val="${Math.max(1, Math.round(s.run.sizePx * 1.5))}"/>`
+  if (s.run.underline) rPr += '<w:u w:val="single"/>'
+  if (rPr) head += `<w:rPr>${rPr}</w:rPr>`
+  const borders =
+    tblBorderXml('top', t.bdTop) +
+    tblBorderXml('left', t.bdLeft) +
+    tblBorderXml('bottom', t.bdBottom) +
+    tblBorderXml('right', t.bdRight) +
+    tblBorderXml('insideH', t.bdInsideH) +
+    tblBorderXml('insideV', t.bdInsideV)
+  const mar =
+    tblMarXml('top', t.padTopPx) +
+    tblMarXml('left', t.padLeftPx) +
+    tblMarXml('bottom', t.padBottomPx) +
+    tblMarXml('right', t.padRightPx)
+  let tblPr = ''
+  if (t.align && STYLE_ALIGN[t.align]) {
+    const word = t.align === 'center' ? 'center' : t.align === 'right' ? 'right' : 'left'
+    tblPr += `<w:jc w:val="${word}"/>`
+  }
+  if (borders) tblPr += `<w:tblBorders>${borders}</w:tblBorders>`
+  if (mar) tblPr += `<w:tblCellMar>${mar}</w:tblCellMar>`
+  if (tblPr) head += `<w:tblPr>${tblPr}</w:tblPr>`
+  if (t.background) {
+    head += `<w:tcPr><w:shd w:val="clear" w:color="auto" w:fill="${t.background.replace('#', '').toUpperCase()}"/></w:tcPr>`
+  }
+  // 条件层（v0.116）：整串挂在最后——CT_Style 里 tblStylePr 是最后一枚孩子，
+  // 每枚内部按 CT_TblStylePr 的序走 rPr → tblPr → trPr → tcPr（乱序会被 Word 判损坏件）
+  for (const type of TABLE_COND_TYPES) {
+    const c = t.cond?.[type]
+    if (!c) continue
+    // CT_TcMarInner 与 CT_TcPrInner 的序：边距四边按 top → left → bottom → right，
+    // 而在 tcPr 里 `w:tcBorders` 在 `w:shd` 之后、`w:tcMar` 之前
+    const tcMar =
+      tblMarXml('top', c.padTopPx) +
+      tblMarXml('left', c.padLeftPx) +
+      tblMarXml('bottom', c.padBottomPx) +
+      tblMarXml('right', c.padRightPx)
+    // 条件格边框（v0.117）：`w:tcBorders` 住 `w:tcPr` 内
+    const tcBorders = bordersXml(c.borders)
+    const tcPrInner =
+      (c.background
+        ? `<w:shd w:val="clear" w:color="auto" w:fill="${c.background.replace('#', '').toUpperCase()}"/>`
+        : '') +
+      tcBorders +
+      (tcMar ? `<w:tcMar>${tcMar}</w:tcMar>` : '')
+    const tcPr = tcPrInner ? `<w:tcPr>${tcPrInner}</w:tcPr>` : ''
+    // 条件行高（v0.117）：`w:trPr` 在 CT_TblStylePr 的序里排在 `w:tcPr` 之前；
+    // 仅行型条件（firstRow/lastRow/band*Horz）对 Word 有意义，列型/角型写了也会被忽略
+    const trPr =
+      c.rowHeightPx && c.rowHeightPx > 0
+        ? `<w:trPr><w:trHeight w:val="${Math.max(1, Math.round(c.rowHeightPx * PX_TWIP))}" w:hRule="${
+            c.rowHeightExact ? 'exact' : 'atLeast'
+          }"/></w:trPr>`
+        : ''
+    const inner = (c.bold ? '<w:rPr><w:b/></w:rPr>' : '') + trPr + tcPr
+    if (inner) head += `<w:tblStylePr w:type="${type}">${inner}</w:tblStylePr>`
+  }
+  return head + '</w:style>'
+}
+
+/** meta 里的表样式 → Document 的 importedStyles；一条都没有时不给这个槽 */
+function tableStylesOf(meta: DocMeta | undefined): { importedStyles: ImportedXmlComponent[] } | {} {
+  const xmls = (meta?.styles ?? [])
+    .filter((s) => s.kind === 'table' && !BUILTIN_STYLE_IDS.test(s.id))
+    .map(tableStyleXml)
+    .filter((x): x is string => !!x)
+  return xmls.length ? { importedStyles: xmls.map(importedStyleComponent) } : {}
+}
+
+/**
+ * docx 这版的 `ImportedXmlComponent.fromXmlString` 有 bug：它把整段 XML 经 xml-js 解析后，
+ * 顶层对象（没有 `type` 字段）被当成根，于是我们写的 `<w:style>` 落进一个名字为 `undefined`
+ * 的外层元素里——Word 不认、回读也丢。这里直接拿 xml-js 的根元素（elements[0]）建组件树，
+ * 绕开那个包裹，让 `<w:style>` 成为 `<w:styles>` 的直接子节点。
+ */
+function importedStyleComponent(xml: string): ImportedXmlComponent {
+  const json = xml2js(xml, { compact: false }) as { elements?: XmlNode[] } | undefined
+  const root = json?.elements?.[0]
+  return (root ? buildImported(root) : new ImportedXmlComponent('w:style', {})) as ImportedXmlComponent
+}
+interface XmlNode {
+  type?: string
+  name?: string
+  attributes?: Record<string, string>
+  elements?: XmlNode[]
+  text?: string
+}
+function buildImported(el: XmlNode): ImportedXmlComponent | string | undefined {
+  if (el.type === 'text') return el.text
+  if (el.type === 'element' && el.name) {
+    const c = new ImportedXmlComponent(el.name, el.attributes ?? {})
+    for (const child of el.elements ?? []) {
+      const cc = buildImported(child)
+      if (cc !== undefined) c.push(cc)
+    }
+    return c
+  }
+  return undefined
+}
+
 /**
  * 段落直接格式 → `w:spacing`（行距 + 段前段后）。
  * 只写用户声明过的那几项：整篇的默认行距段距归 Word 的 Normal 样式管，
  * 替每一段补一份默认值会把「没声明」这个信息擦掉（导出再开就长出一屏假的段后距）。
  * 显式的 0 是真值要照写——Word 就用 `w:after="0"` 压掉样式里那段间距。
+ * 样式表定义（DocxStyleInfo 快照）与段落直接格式共用这一套换算。
  */
-function spacingOf(node: PMNode): ISpacingProperties | undefined {
+function spacingVals(
+  lineHeight: number | null,
+  lineRule: LineRule | null,
+  beforePx: number | undefined,
+  afterPx: number | undefined,
+): ISpacingProperties | undefined {
   const o: {
     line?: number
     lineRule?: ISpacingProperties['lineRule']
     before?: number
     after?: number
   } = {}
-  const ln = lineToOoxml(
-    ownedPx(node.attrs?.lineHeight) ?? null,
-    (typeof node.attrs?.lineRule === 'string' ? node.attrs.lineRule : null) as LineRule | null,
-    (px) => px * PX_TWIP,
-  )
+  const ln = lineToOoxml(lineHeight, lineRule, (px) => px * PX_TWIP)
   if (ln) {
     o.line = ln.line
     o.lineRule = ln.lineRule === 'atLeast' ? LineRuleType.AT_LEAST : ln.lineRule === 'exact' ? LineRuleType.EXACT : LineRuleType.AUTO
   }
-  const before = ownedPx(node.attrs?.spaceBefore)
-  if (before !== undefined) o.before = Math.round(before * PX_TWIP)
-  const after = ownedPx(node.attrs?.spaceAfter)
-  if (after !== undefined) o.after = Math.round(after * PX_TWIP)
+  // 显式的 0 是真值要照写——Word 就用 `w:after="0"` 压掉样式里那段间距
+  if (beforePx !== undefined) o.before = Math.round(beforePx * PX_TWIP)
+  if (afterPx !== undefined) o.after = Math.round(afterPx * PX_TWIP)
   return Object.keys(o).length ? o : undefined
 }
 
-/** 段落的三条直接格式（行距段距 / 底纹 / 四边）一次拼好，供 new Paragraph 的参数展开 */
-function paraFormatOf(node: PMNode) {
+function spacingOf(node: PMNode): ISpacingProperties | undefined {
+  return spacingVals(
+    ownedPx(node.attrs?.lineHeight) ?? null,
+    (typeof node.attrs?.lineRule === 'string' ? node.attrs.lineRule : null) as LineRule | null,
+    ownedPx(node.attrs?.spaceBefore),
+    ownedPx(node.attrs?.spaceAfter),
+  )
+}
+
+/** 段落的直接格式（命名样式 / 行距段距 / 底纹 / 四边）一次拼好，供 new Paragraph 的参数展开。
+ *  pstyle 由调用方决定给不给：heading 的样式标签由 HeadingLevel 承担（库会给 heading 和 style
+ *  各写一枚 w:pStyle，并存会出两枚）；bullet 项库无条件补 ListParagraph 标签，同样不能并存 */
+function paraFormatOf(node: PMNode, pstyle?: string | null) {
   const sp = spacingOf(node)
   const sh = shadingOf(node.attrs?.background)
   const bd = bordersOf(node.attrs)
   return {
+    ...(pstyle ? { style: pstyle } : {}),
     ...(sp ? { spacing: sp } : {}),
     ...(sh ? { shading: sh } : {}),
     ...(bd ? { border: bd } : {}),
@@ -698,6 +1126,8 @@ interface DocTrack {
   /** 脚注/尾注正文：键是导出时现编的序号（1 起，两类各自计数），与 Word 的自动编号同一条规则 */
   notes: Record<NoteKind, Map<number, string>>
   seq: Record<NoteKind, number>
+  /** 修订壳的 w:id 计数：Word 只要求文档内不重复，跟批注 id 不同名字空间，从 1 起即可 */
+  revId: number
 }
 
 type NoteKind = 'footnote' | 'endnote'
@@ -715,6 +1145,7 @@ function newDocTrack(): DocTrack {
     skipped: new Set(),
     notes: { footnote: new Map(), endnote: new Map() },
     seq: { footnote: 0, endnote: 0 },
+    revId: 1,
   }
 }
 
@@ -858,7 +1289,9 @@ function blocksOf(
             // 读回来更会把它当成普通段落（编号从此消失）。
             ...(ordered ? { numbering: { reference: ORDERED_REF, level: Math.min(2, depth) } } : { bullet: { level: depth } }),
             indent: indentOf(main),
-            ...paraFormatOf(main),
+            // 有序项库见 style 会跳过 ListParagraph 标签，命名样式可并存；子弹项库无条件
+            // 补 ListParagraph（两枚 pStyle 撞车），样式标签只好丢（挂账）
+            ...paraFormatOf(main, ordered ? pstyleOf(main) : undefined),
           }),
         )
         out.push(...blocksOf(blocks.slice(1), depth, dt, contentTwips))
@@ -943,6 +1376,9 @@ function blocksOf(
       const totalTw = gridTw.reduce((s, w) => s + w, 0)
       out.push(
         new Table({
+          // 表样式引用（v0.114）：表身上这枚 data-tstyle 就是 w:tblStyle，
+          // 定义那一份由 tableStylesOf 写出搬到 styles.xml
+          ...(typeof node.attrs?.tStyle === 'string' && node.attrs.tStyle ? { style: node.attrs.tStyle as string } : {}),
           ...(gridPx
             ? { width: { size: totalTw, type: WidthType.DXA }, layout: TableLayoutType.FIXED }
             : { width: { size: 100, type: WidthType.PERCENTAGE } }),
@@ -1019,7 +1455,7 @@ function blocksOf(
         children: inlineBlockChildren(node, dt),
         alignment: alignOf(node),
         indent: indentOf(node),
-        ...paraFormatOf(node),
+        ...paraFormatOf(node, pstyleOf(node)),
       }),
     )
   }
@@ -1158,6 +1594,9 @@ export async function prosemirrorToDocxBytes(json: PMNode, meta?: DocMeta): Prom
         }
       : {}),
     numbering: { config: [{ reference: ORDERED_REF, levels: ORDERED_LEVELS }] },
+    // 文档带进来的样式表（v0.102）：快照重建，Normal/内置 id 之外的定义都落回去，
+    // 段落上的 w:pStyle 才有处可指——样式表不再在导出这一步被洗掉
+    styles: { ...paragraphStylesOf(meta), ...characterStylesOf(meta), ...tableStylesOf(meta) },
     sections: [section],
   })
   // Packer.toBuffer 走 jszip 的 nodebuffer 通道，浏览器里没有 Buffer 会直接抛
@@ -1167,5 +1606,61 @@ export async function prosemirrorToDocxBytes(json: PMNode, meta?: DocMeta): Prom
   const bin = atob(b64)
   const out = new Uint8Array(bin.length)
   for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i)
-  return out
+  // 条件层的闸门（v0.116）：docx 库的 Table 不认 `w:tblLook`（<w:tblPr> 末位那一枚），
+  // 只能像 pptx 那边一样打包后回头补；引用了带条件层样式的表才补，别的原样放出
+  const looks = new Map<string, string>()
+  for (const s of meta?.styles ?? []) {
+    const look = tblLookOf(s)
+    if (look) looks.set(s.id, look)
+  }
+  return looks.size ? patchTblLook(out, looks) : out
+}
+
+/**
+ * 表样式 → 引用它的表上那枚 `<w:tblLook>`（v0.116）。
+ *
+ * 这一枚是条件层的总闸：Word 先按它决定某一型要不要落，再去样式表里找那一块。
+ * 缺席那档的默认（读侧 tblLookOn 量过）是「首行首列开、末行末列关」，我们不赌这个默认——
+ * 凡是用到的部位都显式写 1、没用到的显式写 0，等同于在 Word 里逐项勾选/取消勾选。
+ * 四个角落在 `w:tblLook` 上没有自己的位，它要的是所在行列那两位同时开着。
+ */
+function tblLookOf(s: DocxStyleInfo): string | undefined {
+  const c = s.table?.cond
+  if (!c || !Object.keys(c).length) return undefined
+  // 四位闸门走 table-cond 的 condLookBits：odt 出口没处存闸门，只能按同一规则再推一次，
+  // 两边共用这一枚函数才不会推出两个结果
+  const look = condLookBits(c)
+  const has = (...ts: TableCondType[]) => ts.some((t) => c[t])
+  const bit = (b: boolean) => (b ? '1' : '0')
+  return (
+    `<w:tblLook` +
+    ` w:firstRow="${bit(look.firstRow)}"` +
+    ` w:lastRow="${bit(look.lastRow)}"` +
+    ` w:firstColumn="${bit(look.firstColumn)}"` +
+    ` w:lastColumn="${bit(look.lastColumn)}"` +
+    ` w:noHBand="${bit(!has('band1Horz', 'band2Horz'))}"` +
+    ` w:noVBand="${bit(!has('band1Vert', 'band2Vert'))}"` +
+    `/>`
+  )
+}
+
+/** 给引用了这些表样式的每一张表补 `<w:tblLook>`：`<w:tblPr>` 的最后一位，插到 `</w:tblPr>` 之前就是了 */
+async function patchTblLook(bytes: Uint8Array, looks: Map<string, string>): Promise<Uint8Array> {
+  const { default: JSZip } = await import('jszip')
+  const zip = await JSZip.loadAsync(bytes)
+  const file = zip.file('word/document.xml')
+  if (!file) return bytes
+  const xml = await file.async('string')
+  let touched = false
+  const patched = xml.replace(/<w:tblPr>([\s\S]*?)<\/w:tblPr>/g, (all, inner: string) => {
+    const id = /<w:tblStyle w:val="([^"]+)"/.exec(inner)?.[1]
+    const look = id ? looks.get(id) : undefined
+    if (!look) return all
+    touched = true
+    return all.replace('</w:tblPr>', `${look}</w:tblPr>`)
+  })
+  if (!touched) return bytes
+  zip.file('word/document.xml', patched)
+  const buf = (await zip.generateAsync({ type: 'arraybuffer' })) as ArrayBuffer
+  return new Uint8Array(buf)
 }

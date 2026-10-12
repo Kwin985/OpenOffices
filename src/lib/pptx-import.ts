@@ -2,6 +2,8 @@ import type JSZip from 'jszip'
 import {
   emptyDeck,
   newId,
+  revealItemKey,
+  revealOrder,
   type AnimDir,
   type BulletAnim,
   type BulletExit,
@@ -9,6 +11,7 @@ import {
   type MasterRect,
   type MasterStyle,
   type Slide,
+  type SlideShape,
   type SlideTransition,
 } from './ppt'
 
@@ -68,8 +71,53 @@ function phType(sp: Element): string | null {
   return ph?.getAttribute('type') ?? null
 }
 
-const MIME_BY_EXT: Record<string, string> = {
-  png: 'image/png',
+// 形状文本的字符样式：首个 rPr（run 级）优先，退而求其次取 defRPr；对齐取首个 pPr 的 algn
+function shapeStyleOf(
+  sp: Element,
+  env: { colors: Record<string, string>; clrMap: Record<string, string> },
+): Partial<SlideShape> {
+  const out: Partial<SlideShape> = {}
+  const rPr = descendantsByName(sp, 'rPr')[0] ?? descendantsByName(sp, 'defRPr')[0]
+  const sz = Number(rPr?.getAttribute('sz') ?? NaN) // OOXML：百分之一磅
+  if (Number.isFinite(sz) && sz >= 400 && sz <= 40000) out.sizePt = Math.round(sz) / 100
+  if (rPr?.getAttribute('b') === '1') out.bold = true
+  if (rPr) {
+    const color = solidFillToHex(childrenByName(rPr, 'solidFill')[0], env.colors, env.clrMap)
+    if (color) out.color = color
+  }
+  const algn = descendantsByName(sp, 'pPr')[0]?.getAttribute('algn')
+  if (algn === 'ctr') out.align = 'center'
+  else if (algn === 'r') out.align = 'right'
+  else if (algn === 'just') out.align = 'left'
+  return out
+}
+
+// 形状盒子外观（v0.108）：spPr 的 solidFill → 底色、ln → 边框色 + 磅宽（w 是 EMU，12700=1pt）。
+// noFill/渐变等不认的填充按「无」落；ln 里没有 solidFill 视作无边框
+function boxStyleOf(
+  sp: Element,
+  env: { colors: Record<string, string>; clrMap: Record<string, string> },
+): { fill?: string; outline?: string; outlineW?: number } {
+  const out: { fill?: string; outline?: string; outlineW?: number } = {}
+  const spPr = childrenByName(sp, 'spPr')[0]
+  if (spPr && !childrenByName(spPr, 'noFill').length) {
+    const fill = solidFillToHex(childrenByName(spPr, 'solidFill')[0], env.colors, env.clrMap)
+    if (fill) out.fill = fill
+  }
+  const ln = spPr ? childrenByName(spPr, 'ln')[0] : undefined
+  if (ln && !childrenByName(ln, 'noFill').length) {
+    const c = solidFillToHex(childrenByName(ln, 'solidFill')[0], env.colors, env.clrMap)
+    if (c) {
+      out.outline = c
+      const wEmu = Number(ln.getAttribute('w') ?? NaN)
+      if (Number.isFinite(wEmu) && wEmu >= 3175 && wEmu <= 254000)
+        out.outlineW = Math.round((wEmu / 12700) * 100) / 100
+    }
+  }
+  return out
+}
+
+const MIME_BY_EXT: Record<string, string> = {  png: 'image/png',
   jpg: 'image/jpeg',
   jpeg: 'image/jpeg',
   gif: 'image/gif',
@@ -315,46 +363,110 @@ function flyStartDir(effect: Element): AnimDir | undefined {
   return undefined
 }
 
-// <p:timing> 逐条构建：bldP + 首个 entr clickEffect 判定 fade/wipe/fly 与方向；exit clickEffect 识别淡出
-function parseAnim(root: Element): {
-  anim?: BulletAnim
-  animDir?: AnimDir
-  exitAnim?: BulletExit
-} {
-  const timing = childrenByName(root, 'timing')[0]
-  if (!timing) return {}
-  const bld = descendantsByName(timing, 'bldP')[0]
-  if (!bld) return {}
-  const clicks = descendantsByName(timing, 'cTn').filter(
-    (c) => c.getAttribute('nodeType') === 'clickEffect',
-  )
-  const effect = clicks.find((c) => c.getAttribute('presetClass') === 'entr')
-  if (!effect) return {}
-  const filter = (descendantsByName(effect, 'animEffect')[0]?.getAttribute('filter') ?? '').toLowerCase()
+/// 形状的 spid：`<p:cNvPr id="N">`（sp/pic 都是这一枚，且都在自己那一层里）
+function spidOf(el: Element): string | undefined {
+  return descendantsByName(el, 'cNvPr')[0]?.getAttribute('id') ?? undefined
+}
+
+/// 一枚 clickEffect 的效果：filter 判定 wipe/fade，`ppt_x`/`ppt_y` 位移判定 fly，
+/// 方向按 presetSubtype → 滤镜名 → 起始位移三路认
+function animEffectOf(c: Element): { anim: BulletAnim; dir?: AnimDir } {
+  const filter = (
+    descendantsByName(c, 'animEffect')[0]?.getAttribute('filter') ?? ''
+  ).toLowerCase()
   let anim: BulletAnim
   if (filter.startsWith('wipe')) anim = 'wipe'
   else if (filter.startsWith('fade')) anim = 'fade'
   else if (
-    descendantsByName(effect, 'anim').some((a) =>
-      descendantsByName(a, 'attrName').some((x) => (x.textContent ?? '') === 'ppt_x' || (x.textContent ?? '') === 'ppt_y'),
+    descendantsByName(c, 'anim').some((a) =>
+      descendantsByName(a, 'attrName').some(
+        (x) => (x.textContent ?? '') === 'ppt_x' || (x.textContent ?? '') === 'ppt_y',
+      ),
     )
   )
     anim = 'fly'
   else anim = 'fade'
-  const out: { anim?: BulletAnim; animDir?: AnimDir; exitAnim?: BulletExit } = { anim }
-  if (anim !== 'fade') {
-    const dir =
-      SUBTYPE_DIR[Number(effect.getAttribute('presetSubtype') ?? 0)] ??
-      WIPE_FILTER_DIR[filter] ??
-      flyStartDir(effect)
-    if (dir) out.animDir = dir
+  if (anim === 'fade') return { anim }
+  const dir =
+    SUBTYPE_DIR[Number(c.getAttribute('presetSubtype') ?? 0)] ??
+    WIPE_FILTER_DIR[filter] ??
+    flyStartDir(c)
+  return dir ? { anim, dir } : { anim }
+}
+
+/**
+ * `<p:timing>` 逐条构建（v0.111 扩到形状）：每个 entr clickEffect 认自己的 `<p:spTgt spid>`——
+ * 等于 bldP 那个 spid 的是正文逐段（build="p"），其余按 spid 归给对应的形状。
+ * 出场同理（transition="out" 的 animEffect）。
+ *
+ * v0.115 起顺手 read 出**播放序**：clickEffect 在 mainSeq 里的先后就是 PowerPoint 的放映序，
+ * 同一段正文的每一条各占一枚 clickEffect 而 spid 相同，故按「第几回遇到它」编成 l<n>；
+ * 形状按它在形状数组里的下标编成 s<n>。默认序（正文在前、形状按数组序）不写回 slide，
+ * 只有真被排过才落 animOrder——「没说话」与「说了一遍默认序」在文件里是同一件事
+ */
+function parseAnim(
+  root: Element,
+  shapeSpids: string[],
+): {
+  anim?: BulletAnim
+  animDir?: AnimDir
+  exitAnim?: BulletExit
+  order: string[]
+  shapeAnims: Map<number, { anim: BulletAnim; animDir?: AnimDir; exitAnim?: BulletExit }>
+} {
+  const empty = {
+    order: [] as string[],
+    shapeAnims: new Map<number, { anim: BulletAnim; animDir?: AnimDir; exitAnim?: BulletExit }>(),
   }
-  const exit = clicks.find((c) => c.getAttribute('presetClass') === 'exit')
-  if (
-    exit &&
-    descendantsByName(exit, 'animEffect').some((a) => a.getAttribute('transition') === 'out')
+  const timing = childrenByName(root, 'timing')[0]
+  if (!timing) return empty
+  const bodySpid = descendantsByName(timing, 'bldP')[0]?.getAttribute('spid') ?? undefined
+  const clicks = descendantsByName(timing, 'cTn').filter(
+    (c) => c.getAttribute('nodeType') === 'clickEffect',
   )
-    out.exitAnim = 'fade'
+  const out: {
+    anim?: BulletAnim
+    animDir?: AnimDir
+    exitAnim?: BulletExit
+    order: string[]
+    shapeAnims: Map<number, { anim: BulletAnim; animDir?: AnimDir; exitAnim?: BulletExit }>
+  } = empty
+  const shapeAt = (spid: string) => {
+    const i = shapeSpids.indexOf(spid)
+    return i < 0 ? undefined : i
+  }
+  let bodySeen = 0
+  for (const c of clicks) {
+    const spid = descendantsByName(c, 'spTgt')[0]?.getAttribute('spid')
+    if (!spid) continue
+    if (c.getAttribute('presetClass') === 'exit') {
+      if (!descendantsByName(c, 'animEffect').some((a) => a.getAttribute('transition') === 'out'))
+        continue
+      if (spid === bodySpid) out.exitAnim = 'fade'
+      else {
+        const i = shapeAt(spid)
+        if (i !== undefined) out.shapeAnims.set(i, { ...(out.shapeAnims.get(i) ?? { anim: 'fade' }), exitAnim: 'fade' })
+      }
+      continue
+    }
+    if (c.getAttribute('presetClass') !== 'entr') continue
+    const eff = animEffectOf(c)
+    if (spid === bodySpid) {
+      out.anim = eff.anim
+      if (eff.dir) out.animDir = eff.dir
+      out.order.push(`l${bodySeen++}`)
+    } else {
+      const i = shapeAt(spid)
+      if (i !== undefined) {
+        out.shapeAnims.set(i, {
+          ...(out.shapeAnims.get(i) ?? { anim: eff.anim }),
+          anim: eff.anim,
+          ...(eff.dir ? { animDir: eff.dir } : {}),
+        })
+        out.order.push(`s${i}`)
+      }
+    }
+  }
   return out
 }
 
@@ -369,12 +481,71 @@ async function slideToDeckSlide(
   const doc = new DOMParser().parseFromString(text, 'application/xml')
   const root = doc.documentElement
 
+  // 占位符走版式槽；无占位符身份的自由文本框进形状层（v0.107）——不再摊进正文，
+  // 位置/字号/颜色原样保住，这正是外部设计版版面此前整页丢失的地方。
+  // v0.108 起按 spTree 文档序单趟收集 sp/pic：形状数组序 = 层叠序（后画在上），
+  // 不再是「文本先收、图片后收」导致「图片垫底、文字压上」被翻转
   const boxes: { lines: string[]; y: number; ph: string | null }[] = []
-  for (const sp of descendantsByName(root, 'sp')) {
-    const lines = shapeParagraphs(sp).filter((l) => l.trim())
-    if (!lines.length) continue
-    const pos = shapeExt(sp)
-    boxes.push({ lines, y: pos ? pos.y : 999, ph: phType(sp) })
+  const shapes: SlideShape[] = []
+  // 形状在原件里的 spid（与 shapes 平行）：动画挂靠靠它认人（v0.111），
+  // 它是 pptx 内部的号，不进 .opd——换一次存盘号就重排了
+  const shapeSpids: string[] = []
+  {
+    const relsPath = slideXml.name.replace(/slides\/(slide\d+\.xml)$/, 'slides/_rels/$1.rels')
+    const relsFile = zip.file(relsPath)
+    const rels = relsFile ? parseRels(await relsFile.async('string')) : undefined
+    const ordered: Element[] = []
+    const walk = (n: Element) => {
+      for (const c of kids(n)) {
+        if (c.localName === 'sp' || c.localName === 'pic') ordered.push(c)
+        walk(c)
+      }
+    }
+    walk(root)
+    for (const el of ordered) {
+      if (el.localName === 'sp') {
+        const lines = shapeParagraphs(el).filter((l) => l.trim())
+        if (!lines.length) continue
+        const pos = shapeExt(el)
+        const ph = phType(el)
+        if (!ph && pos) {
+          const sh: SlideShape = {
+            id: newId(),
+            kind: 'text',
+            ...pos,
+            text: lines.join('\n'),
+            ...shapeStyleOf(el, env),
+          }
+          Object.assign(sh, boxStyleOf(el, env)) // fill/outline/outlineW 按接口序落在 align 之后
+          shapes.push(sh)
+          shapeSpids.push(spidOf(el) ?? '')
+          continue
+        }
+        boxes.push({ lines, y: pos ? pos.y : 999, ph })
+      } else {
+        // 图片：一律进形状层（v0.107）——位置原样保住，不再有「第一张塞版式槽、其余丢弃」的
+        // 有损近似；版式槽的 image 只留给用户在图片页手工插入与单页背景图回退
+        const blip = descendantsByName(el, 'blip')[0]
+        const embed =
+          blip?.getAttribute('r:embed') ??
+          blip?.getAttributeNS('http://schemas.openxmlformats.org/officeDocument/2006/relationships', 'embed')
+        if (!embed || !rels) continue
+        const target = rels.get(embed)
+        if (!target) continue
+        const mediaPath = resolveRel('ppt/slides', target)
+        const mediaFile = zip.file(mediaPath)
+        if (!mediaFile) continue
+        const bytes = await mediaFile.async('uint8array')
+        const ext = mediaPath.split('.').pop()?.toLowerCase() ?? 'png'
+        const pos = shapeExt(el)
+        if (!pos) continue
+        const sh: SlideShape = { id: newId(), kind: 'image', ...pos }
+        Object.assign(sh, boxStyleOf(el, env))
+        sh.image = bytesToDataUri(bytes, MIME_BY_EXT[ext] ?? 'image/png')
+        shapes.push(sh)
+        shapeSpids.push(spidOf(el) ?? '')
+      }
+    }
   }
 
   let title = ''
@@ -392,37 +563,14 @@ async function slideToDeckSlide(
     for (const b of rest.slice(title ? 1 : 0)) bodyLines.push(...b.lines)
   }
 
-  // 图片：第一个有位置信息的 blip
+  // 图片一律已在上面的文档序单趟里进形状层（v0.107/108）；槽位 image 只留给单页背景图回退
   let image: string | undefined
   let layout: Slide['layout'] = 'bullets'
-  const pic = descendantsByName(root, 'pic')[0]
-  if (pic) {
-    const embed = descendantsByName(pic, 'blip')[0]?.getAttribute('r:embed') ??
-      descendantsByName(pic, 'blip')[0]?.getAttributeNS(
-        'http://schemas.openxmlformats.org/officeDocument/2006/relationships',
-        'embed',
-      )
-    if (embed) {
-      const relsPath = slideXml.name.replace(/slides\/(slide\d+\.xml)$/, 'slides/_rels/$1.rels')
-      const relsFile = zip.file(relsPath)
-      if (relsFile) {
-        const rels = parseRels(await relsFile.async('string'))
-        const target = rels.get(embed)
-        if (target) {
-          const mediaPath = resolveRel('ppt/slides', target)
-          const mediaFile = zip.file(mediaPath)
-          if (mediaFile) {
-            const bytes = await mediaFile.async('uint8array')
-            const ext = mediaPath.split('.').pop()?.toLowerCase() ?? 'png'
-            image = bytesToDataUri(bytes, MIME_BY_EXT[ext] ?? 'image/png')
-            layout = 'image'
-          }
-        }
-      }
-    }
-  }
 
-  if (index === 0 && total > 1 && bodyLines.length <= 2 && !image) {
+  if (!title && !bodyLines.length && !image && shapes.length) {
+    // 纯自由形状页：画布驱动，没有槽可渲染，落空白（优先于「首页即标题页」推断）
+    layout = 'blank'
+  } else if (index === 0 && total > 1 && bodyLines.length <= 2 && !image) {
     layout = 'title'
   } else if (index === 0 && total === 1) {
     layout = 'title'
@@ -450,7 +598,37 @@ async function slideToDeckSlide(
     console.warn('页背景/备注解析失败，忽略', e)
   }
 
-  const { anim, animDir, exitAnim } = parseAnim(root)
+  const { anim, animDir, exitAnim, order, shapeAnims } = parseAnim(root, shapeSpids)
+  // 形状动画按 spid 归位：出场那条可能先于入场被遇到，两条并进同一格
+  for (const [i, a] of shapeAnims) {
+    const sh = shapes[i]
+    if (!sh) continue
+    sh.anim = a.anim
+    if (a.animDir) sh.animDir = a.animDir
+    if (a.exitAnim) sh.exitAnim = a.exitAnim
+  }
+  // 播放序：read 出来的先后就是 PowerPoint 的放映序，只有真被排过（≠ 默认序）才写回模型
+  let animOrder: string[] | undefined
+  if (order.length) {
+    // 去重（正文那枚 spid 在 mainSeq 里每逐条一回就要出现一回）+ 只留这一页真有的那几项：
+    // 自有导出件再导入时标题/正文会落进形状层（v0.107 语义），文件里 l0/l1 那几票
+    // 参照的正文此刻已不存在，留着就是一串悬空引用
+    const keys = [...new Set(order)]
+    const probe: Slide = {
+      id: '',
+      layout,
+      title: '',
+      body: bodyLines.join('\n'),
+      anim,
+      animDir,
+      exitAnim,
+      ...(shapes.length ? { shapes } : {}),
+    }
+    const def = revealOrder(probe).map(revealItemKey)
+    const known = keys.filter((k) => def.includes(k))
+    // 一项都不剩（文件里那几票的对象全没了）⇒ 不写——空数组比 undefined 更没信息
+    if (known.length && def.join(',') !== known.join(',')) animOrder = known
+  }
 
   return {
     id: newId(),
@@ -465,6 +643,8 @@ async function slideToDeckSlide(
     animDir,
     exitAnim,
     autoAdvance,
+    animOrder,
+    ...(shapes.length ? { shapes } : {}),
   }
 }
 

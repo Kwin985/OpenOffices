@@ -796,6 +796,71 @@ button {
   color: var(--text-2);
 }
 
+/* 定义名称管理器（v0.104）：弹层骨架沿用 print-pop，行内三件套按「名字窄 / 所指宽 / 作用域中」分 */
+.names-pop {
+  position: absolute;
+  top: 40px;
+  left: 10px;
+  z-index: 31;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  width: min(760px, calc(100% - 20px));
+  max-height: calc(100% - 60px);
+  overflow: auto;
+  padding: 12px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  box-shadow: 0 6px 20px rgb(0 0 0 / 12%);
+}
+
+.names-pop-empty {
+  padding: 10px;
+  font-size: 13px;
+  color: var(--text-2);
+  border: 1px dashed var(--border);
+  border-radius: 8px;
+}
+
+.names-row {
+  display: grid;
+  grid-template-columns: 180px minmax(0, 1fr) 140px auto;
+  gap: 6px;
+  align-items: center;
+}
+
+.names-row input,
+.names-row select {
+  min-width: 0;
+  padding: 3px 6px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg);
+  color: var(--text);
+}
+
+.names-pop-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.names-pop-spring {
+  flex: 1;
+}
+
+.names-pop-err {
+  font-size: 12px;
+  color: #c0392b;
+}
+
+@media print {
+  .names-pop {
+    display: none;
+  }
+}
+
 .print-margin-grid {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
@@ -992,7 +1057,12 @@ button {
 .doc-content {
   outline: none;
   min-height: 900px;
-  line-height: 1.75;
+  /* 默认行距 = 字体自然行高（v0.97 起，原 1.75）：Word 的「单倍行距」就是字体度量里的
+     ascent+descent+行隙，CSS 的 `normal` 取的是同一份字体度量——这是两排版版引擎之间
+     唯一不需要换算系数的默认值。1.75 是屏幕时代的舒适档，代价是纸面行高比 Word 厚一截
+     （v0.95 记的那笔「厚约 3×」里默认档的那一部分）。显式声明过行距/段距的段落走内联
+     样式，不受这里影响。 */
+  line-height: normal;
   font-size: 15px;
 }
 
@@ -1220,6 +1290,103 @@ button {
   gap: 4px;
 }
 
+/* v0.106 命名样式表面板：一行一样式，行内直接改定义——渲染层与导出都吃这份定义 */
+.doc-style-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--border);
+  font-size: 13px;
+}
+
+.doc-style-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+/* 表样式条件层（v0.116）：条件面板挂在所属那一样式行的下面，Row 内每一行是一块 w:tblStylePr */
+.doc-tblcond-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 0 0 6px 12px;
+  padding: 6px 8px;
+  border-left: 2px solid var(--border);
+  background: var(--code-bg);
+  font-size: 12px;
+}
+
+.doc-tblcond-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.doc-tblcond-name {
+  min-width: 46px;
+  color: var(--text-2);
+  white-space: nowrap;
+}
+
+.doc-style-row {
+  display: grid;
+  grid-template-columns: minmax(120px, 1.4fr) 64px 32px 32px 34px 76px 64px 64px 56px 56px 32px;
+  gap: 6px;
+  align-items: center;
+}
+
+.doc-style-row .doc-style-name {
+  width: 100%;
+  min-width: 0;
+}
+
+.doc-style-num {
+  width: 100%;
+}
+
+.doc-style-color {
+  width: 30px;
+  height: 24px;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: none;
+  cursor: pointer;
+}
+
+.doc-style-chk {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  white-space: nowrap;
+  color: var(--text-2);
+}
+
+.doc-style-tag {
+  font-style: normal;
+  font-size: 11px;
+  color: var(--text-2);
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  padding: 0 4px;
+  margin-left: 6px;
+}
+
+.doc-style-del {
+  color: #b91c1c;
+}
+
+@media print {
+  .doc-style-panel,
+  .doc-style-row {
+    display: none !important;
+  }
+}
+
 /* v0.30 页面设置：分页参考线 + 设置面板 + 表格/图片上下文条 */
 .doc-pg-lines {
   position: absolute;
@@ -1376,6 +1543,35 @@ button {
 .doc-content span[data-oo-comment] {
   background: rgba(240, 180, 41, 0.24);
   border-bottom: 2px solid #f0b429;
+}
+
+/* 修订标记（v0.100）：插入=绿色下划线、删除=红色删除线，与 Word 审阅窗格的直觉一致；
+   删除文字变灰但留在原位——「拒绝修订」要靠它把内容找回来 */
+.doc-content span[data-rev='ins'] {
+  text-decoration: underline;
+  text-decoration-color: #2e7d32;
+  text-decoration-thickness: 1.5px;
+  text-underline-offset: 3px;
+  background: rgba(46, 125, 50, 0.07);
+}
+.doc-content span[data-rev='del'] {
+  text-decoration: line-through;
+  text-decoration-color: #c62828;
+  text-decoration-thickness: 1.5px;
+  color: #9e9e9e;
+  background: rgba(198, 40, 40, 0.07);
+}
+/* 打印与导出 PDF 时保留修订视觉：纸面上定稿前也要看得出哪些是改动 */
+@media print {
+  .doc-content span[data-rev='ins'] {
+    text-decoration: underline;
+    text-decoration-color: #2e7d32;
+  }
+  .doc-content span[data-rev='del'] {
+    text-decoration: line-through;
+    text-decoration-color: #c62828;
+    color: #9e9e9e;
+  }
 }
 
 .doc-content blockquote {
@@ -1702,6 +1898,92 @@ button {
   opacity: 0.45;
 }
 
+/* v0.107 自由形状层：编辑态叠加（放映/缩略图走 StaticSlide 里的同名渲染类） */
+.ppt-shape-text {
+  position: absolute;
+  inset: 0;
+  white-space: pre-wrap;
+  overflow: hidden;
+  pointer-events: none;
+  line-height: 1.35;
+}
+
+.ppt-shape-img {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: fill;
+  pointer-events: none;
+}
+
+.ppt-shape-box {
+  position: absolute;
+  cursor: move;
+  touch-action: none;
+}
+
+.ppt-shape-box.ppt-shape-sel {
+  outline: 1.5px dashed var(--ppt);
+  outline-offset: 2px;
+}
+
+.ppt-shape-handle {
+  position: absolute;
+  right: -5px;
+  bottom: -5px;
+  width: 10px;
+  height: 10px;
+  background: var(--ppt);
+  border: 2px solid var(--panel);
+  border-radius: 2px;
+  cursor: nwse-resize;
+  touch-action: none;
+}
+
+.ppt-shape-textedit {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  resize: none;
+  border: none;
+  background: transparent;
+  outline: none;
+  font: inherit;
+  line-height: 1.35;
+  padding: 0;
+}
+
+.ppt-shape-bar {
+  position: absolute;
+  left: 0;
+  /* v0.111 起属性条挂了动画三件（可能换行）：按底边贴住形状上方，多高都不压住形状 */
+  bottom: calc(100% + 6px);
+  display: flex;
+  flex-wrap: wrap;
+  max-width: 560px;
+  gap: 4px;
+  align-items: center;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 3px 6px;
+  box-shadow: 0 2px 8px rgba(31, 41, 55, 0.18);
+  z-index: 5;
+  white-space: nowrap;
+}
+
+.ppt-shape-color {
+  width: 26px;
+  height: 22px;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: none;
+  cursor: pointer;
+}
+
 /* 静态幻灯片渲染（缩略图 / 放映共用，靠父级 font-size 缩放） */
 .ppt-slide-static {
   position: absolute;
@@ -1977,6 +2259,63 @@ button {
 
 .ppt-out-fade {
   animation-name: ppt-out-item-fade;
+}
+
+/* 逐条还没轮到的那一项（v0.111 形状、v0.115 正文条目同用一枚）：
+   不 display:none 而是留着位置—— PPT 未揭示的内容占位不动，条目不会随揭示往上跳 */
+/* v0.115 播放顺序面板：一行排下本页的揭示序，↑↓ 就在原处调这一次序 */
+.ppt-seq-panel {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  border-bottom: 1px solid var(--border);
+  background: var(--panel);
+  font-size: 12px;
+}
+
+.ppt-seq-label {
+  color: var(--fg-muted, #6b7280);
+  margin-right: 2px;
+}
+
+.ppt-seq-item {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 2px 4px;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  background: var(--bg);
+}
+
+.ppt-seq-no {
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: var(--accent, #2c66d4);
+  color: #fff;
+  font-size: 11px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.ppt-seq-name {
+  max-width: 260px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ppt-seq-hint {
+  color: var(--fg-muted, #6b7280);
+  margin-left: 4px;
+}
+
+.ppt-anim-hide {
+  visibility: hidden;
 }
 
 .ppt-present-bar {
@@ -2811,6 +3150,84 @@ button {
   stroke-width: 1.5;
   stroke-dasharray: 4 3;
   pointer-events: none;
+}
+
+/* v0.99 图章：图片烙在页面上，标注态可拖可删 */
+.pdf-anno-stamp {
+  position: absolute;
+  z-index: 3;
+  object-fit: fill;
+  pointer-events: auto;
+  cursor: move;
+  outline: 1px dashed transparent;
+}
+
+.pdf-anno-stamp.sel {
+  outline-color: var(--accent);
+}
+
+/* v0.99 表单控件（AcroForm widget 的屏幕替身）：贴着字段块摆放，
+   平时半透明、悬停/聚焦实起来；只读的完全隐身（只留底下的页面外观） */
+.pdf-form {
+  position: absolute;
+  z-index: 3;
+  margin: 0;
+  padding: 0 2px;
+  font: 12px/1.3 'Segoe UI', sans-serif;
+  color: #111;
+  background: rgba(255, 255, 255, 0.75);
+  border: 1px solid rgba(59, 130, 246, 0.55);
+  border-radius: 2px;
+  opacity: 0.72;
+}
+
+.pdf-form:focus,
+.pdf-form:hover {
+  opacity: 1;
+  border-color: var(--accent);
+}
+
+.pdf-form.ro {
+  pointer-events: none;
+  opacity: 0;
+}
+
+.pdf-form-ta {
+  resize: none;
+}
+
+.pdf-form-chk {
+  padding: 0;
+  margin: 0;
+  opacity: 0.85;
+}
+
+.pdf-form-sig {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 11px;
+  color: var(--text-3, #9ca3af);
+  background: rgba(255, 255, 255, 0.4);
+  border: 1px dashed rgba(107, 114, 128, 0.5);
+  opacity: 0.85;
+  pointer-events: none;
+}
+
+/* v0.99 打印覆盖层：每页一个页盒（pt 定尺寸、页间强制分页），位图铺满页盒 */
+.pdf-print-overlay {
+  background: #fff;
+}
+
+.pdf-print-page {
+  overflow: hidden;
+  page-break-after: always;
+  break-after: page;
+}
+
+.pdf-print-page:last-child {
+  page-break-after: auto;
+  break-after: auto;
 }
 
 .pdf-tools {

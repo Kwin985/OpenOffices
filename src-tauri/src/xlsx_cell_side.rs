@@ -650,7 +650,7 @@ pub struct SheetSideWrite {
     pub authors: Option<AuthorTable>,
 }
 
-/// 一张表的作者表，用来核对与重排产物里的 `<authors>`（见 [`save_workbook`]）
+/// 一张表的作者表，用来核对与重排产物里的 `<authors>`（见 [`save_workbook_bytes`]）
 #[derive(Clone, Default)]
 pub struct AuthorTable {
     /// 第 i 项 = `authorId` 为 i 的署名；第 0 项恒是空串（"没人署过"在表里的样子）
@@ -811,12 +811,13 @@ fn rc_to_a1(r: u32, c: u32) -> String {
 /// 于是 A1=李四、A2=张三 的件在 Excel 里会把 A1 显示成张三——署名串到了别人头上。
 /// 载荷里那张表我们自己数得出来，就按编号重排回去；数不上（产物与预期对不齐）宁可不动也不猜。
 /// 同一趟里还要补 worksheet 上的打印设置（crate 只写 odd 页眉页脚，起始页码又落错了属性）。
-pub fn save_workbook(
-    path: &str,
+pub fn save_workbook_bytes(
     wb: &mut Workbook,
     tables: &[Option<AuthorTable>],
     print: &[(String, crate::xlsx_print::PrintPatch)],
-) -> Result<Vec<String>, String> {
+    names: &[crate::xlsx_names::DefinedName],
+    sheet_order: &[String],
+) -> Result<(Vec<u8>, Vec<String>), String> {
     let bytes = wb.save_to_buffer().map_err(|e| format!("保存失败: {e}"))?;
     // `xl/comments1.xml`、`comments2.xml`… 按"有批注的表"的先后编号（crate 的 write_comment_files），
     // 所以第 i 份归第 i 张有批注的表
@@ -831,19 +832,20 @@ pub fn save_workbook(
     for (part, p) in print {
         want.push((part.clone(), Fix::Print(p)));
     }
-    if want.is_empty() {
-        std::fs::write(path, bytes).map_err(|e| format!("保存失败: {e}"))?;
-        return Ok(Vec::new());
+    if !names.is_empty() {
+        want.push(("xl/workbook.xml".to_string(), Fix::Names(names, sheet_order)));
     }
-    let (out, accounts) = rezip_parts(&bytes, want.as_slice())?;
-    std::fs::write(path, out).map_err(|e| format!("保存失败: {e}"))?;
-    Ok(accounts)
+    if want.is_empty() {
+        return Ok((bytes, Vec::new()));
+    }
+    rezip_parts(&bytes, want.as_slice())
 }
 
-/// 重打包要动的两类部件（都是"只换点名的那一个，其余原样搬"）
+/// 重打包要动的三类部件（都是"只换点名的那一个，其余原样搬"）
 enum Fix<'a> {
     Authors(&'a AuthorTable),
     Print(&'a crate::xlsx_print::PrintPatch),
+    Names(&'a [crate::xlsx_names::DefinedName], &'a [String]),
 }
 
 /// 整包重打包，只换掉点名的那几个部件（其余条目原样搬过去、压缩方式照旧）
@@ -883,6 +885,11 @@ fn rezip_parts(bytes: &[u8], want: &[(String, Fix<'_>)]) -> Result<(Vec<u8>, Vec
                 accounts.append(&mut notes);
                 (new, true)
             }
+            Fix::Names(names, order) => {
+                let (new, mut notes) = crate::xlsx_names::patch_workbook_part(text.as_str(), names, order);
+                accounts.append(&mut notes);
+                (new, true)
+            }
         };
         done[k] = done[k] || fixed;
         zw.start_file(name.as_str(), opt)
@@ -903,6 +910,9 @@ fn rezip_parts(bytes: &[u8], want: &[(String, Fix<'_>)]) -> Result<(Vec<u8>, Vec
                 "产物里没有 {}，那张表的页眉页脚、起始页码或缺省行高没写出去",
                 want[k].0
             )),
+            Fix::Names(..) => accounts.push(
+                "产物里没有 xl/workbook.xml，定义名称没写出去".to_string(),
+            ),
         }
     }
     let out = zw.finish().map_err(|e| format!("保存失败: {e}"))?;
