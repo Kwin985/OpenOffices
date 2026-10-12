@@ -6745,6 +6745,883 @@ difflib 纯插入 3、纯删除 0、整行替换块 0，hunk 细目 `insert@998 
 - 本轮没动的（各开一枚进路线图）：`em`/`ex`/`%` 三档两头都不收而门面对它们给的是退化页（等于这一族没有第三头判据）；真件页面族没有 px/pc 字面 ⇒ 新补那两枝只有夹具一头；`lenPx` 与 `cm2mm` 的单位榜还没并（`pc` 只在这一枝）；`DEFAULT_COL_GAP ± 0.6` 会把错系数读成「整枚没账」；`n <= 0` 那道闸与门面把 0 读成有值之间的分歧（页面族问位上 35 枚显式 0）；自家写手只发 cm ⇒ 这三档在自家往返里自证不了；`cm` 折 mm 的 ×10 与 `lenPx` 那套 px→mm 并存（同一物理宽度差 0.003mm）。
 - 收尾：README 新增本节 + 六处就地改口（上一节「本轮没动的」第一句挂指针、架构那节 `lib/odt.ts` 补本轮单位榜口径、路线图 A 类那枚里的「pt/px/pc 全拒收」改口、`cm2mm` 不收 pt/px/pc 那枚勾掉、显式 0 那枚把「有没有写 0 没扫过」换成 35 枚读数、裸数那枚补 SPACE 档读数）+ 路线图勾掉 1 枚而新开 7 枚（未勾 264→270、已勾 130→131）；**本轮不占版本号**（`package.json`/`Cargo.toml`/`tauri.conf.json` 住着并发轮次的 0.119.0，本节按内容命名）；并发会话在场 ⇒ dev 树与工作树那份 README 全程未碰，提交走 index-only blob（`src/lib/odt.ts` 与这份 README），只本地 commit 不 push；一次性腿件与日志留在被忽略的临时目录里。
 
+## 表格保留式写回：图片与表格部件按表名映射搬进产物（v0.98）
+
+路线图上「整包重写留不下我们不认的属性」那一条定方向：**部件级搬运**，不是逐属性缝合、也不是整份件
+只改点名字节。存盘本体仍是 rust_xlsxwriter 整包重建（这条链路的保真账本已调平，不为第三方件推倒重来），
+重建落地之后、写盘之前，新模块 `xlsx_preserve.rs` 从原件把「读侧不认、模型里也没有」的部件按**表名映射**
+整份搬进产物，并接好三处线：sheet 部件上的引用元素、逐层 rels、`[Content_Types].xml`。
+
+本轮搬进第一梯队两样——正是普通用户 open→save 一趟就丢、丢得最疼的：
+
+- **图片**（`xl/media/*` + drawing 里的 `<xdr:pic>` 锚点）：锚点块整份照搬，embed 的 rId 换成搬入新号、
+  cNvPr id 重排避开与产物已有图形撞号；该表已有 crate 图表（payload 重写的原生图）就**并进同一份
+  drawing**，没有才新建 drawingN 并给 sheet 部件补 `<drawing r:id>`；媒体字节原样，扩展名认不出的
+  （不在 png/jpeg/gif/bmp/tiff/emf/wmf 表内）记账跳过。带超链接（`r:id`/`r:link` 等 embed 之外的 rel）
+  的图片整块放弃并记账——搬一半比不搬恶劣；页眉页脚里的图住在 `<picture r:id>` 指的那份 drawing 里，
+  是另一路，本轮不搬（记账）。
+- **表格 ListObjects**（`xl/tables/tableN.xml` + `<tableParts>`）：表格部件整份照搬（表内筛选、
+  banded 样式声明都在），sheet 部件补 `<tableParts>`（按 CT_Worksheet 顺序落在 extLst 之前）、
+  sheet rels 补关系、content types 补 Override。用户在 app 里套的「表格样式」第一次能活着过一次存盘
+  ——只要它来自原件。
+
+**守卫按表逐一对名**，不设全簿门槛：同名表才搬；改名/删除的表自然不搬，且各记一条账
+（「原件表「X」在新簿里没有同名表……」），改名的表不再无声丢图。`WorkbookPayload` 新增 `srcPath`
+（前端 `SheetEditor.save` 在原件是 xlsx 时带上 `tab.path`），原件不在/读不开/不是 xlsx 时记账退回
+纯整包重建，保存不失败。部件名分配逐名探测（drawingN/tableN/imageN 从产物已有最大号往后排），
+连续另存（srcPath 指向上一趟产物）不会撞号也不会留孤儿部件——crate 从不写表格与媒体，产物里这些
+名字只会来自上一趟搬运，重搬即原位覆盖。
+
+**判据**（cargo 离线腿，如实记档）：`xlsx_preserve` 4 测 4 过——①表格部件整份照搬 + tableParts/rels/
+content types 三处接线齐全 + 媒体字节原样 + pic 锚点并进产物 drawing（embed 换 rIdC1、cNvPr 重排
+1000 起）+ calamine 能开产物且数据在；②该表有 crate 图表时图片并入**同一份** drawing（graphicFrame
+与 `<xdr:pic>` 同在，sheet 上 drawing 引用仍只一枚）；③改名场景不搬且账说得出；④原件不存在记账
+「保留式写回没启用」并退回。全量 `cargo test --lib` **101 过 0 挂**（11 ignored 为实机腿），
+`tsc --noEmit` + `vite build` 绿。**没做的**：Excel 实机开产物腿（接线形状按 ECMA-376 的
+CT_Worksheet/CT_Relationships 顺序写，但「Excel 打开不弹修复」这一格没验）、透视表/切片器/查询连接、
+定义名称（print 两条之外的）、行级属性账（`x14ac:dyDescent` 一类，部件级搬运管不到部件内部）、
+读侧不支持的图表类型（radar 等仍是读时丢弃）、页眉页脚图片、ODS→xlsx 转存的对应物。
+
+**收尾**：README 新增本节 + 路线图那条改口（方向已定、第一梯队已收，余下挂账逐条列出），
+版本 0.98.0（package.json / tauri.conf.json / Cargo.toml 三处对齐）。
+
+## PDF 三连：表单填写 + 打印 + 图章（v0.99）
+
+四组件深化规划的 PDF 一轮，三件事把 PDF 从「查看器」推成「处理工具」。零新依赖：
+读侧吃 pdf.js 注解扫描顺路收的 widget，写侧吃依赖树里一直没接线的 pdf-lib `getForm()`。
+
+- **表单（AcroForm）**：`readAnnos` 那趟逐页扫描里 `/Subtype=Widget` 的注解顺路收（同一次
+  `getAnnotations`，不为表单多付一趟全量解析），`lib/pdf-forms.ts` 归类成文本（单行/多行/最长长度）、
+  checkbox、radio（同名多格归组、每格认自己的导出值）、下拉（导出值与显示值分开）、多选列表、
+  签名域占位；pushbutton 没有值可填、隐藏的不渲染。屏幕上是贴着字段块摆的原生控件（半透明、
+  悬停实起来，只读的完全隐身留页面外观），编辑进**值账**。写回按「点过名才写」：只有用户碰过的
+  字段才进 patch——文件里 pdf.js 读不全的值（密码框、富文本、签名域）一个字节不动。单字段失败
+  记一条账不让保存失败；找不到字段、不是可填字段各说各话。
+- **打印**：逐页栅格化（144 DPI）→ **内存标注/图章/表单值画进位图**（所见即所得：高亮/形状/
+  手绘/便签/图章/勾选✓/下拉选中值都上纸）→ 每页位图立刻转 JPEG 释放 canvas（300 页 A4@2x
+  全留位图要两三个 GB）→ 纸张按首页定、页盒 `pt` 定尺寸页间强制分页 → 复用 `lib/pdfprint.ts`
+  的 PrintToPdf 链路落一份「打印版 PDF」，页边距 0（PDF 自己带边距）。与首页尺寸不同的页数
+  在完成句里说。
+- **图章**：标注行新增 🖼——选一张 png/jpg 量好宽高比进入落章模式，点击落章（宽 140pt、
+  高按原图比例）、可连盖多枚，落完走既有标注机制拖移/删除。写回**不是注解**：图片直接
+  `embedPng/Jpg` 烙进页面内容流（`pg.drawImage`），其他阅读器打开就是页面上的一幅图，
+  没有「注解层」可丢。图章数据以 dataURL 存内存模型，base64 分块转码（一次
+  `String.fromCharCode` 有栈上限）。
+
+**验证腿挖出来的两枚真缺陷**（这正是先立腿再动手的回报）：
+
+1. **pdf-lib 的外观更新对中文值必炸**：`updateFieldAppearances()` 给字段画外观走内置字体的
+   WinAnsi 编码，「李四」直接抛 `WinAnsi cannot encode`。而且 `PDFDocument.save()` **默认
+   `updateFieldAppearances: true`**——只要调过 `getForm()`，带中文字段值的 PDF 连保存都过不去。
+   修法：写回链路 `save({ updateFieldAppearances: false })` 显式接管，ASCII 值当场画好外观，
+   画不动的翻 `/NeedAppearances` 让打开文件的阅读器自己重画（值在文件里是准的）。
+   `pdf-pages.ts` 那几条 save 从没碰过 `getForm()`（Cache 惰性，不碰就不触发），不受牵连。
+2. **值分发不能按值的类型**：radio/下拉的选中值也是字符串，按「字符串→setText」分发就全撞墙。
+   改成「布尔→勾选；字符串→有 `setText` 走文本、否则走 `select`；数组→多选」。
+
+**判据**（vite-node 离线腿，如实记档）：**23 断言 23 过**——base64/dataURL 往返；widget 归类
+（几何换算含 rot 90 页、checkbox 选中态、radio 归组与命中格、下拉导出/显示值分开、数组值归
+list、无名/隐藏/按钮丢弃、签名占位）；`applyFormValues` 对 pdf-lib 真件写回（文本/勾选/radio/
+下拉各一路存盘重开断言、只写点名字段、中文字段值钉住 WinAnsi 兜底路径）。`tsc --noEmit` +
+`vite build` 绿。**没做的**：浏览器侧真件腿（真表单 PDF 的屏幕控件位置没在 dev 上量过，
+几何换算与标注同一条通道但 widget 的 `Rect` 形状按 pdf.js 实现假定）；打印不改原文件、
+内存未存盘的标注只进打印版不进文件；混合纸张尺寸的文档按首页一张纸（缩放放入，账说得出）；
+XFA 表单（pdf.js/pdf-lib 都不认）、文本域的字体/字号/对齐细节、radio 的 on 状态外观重画；
+旋转页上的图章按未旋转方向画入（方向可能与屏幕差 90°/180°，记账）；加密件的表单走同密码
+腿没单独量。
+
+**收尾**：README 新增本节，版本 0.99.0（package.json / tauri.conf.json / Cargo.toml 三处对齐），
+tmp 验证腿按家规删除。
+
+## 修订（track changes）：w:ins/w:del 读写与接受/拒绝（v0.100）
+
+文字深化 P1 的第一件：带修订的 docx 进得来、看得清、裁决得了、存得回去。此前 `w:ins` 被静默
+并入正文、`w:del` 连同 `w:delText` 整块丢弃——打开带修订的件等于强制「接受全部修订」且不告知。
+
+- **读侧**（docx-fidelity.ts）：`w:ins`/`w:del` 落成修订壳，`w:delText` 只在删除壳里当文字读，
+  作者/日期原样带走（作者名含引号先转义再进属性）；裸 `w:delText`（脱离 `w:del` 的非法写法）
+  仍不读；`moveFrom`/`moveTo` 按「接受后的状态」读并逐处记账；段落标记自身的修订（`pPr/w:ins`、
+  `pPr/rPr/w:del`）前者按接受态读、后者模型无承载如实记账。判据走内联 span（`span[data-rev]`）
+  ——不用原生 `<del>` 标签，StarterKit 删除线 mark 已把 `<del>` 占了，同一段字会被读成两种含义。
+- **模型与视觉**（lib/revision-extension.ts + CSS）：`revIns`/`revDel` 两个 mark；插入=绿色下划线、
+  删除=红色删除线且文字变灰留在原位（「拒绝」要靠它找回内容），打印/导出 PDF 保留修订视觉。
+- **裁决**：接受/拒绝（工具栏，空选区管全文、有选区只裁决选区）。语义核是纯函数（`adjudicate`：
+  接受插入/拒绝删除=只摘标记；拒绝插入/接受删除=删字，区间从后往前删避免位置漂移），离线可测。
+- **导出**（docx.ts）：标记 → docx 库的 `InsertedTextRun`/`DeletedTextRun`（后者自动把 `w:t` 写成
+  `w:delText`），作者/日期回写，`w:id` 文档内不重复；超链接内的文字不包修订壳（库的链接子元素
+  类型不收），内容保住、标记丢失，边界如实记。
+- **范围**：本应用内**新增**修订（修订模式输入）未做——本轮收的是「收文—审阅—定稿—回传」链路；
+  in-app 修订要动 replaceSelection 行为，另行开工。
+- 判据：vite-node 验证腿 19/19（导入标记/边界、导出壳与 id、裁决四语义+选区过滤；当场抓到
+  裁决方向写反、switch 早退列表吞掉 w:del 分支两枚真缺陷）；tsc + vite build 绿。浏览器侧
+  dev 真件腿未跑。
+- 版本三处 0.100.0；tmp 验证腿按家规删除。
+
+## 修订模式：本应用里改字留痕（v0.101）
+
+补上 v0.100 明示的范围缺口：收文—审阅—定稿链路里，「在收到的文件上继续改并留下自己的痕迹」这一段。
+工具栏新增「修订模式」开关，开着时：
+
+- **插入留痕**：打字/粘贴的内容由 ProseMirror 插件（`appendTransaction`）自动挂 `revIns`，
+  署名沿用批注惯例的「我」，日期到毫秒；纯内容插入才追踪——带开口/含块节点的 slice
+  （回车切分、整段粘贴）说明结构在变，模型装不下，照旧落盘不打标。
+- **删除转标记**：Backspace/Delete/Ctrl+X 不真删，改成把区间挂 `revDel`（红删除线留在原位）；
+  区间全是未定稿的插入（revIns）时放行真删——接受语义正好抵消；纯段落缝（无文字）也不拦，
+  结构不追踪与读侧同一账本。IME 组合中的退格不拦（那是输入法在改拼字）。
+- **裁决复用 v0.100**：接受/拒绝按钮对本应用产生的修订同样生效，存盘走同一条导出链路
+  （`InsertedTextRun`/`DeletedTextRun`），Word 打开就是标准修订。
+- **已知边界（如实记）**：紧贴修订边缘、且模式已关时的打字会继承相邻的修订 mark——这是
+  ProseMirror 对一切 mark 的原生行为（粗体同样如此），可用「接受/拒绝」或清格式处理；
+  回车/段合并不追踪；剪切不放剪贴板（标记化后原文字还在文档里）。
+- 判据：vite-node 验证腿 18/18（开关、插入打标署名、删除转标记、revIns 区间真删放行、
+  段落缝放行、相邻标记合并、裁决闭环清零；其中三枚失败全是测试助手自身 bug——
+  nodesBetween 未下钻、右边界相触节点混入、与 mark 继承语义误解）；tsc + vite build 绿。
+  dev 真机腿（中文 IME 全流程）未跑。
+- 版本三处 0.101.0；tmp 验证腿按家规删除。
+
+## 文字命名样式体系：样式清单 / pStyle 标签 / 样式表写回（v0.102）
+
+修订闭环之后，公文/论文场景还差最后一块拼图：**样式**。此前 docx 保真导入一直是「摊平」哲学——
+样式的格式沿 basedOn 链摊进每段每 run 的直接属性，样式身份本身（`w:pStyle`）与样式表（`styles.xml`）
+读完就扔；导出侧 `styles.xml` 里只有 docx 库默认生成的几个内置定义，原文档的样式表整个被洗掉，
+Word 里改一处样式带全篇的那种文档，到我们手里就断了这条链。这一轮把三件事接上：
+
+- **读侧清单**：`styleList()` 把 `styles.xml` 里 type="paragraph" 的每一枚收进 `DocxImport.styles`
+  （字符/表/编号样式不进清单，编辑器的样式挂点只有段落栏一处）。每枚带 id/name/basedOn 与
+  **沿 basedOn 链摊平后的结构化快照**：run 层逐层 `readRPr`（字体串/字号 px/粗斜下删/颜色），
+  para 层取合并视图 pPr 的各枚值（对齐/左右缩进/首行缩进/行距与规则/段前后/大纲级别），
+  单位与编辑器内部一致。Normal 恒排最前，段前后按「行」计的按 19px/行 估算（与正文段落同款口径，
+  但这一路**不 warn**——读的是样式定义本身，估算值就是快照的一部分，不算「未保留」）。
+- **段落标签**：非标题段落的 pStyle 随 HTML 落 `data-pstyle`（ParagraphStyle 扩展新增 `pStyle`
+  属性与 `setPstyle` 命令）；h1-h4 不带——标题语义由 heading 层级承载（导出走 `HeadingLevel`），
+  Heading5+ 与自定义标题样式落 p 标签时靠这一笔带走，导出时反而是能力增强（Word 里就是标题5）。
+- **UI 套用**：段落栏新增「样式」下拉（清单从 `meta.styles` 派生，零独立状态），套用 = 挂 pStyle
+  标签 + 摊入段级快照的**三样**（对齐/行距/段距，编辑器有属性挂点的）；标题级样式（level 1-4）
+  套用时**转 heading 节点类型**并清标签（style 与 heading 并存会被库写出两枚 `w:pStyle`），
+  字符格式本来就在读侧摊进了每个 run，套完视觉即正确。
+- **导出写回**：段落 `w:pStyle` 写回（普通段落/有序列表项；heading 不重复写、bullet 项库无条件
+  补 ListParagraph 标签所以样式标签丢）；样式表按快照重建进 `styles.paragraphStyles`——
+  **样式表不再在导出这一步被洗掉**。行距段距换算抽成 `spacingVals` 与段落直接格式共用一套。
+  docx 库 `DefaultStylesFactory` 每次构造都会生成一批内置定义并与外部样式合并，同 id 再写一枚会
+  出两个 `w:style` 节点，故 Heading1-6/Title/Strong/ListParagraph/FootnoteText/EndnoteText/Hyperlink
+  七类 id 跳过不写；**Normal 不在库内置清单里，定义照写**。
+- **已知边界（如实记）**：① 样式表定义写的是摊平链全量值（basedOn 照抄原链）——Word 打开渲染
+  正确，但样式面板里每层看着都是全量格式，父样式一改子样式不跟；样式表的逐条保真不是本轮目标。
+  ② 对内置七类的定制（改过 Heading1 的字号）会丢，Word 落回库内置定义。③ 套用**只加不减**：
+  不清用户手调的直接格式（清了却不给样式格式兜底，屏幕会比套用前更秃——编辑器没有样式表实时
+  渲染层），缩进/底纹/边框也不摊。④ heading 节点上套非标题样式时导出 pStyle 丢弃（标题语义赢）。
+  ⑤ 编辑器内没有样式表编辑器（改一处全文变的那种），样式格式不进视图渲染。
+  ⑥ ODT 导出不带样式表（`meta.styles` 只有 docx 导出吃）。
+- 判据：vite-node 验证腿全绿（清单 3 枚收字符样式拒收、快照值逐项断言 44hp→29.33px/行距 1.5/
+  beforeLines 50→9.5px/outlineLvl 4→level 5、data-pstyle 三段落两带一不带、`w:pStyle` 写回且
+  heading 单枚、样式表 CustomBody/MyH5/Normal 定义落回而 Heading1/ListParagraph 各只一枚、
+  meta 无清单时样式表干净）；tsc + vite build 绿。
+- 版本三处 0.102.0；tmp 验证腿按家规删除。
+
+## 定义名称搬运（v0.103）
+
+**问题**：公式引用了定义名字（如 `税率`）的表格文件，读侧 calamine 不认、写侧 crate 只认
+print 两条——写回后名字定义整个丢失，公式全部断链（Excel 里显示 `#NAME?`）。这是 v0.98
+保留式写回轮明确挂账、v0.45 公式轮交汇的缺口，本轮收掉。
+
+**读侧**（`xlsx_names.rs` 新模块）：一趟 zip 直解 `xl/workbook.xml` 的 `<definedNames>`——
+calamine 不公开这一层（与打印设置同款处境）。只收用户名字（`_xlnm.*` 系统名跳过：print
+两条归打印通道，其余影子名搬了可能与筛选通道重复）；`localSheetId` 解析成表名跟在名字上
+（越界记账不硬收）；hidden/comment 属性保留；值里的实体逐个还原（Excel 产出的预定义实体）。
+载荷新增 `definedNames` 字段随打开流程进前端。
+
+**写侧**：沿用侧通道账本模式（与打印设置/默认字体同款）——前端 `namesRef` 收读侧清单，
+保存时原样回贴载荷；Rust 在 `save_workbook_bytes` 收尾趟里把名字按**当前表序**重算
+`localSheetId`（crate 重排过表序，原件的声明序下标已失效）、`patch_workbook_part` 补进产物
+`workbook.xml`：已有 `<definedNames>` 块（crate 写的 print 两条）就插块尾，没有就在 `<calcPr>`
+前造块；作用域表已删的名字丢并记账，不说瞎话。名字定义与公式引用**原样保留**——不做范围
+搬运，公式引用的 `$A$1` 与名字值天然一体。
+
+**测试**（8 条，`xlsx_names` 模块）：清单读出与系统名跳过、隐藏名带备注与作用域、坏
+`localSheetId` 记账、值实体还原、补块位置两态（已有块/造块）、作用域表已删记账、写回转义
+（文本节点引号原样，与 Excel 产出一致）、**全环路**——crate 造带名字的原件→读侧收→写新簿→
+产物 zip 里名字与公式都活着。全量 `cargo test --lib` **109 过 0 挂**（11 ignored 为实机腿），
+`tsc --noEmit` 绿。
+
+**挂账**：名字的公式引用了读侧不认的东西（外部引用、宏表函数）照原样搬，Excel 开不开得
+认没验实机；名字清单在编辑器内不可见不可管理（无 UI）；名字值与格子内容不做联动（改格子
+不改名字定义）；ODS 这条路不带（读侧本身不收）。
+
+**收尾**：路线图「定义名称（print 两条之外的）」勾账改口；版本三处 0.103.0。
+
+## 定义名称管理器（v0.104）
+
+**问题**：v0.103 把名字的读写链路打通了，但名字在编辑器里完全不可见——公式重的文件等于
+黑箱：有没有名字、叫什么、指着哪，只有 Excel 知道。这轮补 UI 闭环。
+
+**实现**：工具栏「定义名称」按钮（带枚数角标）+ 内联弹层（页面设置面板同款心智）——
+`namesRef`（v0.103 侧通道）是真相源，弹层编辑的是草稿态，「应用」才回贴并标脏，取消就是
+什么都没发生。行内三件套：名字 / 所指（区域或公式）/ 作用域下拉（工作簿级 + 各表，读当前
+簿实时表名）；新增、逐行删除（应用前可取消反悔，不弹确认框）。应用时 Excel 同款校验：
+非空、不以数字开头、无空格、不像单元格地址（`A1` 型）与 `C`/`R` 保留字、`_xlnm.*` 系统名、
+同作用域不重名；名字的 comment 悬停可见（title），hidden 名照常显示（管理器里没有藏着的
+必要）。**改名不改写引用它的公式**——Excel 改名会顺手重写公式，我们改不了格子里的公式
+串，所以界面不提供改名（删了重加自己担，提示里说得明白）。
+
+**挂账**：改名不重写引用公式（上）；名字与格子的联动（选中区域反查名字、名字所指区域
+高亮）没有；公式栏输入名字自动补全没有。
+
+**收尾**：`tsc --noEmit` + `vite build` 绿，Rust 侧无改动（全量 109 过 0 挂沿用）；版本三处 0.104.0。
+
+## 透视表部件搬运（v0.105）
+
+**问题**：带透视表的文件写回后透视整个消失——读侧 calamine 不认、crate 写不出、部件级搬运
+（v0.98）也没搬它的账。这是 workbook.xml 保留式这条线挂账至今的最后一站，本轮收掉。
+
+**部件链**：透视表在 OOXML 里是三层——workbook.xml 的 `<pivotCaches>`（簿级，cacheId + r:id）
+→ `pivotCacheDefinition`（缓存定义，自身 rels 指向 records）→ `pivotCacheRecords`（缓存数据），
+各表 rels 里再挂 `pivotTable` 部件（自身 rels 指回 definition）。**sheet 部件本身不需要任何
+内联元素**——透视表在 sheet 上只挂 rels，比表格（要 `<tableParts>`）和图片（要 drawing）
+都省一处线。
+
+**实现**（`xlsx_preserve::carry_pivots`）：三趟——①先收：同名活表的 pivotTable 部件清单
+及各自引用的缓存；②缓存搬运：被引用到的 definition（连带 records）整份照搬，编号避开产物
+已有段位，definition 的 rels **只改 Target 不动 rId**（definition XML 里的 `r:id` 就还认得）；
+③表级搬运：pivotTable 整份照搬 + 自身 rels 的 definition 引用改指新部件 + 表 rels 挂链；
+簿级接线（新 rels 关系 + workbook.xml `<pivotCaches>` 元素，按 CT_Workbook 序贴
+`</workbook>`，cacheId 沿用原件）。**孤儿缓存不搬**：改名/删表的透视整体随表消失，缓存没
+人引用就不搬，账走既有的「没有同名表」那一条。守卫与既有机制同款：原件读不开退回整包重建。
+
+**测试**（新增 2 条，`xlsx_preserve` 模块 6 过）：端到端——fixture 注入透视三件套（Excel
+亲笔形状），断言缓存字节原样、definition rels 保 rId 改 Target、簿级两处接线、表级两处
+接线、三笔 Content_Types Override、总账一条、产物仍能被 calamine 打开；改名表——缓存与
+透视部件都不出现、簿级无 `<pivotCaches>`。全量 `cargo test --lib` **111 过 0 挂**。
+
+**挂账**：Excel 实机开产物腿没跑（接线形状按 ECMA-376 的 CT_Workbook/CT_PivotTable 部件
+序写，但「Excel 打开不弹修复、透视表能刷新」这一格没验）；cacheSource 里 `worksheetSource`
+按表名引用——改名后即使表还活着，透视刷新的数据源仍指旧名（如实的维：部件搬运不碰部件
+内部）；多个 pivotTable 共享一个缓存的场景走了（缓存只搬一份）但没有专门测试；切片器
+（slicer 部件）与透视表样式（pivotStyles）不在本轮。
+
+**收尾**：路线图「透视表/切片器/查询连接」条目的透视表部分改口；版本三处 0.105.0。
+
+## 命名样式渲染层（v0.106）
+
+v0.102 把样式链路打通时留了块心病：套用是把快照**摊平**进段落的——样式定义一改，全文不会跟着变，「样式」在编辑器里还是死的。这轮补上**实时渲染层**，样式从「一次性快照」变成「活的定义」：
+
+- **渲染层**（`doc-style-css.ts`，纯函数）：快照编译成 `.doc-content p[data-pstyle=…]` 规则，编辑器里 `<style>` 直出（React 挂卸，随 tab 天然隔离）。字号/字体（引号包死防拆）/粗斜/下划删除线（共用 `text-decoration` 槽合并）/颜色/对齐/行距（倍数原样、固定与最小落 px）/边距/缩进/段距全映射；**内置七类与标题 1-4 不出规则**——和导出侧 `styleDefOf` 同一个 `BUILTIN_STYLE_IDS` 判定，两边口径一致，不出现「编辑在屏幕生效、导出却原样」的半吊子行为。
+- **套用改契约**：`applyDocStyle` 只挂标签、不再摊平。段落手调格式是 inline style，天然压过样式表规则——Word「直接格式覆盖样式」的语义由 CSS 优先级免费成立，不用特判。v0.102 时代摊平过的旧文档不受影响：摊进去的值就是直接格式，照旧赢。
+- **样式表面板**（工具栏「样式表」按钮，带枚数）：行内编辑名称/字号/粗斜/颜色/对齐/行距(值+规则)/段前后，改动即回写 `meta.styles`——渲染层与导出吃同一份，**改定义全文即时变、存盘导出原样带走**。「新建样式」自动命名 `ooS1…` 避开占用；内置样式行只读（带「内置」标）。**删除会摘掉全文引用**（收集带标签的段落逐段 `setPstyle(null)`），不留悬空 pStyle——悬空引用屏幕失去呈现、Word 里也回到默认，不如摘干净。
+- styleId 进 CSS 属性选择器前转义引号与反斜杠（Word 的 id 一般是 NCName，但不赌）。
+
+**验证腿**（tmp/style-css-leg.mts，7 断言一次过）：规则全映射（含字体引号/装饰合并/倍数与 px 行距）、exact 落 px、内置全跳、怪 id 转义、nextStyleId 避占用、**导出契约**（编辑后定义 → styles.xml 的 sz/颜色/段距/对齐/名称逐项 + 段落单枚 pStyle + heading 不双写）、无清单不造表。
+
+**边界**：渲染层吃的是 v0.102 的摊平快照，不解析 basedOn 链（清单生成时已摊平）；面板没有字体下拉（字体编辑挂账）；颜色控件给不了「无颜色」（要清就重建样式）；Word 的「后续段落样式」「自动更新定义」等语义不做。
+
+**收尾**：`tsc --noEmit` + `vite build` 绿；Rust 侧零改动（全量 111 过 0 挂沿用）；版本三处 0.106.0。
+
+## 演示自由形状层：画布驱动第一片（v0.107）
+
+最初深化规划里演示的 P1「版式→画布驱动」开了第一片。此前的演示是纯版式槽模型（标题/要点/图片三槽），外部 pptx 的**非占位符文本框**被按 y 排序摊进正文槽、**只有第一张图片**能活（其余整张丢弃）、形状填充几何全弃——设计过的版面导入后版面尽失。这轮给 `Slide` 加**自由形状层**：
+
+- **模型**：`Slide.shapes?: SlideShape[]`——绝对定位的文本框/图片，坐标是相对整页宽高的分数（允许少许越界，真实版面有出血元素），字号用 PowerPoint 磅值；`parseDeck` 全量守卫（坏形状弃、越界字段归 undefined、单页上限 64、键序归一与既有 parseDeck 同规矩）。
+- **导入**：非占位符文本框→text 形状（位置/字号/粗体/颜色/对齐原样保住，**不再摊进正文**）；图片**一律**进 image 形状（不再有「第一张塞槽、其余丢弃」的有损近似——版式槽的 `image` 只留给用户在图片页手工插入与单页背景图回退）；纯形状页落 `blank`（推断优先于「首页即标题页」）。
+- **导出**：形状按分数坐标→英寸原位落 `addText`/`addImage`，文字样式直接落 run 级属性（`sz` 百分之一磅/`b`/`srgbClr`/`algn`）。
+- **渲染**：StaticSlide 形状叠加层（缩略图/放映/PDF 导出三端共用）；字号按 18pt≡1em 与槽位同一比例缩放。
+- **编辑**：工具栏「＋文本框」；点选/拖动移动/右下角手柄缩放（pointer capture，坐标按舞台尺寸折分数并限幅）；双击改文字（textarea 原位编辑）；选中出迷你属性条（字号/粗体/颜色/对齐/删除）；Del 删除（焦点在输入框时不劫持）。
+
+**语义改口**：自有导出→再导入，标题/正文不再回槽，统一落形状层——内容、位置、字号、颜色全保留，比此前「按 y 猜版式」的槽近似更保真；v0.4 的「要点内容无损」改为「内容+几何无损（形状层承载）」。
+
+**验证腿**（tmp/shapes-leg.mts，6 断言全绿；Node 端用隔离 workspace 的 @xmldom/xmldom 补 DOMParser 跑通**完整导入往返**——含 EMU 几何 1e-6 级对账）：.opd 守卫、导出 XML（EMU/字号/粗体/颜色/对齐/p:pic）、pptx 完整往返、标题落形状层、.opd 序列化逐字节往返。
+
+**挂账**：形状无填充色/边框/旋转（导入带旋转的形状按未旋转矩形落位）；文本只取首个 run 的样式（一段多样式会拉平）；形状不参与逐条动画；无层级调整（置顶/置底）；纯形状页的形状删除到空后 layout 不回填 bullets。
+
+**收尾**：`tsc --noEmit` + `vite build` 绿；Rust 侧零改动；版本三处 0.107.0。
+
+## 切片器部件搬运（v0.109）
+
+v0.105 收了透视表之后，路线图上「透视表/切片器/查询连接」里剩下的**切片器**这轮收掉——
+它是部件级搬运第一梯队的最后一块常见部件（透视表带切片器是 Excel 里的常态组合）：
+
+- **缓存侧**：workbook.xml 的 `<x14:slicerCaches>` → workbook rels → `xl/slicerCaches/slicerCacheN.xml`，
+  部件整份照搬，自身 rels 里指向**透视缓存/表格**的数据源改指搬过去的那个新部件（rId 不动，与透视表同一手法）。
+- **形状侧**：原件 drawing 里带 `slicer r:id` 的 `<xdr:graphicFrame>` 锚点整份并进产物的 drawing
+  （与 crate 图表、搬来的图片**同处一份 drawing** 共存），`r:id` 换新号、cNvPr 重排不撞号。
+- **簿级接线**：产物 workbook.xml 补一枚 `<extLst><ext uri="{BBE1A952-…}">`（CT_Workbook 里 extLst 是最后一节，
+  排在 `<pivotCaches>` 之后）；两笔 content types Override（`ms-excel.slicer+xml` / `slicerCache+xml`）。
+- **守卫**：数据源没搬成的缓存不搬，切片器按 `cache` 名对账跟着不搬（搬一半比不搬更恶劣），并记一条账。
+
+**顺手修掉一枚 v0.105 遗留的潜伏 bug**：`add_sheet_rel` 用 `rIdP{n}` 造关系号，而 `max_rid` 只认 `rId<数字>`——
+`rIdP1` 的编号根本数不进去，于是**同一张表上图片搬运建好的 drawing 关系被透视表搬运抢成同名**，
+`<drawing r:id>` 解析到了 pivotTable 部件上（此前只有透视表、没有 drawing 的测试撞不出来；
+v0.109 的切片器腿第一次让两者同框就暴露了）。现在 `max_rid` 跳过字母前缀再取数字，并新增 `free_rid`
+「遇撞号就往后让」，图片那一路的 `rIdC{n}` 同样走它。
+
+**验证**：`cargo test --lib` **114 过 0 挂**（新增 3：切片器全链路端到端、数据源没搬成时不搬、
+搬来的关系 rId 永不撞号）。**挂账**：**Excel 实机开产物腿未跑**——切片器不在 ECMA-376 里，
+关系类型是 MS 扩展 URI（与 timeline 同族），接线形状按 Excel 亲笔写但「Excel 打开不弹修复、切片器能点」这一格没验；
+切片器缓存的数据源若指向**透视表部件**（而非缓存）不搬；timeline（时间线）部件不搬；
+数据源表改名后切片器刷新的指向不修；slicerStyles/pivotStyles 不在本轮；查询连接（connections）仍挂账。
+
+**收尾**：`tsc --noEmit` + `vite build` 绿；版本三处 0.109.0。
+
+## 形状参与逐条动画（v0.111）
+
+v0.107 立起自由形状层、v0.108 让它能改外观之后，形状仍是个「一动不动的贴片」——
+动画只挂在正文槽上。这轮把**逐条动画从正文扩到形状**：
+
+- **模型**：`SlideShape` 增 `anim` / `animDir` / `exitAnim`（与页级那套同型），形状自己认一份动画。
+- **放映步序**：新增纯函数 `revealAt(slide, step)`（替代原先散在各处的 `visibleLines`+`exitCount`）：
+  先正文逐条、再形状逐个（形状数组序 = 揭示序 = 层叠序），全部揭示完才按同序出场。
+  `revealSteps` 一并计入形状——**只有形状动画的页也会分步点击**，不再一点就翻页。
+  缩略图/导出不传进度 = 全显示。
+- **导出**：每个真落盘的形状起一个 `objectName`（`ooShapeN`），注入 `<p:timing>` 时按它反查 spid——
+  pptxgenjs 不给形状可预测的 id，按序号猜会在「形状没落盘」时整体错位。mainSeq 里正文逐段
+  （`bldP build="p"`）+ 形状各一枚 clickEffect，出场按同序追加。
+- **导入**：形状收集时记下它在原件里的 spid（`pptx` 内部的号，不进 .opd），
+  `<p:timing>` 里每个 clickEffect 按自己的 `<p:spTgt spid>` 归位——等于 bldP 那个的是正文逐段，
+  其余归给对应形状；出场同理。
+- **编辑**：选中形状的属性条加「动画 / 入场方向 / 出场」三件（属性条改为可换行，贴形状上方不压住它）。
+
+**验证**：tmp/shapeanim-leg.mts 四组 22 条断言全绿（步序纯函数含「只有形状动画」分支、导出
+timing 的 spTgt 顺序与 clickEffect 段数、pptx 往返动画归位、.opd 键序归一）后按家规删；
+`tsc --noEmit` + `vite build` 绿；Rust 侧零改动。
+
+**挂账**：形状动画的**播放顺序不可调**（固定正文先、形状按层叠序）——**v0.115 已收**，见 v0.115 章节；
+形状出场只有淡出一档；形状没落盘（空文本/空图）时它的动画随之丢失；
+「自有导出再导入标题正文落形状层」是 v0.107 定的语义，本轮维持（它们没有动画，不受影响）。
+
+**收尾**：版本三处 0.111.0。
+
+## 形状动画的播放顺序可调（v0.115）
+
+v0.111 把形状送进逐条序列之后，放映那一列是**写死的**：正文逐条先、形状按层叠序在后，
+形状只能排在所有正文后面。而 PowerPoint 里这一列向来是能拖拽重排的——一张图常常要先于第一条要点出来。
+这轮把「揭示序」从形状数组里拎出来，落成真的一列：
+
+- **模型**：`Slide.animOrder?: string[]`——键是 `l<n>`（正文第 n 条，0 基）与 `s<n>`（第 n 个形状），
+  `animOrder` 缺省就是 v0.111 那一套默认序（正文在前、形状按数组序）。
+  **没有它不等于「排了一遍默认序」**：`writeAnimOrder` 排回默认就写 `undefined`，文件里不留冗余。
+- **守卫分两层**：`parseDeck` 只挑「像不像键」（`^[ls]\d{1,3}$`、去重、封顶 64）；
+  `revealOrder` 再把**指向不存在的那一票**（`l9` 而只有两条正文、删掉的形状）丢掉，
+  并把它没点名的项按默认序补在末尾 ⇒ **排坏了的次序最坏退化成默认序**，既不丢人也不重复。
+- **步序**：`revealSteps` / `revealAt` 不再假定「先正文后形状」，而是遍历 `revealOrder` 逐项计数。
+  揭示进度照旧只交**枚数**（`RevealState`），新纯函数 `revealSets` 负责把枚数按同一份序还原成
+  「此刻该看见哪几条、哪几条已退场」——**渲染层因此不再依赖「前 n 条」这种前缀算法**：
+  StaticSlide 的正文条目也按名单取舍（未揭示的那一条是 `visibility: hidden` 占位，不参与 reflow，
+  揭示时下面的条目不会往上跳；原先是把它们整段不渲染）。出场序同样跟着揭示序走。
+- **导出**：`timingXml` 改吃 `(slide, order, spidOf)`——mainSeq 里的 clickEffect 逐项按揭示序产出，
+  认不出 spid 的那一项整段跳过（宁可少一段，也不指向错的形状）；`bldLst` 仍只给正文那一项。
+- **导入**：clickEffect 在 mainSeq 里的先后就是 PowerPoint 的放映序，故直接 read 回来——
+  正文那枚 spid 每逐条一回出现一次，按「第几回遇到」编成 `l<n>`，形状按下标编成 `s<n>`；
+  只留这一页真有的那几项，且**与默认序相同就不写**（默认序件不给模型添冗余）。
+- **编辑**：工具栏多一枚「播放顺序 N」（≥2 项才给入口），展开一条面板：每票一枚序号与名字
+  （`要点 2 · 第二条…` / `文本框 1 · …`）、↑↓ 就在原处调这一次序，另有「默认序」退回。
+  **层叠序（形状数组）与揭示序是两件事**，这次第一次分开记，拖揭示序不会动谁画在上面。
+
+**验证**：tmp/revealorder-leg.mts 七组 45 条断言一次全绿后按家规删——默认序与 v0.111 完全同形、
+自定义序下第 1 击揭示的是第 2 个形状（含 `revealSets` 名单不是前缀）、出场序同揭示序、
+排坏了的键两个层面的守卫、`writeAnimOrder` 排回默认即 undefined、导出 mainSeq 的 clickEffect
+次序 == 揭示序（含 bldP 仍指正文）、**合成一份「标题占位符 + 正文占位符 + 两个自由形状」的 pptx**
+按文件里的先后认出被排过的序而在默认序件上不写 `animOrder`；`tsc --noEmit` + `vite build` 绿；
+Rust 零改动。
+
+**挂账**：出场仍只有淡出一档（`BULLET_EXIT_NAMES` 只有 fade）；
+形状没落盘（空文本/空图）时它的动画随之丢失（v0.111 那条原样挂着）；
+自有导出件再导入会丢掉「正文逐条」这几票——pptxgenjs 不写占位符身份，再导入时标题/正文双双进形状层
+（v0.107 语义），于是 `l0/l1` 失去参照物，只剩名字和动画都还在的那些项 `revealOrder` 才认，
+修补方向是给自有导出的正文/标题补上占位符身份（属 v0.107 那条账的正主，本轮不动）；
+面板的 ↑↓ 与「未揭示条目占位不跳版」只有离线证据，浏览器手测未跑。
+
+**收尾**：版本三处 0.115.0。
+
+## 表样式条件层（v0.116）
+
+v0.114 把表样式三层做通之后，还差 Word 表样式里最「按位置说话」的那一格——**条件层**（`w:tblStylePr`：首行、末行、首列、末列、四角、隔行/隔列镶边）。它不像表级层一视同仁，而是「第几行第几格长什么样」，并靠 `w:tblLook` 这道闸门决定哪些位置生效。这轮把**读侧进快照、导出写回、渲染 ladder、面板编辑**四头全通，顺手修掉 v0.114 起就埋着的表样式导出隐患：
+
+- **模型**：`TABLE_COND_TYPES`（Word 真会落出来的十二型驼峰枚举，`wholeTable` 不在其列——换哪一格写都不落，收进来只是个按下没反应的旋钮）、`TABLE_COND_LABEL`（中文部位名）、`TableCond { background?; bold?; padTopPx?; padRightPx?; padBottomPx?; padLeftPx? }`、`asTableCondType`（驼峰与大小写差一级都归一）。
+- **读侧**：`StyleInfo.tblStylePr` 采集每个 `w:tblStylePr`；快照按型逐项填 `cond`，**同型块的四条格边距按后块整套重写**（前块说过的边距后块没说就被清空——对应 Word 量到的 `r_dup_type_firstRow` 那一账），而**背景与粗体独立成回合**，后块没说不动前者；一块载荷全空的那几型不进快照；`wholeTable` 不入 `cond`。只认格子的 `w:tcPr`（`shd`→底纹、`tcMar` 四边→px 边距，系数 twip/15）与 `w:rPr`（`b`→粗体），行级 `w:trPr` 那一支本轮不接。
+- **导出**：`tableStyleXml` 遍历十二型写 `<w:tblStylePr w:type="…">`，块内严格按 CT_TblStylePr 序 `rPr → tcPr`；`tcPr` 内 `w:shd` 先于 `w:tcMar`，且 `w:tcMar` 必须包一层 `<w:tcMar>` 外壳（v0.114 那版把 `<w:top>/<w:left>` 直接写成 `w:tcPr` 子节点是非法结构、读回拿不到边距，已修正）。`tblLookOf` + `patchTblLook` 在打包后 JSZip 阶段把 `<w:tblLook>` 补进每张引用该样式的表 `</w:tblPr>` 之前——它是条件层总开关：首/末行、首/末列逐位，隔行开着则 `noHBand=0`、列带随 `noVBand`，**四角靠所在行列两枚位同时开**。无 cond 不写这枚尾巴。
+- **导入隐患修复**：docx 库这版 `ImportedXmlComponent.fromXmlString` 把顶层 JSON 对象当根，把 `<w:style>` 包进一枚名字为 `undefined` 的外层元素——v0.114 起的表样式定义导出即损坏（Word 不认、回读 `styles` 整列为空）。改用 `xml-js` 的 `xml2js` 取 `elements[0]` 自建组件树绕过，并把 `xml-js` 提为直接依赖（`docx` 的传递依赖，vite 可靠解析、零体积增量）。
+- **渲染**：`COND_RULES`（十二型，ladder 序 band → 列 → 角 → 行，行最强）每条出一条 `tr:ROW > :is(td,th):COL` 选择器；用 `nth-child(n)` 把每条补齐到同数伪类 ⇒ **特异度统一、后写者胜**，正好承接 ladder（首行压列与角）。条件层特异度高于表级那条 `table[data-tstyle] td,th`，命中条件型的格子自动盖过基座层。`condRules` 注进 `styleCssOf` 的表分支，排在表级规则之后。
+- **编辑**：表样式行尾「条件 N」按钮展开 `doc-tblcond-panel`：部位下拉 +「加这个部位」；每块含底纹色 / 无底 / 粗体 / 四边距 / 删，`patchCond(type, partial | null)` 动某块只动某块，整体写回 `table.cond`。
+
+**验证**：tmp/tblcond-leg.mts 六组 30 条断言全绿后按家规删——读侧条件层进快照（wholeTable 不收）、同型块边距整套重写、CSS ladder 顺序与位置写法、导出条件块 + `w:tblLook` 闸门（首行/末行/首列位与 noHBand/noVBand）、**导出件再读回条件层还在**、无 cond 不写尾巴；`tsc --noEmit` + `vite build` 绿（含 `xml-js` 导入）；Rust 零改动。
+
+**挂账**：cond 只认 `rPr`（`bold`）+ `w:tcPr`（`background`/`tcMar`），**行级 `w:trPr`（行高、行边框等条件属性）未进快照**，条件的**边框（`tcBorders`）那一维也没有**；cond 的 `bold` 仅作用于格子文字（rPr），不改格子容器本身；ladder 让「行型」压过同格的「角型」，于是右下角的专属底色（seCell）会被末行（lastRow）盖掉——Word 界面里那枚角格其实是显示专属角的，这里按「行 > 列」的简化账走；`w:tblLook` 按「cond 有哪些型」重算后整枚重写，不保留原文档可能关掉的某位（极小概率与原意不符）；v0.114 起的 `insideH/insideV` 给到每格、最外圈多一圈内部线，以及 `odt`/`PDF` 出口不认表样式定义（含条件层）那两条账原样挂着。
+
+**收尾**：版本三处 0.116.0。
+
+## 表样式条件层·边框与行高（v0.117）
+
+v0.116 把条件层（首行/末行/首列/末列/四角/隔行隔列镶边 + `w:tblLook` 闸门）的读/写/渲染/编辑四头做通之后，快照与渲染还只认 `rPr`（`bold`）+ `w:tcPr`（`background`/`tcMar`）——**行级 `w:trPr`（行高）与 `w:tcPr/w:tcBorders`（条件格边框）两维没接**。这轮补齐，顺手修掉 v0.116 起就潜伏、此前从未被渲染测试暴露的条件层 bug：
+
+- **模型**：`TableCond` 增 `borders?: Partial<Record<CellEdge, string>>`（逐边规范串，沿用单元格那套）、`rowHeightPx?: number`、`rowHeightExact?: boolean`（exact↔atLeast）；`CELL_EDGES` 与 `CellEdge` 从 `cell-style` 引过来共用。
+- **读侧**：快照循环（`docx-fidelity.ts`）新读 `w:tcPr/w:tcBorders`（`borderEdges`→规整→`bc`）与 `w:trPr/w:trHeight`（`thv`/`thExact`，twips→px）；整块替换语义写入 `cond.borders` / `cond.rowHeightPx` / `cond.rowHeightExact`；跳过判定改成「四边/底纹/粗体/边框/行高全无才 continue」。`CondCell` 扩 `borders?` / `rowHeightPx?` / `rowHeightExact?`；`styleCondCells` 存储改用 `asTableCondType(type)` 存驼峰（修掉旧版 `type.toLowerCase()`＝`firstcolumn`，与渲染梯子查的缩写 `firstcol` 对不上的真 bug）。
+- **导出**：`tableStyleXml` 每枚 `w:tblStylePr` 重写——`tcPr` 内序 `shd → tcBorders → tcMar`（`bordersXml` 按 `CELL_EDGES` 逐边吐 `w:tcBorders`）；`trPr` 写 `w:trHeight w:val="${Math.max(1,Math.round(c.rowHeightPx * PX_TWIP))}" w:hRule="${c.rowHeightExact?'exact':'atLeast'}"`（**单位方向修了**：初版误写 `/`，twips↔px 反了会放大 225 倍，已改 `*PX_TWIP`）；块内序 `rPr → trPr → tcPr`。
+- **渲染**：新增 `condBordersFor(look, conds, ri, isLastRow, gc, colspan, cols)`——底纹族位置梯子（nwCell→neCell→swCell→seCell→firstRow→lastRow→firstColumn→lastColumn），**逐边取一、先说先定**；`condRowHeightFor(look, conds, ri, isLastRow)`——梯子 band1Horz/band2Horz→lastRow→firstRow，返 `{px, exact}`。行循环先算 `last`，direct `w:trHeight` 优先、无则 `condRowHeightFor`（direct>条件）写 `trStyle = height: px2(ch.px)px`；格循环 `cb2 = condBordersFor(...)`，格边框优先级 `cb.top ?? cb2.top ?? table-default`（direct>条件>表级）。`condMarginLadder`/`condShadingFor`/`condBordersFor`/`condRowHeightFor` 四枚梯子 key 全统一为 `TABLE_COND_TYPES` 驼峰。
+- **CSS 侧**：`condRules` 每格规则加逐边 `border-<edge>`；新 `condRowRules(sel, cond)` 跳过列型（`nth-child(n)` 不说话）、行型出 `tr:ROW{height:…px}`，`styleCssOf` 表分支紧跟 `condRules` 之后。
+- **编辑**：表样式行尾条件部位行加四边边框切换按钮（复用 `CELL_EDGES` + `borderParts`/`borderCss` 笔，写 `patchC({borders})`）+ 行高数字输入（仅行型语义、写 `patchC({rowHeightPx})`）；列型/角型不暴露行高手柄（Word 本就忽略）。
+
+**验证**：tmp/cond2-leg.mts 三组 14 条断言全绿后按家规删——A 往返（导出 MyTbl→读回 styles，borders/rowHeight/background 一致）、B 条件层 CSS（首行 per-cell 规则含 border-bottom/底纹、首行 tr 行高规则、首列规则含左边框）、C 手写 docx（含 tblLook 闸门 firstRow+firstColumn）→HTML（首行 tr height:48px、首行格 border-bottom:4px solid #ff0000、首列格 border-left:2px solid #0000ff）；`tsc --noEmit` + `vite build` 绿；Rust 零改动。C 组手写件渲染测试恰好暴露了上面那条 key 不匹配 bug（首列格无左边框），修后全绿。
+
+**挂账**：① **v0.116 起条件层渲染全部失效的潜 bug 已修**（存储 `type.toLowerCase()`＝小写全拼 `firstcolumn`，而渲染梯子查 `firstcol` 缩写，所有条件层实际都没渲染——此前只测了 CSS/往返没测渲染，CSS/快照因直接用 `cond?.[type]`（驼峰）所以看不出）；② **exact 行高按最小行高读**：HTML `tr` 高度下限语义＝atLeast，Word 的 exact 在浏览器里仍是下限，exact/atLeast 标志照存但屏幕表现同 atLeast；③ **列型/角型行高 Word 忽略**，面板不暴露其行高手柄；④ 边框族**逐边取一、角压行列**（nwCell 等边落边时压 firstRow/firstColumn 的同边）；⑤ v0.116 那条「渲染层把 `insideH/insideV` 给到每格、最外圈多一圈内部线」与「odt/PDF 出口不认表样式定义（含条件层）」两笔账原样挂着；⑥ 条件的 `bold` 仍只作用于格子文字（rPr），不改格子容器本身。
+
+**收尾**：版本三处 0.117.0。
+
+## 表样式条件层·角落优先级（v0.118）
+
+v0.116 挂账里记过一条简化账——「`seCell` 会被 `lastRow` 盖掉」（交集格四角输给行/列型）」，之前一直没修。这轮对齐 Word 界面把它修掉。**但修法不是「统一梯子」**：内联路径（`docx-fidelity.ts` 的 `condShadingFor`/`condBordersFor`/`condMarginLadder`）自 v0.117 起就已是 Word 16.0 实测序——**外观族（底纹/边框/粗体）角压一切**、`condMarginLadder` **边距族（格边距）行＞角＞列**，而旧 CSS 路径（`doc-style-css.ts` 单一 `COND_RULES`）把行型排末、角型排前，等特异度后者胜→行压角，正是那条账的根因。两族写入的 CSS 属性**互不相交**（外观只写 `background-color`/`border-*`/`font-weight`，边距只写 `padding-*`），故拆成两条独立梯子而不互相覆盖：
+
+- **模型**：无新增（沿用 v0.116/0.117 的 `TableCond`）。
+- **读侧**：无改动（仅核实 `docx-fidelity.ts` 两族梯子序正确：`condMarginLadder` 行型排末、`condBordersFor`/`condShadingFor` 四角排梯子最前）。
+- **导出**：无改动（Rust 零改动）。
+- **渲染（CSS 侧）**：`doc-style-css.ts` 把单一 `COND_RULES` 拆成 `COND_RULES_APPEARANCE`（角排最末→角压一切）与 `COND_RULES_MARGIN`（角排前位、行排末位→行＞角＞列）；`condRules` 拆双循环——外观族循环写 `background`/`bold`/`border-*`，边距族循环写 `padding-*`，各自 push `${sel} tr:${r.row} > :is(td,th):${r.col}{…}`；`condRowRules` 改用 `MARGIN`（跳过 `row==='nth-child(n)'`）；`styleCssOf` 表分支调用序不变。
+- **编辑**：无改动。
+
+**验证**：tmp/cond3-leg.mts 两组 11 条断言全绿后按家规删——A `styleCssOf` 构造 MyTbl 条件 `firstRow{bg#ff0000,padTop10}`/`firstColumn{bg#0000ff,padLeft12}`/`nwCell{bg#00ff00,padTop30,padLeft30}`，模拟 CSS 级联，断言左上角 `background-color:#00ff00`（角赢·外观族）/ `padding-top:10px`（行压角·边距族）/ `padding-left:30px`（角压列·边距族）、首行非角红、首列非角蓝且 `padding-left:12px`；B `docxToHtmlFidelity` 手写 docx（`tblLook` firstRow+firstColumn，三型 shd FFOO00/0000FF/00FF00）→左上角格 `background-color: #00ff00`、首行非角红、首列非角蓝（5 枚带 style 而非 9）。`tsc --noEmit` + `vite build` 绿；Rust 零改动。
+
+**挂账**：① 诚实改写 v0.116 那条「`seCell` 会被 `lastRow` 盖掉」简化账——根因是 CSS 路径行压角，已修；② 两族优先级不同（外观族角压一切、边距族行＞角＞列）的 Word 16.0 实测依据已记；③ 内联路径（`docx-fidelity`）自 v0.117 起已正确，本次只修 CSS 路径，二者现在一致；④ v0.116 那条「渲染层把 `insideH/insideV` 给到每格、最外圈多一圈内部线」（**v0.121 核实更正：实情是 CSS 路径压根没用上 `insideH/insideV`，是缺线不是多线，见 v0.121 章节**）与「odt/PDF 出口不认表样式定义（含条件层）」——**两笔都已在 v0.121 / v0.122 修掉**（v0.122 只收 odt 那半，PDF 走打印链路不经过 `odt.ts`，仍不认）；⑤ 条件的 `bold` 仍只作用于格子文字（`rPr`），不改格子容器本身。
+
+**收尾**：版本三处 0.118.0。
+
+## xlsx 图表读侧·雷达图（v0.119）
+
+v0.116 挂账候选③——xlsx 读侧补 radar 图表类型识别。此前 `xlsx_chart.rs` 的 `TYPES` 白名单只认 5 种（bar/line/pie/doughnut/area），`radarChart` 不在内→`parse_chart` 直接返回 `None` 丢弃；且有一条测试把 radar 显式断言为 `None`。这轮接上，并顺手让雷达图能原生保真回写（`rust_xlsxwriter` 0.99.1 已支持 `Radar`/`RadarWithMarkers`/`RadarFilled`，不必再 `continue` 跳过）：
+
+- **模型**：Rust `ChartPayload` 增 `radar_style: Option<String>`（缺值即 `None`，旧快照不受影响），TS 侧对应 `radarStyle?: string`；仅 radar 用，存 `<c:radarStyle>` 的 `standard`/`marker`/`filled`，其余类型为 `None`。
+- **读侧**：`xlsx_chart.rs` `TYPES` 加 `radarChart`→`"radar"`；新增 `radarStyle` 抓取（与 `grouping` 同位、ser 外）；`ChartCore` 增 `radar_style`，`read_xlsx_charts` 落盘时 `if empty { None } else { Some }`。系列/标题/锚点沿用既有逻辑（radar 也是 `<c:ser><c:cat><c:val>`，与折线/面积同构）。
+- **渲染**：`chart.ts` `buildVChartSpec` 新增 radar 分支——`type:'radar'` + `categoryField`/`valueField`/`seriesField`，并按 `radarStyle` 切 `point`/`area` 可见性（standard 仅线 / marker 线+点 / filled 线+面），与 Excel 三型对齐。
+- **写侧**：`chart_type_for` 增 `radar_style` 形参，`("radar",_,_)` 映射到 `C::Radar` / `C::RadarWithMarkers` / `C::RadarFilled`；调用点补 `chart.radar_style.as_deref()`。雷达图不再被跳过，可原生回写。
+- **编辑**：`CHART_TYPES` 下拉加 `['radar','雷达图']`（用户也能新建雷达图；`CARTESIAN` 不含 radar，故不显示堆叠分组）；新建 radar 默认 standard。
+
+**验证**：Rust `xlsx_chart` 单测——`radar_chart_parses_with_style`（filled 样式 + 标题 + 系列值从网格取）与改写后的 `unsupported_and_missing_series_drop`（scatter 仍 `None`、缺 val 系列 `None`）全绿（6/6）；TS `buildVChartSpec` 验证腿 17 条（radar 三型 point/area 可见性 + 缺省 standard + column/pie 回归）全绿后按家规删；`tsc --noEmit` + `vite build` 绿。
+
+**挂账**：① scatter/stock 仍不识别（继续 `None` 丢弃，未接）；② 编辑器新建雷达图走 overgrid 图片（与所有编辑器图表一致），回写时转原生 radar；③ 雷达图系列若 `c:cat` 引用缺失，按既有逻辑该系列被跳过（与折线同）；④ `radarStyle` 仅 standard/marker/filled 三枚举，Excel 也只有这三个，足够。
+
+**收尾**：版本三处 0.119.0。
+
+## xlsx 图表读侧·散点与股价图（v0.120）
+
+v0.116 挂账候选①的后一半：xlsx 读侧再接 scatter（散点图）与 stock（股价图）。这两型此前跟 radar 一样被 `TYPES` 白名单挡在门外，打开含它们的 xlsx 时图上什么都显示不出来；现在接上，并且**两型都能原生回写**（`rust_xlsxwriter` 0.99.1 有 `Scatter` 五变体与 `Stock`），不会被降级成跳过。
+
+- **读侧**：`xlsx_chart.rs` `TYPES` 六型扩到八型，加 `scatterChart`/`stockChart`。
+  - **scatter 的系列形状跟别家不一样**：它不用 `cat`/`val` 而是 `xVal`/`yVal`（两轴都是数值，没有类别轴）。解析时把 `xVal` 落进 `cat` 槽、`yVal` 落进 `val` 槽，
+    其余（系列名、锚点、标题）全部复用既有逻辑；`<c:scatterStyle>`（marker/line/lineMarker/smooth/smoothMarker）与 `<c:radarStyle>` 一样在 ser 之外抓取。
+  - **stock 则是白捡**：它的 ser 结构与折线图同构（`cat` + `val`），四个 OHLC 段就是四个共享同一类别轴的系列，`<c:upDownBars>` 之类的修饰元素不影响解析，一行 match 就够。
+- **写侧**：`chart_type_for` 的第三个参数从「radar 专属」升为该图型「专属样式」，配新的 `chart_style_of` 按 `chart_type` 分流（radar→radarStyle、scatter→scatterStyle，其余无）。
+  scatter 五个变体按 `<c:scatterStyle>` 映射（`marker` 是 Excel 默认：只有点不连线），stock 直接落到 `ChartType::Stock`。
+- **渲染**：`buildVChartSpec` 里 records 的 `cat` 原本无条件 `String(...)`——**散点图不能这么干**，X 是数值轴，故散点走 `numOf`（取不到数时退成 1,2,3… 序号，与 Excel 无 X 值的行为一致）；
+  scatter 出 `type:'scatter'` + `xField/yField/seriesField`。
+- **编辑**：下拉加「散点图」「股价图」；两者都不进 `CARTESIAN`（都不是堆叠语义），面板不显示分组手柄。
+
+**验证**：Rust `xlsx_chart` 单测 8/8 全过——新增 `scatter_chart_parses_x_y_and_style`（xVal→cats、yVal→vals、cat 引用的行列不串位）与
+`stock_chart_parses_multi_series_shared_categories`（两系列共享类别轴、系列名从网格取），并把 v0.119 之前那条「scatter 仍返回 None」的老账换成真正不支持的 `surfaceChart`
+（`bubble`/`surface` 依旧丢弃）；TS `buildVChartSpec` 验证腿 41 条全绿（scatter 五样式 `point.visible`、X 值保持 number、缺 X 退化序号、stock→line 四条记录、
+既有七类回归、`column→bar`/`direction`/`stack`/`percent` 不受影响）后按家规删；`tsc --noEmit` 零错；`vite build` 退出 0。
+
+**挂账**：① **VChart 的 scatter 系列只有 `point` 标记、没有 `line` 标记**（见 `esm/series/scatter/interface.d.ts` 的 `ScatterMarks`）⇒ Excel 的
+`line`/`lineMarker`/`smooth`/`smoothMarker` 四种连线样式**在屏幕上都退化成「只画点」**：目前只能按样式决定点是否显示（`'line'`/`'smooth'` 无点），连不出线；
+数据本身无损，**写侧仍是原生五变体**，用 Excel 打开是对的。② **VChart 没有股价图类型**（无 candlestick/OHLC），故 stock 在编辑器里渲染为「共享类别轴的多条折线」，
+丢掉了涨跌柱语义，同样**只在渲染层降级、写侧保真回写 `ChartType::Stock`**。③ rust_xlsxwriter 明确说 **Stock 的 Volume（成交量）变体尚不支持**，含成交量的股价图回写会缺那一节。
+④ **组合图仍取 chartPart 内最后命中的那一型**——这条简化账**已在 v0.123 修掉**（系列各自记图型、写侧 `combine` 原生回写），见 v0.123 章节；
+⑤ scatter 在组合图里只能做 secondary chart（库的既有限制），单图不受影响。
+
+**收尾**：版本三处 0.120.0。
+
+## 表样式的内部横竖线进渲染（v0.121）
+
+v0.116 挂账候选②的前一半：把表样式六条边里的 `insideH/insideV` 真正画出来。**动手前先更正那笔账的说法**——原文写的是
+「渲染层把 `insideH/insideV` 给到每一格、最外圈多一圈内部线」，这与后来代码的实际形状已经对不上了：
+
+- Word 的 `w:tblBorders` 是**六条各管一段**的线：`top/right/bottom/left` 只描最外那一圈，`insideH/insideV` 只描格子之间的横线竖线，
+  分工不同、从不重叠。所谓"多一圈"的说法，前提是内部线被摊到了外圈上。
+- 而 v0.114 之后的实际做法是：**外框四边一股脑给到每个格子、`insideH/insideV` 压根没出规则**——
+  于是「清单型」这类只声明内部横线、没有外框的表样式，在屏幕上一根线都看不到。比"多一圈"更糟，是**缺线**。
+  导出侧（`tableStyleXml`）一直是对的，所以同一份文件存盘进 Word 又是好的，差额只落在屏幕上。
+- 内联那条路径（`docx-fidelity` 的 `cb.top ?? (ri === 0 ? tb.top : tb.insideH)`）从 v0.117 起就是算对的，所以两条渲染路径此前不一致。
+
+- **改动**：`doc-style-css.ts` 里原 `tableDecls` 拆成两个——`tableCellDecls`（底纹与格边距，与位置无关，仍落 `${sel} td`）与
+  新的 `tableBorderRules`（六条边按行列位置落地）：首/末行走 `bdTop`/`bdBottom`、其余行走 `bdInsideH`，
+  首/末列走 `bdLeft`/`bdRight`、其余列走 `bdInsideV`。`styleCssOf` 里它排在 `${sel} td` 之后、条件层规则之前。
+- **共处**：表格是 `border-collapse: collapse`（`index.css`），相邻两格共享同一条边，各写不打架；
+  每条规则只写一边的 `border-*`，本族内部没有互相覆盖；条件层规则排在后面、特异度也不低于它，照旧压得住基座层。
+- **验证**：`tmp/bd-leg.mts` **34 条**全绿后按家规删。核心那组是把「3 行 2 列」丢进一个极小的 CSS 级联求值器，
+  算出**每格最终的四边**，与 Word/内联那条路径逐格对照（首行上边＝外框上边、其余行＝内部横线；首列左边＝外框左边、其余列＝内部竖线；
+  只有横线时不许长出左右边；只有外框时中间行不来线），另含条件层压基座层、以及 v0.118 那条「专属角赢」的回归（不能白修）。
+  `tsc --noEmit` 零错、`vite build` 退出 0。Rust 零改动。
+
+**挂账**：① `first-child`/`last-child` 只看 DOM 位置，遇到 rowspan/colspan 的合并格会把跨列的那枚当成普通非首格
+（内联路径能按 `gc + colspan >= rowEnd` 算准，CSS 表达做不到这一层，只能借 cascade 先天不足接受）；
+② odt/PDF 出口那笔账（见下）仍挂着。
+
+**另一半旧账的性质（odt/PDF 出口不认表样式定义）**：这轮摸了底，它不是同一类小账，结论如实写下以便后人对账
+（**v0.122 已按这里写的路径收掉 odt 那半，见 v0.122 章节**）——
+ODT 出口（`odt.ts` 的 `OdtBuilder`）的表格样式目前**只认 `marginLeft`**（`tStyle`），单元格样式**只读格子自己的直接格式**（`cStyle`），
+Word 的命名表样式定义（`w:style type="table"`，含条件层）在导出时整份缺席。难处是 ODF 没有 Word 那种
+「条件层」概念（首行/末行/斑马线/角格模板），要做只能**按位置把样式与条件层展开成逐格硬格式**。
+好消息是入口很近：`meta.styles` 里就带着整份样式清单，而 `prosemirrorToOdtBytes(json, meta)` 已经拿着 meta；
+要花的工是把 `docx-fidelity` 里五个私有求值函数（`condShadingFor`/`condBordersFor`/`condMarginLadder`/`condRowHeightFor` 等）
+导出给 odt 侧复用（免得两套算法跑偏），再把展开结果并进 `cStyle`/`rStyle` 的样式键里（含 colspan 与行高那一档）。
+这笔**已在 v0.122 收掉**（做法略有出入：没有直接导出那五个吃 XML 的函数，而是抽出 `table-cond.ts` 的纯梯子供三处共用，见 v0.122 章节）。
+
+**收尾**：版本三处 0.121.0。
+
+## odt 出口的表样式展开（v0.122）
+
+**这笔账的原始描述**：`odt/PDF 出口不认表样式定义（含条件层）`——v0.116 挂起，v0.121 摸底，本轮收掉。
+
+**为什么它此前整份缺席**：`OdtBuilder` 的表格样式（`tStyle`）只认 `marginLeft`，单元格样式（`cStyle`）只读格子自己的直接格式。
+Word 的**命名表样式定义**（表级六边 / 格边距 / 默认格底纹 + `w:tblStylePr` 十二型条件）在 odt 出口这一侧从来没有进来过——
+套了「清单型」之类样式的表，存成 .odt 后线条与底纹全丢。
+
+**为什么不能照搬**：ODF 没有 Word 那种「条件层」概念——没有"样式里声明一块 firstRow、读者按位置去查"这种机制。
+唯一能保真的是**在出口按位置把样式+条件层展开成逐格硬格式**，写进每格的 `table-cell` 自动样式。
+
+**关键取舍：复用而不是抄第二套**。条件层的尊卑是逐族实测出来的（外观族角压一切、边距族 行＞角＞列），
+若 odt 侧另写一份梯子，迟早与 docx 渲染跑偏。所以本轮抽了 `src/lib/table-cond.ts`
+（纯函数、不碰 XML）作为**唯一来源**：
+
+| 共享函数 | 谁在用 |
+|---|---|
+| `condLookBits`（由样式开了哪几型反推 `w:tblLook` 四位闸门） | docx 出口 `tblLookOf` + odt 出口（闸门不在模型里，只能两头各推一次，故必须同源） |
+| `condLadderAppearance`（外观族：角压一切） | `condShadingFor` / `condBordersFor` + odt |
+| `condLadderMargin`（边距族：行＞角＞列） | `condMarginsFor` + odt |
+| `condLadderRowHeight`（条件行高） | `condRowHeightFor` + odt |
+| `tableEdgeFor`（表级六边 → 这一格的四边） | odt（CSS 侧仍用伪类规则表达，见挂账） |
+| `tableStyleChain` / `mergedTableOf`（basedOn 链合并，cond 按型别整块替换） | odt |
+
+**统一约定**：三条梯子都改成**从高到低排、取法「先说话的赢」**。边距族原先是「从低到高、整块后写覆盖」，
+与这里的序恰好互为逆序，两种写法对逐边合并等价（验证腿 A7 用同一组输入对照两种算法，逐边同形）。
+
+**入口为什么近**：`DocMeta.styles` 带着整份 `DocxStyleInfo`（docx.ts:296），`prosemirrorToOdtBytes(json, meta)` 已经拿着 meta，
+`OdtBuilder` 也存了它 ⇒ **不必改调用签名**；表节点上的 `tStyle` 就是 `w:tblStyle` 的身份（cell-style.ts:294）。
+
+**合并次序**（与 Word「直接格式压样式」同一条纪律）：表级基座 → 条件层 → 逐格直接格式。
+条件层内部再按族走梯子：底纹/边框走外观族、格边距走边距族、行高走行型梯子（且只在行上没写直接行高时才上场）。
+
+**验证**：`tmp/odt-cond-leg.mts` **43/43** 后按家规删。四组：A 共享梯子的形状与「两种取法等价」；
+B odt 出口真摊出逐格硬格式（3×2 表逐格断言四边、底纹、边距，含"首行非角也吃 nwCell 那档左边距"——
+边距族角型按整行落，与 Word 同形）；C 直接格式压样式层 + **不套样式时与改版前逐字同形**（回归护栏）；
+D **docx 内联渲染回归**——改梯子不能改变既有行为（角压一切、逐格压条件层）。`tsc` 零错、`vite build` 退出 0、Rust 零改动。
+
+**踩到一个真 bug（不是测试的错）**：条件层边距一度被表级值挡住——先落表级再用 `pad[e] === undefined` 判据，
+条件层永远进不来。修法是**先算条件层、再让表级兜底**（条件层压基座，不是基座挡条件层）。
+
+**挂账（如实）**：
+
+① **CSS 侧的表级六边展开仍未走 `tableEdgeFor`**——CSS 是声明式的、没有逐格上下文，只能用
+`tr:first-child` / `not(:first-child)` 那类伪类规则表达，与 `tableEdgeFor` 语义等价但**是两份实现**；
+合并格会让伪类判定偏差（v0.121 已挂的那条账），所以这不是纯粹的重复，改为"ODF 用索引、CSS 用伪类"。
+② **`condLadderRowHeight` 的序与 docx-fidelity 里那条注释相反**：代码按 ladder 从头取第一枚有值的，
+而 ladder 把 band 排在最前 ⇒ 实际是 **band 赢**；注释却写"firstRow > lastRow > band"。
+本轮**不做实测、不擅自翻序**（翻了就是改 docx 渲染行为），只把它照搬进共享函数并在代码注释里标明——
+两处共用同一枚函数后，将来实测出结论只改一处即可。
+③ **PDF 出口是否同步受益未核实**：PDF 走的是浏览器打印链路（`@media print` + CSS），
+不走 `odt.ts`，所以本轮**没有**自动把表样式带进 PDF；那条账原样挂着。
+④ 条件的 `bold` 仍未进 ODT（它作用在格子里的文字上，要摊进 `text:span` 的字符样式而非单元格属性）。
+⑤ 合并格的 `first/last-child` 判定偏差（v0.121 那条）原样挂着。
+
+**收尾**：版本三处 0.122.0。
+
+## xlsx 图表读侧·组合图（v0.123）
+
+Excel 的组合图（柱形 + 折线这类）在 OOXML 里是**同一份 chartN.xml 的 `<c:plotArea>` 内并排多个 chart 元素**
+（`<c:barChart>` 后面再跟一个 `<c:lineChart>`），每个元素自带 `<c:barDir>`/`<c:grouping>`/专属样式与若干 `<c:ser>`。
+
+**旧账的实情**：v0.122 及之前的读侧把 `barDir`/`grouping`/图型都存在**全局单变量**上，遇一个新 chart 元素就被覆盖，
+而系列表 `sers` 是跨元素平铺的——于是「最后命中的那一型」被套到**所有**系列头上。
+柱形 + 折线的组合图读进来变成「全是折线」，柱形那几条系列连同它们的 `barDir`（column/bar 之别）一起丢了；
+回写时同理，等于打开再存盘组合图就退化成单型图。
+
+**模型**：给 `ChartSeries` 加 `chart_type`（只在**与主图型不同**时才有值）。
+刻意选「系列自带图型」而不是「`ChartPayload` 上挂一个副图型」：前者能表达哪几条系列是副图，后者不行
+（组合图里主副系列的条数是任意的）。副字段只在真组合时出现，单一图型的载荷与 v0.122 之前逐字同形。
+
+**读侧**（`xlsx_chart.rs`）：新增 `ElemCtx` 表示 plotArea 里的一个 chart 元素，`elems` 按出现顺序收集；
+`barDir`/`grouping`/`radarStyle`/`scatterStyle` 一律写进 `elems.last_mut()`（不再全局覆盖）；
+`SerParse` 记自己落在第几个元素上（`elem` 下标）。收尾时：
+
+- 主图型 = `elems[0].resolved()`（Excel 组合图里第一个元素承载主轴与共享的类别轴）
+- `barDir` 按元素各判（`col`→column、`bar`→bar），所以「两个 barChart，一个竖一个横」也是真组合
+- 每条系列：`own == 主图型` 就留 `None`（随主图型），否则记 `Some(own)`
+
+**写侧**（`xlsx.rs`）：把「挂一条系列」抽成 `add_chart_series()` 供主图/副图共用（免得两处跑偏）。
+副图型按**首次出现**定一种，用 `Chart::combine()` 合成真正的组合图回写（Excel 打开是原生组合图，不是降级）。
+`rust_xlsxwriter` 的 `combine` 只有**一个副图槽位**（`combined_chart: Option<Box<Chart>>`），
+所以真出现两种以上副图型时按第一种回写并**记账**（不静默丢系列）；副图型本身写不进去（pie 那类不支持组合的）则退回主图。
+
+**渲染**（`chart.ts`）：任一 `s.chartType` 与主图型不同 ⇒ 走 VChart 的 `type: 'common'`，
+每条系列各自声明 `type` 并用 `dataId` 认领**独立的一份数据**（common 图不能像单一图型那样挤在一张宽表里）。
+只接「竖轴笛卡尔」那一族（column/line/area/stock）：掺进横向 `bar` 会让「类别轴该在左还是在下」说不清，
+那类组合退回单一图型分支（画得不对但至少不炸）。
+
+**验证**：Rust `xlsx_chart` 单测 **10/10**（新增 `combo_chart_keeps_per_series_type`
+——三系列一条不丢、副图型只落在第三条、两个 barChart 的 `barDir` 各判；`combo_chart_primary_is_first_element`
+——顺序反过来时主图型随之变成 `line`）；TS 验证腿 **30/30**（common 的 `data`/`series`/`dataId`/`axes`、
+堆叠逐系列下发、横向 bar 掺入时退回、**不带 `chartType` 的九类图型与 v0.122 同形**的回归护栏）后按家规删；
+`tsc --noEmit` 零错；`vite build` 退出 0。
+
+**挂账**：① **次轴没建模**——**已在 v0.124 收掉**（读侧解 `<c:axId>` 定值轴主次、写侧 `set_secondary_axis`、
+渲染加右轴），见 v0.124 章节。② **副图型的 `grouping` 随主图**——
+「堆积柱形 + 折线」里折线本该 standard，现在跟着主图一起堆叠。③ **两种以上副图型**回写时按第一种（已记账，不静默丢）。
+④ 掺横向 `bar` 的组合图渲染退回单一图型。⑤ VChart `common` 图的实际观感**未做实机验证**（只验了 spec 结构），
+`axes` 的 band/linear 指派是按惯例给的。⑥ UI 仍不能新建组合图（下拉只有单一图型），只能在读进来的组合图上看到效果。
+
+**收尾**：版本三处 0.123.0。
+
+## xlsx 图表读侧·组合图次轴（v0.124）
+
+**接的是 v0.123 挂账①**：Excel 组合图常把副图放到副 Y 轴上（柱形看销量、折线看利润率），此前读侧**完全没解 `<c:axId>`**
+——全仓搜不到一个 `axId` 字样，写侧也因此从不调 `set_secondary_axis`，一律让所有系列共享主轴。量纲差得远的组合图
+（几百 vs 百分之几）在我们的渲染与回写里都会挤在同一根轴上，副图那条几乎贴着底线走。
+
+**模型**：`ChartSeries` 增 `secondary_axis: bool`。与 v0.123 的 `chart_type` 同一路数——**只在真次轴时才是 `true`**，
+于是既有载荷形状一位不变。
+
+**读侧怎么判定谁走次轴**。OOXML 里 `<c:ser>` 自身**不带** `axId`，轴归属由它所在的那个 chart 元素决定：
+每个 `<c:barChart>`/`<c:lineChart>` 里列着若干 `<c:axId val="…"/>`（引用），而这些 id 的**定义**在
+`<c:catAx>`/`<c:valAx>` 里（声明）。所以判据是两步：
+
+1. 解析时区分「声明」与「引用」——用一个 `ax_kind` 状态记住当前是否在轴定义元素内部：在 `<c:valAx>` 里的 `axId`
+   记进 `val_ax_ids`（按出现次序定序），在 chart 元素里的记进该元素的 `ax_ids`。
+2. 值轴按出现次序编号后回看每个元素引用了第几根：**第 0 根是主轴，之后皆为次轴**。
+
+一个必须专门处理的特例：**散点图引用的两根都是值轴**（X/Y 皆数值）。按上面的判据第二根会被当成次轴，于是加了
+「引用的 axId 落在值轴集合里有两个及以上 ⇒ 判为散点，无主次」这条。雷达图是 catAx+valAx、股价图同理，都只有一根值轴，
+自然落在主轴，无需特判。
+
+**写侧**：`rust_xlsxwriter` 的次轴开关在**系列**上（`ChartSeries::set_secondary_axis`，不是 chart 上），
+正好对得上「哪几条系列走次轴」这一定位；只在 `true` 时喊话，省得给非组合图平白多出一份轴定义。
+
+**渲染**：VChart 的 `common` 图靠**轴认领系列**——轴 spec 写 `seriesId` 数组，系列得带 `id` 才配得上
+（`base-chart-transformer`：轴只服务 `seriesId` 含自己 id 的那些系列）。所以分轴时给系列补 `id`，并把主值轴也
+一并圈定（否则左轴会连次轴那几条一起画，两根轴挤在同一侧）。顺带把「同型但分轴」的双轴图也引到 `common` 分支——
+VChart 的单一图型分支不接 `axes`，双轴柱形此前无处安放。
+
+**验证**：Rust `xlsx_chart` 单测 **12/12**、**全仓 `cargo test` 126 passed / 0 failed**（新增
+`combo_chart_secondary_axis_from_ax_id`——柱形引用第一根值轴走主、折线引用第二根走次；散点双值轴不被判次轴；
+单值轴的单一图型系列全是主）；TS 验证腿 **29/29** 后按家规删，
+含「无次轴时 `axes` 与 v0.123 逐字同形」的回归护栏；`tsc --noEmit` 零错、`vite build` 退出 0。
+
+**挂账**：① **次轴只做了主/次二分**——Excel 理论上可以有第三根值轴，本版按「第 0 根主、其余皆次」处理，
+第三根起的系列都归到次轴（不丢系列，但轴数对不上原文）。② **轴的标题、刻度范围、对数刻度、显示单位**——
+**已在 v0.125 收掉**（读侧逐字段解、写侧逐 setter 落、渲染逐项映射，见 v0.125 章节）。③ 副图型的 `grouping` 仍随主图（v0.123 挂账②，未动）。④ **VChart 双轴的实际观感
+未做实机验证**——只验了 spec 结构，`seriesId` 的关联机制是从 `base-chart-transformer` 的实现里读出来的，
+没有真的渲染过一张图看它分没分轴。⑤ UI 仍不能新建/编辑次轴，只能在读进来的组合图上看到效果。
+
+**收尾**：版本三处 0.124.0。
+
+## xlsx 图表读侧·轴的刻度与标题（v0.125）
+
+**接的是 v0.124 挂账②**：轴的归属（谁跟谁一根轴）上一轮通了，但轴**自己说了什么**——标题、刻度范围、对数刻度、
+主/次刻度间隔、显示单位、数字格式、倒序、隐藏——一概没读没写。做一张「销售额按千显示、Y 轴从 0 到 100、
+标题写『万元』」的图，存盘再打开，那些设置就全没了。
+
+**模型**：新增 `ChartAxis`（`id`/`kind`/`pos`/`title`/`min`/`max`/`logBase`/`majorUnit`/`minorUnit`/
+`displayUnit`/`numFormat`/`reverse`/`hidden`），`ChartPayload` 增 `axes: Vec<ChartAxis>`。
+**整根没说话的轴不进载荷**（`speaks()` 判据：十项字段全空就丢弃），于是朴素图表的载荷与 v0.124 之前**逐字同形**；
+`pos`（`<c:axPos>`）平时用不上，唯独散点图靠它——散点的两根轴在 OOXML 里**都是值轴**，X/Y 只能靠 `axPos` 的
+`b`/`l` 分出来（认不出来才退回出现次序）。
+
+**读侧**：沿用 v0.124 的 `ax_kind` 状态机，进轴定义元素时建一根新轴，此后 `min`/`max`/`logBase`（都在
+`<c:scaling>` 里）、`majorUnit`/`minorUnit`、`builtInUnit`/`custUnit`（显示单位的内置档与自定义档）、
+`numFmt`（`sourceLinked="1"` 是"跟随源数据"，不算轴自己说话）、`delete`（隐藏）、`orientation val="maxMin"`
+（倒序）各回各位；轴标题走轴内 `<c:title>` 的富文本，与图表标题的两套捕获互不串门（图表标题的闸门是
+「不在 plotArea 内」，轴标题的闸门是「在轴定义内」）。
+
+**写侧**：类目轴 → `x_axis()`，值轴按出现次序第 0 根 → `y_axis()`、第 1 根 → `y2_axis()`（且要真有系列走
+次轴才接，否则凭空多一份 `<c:valAx>` 反而把图弄歪）；`set_name`/`set_min`/`set_max`/`set_log_base`/
+`set_major_unit`/`set_minor_unit`/`set_display_unit_type`/`set_num_format`/`set_reverse`/`set_hidden`
+一一对应，写不进去的（`custUnit` 自定义数字——crate 的枚举只到内置十档；第三根起的值轴；没有次轴系列时的
+次值轴设置）**带回来记账**，不在存盘时静默少给。轴在 `combine` **之后**设，免得被副图的轴盖掉。
+
+**渲染**：VChart 这头每一项都有现成落点——轴标题 `title:{visible,text}`、范围 `min`/`max`、对数
+`type:'log'+base`、主刻度间隔 `tick.tickStep`、显示单位 `unit:{visible,text}`（内置档配中文短名：千/万/百万/亿…，
+自定义档原样显示数字）、倒序 `inverse`、隐藏 `visible:false`。落点纪律同前几轮：**只填"说了话"的项**，没说的
+留给 VChart 默认。类目轴是 band，不吃 min/max/log；pie/radar 是极坐标、横条 bar 两轴掉个儿，都不接 axes（挂账）。
+
+**验证**：Rust `xlsx_chart` 单测 **13/13**、**全仓 `cargo test` 127 passed / 0 failed**（新增
+`axes_parse_title_scale_display_unit`——标题/范围/对数/间隔/显示单位/数字格式/倒序/隐藏逐项断言；
+`axis_with_no_settings_is_dropped`——没说话的轴不进载荷、`sourceLinked=1` 不算说话；散点测试补两根值轴按
+`axPos` 分 X/Y 的断言）；TS 验证腿 **22/22** 后按家规删（朴素载荷不产 axes 的同形护栏、组合图次值轴 extras
+落到 right 轴、pie/radar/bar 不接 axes 的回归）；`tsc --noEmit` 零错、`vite build` 退出 0。
+
+**挂账**：① **数字格式（numFormat）读了写了但不渲染**——Excel 的格式语法（`0.0%`/`#,##0`…）换算成 VChart
+label formatter 是一件独立的事。② **custUnit 自定义显示单位写不回去**（crate 无此枚举），渲染侧以数字串显示。
+③ **第三根起的值轴、第二根类目轴不写**（xlsx 只认主/次二分）。④ **pie/radar/bar 的轴不接渲染**（极坐标与
+横条的轴语义不同）。⑤ **次刻度 minorUnit 渲染侧没接**（VChart 的 `subTick` 收的是数量不是间隔，语义对不上）。
+⑥ UI 仍不能编辑轴；⑦ 副图 `grouping` 随主图（v0.123 挂账②，未动）；⑧ VChart 双轴与轴标题的实际观感仍未实机验证。
+
+**收尾**：版本三处 0.125.0。
+
+## 表格命名样式（v0.114）
+
+v0.113 收了字符级样式之后，命名样式还剩最后一类——**表样式**（Word 的 `w:style type="table"`，
+内置那一排「网格型/清单型/浅色底纹」就是它）。这轮补齐，**段落 / 字符 / 表格三层至此全通**：
+
+- **模型**：`DocxStyleInfo.kind` 增 `'table'`，新增 `table` 快照：外框四边 + 内部横竖线共六条边
+  （沿用单元格那套规范串，`'none'` 是显式无边、缺省是没声明）、默认格边距（px）、整表位置
+  （`w:jc`）、默认格底纹（样式自己的 `w:tcPr/w:shd`），外加作用在表内文字上的那份 run。
+- **读侧**：`styleList()` 收 type="table" 的样式，沿 basedOn 链自根向下逐条合并（含 `start/end`
+  与 `left/right` 两种写法的归一，否则叶层的 `start` 盖不住祖先的 `left`）。两条既有纪律照守：
+  `TableNormal` 这类 Word 会换掉自己定义的 id **不进清单**（往它身上写的数从不落地，照抄就是
+  把别家的默认写成用户的声明）；没人说的那条边距仍不铺默认值。
+- **引用**：`<table data-tstyle="…">` 进出编辑器（新的 table 节点属性，与 `marginLeft` 同住
+  cell-style.ts），命令 `setTableStyle(id | null)`。样式 id 认不出就**不挂标签**——
+  挂上去就是一枚指向不存在定义的 `w:tblStyle`。
+- **导出**：`Table({ style: id })` 写回 `w:tblStyle`；定义那一份由新的 `tableStyleXml` 自己拼 XML，
+  走 docx 库 `styles.importedStyles` 这道「原样收一片」的门（`IStylesOptions` 里没有 tableStyles
+  这个槽）。节点顺序按 CT_Style / CT_TblPrBase 的 schema 排（name → basedOn → rPr → tblPr → tcPr），
+  乱序会被 Word 判成损坏件；`'none'` 写 `w:val="nil"` 而不是 `none`（单元格那条老教训此处同形：
+  `none` 在 Word 眼里等于没指定，会被默认边框盖回来）。
+- **渲染**：`styleCssOf` 出两组规则——格子承担边框/底纹/边距（表级的画面主要由 `<td>` 承担，
+  挂在 `<table>` 上会被单元格自己的盒模型挡在外面），`<table>` 承担整表位置与那份 run。
+- **编辑**：样式下拉加「表格样式（套到光标所在的表）」组；不在表里选它会提示而不是默默乱套；
+  样式表面板表格行给「线型/磅/颜色 + 六条边」的边框套件、表位置、格底纹、四枚格边距；
+  「新建表格样式」独立入口；删除时按表节点逐张清掉 tStyle 属性（孤儿引用会让
+  屏幕失去呈现、导出也是悬空 `w:tblStyle`）。
+
+**验证**：tmp/tablestyle-leg.mts 31 条断言一次全绿（沿链摊平含 start/end 归一与「没声明」留白、
+`TableNormal` 不进清单、`data-tstyle` 落标签、CSS 两组规则、导出 `w:tblStyle` + 两份定义的
+schema 顺序/全量边/`nil` 语义/缇换算、同 id 不重复）后按家规删；`tsc --noEmit` + `vite build` 绿；
+Rust 零改动。
+
+**挂账**：**条件层（`w:tblStylePr` + `w:tblLook`）v0.116 已收**（读侧进快照、导出写回、渲染 ladder、面板编辑）——见 v0.116 章节；渲染层把 `insideH/insideV` 给到每一格，最外圈会多一圈
+内部线（嵌套表尤其明显），好在 Word 亲笔文件里通常还有逐格/逐表的直接格式压在上面
+（它们进 `<td>` 的 inline style，天然胜出），漏出来的只发生在没人喊价的那几格；
+Word 对表样式基准那份 run 的应用未实机验证；odt 出口不认这套定义（**v0.122 已收：按位置展开成逐格硬格式，见 v0.122 章节**）、PDF 出口仍不认。
+
+**收尾**：版本三处 0.114.0。
+
+## 字符级命名样式（v0.113）
+
+v0.102/106 把段落命名样式做全（读清单、套用、渲染层、样式表编辑）之后，样式体系剩下的最后一层——
+**字符级样式**（Word 的 `w:style type="character"`，如「强调」「引用」）——这轮补上，四段全部同构复用：
+
+- **模型**：`DocxStyleInfo` 增 `kind?: 'paragraph' | 'character'`（缺省段落，旧 .odoc meta 兼容）。
+- **读侧**：`styleList()` 收 type="character" 的样式（只摊 run 层，basedOn 链照摊；清单排序
+  Normal → 段落 → 字符，组内按名）。库内置的字符样式（Hyperlink、FootnoteText 等 5 枚）随
+  DefaultStylesFactory 一样进清单、编辑器里只读。
+- **导入**：run 的 `w:rStyle` 落成 HTML 的 `<span data-rstyle>`，由新的 `RStyleMark`
+  （paragraph-style.ts，与 pStyle 同纪律：套用只挂标签、呈现走样式表、直接格式天然压样式层）
+  接住——`data-rstyle` 不继承，每个 run 只认自己 rPr 上的那份。
+- **导出**：`rStyle` mark 写回 `w:rStyle`；`meta.styles` 里 kind=character 的条目经
+  `styleDefOf` 产 `ICharacterStyleOptions` 走 `styles.characterStyles`（与段落样式分开两桶、
+  同一 id 命名空间、basedOn 链照写）。
+- **渲染**：`styleCssOf` 出 `.doc-content span[data-rstyle=id]` 规则，与段落规则共用 run 层声明。
+- **编辑**：样式下拉分「段落样式 / 字符样式」两组；字符样式套到选中文字（选区 marks 展示当前态）；
+  样式表面板字符行隐藏段落排版区、显「字符」徽标；「新建字符样式」独立入口；删除字符样式按
+  mark 摘全文引用（段落样式沿用 pStyle 摘除路径）。
+
+**验证**：tmp/charstyle-leg.mts 11 条断言全绿（读侧快照含 basedOn 摊平、data-rstyle 落标签、
+CSS 规则、导出写回 w:rStyle 与 characterStyles、basedOn 链、内置段落样式不进字符桶）后按家规删；
+`tsc --noEmit` + `vite build` 绿；Rust 零改动。
+
+**挂账**：mark 进出编辑器的 schema 往返没有离线腿（靠 tiptap parseHTML，浏览器手测为准）；
+超链接文字的 rStyle 导出让位 Hyperlink 样式（docx 库 TextRun 只有一枚 style 槽）；表样式见 v0.114 章节。
+
+**收尾**：版本三处 0.113.0。命名样式三层里段落与字符两层已收。
+
+## 查询连接与查询表搬运（v0.112）
+
+v0.109 收口切片器时挂下的最后一格——**查询连接（connections）**——这轮收掉，
+workbook.xml 线（透视缓存、切片器缓存、查询连接）就此全清：
+
+- **连接侧**：workbook.xml 的 `<connections>` 清单（MS 扩展元素，ECMA-376 没有它）→
+  workbook rels → `xl/connections/connectionN.xml`，部件整份照搬；清单里的 r:id 换新号，
+  其余属性（`id`/`name`/`type`/连接串）一位不动——**`id` 是簿级对账键**，queryTable 与
+  透视缓存定义里的 `connectionId` 都按它认线，改号等于把查询接到别的表上。
+- **查询表侧**：sheet rels 上的 `/queryTable` 关系 → `xl/queryTables/queryTableN.xml`
+  整份照搬，自身 rels 里的连接引用改指搬过去那份。与 pivotTable 一样，sheet 部件上
+  **不需要**内联元素，只挂 rels。
+- **簿级接线**：`<connections>` 按 CT_Workbook 序插在 `pivotCaches` 之后、smartTag/extLst
+  之前（与 `insert_pivot_caches` 同一组锚点）；连接自身 rels 里指回透视缓存的那条按
+  `def_map` 改指（没搬成的原样留着并记账——照搬总比留悬空好找账）。
+- **守卫**：连接的关系断了或部件读不出 → 不搬；查询表认的连接没搬成 → 查询表跟着不搬、
+  sheet rels 不留悬空引用——接不上线的查询表比没有更糟。
+
+**验证**：`cargo test --lib` **119 过 0 挂**（新增 2：连接+查询表端到端——部件字节、
+r:id 换号与 schema 序、rels 改指、content types 两笔；关系断了则整条线不搬且账说得出）。
+**挂账**：Excel 实机开产物未验（`<connections>` 是 MS 扩展元素）；连接的 rels 里
+指向外部数据源（OLAP/Model）的关系照搬不改指；dataModel 部件本身不搬。
+
+**收尾**：`tsc --noEmit` + `vite build` 绿；版本三处 0.112.0；路线图该条改口。
+
+## 页眉页脚图片搬运（v0.110）
+
+v0.107 起的图片搬运一直有句账：「页眉页脚里的图片是另一路（picture 部件），本轮没搬」。
+这轮把它接上——**部件级搬运第一梯队就此清完**（图片、表格 ListObjects、定义名称、透视表、切片器、页眉页脚图）：
+
+- **① `<picture r:id>` 那路（Excel 2010 起）**：页眉图住在一份**独立** drawing 里，正文浮动图的搬运会
+  跳过它。现在整份照搬（锚点字节与块内 `r:embed` 一位不动），它 rels 指向的媒体逐个搬成新部件、
+  Target 改指过去；sheet 上补 `<picture r:id>`（CT_Worksheet 序：在 `<legacyDrawingHF>` 之后）。
+- **② `<legacyDrawingHF r:id>` 那路（老式 VML）**：只挑带 `<v:imagedata>` 的 `<v:shape>`
+  并进产物**已有**的 vmlDrawing——批注那份是 crate 写的，页眉形状并进去，批注形状一个不惊动
+  （判据干净：批注形状没有 imagedata；`<v:shapetype>` 同样以 `<v:shape` 开头，靠标签名后的分隔符区分）。
+  产物没有 vmlDrawing 才新建一份。`r:id` 换新号，根上缺 `xmlns:r` 就补。
+- **两个元素指一份 VML**：`<legacyDrawing>`（批注）与 `<legacyDrawingHF>`（页眉图）指同一部件，
+  这正是 Excel 亲笔的写法，不另起一份。
+- **守卫**：媒体扩展名认不出、或媒体读不出来/指向外部 → 那张图不搬、sheet 上不留悬空引用、记一条账；
+  另一条线不受牵连。页眉正文里的 `&G` 标记不归这条线（xlsx_print 那路保留式重写已在）。
+
+**验证**：`cargo test --lib` **117 过 0 挂**（新增 3：两条线端到端含媒体字节与 CT_Worksheet 序、
+VML 并进批注那份且两个元素同指一份、认不出的媒体不搬且不留悬空引用）。
+**挂账**：页眉页脚图片的**实机渲染**没验（Excel 里 `&G` 与 VML 形状的定位由页眉文本决定，
+部件搬对了不等于位置对）；表单控件/批注气泡的 VML 形状不搬（只搬带 imagedata 的）；
+timeline、slicerStyles/pivotStyles、查询连接仍挂。
+
+**收尾**：`tsc --noEmit` + `vite build` 绿；版本三处 0.110.0。
+
+## 形状层第二片：填充/边框/层级（v0.108）
+
+v0.107 把自由形状层立起来之后，v0.107 的挂账里最影响还原度的三格——**填充色、边框、层级调整**——这轮收掉：
+
+- **模型**：`SlideShape` 增 `fill`（文本框底色）、`outline` + `outlineW`（边框色与磅宽，0.25~20）；
+  parseShapes 守卫同步扩：非法 hex 弃、越界宽弃、`fill` 只属于文本形状；键序归一并入接口序（fill/outline/outlineW 落在 align 与 image 之间）。
+- **导入**：新增 `boxStyleOf` 读 `spPr` 的 `solidFill`（→底色）与 `ln`（→边框色 + `w` EMU÷12700→磅）；
+  `noFill`/渐变等不认的填充按「无」落、无 `ln` 或 `ln` 无色视作无边框——不虚造默认值。
+  顺手修掉一个 v0.107 的**层级保真缺口**：原先文本形状一趟先收、图片第二趟后收，原文件里「图片垫底、文字压上」的
+  层序会被翻转——现在按 spTree **文档序单趟**收集 `sp`/`pic`（`grpSp` 嵌套自然跟随），形状数组序 = 层叠序（后画在上），
+  与 pptx 的 z 语义同源。图片的边框也读（渲染可见），导出暂不落（见挂账）。
+- **导出**：文本形状的 `fill`/`line` 走 pptxgenjs 的 shape props 落盘（`<a:solidFill>` + `<a:ln w="…">`，宽收磅值）。
+- **渲染**：StaticSlide 新 `boxFace`（底色 + 边框，按固定 1280px 宽折 1pt=16/9px），缩略图/放映/PDF 三端同一份；
+  编辑舞台按实宽折 px（10 英寸页 = 720pt）。
+- **编辑**：选中属性条增**底色/边框**两枚取色器（各配 × 清除）与**上移/下一层**两钮（挪数组序，↑ 即后画在上）。
+
+**验证腿**（tmp/shapes2-leg.mts，5 组断言一次全绿）：.opd 守卫（非法色/越界宽/image 不吃 fill/键序逐字节稳定）、
+导入文档序层叠（pic 在前不被翻转）+ spPr 填充边框 EMU→磅对账、导出 XML（solidFill + `ln w="31750"`）、
+pptx 完整往返（fill/outline/outlineW/几何 1e-6 全对账）、noFill/无 ln 按无落。
+
+**挂账**：边框宽度编辑器不给调（随导入或 JSON 手改，属性条只控色）；图片边框导出不落（pptxgenjs ImageProps 无 line）；
+渐变/图案填充按无填充落；形状无旋转（导入带旋转的按未旋转矩形落位）；文本只取首个 run 样式（一段多样式会拉平）；
+形状不参与逐条动画；纯形状页删到空后 layout 不回填 bullets。
+
+**收尾**：`tsc --noEmit` + `vite build` 绿；Rust 侧零改动；版本三处 0.108.0。
+
+## 接管：并发会话的 v0.98–v0.125 与本会话的 b21–b27 合在同一份树上
+
+另一会话把 v0.98–v0.125 的产品改动写在工作树里而没有提交（25 枚已跟踪件的改动 + 6 枚未跟踪的新模块：
+`src-tauri/src/xlsx_names.rs`、`src-tauri/src/xlsx_preserve.rs`、`src/lib/doc-style-css.ts`、`src/lib/pdf-forms.ts`、
+`src/lib/revision-extension.ts`、`src/lib/table-cond.ts`），而本会话的 b21–b27 已落在 main 上 ⇒ 两条血统分叉在同一份工作树上。
+接管按「先保住状态、再分功能区合、两头都下判据」三步走：
+
+- **保住状态**：未提交的那一份整体打成快照提交并挂 tag `takeover/before-merge`（树 `f2ae3bc`）——合并失败也能退回原样。
+- **代码四枚共有文件的三向合并**（基座 = 分叉点 `24311dc`）：`src/lib/odt.ts` 基座 `5809b80826d9`/1622 行、HEAD `17fedfa33f29`/1662、工作树 `a702edb69ac2`/1765、合并件 `60331969415f`/1805；
+  `docx.ts` 1165→1172/1660→1667、`docx-fidelity.ts` 2065→2159/2431→2525、`DocEditor.tsx` 1721→1724/2347→2350。
+  合并件相对 HEAD 的每一段 hunk 都能归因到队友那一份（odt 16 段、docx 28 段、docx-fidelity 39 段、DocEditor 21 段），
+  相对工作树的每一段都能归因到本会话（13/3/19/2 段）——**两个方向的「无法归因段」都是 0**，即没有一段是编出来的。
+- **README 的合并基座不是代码的分叉点**：按行集比对，队友那一份 6,993 行里只有 4 行不在 `631d7210`（v0.97 那一节）里，
+  而对 `24311dc` 缺 1,236 行 ⇒ 它的真基座是 v0.97，代码分叉点当基座会让它的「旧行」被当成删除静默吃掉。按 `631d7210` 作 base 三向合并，
+  8,417 行对 6,993 行只剩 **一枚冲突**（两个大块插在同一锚点：本会话 b16–b27 的 1,807 行与并发会话 v0.98–v0.125 的 849 行），解法是两块都留。
+  成品对 HEAD 的形状：纯插入 857 / 纯删除 0 / 整行替换块 2（正是队友改写的两枚路线图行：`表格：图表` 与 `整包重写留不下我们不认的属性`），
+  HEAD 的字面除了那 4 行基座原句（被队友的改写取代）一行没少；标题 129→157、已勾 131→136、未勾 270→270、奇数反引号行 31→31、CR 0、含盘符路径的行 33→33。
+- **行为面两头各下一判据**：本会话已收的三笔账在合并件上逐臂同值（读手回归 53 臂全同），77 枚真件用合并件读手跑
+  （ours/merged 各读成 77、抛 0）HTML 全同 77、正文全同 77、页账全同 77；写侧六臂（plain/table/heading/marks/withmeta/tablemeta）三份件（ours/theirs/merged）
+  逐部件 md5 全同；队友 v0.122 那一条表样式通道在合并件上与她那一份**逐部件相同**，而与本会话那份只差 `content.xml` 一枚部件，
+  读回时 4 枚带 style 的 `<td>` 与自动样式计数一寸没丢。
+- **编译腿**：`tsc --noEmit` 0 错、`vite build` 成功、`cargo check --all-targets` 0 错、`cargo test` 127 passed / 0 failed / 11 ignored。
+- **本轮不占版本号**：`package.json` / `Cargo.toml` / `tauri.conf.json` 现在住 0.95.0（本会话此前把它回拨过一次），
+  而接管进来的账已写到 v0.125 ⇒ 发行号与账目的对齐是另一枚没做的账（已挂进路线图）。
+- **没扫进仓库的**：`.workbuddy/` 与两份评估报告 html（`OpenOffices-vs-WPS-评估报告.html`、`四组件深化规划.html`）按用户此前的口径留在工作树外；一次性腿件与日志留在被忽略的临时目录。
+- 只本地 commit，不 push。
+
+
 ## 性能（v0.3）
 
 
@@ -7079,12 +7956,22 @@ cargo check        # Rust 后端检查（在 src-tauri 下）
 - [x] 演示：元素级动画（逐条入场）与自动换页计时
 - [x] 演示：动画映射 PowerPoint 原生 timing 树（元素级跨端保真）
 - [x] 演示：动画方向/出场效果补全 + PowerPoint 实机回放回归确认
+- [x] 演示：自由形状层（文本框/图片画布驱动；填充/边框/层级随 pptx 往返）
+- [x] 演示：**形状动画的播放顺序可调**（`Slide.animOrder` 一列 `l<n>`/`s<n>` 键，揭示序与层叠序第一次分开记；
+      `revealOrder`/`revealExits`/`revealSets` 取代「前 n 条」的前缀算法，出场序同揭示序；导出 mainSeq 的
+      clickEffect 按揭示序产出、导入按 clickEffect 先后反向认出（与默认序相同就不写）；工具栏「播放顺序」面板 ↑↓
+      与「默认序」一键退回）——见 v0.115 章节
+- [x] 演示：形状参与逐条动画（v0.111：形状自带入场/方向/出场，放映步序正文→形状，导出各占一枚 clickEffect；**播放顺序 v0.115 起可调**）
 - [x] 表格：样式（字体/颜色/合并）随 xlsx 往返
 - [x] 表格：边框/对齐/数字格式 xlsx 往返 + ODS 读侧样式/合并 + PDF 打印保真
 - [x] 表格二期：列宽/行高/字体族 xlsx+ODS 全链路往返（读→Univer→保存→PDF 打印）
 - [x] 表格三期：隐藏行列 + 冻结窗格 xlsx+ODS 全链路往返（OOXML/collapse+settings → Univer → 打印跳过）
 - [x] 表格四期：公式 xlsx+ODS 全链路往返（`<f>`/of:= 换算 + 缓存值，Univer 引擎重算）
-- [x] 表格：图表（VChart 渲染 PNG + Univer 社区浮动图片 + xlsx 原生图表往返，Excel 实机确认）
+- [x] 表格：图表（VChart 渲染 PNG + Univer 社区浮动图片 + xlsx 原生图表往返，Excel 实机确认；v0.119 续接：xlsx 读侧补 radar 图表类型识别 + 原生回写雷达图（Radar/RadarWithMarkers/RadarFilled）；v0.120 续接：加 scatter（xVal/yVal + Scatter 五变体）与 stock（ChartType::Stock），scatter 连线型与 stock 的 OHLC 语义仅在我们自己的渲染层降级，写侧保真；v0.123 续接：组合图（同一 plotArea 内多 chart 元素）读侧按系列记各自图型、写侧用 `combine` 原生回写、渲染走 VChart `common`，不再「只取最后命中的那一型」；v0.124 续接：组合图次轴——读侧解 `<c:axId>` 按值轴出现次序定主次、
+写侧 `set_secondary_axis` 系列级回写、渲染加右值轴（VChart 靠 `seriesId` 认领系列）；v0.125 续接：**轴的刻度与标题**——
+读侧解轴内 `<c:title>`/`<c:scaling>`（min/max/logBase）/`major|minorUnit`/`dispUnits`/`numFmt`/`delete`/
+`orientation`，写侧逐 setter 落 `x_axis`/`y_axis`/`y2_axis`，渲染映射 VChart 的 title/min/max/log/tickStep/unit/
+inverse/visible，整根没说话的轴不进载荷（朴素图表载荷与之前逐字同形））
 - [x] 文档：页眉页脚（含 PAGE 页码域）与目录（原生 TOC 域）docx 往返，Word 实机回归
 - [x] 文档：批注（锚点标记 + 侧栏面板 + docx comments 往返）
 - [x] 文档：ODT 批注往返（office:annotation 读 + 写，docx 那两条老规矩照抄）
@@ -7118,6 +8005,8 @@ cargo check        # Rust 后端检查（在 src-tauri 下）
 - [x] 文档保真续项三：段落行距（倍数/固定值/最小值）+ 段前段后 + 底纹与四边 `w:spacing`/`w:shd`/`w:pBdr` 读入，docx/odt 回写（Word 16.0 实机 20 断言 + Word 另存件 OOXML 差分 24 断言）
 - [x] 文档保真续项四：脚注/尾注真往返（`note` 内联原子节点 + 编号按文档顺序现算 + OOXML `word/footnotes.xml`·`endnotes.xml` 与 ODF 1.2 内联写法双向（含旧版 `text:note` 外壳）+ 文末脚注区编辑与打印）
 - [x] 文档保真续项五：文本框展平（`w:txbxContent` 新旧两种外壳 + ODF `draw:text-box`，位置与环绕不保但字不丢）+ 公式线性化（OMML 与 MathML 翻成同一套 `x^2`/`a/b`/`√(y)`/`∑_i^n`）+ `mc:AlternateContent` 只取一支（Word 16.0 只读腿按 `wdTextFrameStory` 逐句核对）
+- [x] 文档：**表格命名样式**（`w:tblStyle` 读侧入清单并沿 basedOn 链逐条合并表级六边/格边距/表位置/默认格底纹，data-tstyle 标签进出、`Table({style})` 写回引用、样式定义自拼 XML 走 importedStyles 进 styles.xml、渲染层两套规则、下拉分组/面板编辑/删除摘引用；**命名样式段落/字符/表格三层至此全通**；**条件层（v0.116）：`w:tblStylePr` 十二型 + `w:tblLook` 闸门读侧进快照/导出写回/渲染 ladder/面板编辑全通（v0.117 续接：条件层新增 `w:tcBorders` 逐边边框与 `w:trPr/w:trHeight` 条件行高，并修掉 v0.116 起条件层渲染 key 不匹配导致全部不渲染的潜 bug；v0.118 续接：CSS 路径拆 `COND_RULES` 为「外观族角压一切 / 边距族 行＞角＞列」两条 ladder，修掉 v0.116 起 CSS 路径行压角、四角在交集格输给行/列型的简化账，与内联路径（Word 16.0 实测序）对齐；v0.121 续接：表级六边里的 `insideH/insideV` 按行列位置落地成 CSS 规则——此前 CSS 路径只出外框四边、内部横线竖线整条缺席，只声明内部线的表样式在屏幕上一根线都不见，现与内联路径对齐；**v0.122 续接：odt 出口按位置把表样式+条件层展开成逐格硬格式**——此前 `OdtBuilder` 只认 `marginLeft`、命名表样式定义整份缺席，现抽 `src/lib/table-cond.ts` 作**唯一来源**（三条条件层梯子 + `condLookBits` + `tableEdgeFor` + basedOn 链合并）供 docx 渲染/CSS/odt 三处共用，docx 出口的 `tblLookOf` 也改指同一枚 `condLookBits`）——见 v0.114 章节
+- [x] 文档：**字符级命名样式**（`w:rStyle` 读侧入清单并随 basedOn 链摊平 run 层、data-rstyle 标签 + rStyle mark 进出、样式表 characterStyles 写回、渲染层 span[data-rstyle] 规则、下拉分组/面板编辑/删除摘引用；与 v0.102/106 段落样式同一套纪律）——见 v0.113 章节
 - [x] 文档保真续项六之一：SmartArt（`diagrams/dataN.xml` 的 DiagramML 数据模型 → 嵌套列表）与图表（`charts/chartN.xml` 的 ChartML 缓存值 → 标题 + 数据表）读回，格内走层级缩进展平，还原不了的记边界
 - [x] 文档保真续项六之二：域**编号重算**（`SEQ` 按文档顺序现算并压掉缓存、`\* ROMAN`/`\* roman`/`\* ALPHABETIC`/`\* alphabetic` 四形态按开关自身大小写、`REF` 无缓存时按书签所在段落文本兜底、`PAGE`/`PAGEREF`/`DOCPROPERTY` 沿缓存且无缓存记边界、`fldSimple` 同路、被跳过的目录不占号）+ OLE 嵌入对象预览解不开时留一行看得见的占位（ProgID + 部件文件名，.odoc/docx/odt 三链路都在）
 - [x] 文档保真续项六剩下：OLE 嵌入对象的**内容**提取（复合文档 `cfb.ts` + `\x01Ole10Native` 的字段布局与兜底扫描 → 内层 docx 递归展开 / xlsx 与 CSV 取值成表 / txt 分段；两条接缝 docx `w:object` 与 ODT `draw:frame`（内联 base64 与 `Objects/objN/` 两种），块级正文作段落兄弟块、格内压行内，取不出的带真名与大小记边界；**v0.64 那两句"嵌入的 X 解不开"的原串尾巴同样改走 `failText`**（docx 与 xlsx 两路））
@@ -7231,9 +8120,16 @@ cargo check        # Rust 后端检查（在 src-tauri 下）
 - [ ] **显式行高在字节上会漂**：`set_row_height_pixels` 只收整数像素，载荷里非整的那一档被 `as u32` 截掉
       （最多 1px＝0.75pt；`xlsx.rs` 里那句"px↔pt 3/4 对 4/3 无损"的假注释已在 v0.60 改口成说实话），
       要修就得连着纸面行高与 `rowHeights` 那批夹具一起复核
-- [ ] **整包重写留不下我们不认的属性**：存盘是 `Workbook::new()` 整包重写，第三方件里读侧不认的属性活不过这趟
-      （v0.60 实测：Excel 亲笔的 `x14ac:dyDescent="0.3"` 在我们重存后不见了，同一趟里 `defaultRowHeight` 那枚**数**活着）。
-      本轮只保证"点名的那几枚"活着，其余按维记账；要收的是"逐属性搬运"还是"整份件只改点名的字节"，得先定方向
+- [ ] **整包重写留不下我们不认的属性**：方向已定——**部件级搬运**（v0.98，见对应章节）：整包重建落地后
+      把读侧不认的部件按表名映射搬进产物并接好三处线，**第一梯队已清完**（图片、表格 ListObjects、
+      定义名称、透视表、切片器、页眉页脚图——逐条见各自章节）；
+      逐属性缝合（`x14ac:dyDescent` 一类部件内部的行级属性账）明确**不收**——那等于自写 OOXML writer，
+      推倒已调平的 crate 链路，风险收益完全不划算。仍挂账的部件：透视表/切片器/查询连接（要动 workbook.xml
+      与 workbook rels；**透视表 v0.105 已收**、**切片器 v0.109 已收**、**查询连接 v0.112 已收**，见对应章节）、
+      定义名称（print 两条之外的；**v0.103 已收**，见对应章节）、页眉页脚图片（**v0.110 已收**，见对应章节）、
+      读侧不支持的图表类型（bubble/surface 等；radar 已在 v0.119 接上、scatter/stock 已在 v0.120 接上，见对应章节）。
+      v0.60 实测的 `x14ac:dyDescent="0.3"` 那一枚仍按维记账；Excel 实机开产物腿未跑
+      （v0.60 实测：Excel 亲笔的 `x14ac:dyDescent="0.3"` 在我们重存后不见了，同一趟里 `defaultRowHeight` 那枚**数**活着）
 - [x] ODS 的工作簿默认那一层接上了（v0.61）：`xlsx.rs` 的 `.ods` 分流不再硬交回 `None`，而是读同一件 `styles.xml`
       的 `<style:default-style style:family="table-cell">` → `<style:text-properties>`，与 xlsx 的 `cellXfs[0].fontId`
       同一枚形状、两处住址；因为消费点（`baseFontPt` 与 `--oof-print-base-size`）从 v0.56/v0.59 起就跟格式无关，
@@ -8408,6 +9304,12 @@ cargo check        # Rust 后端检查（在 src-tauri 下）
 - [ ] **`cm` 折 mm 的 ×10 与 `lenPx` 那套 px→mm 并存，同一物理宽度差 0.003mm**（同上一笔账 `g3` 的候选B 那一列）：`21.59cm` 在 `cm2mm` 下精确 215.9
       而在「先折 px 再折 mm」那条路上是 215.897；本轮选前者是因为候选B 会连改四档，但两把尺今天对同一枚 `cm` 给两个数，并档是一件事而换算口径是另一件
 - [ ] **负长度那一档两把尺都拒而门面给出一枚怪页**（同上一笔账 `g7` 的 NEG/NEGPT 两臂）：`-15.24cm` 与 `-432pt` 门面都读
+- [ ] **接管只合到「两头不退化」而并发那 28 节的验证腿没在本机重跑**（接管本节）：合并件的判据是「本会话三笔已收账逐臂同值 + 77 枚真件 HTML/正文/页账全同 + 写侧六臂逐部件全同 + 她的 v0.122 通道逐部件相同」
+      ⇒ 这四条证的是两条血统都没被对方碰坏，不是她每一轮自己的结论仍在（Excel/PowerPoint 实机腿与 CDP 冒烟本轮一枚没跑）；要把她那 28 节各自的判据腿点名一遍再决定重跑哪些
+- [ ] **README 的合并基座必须按行集比对找而不能拿代码的分叉点**（接管本节）：按代码分叉点 `24311dc` 当基座合出 3 枚冲突且并发那份比它少 1,236 行（那些「少掉的行」会被当成删除静默吃掉），按 v0.97 `631d7210` 当基座只剩 1 枚同锚点插入
+      ⇒ 下一次并发还得先跑这一枚「谁是谁的祖先」的腿（对每枚候选提交数「它有而我没有」与「我有而它没有」两个行数），判定要留日志而不是留在记忆里
+- [ ] **发行号与账目编号两套并存**（接管本节）：`package.json` / `Cargo.toml` / `tauri.conf.json` 住 0.95.0，而 README 里并发那 28 节自称 v0.98–v0.125、本会话的 b 轮按内容命名不带号
+      ⇒ 要么把发行号追平（一次跨 30 个号，而 release 通道上已发布的是 v0.95.0），要么把并发那 28 节的编号改成按内容命名；两套并排着读会以为少了 30 轮
       `[1584.05,-648,0,0,72,72]`（页宽翻成 1584.05pt 而页高吃负值、左右边距归零）⇒ 我们的 `n <= 0` 把它们整枚挡掉，这一档要不要照门面进账没定而真件问位上负数 3 枚（`g4b`，住 `table-properties`）
 
 - [ ] macOS 打包（需签名/公证凭据）
