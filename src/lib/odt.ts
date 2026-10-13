@@ -1594,69 +1594,9 @@ export async function odtToHtml(bytes: Uint8Array): Promise<{ html: string; meta
             if (cid != null) out += '</span>'
             break
           }
-          case 'frame': {
-            // 一个 draw:frame 里装的是同类的一件东西：位图 / 文本框 / 嵌入对象（公式走这条）
-            let src = ''
-            let imgEl: Element | null = null
-            for (const d of Array.from(e.getElementsByTagName('*'))) {
-              if (d.localName === 'image') {
-                imgEl = d
-                break
-              }
-            }
-            if (imgEl) {
-              src = await imageDataUrl(imgEl.getAttribute('xlink:href') ?? '')
-            }
-            if (src) {
-              const wmm = cm2mm(e.getAttribute('svg:width'))
-              out += wmm
-                ? `<img src="${src}" style="width:${Math.round((wmm / 25.4) * 96)}px"/>`
-                : `<img src="${src}"/>`
-              break
-            }
-            // 文本框：正文原来整块消失（比版式没保真严重一级），现在展平进所在段落，行与行之间用换行连
-            const box = findLocal(e, 'text-box')
-            if (box) {
-              const lines: string[] = []
-              for (const p of Array.from(box.children)) {
-                if (!['p', 'h', 'list'].includes(p.localName)) continue
-                const s = (await renderInline(p)).replace(/<br\/?>/g, ' ')
-                if (s.trim()) lines.push(s)
-              }
-              if (lines.length) {
-                out += lines.join('<br/>')
-                warn('文本框内容已展平为文字（位置与文字环绕未保留）')
-              } else warn('空文本框未导入')
-              break
-            }
-            const obj = findLocal(e, 'object') ?? findLocal(e, 'embed') ?? findLocal(e, 'animate')
-            if (obj) {
-              // objectText 取的是 href 那个迷你 ODF 包里的正文，只有 href 才可能是公式
-              const href = obj.getAttribute('xlink:href') ?? ''
-              const s = href ? await objectText(href) : ''
-              if (s) {
-                out += escapeHtml(s)
-                warn('公式已线性化为文本，结构不保真')
-                break
-              }
-              // 内联 base64（<office:binary-data>）那种老写法根本没有 href，
-              // 所以取内容这一趟不能压在 href 后面，否则它永远走不到
-              const body = await embedOfObject(obj)
-              if (body?.html) {
-                if (inCell) out += inlineFlatten(body.html)
-                else embedBlocks.push(body.html)
-                for (const n of body.notes) warn(n)
-                break
-              }
-              for (const n of body?.notes ?? []) warn(n)
-              warn('嵌入对象（draw:object）未导入')
-              break
-            }
-            if (findLocal(e, 'chart') || Array.from(e.getElementsByTagName('*')).some((d) => d.localName === 'chart'))
-              warn('图表对象未导入')
-            else warn('矢量图形（draw:frame 无位图）未导入')
+          case 'frame':
+            out += await frameHtml(e)
             break
-          }
           case 'noscript':
             break
           case 'footnote-reference':
@@ -1690,10 +1630,71 @@ export async function odtToHtml(bytes: Uint8Array): Promise<{ html: string; meta
     return out
   }
 
+  /**
+   * 一枚 `draw:frame` 的正文——行内和块级两处共用同一个出口。框里装的是同类的一件东西：
+   * 位图 / 文本框 / 嵌入对象（公式走这条）；谁都没有就是纯图形，只出告警不出字。
+   */
+  async function frameHtml(e: Element): Promise<string> {
+    let imgEl: Element | null = null
+    for (const d of Array.from(e.getElementsByTagName('*'))) {
+      if (d.localName === 'image') {
+        imgEl = d
+        break
+      }
+    }
+    const src = imgEl ? await imageDataUrl(imgEl.getAttribute('xlink:href') ?? '') : ''
+    if (src) {
+      const wmm = cm2mm(e.getAttribute('svg:width'))
+      return wmm ? `<img src="${src}" style="width:${Math.round((wmm / 25.4) * 96)}px"/>` : `<img src="${src}"/>`
+    }
+    // 文本框：正文原来整块消失（比版式没保真严重一级），现在展平进所在段落，行与行之间用换行连
+    const box = findLocal(e, 'text-box')
+    if (box) {
+      const lines: string[] = []
+      for (const p of Array.from(box.children)) {
+        if (!['p', 'h', 'list'].includes(p.localName)) continue
+        const s = (await renderInline(p)).replace(/<br\/?>/g, ' ')
+        if (s.trim()) lines.push(s)
+      }
+      if (lines.length) {
+        warn('文本框内容已展平为文字（位置与文字环绕未保留）')
+        return lines.join('<br/>')
+      }
+      warn('空文本框未导入')
+      return ''
+    }
+    const obj = findLocal(e, 'object') ?? findLocal(e, 'embed') ?? findLocal(e, 'animate')
+    if (obj) {
+      // objectText 取的是 href 那个迷你 ODF 包里的正文，只有 href 才可能是公式
+      const href = obj.getAttribute('xlink:href') ?? ''
+      const s = href ? await objectText(href) : ''
+      if (s) {
+        warn('公式已线性化为文本，结构不保真')
+        return escapeHtml(s)
+      }
+      // 内联 base64（<office:binary-data>）那种老写法根本没有 href，
+      // 所以取内容这一趟不能压在 href 后面，否则它永远走不到
+      const body = await embedOfObject(obj)
+      if (body?.html) {
+        for (const n of body.notes) warn(n)
+        if (inCell) return inlineFlatten(body.html)
+        embedBlocks.push(body.html)
+        return ''
+      }
+      for (const n of body?.notes ?? []) warn(n)
+      warn('嵌入对象（draw:object）未导入')
+      return ''
+    }
+    if (findLocal(e, 'chart') || Array.from(e.getElementsByTagName('*')).some((d) => d.localName === 'chart'))
+      warn('图表对象未导入')
+    else warn('矢量图形（draw:frame 无位图）未导入')
+    return ''
+  }
+
   async function renderChildrenBlocks(el: Element): Promise<string> {
     let out = ''
     for (const child of Array.from(el.children)) {
-      if (['s', 'tab', 'line-break', 'span', 'a', 'frame'].includes(child.localName)) {
+      if (['s', 'tab', 'line-break', 'span', 'a'].includes(child.localName)) {
         // 容器里直接散落的行内容（list-item/table-cell 均可能）
         out += `<p>${annWrap(await renderInline(el))}</p>${tail()}`
         return out
@@ -1808,6 +1809,13 @@ export async function odtToHtml(bytes: Uint8Array): Promise<{ html: string; meta
         // 文本节是块容器不是排版单位：孩子平铺进同一股流。
         // `text:display="none"` / 隐藏条件那一档本轮不设求值器（条件要读文档设置），内容照落，门面上 Word 也是这么落的。
         return await renderChildrenBlocks(el)
+      case 'frame': {
+        // 住在文档流里的框是一枚块而不是一撮散落的行内容：一框一块，框内段留在自己那块里。
+        // 空产出不造空块（与分页段同一口径）——纯图形只出告警，落一枚空 `<p>` 等于凭空造段。
+        const inner = await frameHtml(el)
+        const t = tail()
+        return inner.trim() === '' && t === '' ? '' : `<p>${inner}</p>${t}`
+      }
       default:
         return ''
     }
