@@ -1536,9 +1536,27 @@ export async function odtToHtml(bytes: Uint8Array): Promise<{ html: string; meta
   }
 
   /**
+   * 索引壳的名字族（ODF §2.1.4 的七型）：壳自己是一枚**块容器**，正文住在 `text:index-body` 那一层。
+   * 文档流与注正文两处同吃这一族，所以名单只写这一处（撤一名就两处一起哑）。
+   * `text:<名>-source`、`text:index-title-template`、`text:bibliography-entry-template` 是**生成规格**不吃：
+   * 真件里 source 的 `index-title-template` 自己就带一枚 `text:p`（c3），吃了它就是拿模板当正文、多出双份。
+   */
+  const INDEX_SHELLS = [
+    'table-of-content',
+    'bibliography',
+    'alphabetical-index',
+    'illustration-index',
+    'object-index',
+    'list-of-table-index',
+    'user-index',
+  ]
+  /** 壳的正文容器：异形件（标题与条目直接挂在壳下）没有这一枚 ⇒ 整壳不吃，而不是把壳的孩子当块 */
+  const indexBodyOf = (el: Element): Element | null => pick(el, 'index-body')
+
+  /**
    * 注正文按文档顺序摊成行：`p`/`h` 各一行，`list` 递归进 `list-item`（真件 ooo77837-1 的 13 字住这一层，
-   * 而主文对同一形状本来就有出口）。index 壳（bibliography / alphabetical-index / table-of-content）明不吃，
-   * 与主文同一口径（c2：主文对这些壳出的字=0）。
+   * 而主文对同一形状本来就有出口）。index 壳与主文同吃（b37 前这里写的是「明不吃」——当时主文对这些壳
+   * 出的字=0，那正是缺口本身而不是理由；真件 3 枚壳里 2 枚住注体、568 字走的就是这一枝）。
    */
   function noteBlockLines(holder: Element): string[] {
     const lines: string[] = []
@@ -1549,6 +1567,11 @@ export async function odtToHtml(bytes: Uint8Array): Promise<{ html: string; meta
           if (k.localName === 'list-item' || k.localName === 'list') lines.push(...noteBlockLines(k))
         }
       }
+      // 壳的孩子不属于注，属于壳里那一枚 index-body（生成规格在这一层照旧不出账）
+      else if (INDEX_SHELLS.includes(c.localName)) {
+        const body = indexBodyOf(c)
+        if (body) lines.push(...noteBlockLines(body))
+      } else if (c.localName === 'index-title') lines.push(...noteBlockLines(c))
     }
     return lines
   }
@@ -1962,8 +1985,15 @@ export async function odtToHtml(bytes: Uint8Array): Promise<{ html: string; meta
         const t = tail()
         return inner.trim() === '' && t === '' ? '' : `<p>${inner}</p>${t}`
       }
-      default:
-        return ''
+      case 'index-title':
+        // 标题枚住在 index-body 里、自己是一枚装 p/h 的壳：文档序天然在条目之前，不另立「标题必须在最前」那条话外之音
+        return await renderChildrenBlocks(el)
+      default: {
+        // 索引壳是块容器而不是排版单位：正文容器 `text:index-body` 的孩子平铺进同一股流（与文本节同一口径）。
+        // 只有生成规格而没有正文容器的壳 ⇒ 零产出（空产出不造空块，与分页段/块级框同一口径）。
+        const idxBody = INDEX_SHELLS.includes(el.localName) ? indexBodyOf(el) : null
+        return idxBody ? await renderChildrenBlocks(idxBody) : ''
+      }
     }
   }
 
