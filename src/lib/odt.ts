@@ -1000,6 +1000,20 @@ function findLocal(el: Element, localName: string): Element | null {
   return null
 }
 
+/**
+ * 一枚 `draw:frame` 的替身说明：`svg:desc`（长描述）与 `svg:title`（短标题）。
+ * 只吃框的直接子——规格上题注住这一层，真件 77 枚里带题注的 3 枚也全在直接子上（更深的一枚都没有）。
+ * 去首尾空白后为空串的不算账（真件里这样的空元素有 10 枚）。
+ */
+function frameCaptions(el: Element): { alt: string; title: string } {
+  const read = (name: string) =>
+    Array.from(el.children)
+      .find((c) => c.localName === name)
+      ?.textContent?.replace(/\s+/g, ' ')
+      .trim() ?? ''
+  return { alt: read('desc'), title: read('title') }
+}
+
 /** 需要加括号才不歧义的片段（与 docx 侧 ommlLinear 同一条规则，两套标记语言翻成同一种线性写法） */
 function mathGrouped(s: string): string {
   return /[\s/^_()+*\-]/.test(s) ? `(${s})` : s
@@ -1645,7 +1659,12 @@ export async function odtToHtml(bytes: Uint8Array): Promise<{ html: string; meta
     const src = imgEl ? await imageDataUrl(imgEl.getAttribute('xlink:href') ?? '') : ''
     if (src) {
       const wmm = cm2mm(e.getAttribute('svg:width'))
-      return wmm ? `<img src="${src}" style="width:${Math.round((wmm / 25.4) * 96)}px"/>` : `<img src="${src}"/>`
+      // 题注走属性通道不走正文通道：一张图说它自己是什么，不是流里多出的一撮字。
+      const { alt, title } = frameCaptions(e)
+      const cap = (alt ? ` alt="${esc(alt)}"` : '') + (title ? ` title="${esc(title)}"` : '')
+      return wmm
+        ? `<img src="${src}"${cap} style="width:${Math.round((wmm / 25.4) * 96)}px"/>`
+        : `<img src="${src}"${cap}/>`
     }
     // 文本框：正文原来整块消失（比版式没保真严重一级），现在展平进所在段落，行与行之间用换行连
     const box = findLocal(e, 'text-box')
