@@ -1068,6 +1068,114 @@ function escapeHtml(s: string): string {
   return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
 }
 
+// master-page 的档（`style:header` / `style:footer`）里，规格上住着三种各不相同的东西：
+//   ① 作者写的字面——住在一枚枚块容器（`text:p` / `text:h`）里，块与块之间是段界；
+//   ② 显式空白——`text:s`（可带 `text:c` 计数）、`text:tab`、`text:line-break`，元素本身没有子文本；
+//   ③ 域——`text:page-number` / `text:date` / `text:variable-get` 那一族，其子文本是宿主每次排版现算的缓存。
+// `textContent` 把三种吞成一串：段界被抹平（真件 77 枚里 3 件的 meta 出现跨段粘连）、显式空白一个字不现形、
+// 缓存则原样上屏（页码与日期就是这一条进来的）。这里按元素走：一枚块容器出一行，行内认得 ②，遇到 ③ 整棵跳过。
+// 段界只能落成空格——这两枚串目前唯一的出口是 @page 的 `content:`（DocEditor 走 JSON.stringify，
+// 换行与制表在那儿都会变成字面字母），要真·多行得先给 DocMeta 开槽，那是另一轮。
+// 名单只按元素名判，故与 `draw:title` / `svg:desc` 同名（图内题注是框外的外账）的那几枚 meta 域
+// （title / subject / keywords / description）留在名单外：真件语料里档内一枚都没有，宁可窄而不错。
+const HF_FIELD = new Set([
+  'page-number',
+  'page-count',
+  'page',
+  'pages',
+  'page-name',
+  'page-echo',
+  'date',
+  'time',
+  'creation-date',
+  'creation-time',
+  'modification-date',
+  'modification-time',
+  'print-date',
+  'print-time',
+  'editor',
+  'language',
+  'country',
+  'initial-creator',
+  'creator',
+  'revision-number',
+  'publication-mode',
+  'supplier',
+  'category',
+  'abbreviation',
+  'subtitle',
+  'variable-get',
+  'variable-set',
+  'user-variable-get',
+  'user-variable-set',
+  'expression',
+  'conditional-text',
+  'placeholder',
+  'selection',
+  'has-change',
+  'database-display',
+  'database-name',
+  'database-row-number',
+  'database-row-count',
+  'dde-item',
+  'dde-location',
+  'url',
+  'url-field',
+  'url-text',
+  'chapter',
+  'chapter-mark',
+  'sequence',
+  'script',
+])
+
+// 行内取字：XML 排版空白压成一格，作者显式点出来的空白（text:s 的计数、tab、换行）留着
+const hfLine = (el: Element): string => {
+  let s = ''
+  const walk = (n: Node) => {
+    for (const k of Array.from(n.childNodes)) {
+      if (k.nodeType === 3) {
+        s += (k.textContent ?? '').replace(/\s+/g, ' ')
+        continue
+      }
+      if (k.nodeType !== 1) continue
+      const e = k as Element
+      const t = e.localName
+      if (HF_FIELD.has(t)) continue
+      if (t === 's') {
+        const c = Number(e.getAttribute('text:c') ?? '1')
+        s += ' '.repeat(c >= 1 ? Math.min(c, 12) : 1)
+        continue
+      }
+      if (t === 'tab' || t === 'line-break') {
+        s += ' '
+        continue
+      }
+      walk(e)
+    }
+  }
+  walk(el)
+  return s.replace(/^\s+/, '').replace(/\s+$/, '')
+}
+
+const hfText = (el: Element | null | undefined): string => {
+  if (!el) return ''
+  const lines: string[] = []
+  for (const b of Array.from(el.getElementsByTagNameNS('*', '*'))) {
+    if (b.localName !== 'p' && b.localName !== 'h') continue
+    const t = hfLine(b)
+    if (t) lines.push(t)
+  }
+  return lines.join(' ')
+}
+
+// 页码档里的作者字面残骸：缓存既已不进串，「第 页」「- -」「/ 」这类包裹符就没了数字上下文，
+// 只能按 token 剥——与 docx 读手那一头的 stripPageTokens 同判（那边剥的是 PAGE 域的邻接字面）。
+const stripPageTokens = (t: string) =>
+  t
+    .split(/\s+/)
+    .filter((x) => x && x !== '第' && x !== '页' && x !== '共' && x !== '·' && x !== '-' && x !== '/' && !/^\d+$/.test(x))
+    .join(' ')
+
 export async function odtToHtml(bytes: Uint8Array): Promise<{ html: string; meta: DocMeta; warnings: string[] }> {
   const { default: JSZip } = await import('jszip')
   const zip = await JSZip.loadAsync(bytes)
@@ -1852,22 +1960,20 @@ export async function odtToHtml(bytes: Uint8Array): Promise<{ html: string; meta
     const plain = (n: Element | null | undefined) => (n ? (n.textContent ?? '').replace(/\s+/g, ' ').trim() : '')
     const header = master ? pick(master, 'header') : null
     const footer = master ? pick(master, 'footer') : null
-    const headText = plain(header ?? undefined)
+    const headText = hfText(header)
     if (headText) meta.headerText = headText
     if (footer) {
       const kids = Array.from(footer.getElementsByTagName('*'))
       const hasPage = kids.some((x) => x.localName === 'page-number')
       const hasCount = kids.some((x) => x.localName === 'page-count')
-      let foot = plain(footer)
+      // 页码格式的判据问的是「数字住在哪些包裹符之间」（第 1 页 / -1- / 1 / 2），那是排版结构而不是正文，
+      // 故探针仍吃含缓存的原串；上屏的那枚走 hfText，一个字也不抄缓存。
+      const raw = plain(footer)
+      let foot = hfText(footer)
       if (hasPage) {
         meta.footerPageNumber = true
-        meta.pageNumberFormat = detectPageFormat(foot, hasCount)
-        foot = foot
-          .replace(/第\s*\d+\s*页/g, ' ')
-          .replace(/-?\s*\d+\s*-?/g, ' ')
-          .replace(/·/g, ' ')
-          .replace(/\s+/g, ' ')
-          .trim()
+        meta.pageNumberFormat = detectPageFormat(raw, hasCount)
+        foot = stripPageTokens(foot)
       }
       if (foot) meta.footerText = foot
     }
