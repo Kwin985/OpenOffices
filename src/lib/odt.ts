@@ -1677,7 +1677,12 @@ export async function odtToHtml(bytes: Uint8Array): Promise<{ html: string; meta
         const level = Math.min(4, Math.max(1, Number(el.getAttribute('text:outline-level') ?? 1)))
         const sn = el.getAttribute('text:style-name')
         // 派生样式（PSn）挂在 H1..H4 之下，对齐与缩进照旧从样式链上取
-        return `<h${level}${paraStyle(sn)}>${annWrap(await renderInline(el))}</h${level}>${tail()}`
+        const hbrk = styleChain(sn).some(
+          (x) => pick(x, 'paragraph-properties')?.getAttribute('fo:break-before') === 'page'
+        )
+        return `${hbrk ? '<div data-oo-pagebreak="1"></div>' : ''}<h${level}${paraStyle(sn)}>${annWrap(
+          await renderInline(el)
+        )}</h${level}>${tail()}`
       }
       case 'p': {
         const sn = el.getAttribute('text:style-name')
@@ -1687,8 +1692,14 @@ export async function odtToHtml(bytes: Uint8Array): Promise<{ html: string; meta
         if (
           names.includes('PBK') ||
           chain.some((x) => pick(x, 'paragraph-properties')?.getAttribute('fo:break-before') === 'page')
-        )
-          return `<div data-oo-pagebreak="1"></div>`
+        ) {
+          // 标记与该块自己的字是两件事：空分页段（自家写手发的就是空段）只出标记，多出 `<p></p>` 会让往返多出一枚凭空的空段；
+          // 带字的分页段（只在第三方件里现形）两头都出——从前这一枝 return 掉整枚段而把字丢了。
+          const inner = await renderInline(el)
+          return inner.trim() === ''
+            ? `<div data-oo-pagebreak="1"></div>`
+            : `<div data-oo-pagebreak="1"></div><p${paraStyle(sn)}>${annWrap(inner)}</p>${tail()}`
+        }
         if (names.includes('PC')) return `<pre><code>${await renderInline(el)}</code></pre>${tail()}`
         if (names.includes('PQ'))
           return `<blockquote><p${paraStyle(sn, 30)}>${annWrap(await renderInline(el))}</p></blockquote>${tail()}`
