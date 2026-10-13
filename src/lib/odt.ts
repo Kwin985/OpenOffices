@@ -994,6 +994,23 @@ function pick(el: Element, localName: string): Element | null {
   return null
 }
 
+/**
+ * 表的外壳不是内容而是包装：ODF 1.1 遗留的三枚复数外壳 `table:table-columns`（列集）、
+ * `table:table-header-rows` / `table:table-footer-rows`（页首/页尾重复的行集）把自己的孩子挡在表的外面，
+ * 而规格里那些孩子就是表自己的列与行，排在宿主序列里外壳所在的那一格（真件 19 张表 251 枚带宽容器的列、
+ * 3 枚表头行 78 字因这一层整枚不落，见 b36 c8/c9）。外壳一层不嵌套，故只展一层；
+ * 外壳自己带的属性（样式、跨度计数）不吃——本轮只认它「包装」这一件事。
+ */
+function unwrapTableKids(el: Element): Element[] {
+  const out: Element[] = []
+  for (const c of Array.from(el.children)) {
+    if (c.localName === 'table-columns' || c.localName === 'table-header-rows' || c.localName === 'table-footer-rows') {
+      for (const k of Array.from(c.children)) out.push(k)
+    } else out.push(c)
+  }
+  return out
+}
+
 /** 后代里首个指定 local name 的元素（不含自身）：draw:frame 与内容之间还隔着一层的情形 */
 function findLocal(el: Element, localName: string): Element | null {
   for (const d of Array.from(el.getElementsByTagName('*'))) if (d.localName === localName) return d
@@ -1881,10 +1898,12 @@ export async function odtToHtml(bytes: Uint8Array): Promise<{ html: string; meta
       }
       case 'table': {
         const rows: string[] = []
+        // 外壳先摊平（列集与页首/页尾行集的孩子就是表自己的列与行，文档序不变）
+        const kids = unwrapTableKids(el)
         // 列宽槽表：一枚 `<table:table-column>` 按 `table:number-columns-repeated` 占连续多槽，
         // 首行每格按 colspan 吃同宽度的那几枚槽 ⇒ 宽度出在首行格子的 colwidth 上（docx 侧同名属性）。
         const slots: (number | undefined)[] = []
-        for (const c of Array.from(el.children)) {
+        for (const c of kids) {
           if (c.localName !== 'table-column') continue
           const rep = Math.max(1, Math.round(Number(c.getAttribute('table:number-columns-repeated') ?? 1)) || 1)
           const w = columnWidthPx(c.getAttribute('table:style-name'))
@@ -1905,7 +1924,7 @@ export async function odtToHtml(bytes: Uint8Array): Promise<{ html: string; meta
         }
         inCell++ // 单元格里放不下第二层表：嵌入正文改压成行内文本，别让它整块被内容表达式丢掉
         let ri = 0
-        for (const r of Array.from(el.children)) {
+        for (const r of kids) {
           if (r.localName !== 'table-row') continue
           const cells: string[] = []
           let gc = 0
