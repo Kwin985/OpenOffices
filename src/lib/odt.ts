@@ -1761,6 +1761,9 @@ export async function odtToHtml(bytes: Uint8Array): Promise<{ html: string; meta
       }
       case 'body':
       case 'text':
+      case 'section':
+        // 文本节是块容器不是排版单位：孩子平铺进同一股流。
+        // `text:display="none"` / 隐藏条件那一档本轮不设求值器（条件要读文档设置），内容照落，门面上 Word 也是这么落的。
         return await renderChildrenBlocks(el)
       default:
         return ''
