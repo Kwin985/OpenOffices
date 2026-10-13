@@ -1382,7 +1382,14 @@ export async function odtToHtml(bytes: Uint8Array): Promise<{ html: string; meta
    * 建全表而不是"找下一个兄弟"：引用与正文按规范相邻，但第三方文件里位置未必守规矩。
    */
   const noteBodies = new Map<string, Element>()
+  // 同一趟预扫里收「被独立引用枚配走的那些 id」：老式内联锚要不要自己出正文，取决于本件有没有别处已经在配它
+  const refClaimed = new Set<string>()
   for (const el of Array.from(cdoc.getElementsByTagName('*'))) {
+    if (el.localName === 'footnote-reference' || el.localName === 'endnote-reference' || el.localName === 'note-reference') {
+      const id = el.getAttribute('text:id')
+      if (id) refClaimed.add(id)
+      continue
+    }
     if (el.localName === 'footnote' || el.localName === 'endnote' || el.localName === 'note') {
       const id = el.getAttribute('text:id')
       if (id && !noteBodies.has(id)) noteBodies.set(id, el)
@@ -1648,8 +1655,15 @@ export async function odtToHtml(bytes: Uint8Array): Promise<{ html: string; meta
           }
           case 'footnote':
           case 'endnote':
-          case 'note':
-            break // 正文已随引用处渲染成标记节点，再摊进段落就成了"脚注文字混进正文"
+            break // 新版正文与引用是同一段里相邻的两枚，出口已在上面那一枝；再摊进段落就成了"脚注文字混进正文"
+          case 'note': {
+            // 老式内联锚（ODF 1.0/1.1 与不少转换器）：`text:note` 自己就住在正文流里，正文套在自己的 `text:note-body` 里，
+            // 而这一档压根不发独立引用枚——不给它出口，注文在屏上一枚都不会出现。
+            if (refClaimed.has(e.getAttribute('text:id') ?? '')) break // 本件另有引用枚配过同一枚 id：正文已出过，这里再出就是双份
+            const cls = (e.getAttribute('text:note-class') ?? '').toLowerCase()
+            out += noteSpanHtml(cls === 'endnote' ? 'endnote' : 'footnote', noteBodyText(e))
+            break
+          }
           default:
             out += await renderInline(e)
         }
