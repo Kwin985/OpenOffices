@@ -1396,12 +1396,30 @@ export async function odtToHtml(bytes: Uint8Array): Promise<{ html: string; meta
     }
   }
 
+  /**
+   * 注正文按文档顺序摊成行：`p`/`h` 各一行，`list` 递归进 `list-item`（真件 ooo77837-1 的 13 字住这一层，
+   * 而主文对同一形状本来就有出口）。index 壳（bibliography / alphabetical-index / table-of-content）明不吃，
+   * 与主文同一口径（c2：主文对这些壳出的字=0）。
+   */
+  function noteBlockLines(holder: Element): string[] {
+    const lines: string[] = []
+    for (const c of Array.from(holder.children)) {
+      if (c.localName === 'p' || c.localName === 'h') lines.push(notePlainText(c))
+      else if (c.localName === 'list') {
+        for (const k of Array.from(c.children)) {
+          if (k.localName === 'list-item' || k.localName === 'list') lines.push(...noteBlockLines(k))
+        }
+      }
+    }
+    return lines
+  }
+
   /** 正文元素内的段落文本（不含 citation 的那个数字）；段间与段内换行都归一成 \n，与 docx 侧同一套约定 */
   function noteBodyText(body: Element): string {
     const holder = Array.from(body.children).find((c) => c.localName === 'note-body') ?? body
-    const paras = Array.from(holder.children).filter((c) => c.localName === 'p' || c.localName === 'h')
-    const lines = (paras.length ? paras : [holder]).map((p) => notePlainText(p))
-    return lines.join('\n')
+    const lines = noteBlockLines(holder)
+    // 一枚认得的块都没有才整体兜底（真语料 c1 兜底路径 0 枚撞，这一枝只是给异形件留的门）
+    return (lines.length ? lines : [notePlainText(holder)]).join('\n')
   }
 
   function notePlainText(el: Element): string {
