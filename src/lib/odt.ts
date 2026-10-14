@@ -584,13 +584,17 @@ class OdtBuilder {
     // 脚注/尾注正文段落：小一号字，Word 与 LO 的脚注文本都短正文两档
     const fn = `<style:style style:name="FN" style:family="paragraph" style:parent-style-name="Standard"><style:text-properties fo:font-size="9pt"/></style:style>`
     const aligns = this.paraStyleXml()
-    const lb = `<text:list-style style:name="LB">${[1, 2, 3]
+    // 列表档的层：读手按套壳深度取档（见 listOrdered），自家件的嵌套深度没有上限，
+    // 所以这一族要铺满 ODF 世界里的通用宽度——真件 113 枚档里 89 枚铺 1..10、24 枚铺 1..9，
+    // 而只铺 1..3 的话第四层往后就查无该层，有序嵌套会被读成项目符。
+    const lv = Array.from({ length: 10 }, (_, i) => i + 1)
+    const lb = `<text:list-style style:name="LB">${lv
       .map(
         (l) =>
           `<text:list-level-style-bullet text:level="${l}" text:bullet-char="•"><style:list-level-properties text:list-level-position-and-space-mode="label-alignment"><style:list-level-label-alignment text:label-followed-by="listtab" fo:text-indent="-0.6cm" fo:margin-left="${(0.6 * l).toFixed(2)}cm"/></style:list-level-properties></text:list-level-style-bullet>`,
       )
       .join('')}</text:list-style>`
-    const lo = `<text:list-style style:name="LO">${[1, 2, 3]
+    const lo = `<text:list-style style:name="LO">${lv
       .map(
         (l) =>
           `<text:list-level-style-number text:level="${l}" style:num-suffix="." style:num-format="1"><style:list-level-properties text:list-level-position-and-space-mode="label-alignment"><style:list-level-label-alignment text:label-followed-by="listtab" fo:text-indent="-0.7cm" fo:margin-left="${(0.7 * l).toFixed(2)}cm"/></style:list-level-properties></text:list-level-style-number>`,
@@ -1239,7 +1243,11 @@ export async function odtToHtml(bytes: Uint8Array): Promise<{ html: string; meta
   }
 
   const styles = new Map<string, Element>() // name → style:style / default-style
-  const listStyles = new Map<string, boolean>() // name → 是否有序
+  /** `text:list-style` 的档表：档名 → 层（`text:level`，1 起）→ 该层是编号还是项目符号。
+   * ODF 把这枚记在**每一层**上（`text:list-level-style-number` / `-bullet` 各带自己的 `text:level`；
+   * 真件 1,016 枚层元素全是 `text:level` 而 0 枚写 `style:level`，后者是 `text:outline-level-style` 那一族的名字），
+   * 一枚档名压成一颗 bool 就把「这一层是编号」当成了「档里有一层是编号」。 */
+  const listLevels = new Map<string, Map<number, boolean>>()
   /** styles.xml 的 office:styles 里那批具名样式（Text Body、Heading 1…）：它们的排版是文档默认，不是某段的直接格式 */
   const namedStyles = new Set<string>()
   for (const d of [cdoc, sdoc]) {
@@ -1251,13 +1259,29 @@ export async function odtToHtml(bytes: Uint8Array): Promise<{ html: string; meta
         if (name && el.parentElement?.localName === 'styles') namedStyles.add(name)
       } else if (el.localName === 'list-style') {
         const name = el.getAttribute('style:name')
-        if (name)
-          listStyles.set(
-            name,
-            Array.from(el.getElementsByTagName('*')).some((x) => x.localName === 'list-level-style-number'),
-          )
+        if (!name) continue
+        const lv = new Map<number, boolean>()
+        for (const x of Array.from(el.getElementsByTagName('*'))) {
+          const num = x.localName === 'list-level-style-number'
+          if (!num && x.localName !== 'list-level-style-bullet') continue
+          lv.set(Number(x.getAttribute('text:level') ?? '1') || 1, num)
+        }
+        listLevels.set(name, lv) // 同名档后出现的算赢家——与基座那枚 bool 的 `set` 同一口径
       }
     }
+  }
+
+  /** 这一枚 `text:list` 该出 `ol` 还是 `ul`：层由套壳深度决定（ODF 没有「我是第几层」的属性可指），
+   * 而嵌套列表通常只在外层点名，所以无名者向最近的有名祖先借档名，再按自己那一层取型别。 */
+  const listOrdered = (el: Element): boolean => {
+    let name = el.getAttribute('text:style-name') ?? ''
+    let level = 1
+    for (let n = el.parentElement; n; n = n.parentElement) {
+      if (n.localName !== 'list') continue
+      level++
+      if (!name) name = n.getAttribute('text:style-name') ?? ''
+    }
+    return listLevels.get(name)?.get(level) ?? false
   }
 
   const resolveStyle = (name: string | null | undefined, depth = 0): StyleInfo => {
@@ -1915,7 +1939,7 @@ export async function odtToHtml(bytes: Uint8Array): Promise<{ html: string; meta
         return `<p${paraStyle(sn)}>${annWrap(await renderInline(el))}</p>${tail()}`
       }
       case 'list': {
-        const ordered = listStyles.get(el.getAttribute('text:style-name') ?? '') ?? false
+        const ordered = listOrdered(el)
         // 包装层里的块各按文档序吃一遍：头排在本列表之前、尾排之后；外壳自己的属性不吃，空壳一枚不出
         let headHtml = ''
         let footHtml = ''
