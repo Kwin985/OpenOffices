@@ -62,7 +62,10 @@ export function ownPageRule(opts: PrintOpts): string {
   const m = printMarginsInches(opts)
   const size = opts.pageSizeInches ? `size:${opts.pageSizeInches[0]}in ${opts.pageSizeInches[1]}in;` : ''
   const boxes = PAGE_BOXES.map((b) => `${b}{content:normal;}`).join('')
-  return `@page{ ${size} margin:${m[0]}in ${m[1]}in ${m[2]}in ${m[3]}in; ${boxes} }`
+  // 基档复位还不够：文档那份常驻规则可能带着 `@page:first` 的首页页眉（b39），而 `:first` 的排名高于基 `@page`，
+  // 只说基档的话第 1 页会把文档的首页页眉抄到表格/演示的纸上。覆盖层的这份后挂进 head，故表格自己的
+  // `@page:first`（opts.pageStyle，排在后面）照旧说话。
+  return `@page{ ${size} margin:${m[0]}in ${m[1]}in ${m[2]}in ${m[3]}in; ${boxes} } @page:first{ ${boxes} }`
 }
 
 // 等待覆盖层内所有图片解码完成，避免 PDF 丢图

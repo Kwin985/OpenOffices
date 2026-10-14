@@ -2047,6 +2047,24 @@ export async function odtToHtml(bytes: Uint8Array): Promise<{ html: string; meta
       }
       if (foot) meta.footerText = foot
     }
+    // 首页另版那一层（b39）：规格上 master-page 的档有三种角色——默认、首页、左页，而首页那一枚装的是
+    // **另一份作者字面**而不是默认那份的影子（真件 5 件 7 枚里 6 枚与基档字面不同）。取字仍走 `hfText` 那把尺。
+    // 两枚决定记在案：① `pick` 只看 localName 不看命名空间，故 LibreOffice 写 `loext:header-first` 的那一族
+    // 一并接住（真件 4 枚 58 字；规格里没有这一族，Word 16.0 整枚丢弃，但它们是作者打的字且 LibreOffice 自己认得回读）；
+    // ② 变体档里只要住着页码/总页数域就整枚不吃——DocMeta 只有基档那一枚 `footerPageNumber`，
+    // 给变体上屏一串「第 页」而没有页码，那是谎话而不是账（真件 7 枚带此域 0 枚，故不损失任何字）。
+    // 只从基档那一枚 master-page 上取，跨枚不回退；`-left`/`-right` 偶数页那一层本轮明不吃（77 枚真件里
+    // 声明镜像版式的 0 件：`style:extra-page-layout` 与 `fo:break-before="left"` 各 0 枚）。
+    const hfVar = (el: Element | null | undefined): string => {
+      if (!el) return ''
+      const f = Array.from(el.getElementsByTagName('*'))
+      if (f.some((x) => x.localName === 'page-number' || x.localName === 'page-count')) return ''
+      return hfText(el)
+    }
+    const headFirst = hfVar(master ? pick(master, 'header-first') : null)
+    if (headFirst) meta.headerTextFirst = headFirst
+    const footFirst = hfVar(master ? pick(master, 'footer-first') : null)
+    if (footFirst) meta.footerTextFirst = footFirst
     // 页面设置：page-layout-properties 的纸张与四边距 + style:columns 的分栏
     // 「这张纸」取哪一枚：ODF 由 master-page 的 style:page-layout-name 指定，而 styles.xml 文档序的第一枚
     // page-layout-properties 常是 <style:default-page-layout> 的孩子（真件 77 枚里 11 枚如此，那一枚六枚长度字面全缺）。

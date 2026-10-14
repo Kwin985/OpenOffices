@@ -355,10 +355,19 @@ function DocEditor({ tab }: Props) {
       }
       boxes.push(`@bottom-center{content:${expr};font-size:9pt;color:#6b7280}`)
     }
+    // 首页另版那一层（b39 ODT 读侧）：只多立 `@page:first` 那一枝，缺的那一格回退基档而不复位
+    // （实测 v0.54：`:first` 的排名高于基 `@page`，按框逐条比）。屏上那两条 .doc-hf 仍吃基档——
+    // 屏幕是连续流，没有「首页」这一位，这一层只有纸能兑现。
+    const firstBoxes: string[] = []
+    const headFirst = meta.headerTextFirst?.trim()
+    if (headFirst) firstBoxes.push(`@top-center{content:${JSON.stringify(headFirst)};font-size:9pt;color:#6b7280}`)
+    const footFirst = meta.footerTextFirst?.trim()
+    if (footFirst) firstBoxes.push(`@bottom-center{content:${JSON.stringify(footFirst)};font-size:9pt;color:#6b7280}`)
     el.textContent =
       `@media print { @page { size: ${eff.w}mm ${eff.h}mm; ` +
       `margin: ${eff.margin.top}mm ${eff.margin.right}mm ${eff.margin.bottom}mm ${eff.margin.left}mm;` +
-      `${boxes.length ? ' ' + boxes.join(' ') : ''} } }`
+      `${boxes.length ? ' ' + boxes.join(' ') : ''} } }` +
+      (firstBoxes.length ? ` @media print { @page:first { ${firstBoxes.join(' ')} } }` : '')
   }, [
     eff.w,
     eff.h,
@@ -368,6 +377,8 @@ function DocEditor({ tab }: Props) {
     eff.margin.left,
     meta.headerText,
     meta.footerText,
+    meta.headerTextFirst,
+    meta.footerTextFirst,
     meta.footerPageNumber,
     meta.pageNumberFormat,
   ])

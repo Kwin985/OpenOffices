@@ -290,6 +290,13 @@ export interface DocxStyleInfo {
 export interface DocMeta {
   headerText?: string
   footerText?: string
+  /**
+   * 首页另版档（b39）：ODT 的 `style:header-first` / `style:footer-first`（以及 LibreOffice 写成 `loext:` 的那一族同名的）。
+   * 只上纸的第 1 页（DocEditor 的 `@page:first` margin box），屏上是连续流、没有「首页」这一位；
+   * docx 读写与 odt 写手都还不吃这一层，所以它是读侧单向的账。
+   */
+  headerTextFirst?: string
+  footerTextFirst?: string
   footerPageNumber?: boolean
   pageNumberFormat?: PageNumberFormat
   comments?: DocComment[]
