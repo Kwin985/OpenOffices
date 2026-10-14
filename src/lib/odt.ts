@@ -1011,6 +1011,13 @@ function unwrapTableKids(el: Element): Element[] {
   return out
 }
 
+/**
+ * 列表那一族的包装层：`text:list` 的直接子里除 `text:list-item` 与嵌套 `text:list` 外还有这两型，
+ * 规格上它们装的是块（段、标题、更深一层的列表…）而不是列表项——头那些排在本列表所有项之前，
+ * 尾那些排之后。名字闸只放这两型：`list-item` 进了这一层就会丢掉 `<li>` 那一格。
+ */
+const LIST_WRAPPERS = new Set(['list-header', 'list-footer'])
+
 /** 后代里首个指定 local name 的元素（不含自身）：draw:frame 与内容之间还隔着一层的情形 */
 function findLocal(el: Element, localName: string): Element | null {
   for (const d of Array.from(el.getElementsByTagName('*'))) if (d.localName === localName) return d
@@ -1564,7 +1571,9 @@ export async function odtToHtml(bytes: Uint8Array): Promise<{ html: string; meta
       if (c.localName === 'p' || c.localName === 'h') lines.push(notePlainText(c))
       else if (c.localName === 'list') {
         for (const k of Array.from(c.children)) {
-          if (k.localName === 'list-item' || k.localName === 'list') lines.push(...noteBlockLines(k))
+          // 头尾包装层在注里同样是包装（块界的账与主文同一口径），摊一层进注的行序列
+          if (k.localName === 'list-item' || k.localName === 'list' || LIST_WRAPPERS.has(k.localName))
+            lines.push(...noteBlockLines(k))
         }
       }
       // 壳的孩子不属于注，属于壳里那一枚 index-body（生成规格在这一层照旧不出账）
@@ -1907,6 +1916,18 @@ export async function odtToHtml(bytes: Uint8Array): Promise<{ html: string; meta
       }
       case 'list': {
         const ordered = listStyles.get(el.getAttribute('text:style-name') ?? '') ?? false
+        // 包装层里的块各按文档序吃一遍：头排在本列表之前、尾排之后；外壳自己的属性不吃，空壳一枚不出
+        let headHtml = ''
+        let footHtml = ''
+        for (const w of Array.from(el.children)) {
+          if (!LIST_WRAPPERS.has(w.localName)) continue
+          const isHead = w.localName === 'list-header'
+          for (const b of Array.from(w.children)) {
+            const h = await renderBlock(b)
+            if (isHead) headHtml += h
+            else footHtml += h
+          }
+        }
         const items: string[] = []
         for (const child of Array.from(el.children)) {
           if (child.localName === 'list-item') {
@@ -1917,7 +1938,7 @@ export async function odtToHtml(bytes: Uint8Array): Promise<{ html: string; meta
             else items.push(`<li>${nested}</li>`)
           }
         }
-        return `<${ordered ? 'ol' : 'ul'}>${items.join('')}</${ordered ? 'ol' : 'ul'}>`
+        return `${headHtml}<${ordered ? 'ol' : 'ul'}>${items.join('')}</${ordered ? 'ol' : 'ul'}>${footHtml}`
       }
       case 'table': {
         const rows: string[] = []
