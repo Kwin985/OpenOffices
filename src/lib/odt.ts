@@ -584,7 +584,7 @@ class OdtBuilder {
     // 脚注/尾注正文段落：小一号字，Word 与 LO 的脚注文本都短正文两档
     const fn = `<style:style style:name="FN" style:family="paragraph" style:parent-style-name="Standard"><style:text-properties fo:font-size="9pt"/></style:style>`
     const aligns = this.paraStyleXml()
-    // 列表档的层：读手按套壳深度取档（见 listOrdered），自家件的嵌套深度没有上限，
+    // 列表档的层：读手按套壳深度取档（见 listShape），自家件的嵌套深度没有上限，
     // 所以这一族要铺满 ODF 世界里的通用宽度——真件 113 枚档里 89 枚铺 1..10、24 枚铺 1..9，
     // 而只铺 1..3 的话第四层往后就查无该层，有序嵌套会被读成项目符。
     const lv = Array.from({ length: 10 }, (_, i) => i + 1)
@@ -1243,11 +1243,14 @@ export async function odtToHtml(bytes: Uint8Array): Promise<{ html: string; meta
   }
 
   const styles = new Map<string, Element>() // name → style:style / default-style
-  /** `text:list-style` 的档表：档名 → 层（`text:level`，1 起）→ 该层是编号还是项目符号。
+  /** `text:list-style` 的档表：档名 → 层（`text:level`，1 起）→ 该层的读数。
    * ODF 把这枚记在**每一层**上（`text:list-level-style-number` / `-bullet` 各带自己的 `text:level`；
    * 真件 1,016 枚层元素全是 `text:level` 而 0 枚写 `style:level`，后者是 `text:outline-level-style` 那一族的名字），
    * 一枚档名压成一颗 bool 就把「这一层是编号」当成了「档里有一层是编号」。 */
-  const listLevels = new Map<string, Map<number, boolean>>()
+  /** 一层的读数：`num` 是编号还是项目符号，`fmt` 是 `style:num-format` 的字面（原样），
+   * `start` 是 `text:start-value` 的字面——「是编号」与「号长什么样」是两件事，前者 b40 已入账而这一笔补后者。 */
+  type ListLevel = { num: boolean; fmt: string; start: string }
+  const listLevels = new Map<string, Map<number, ListLevel>>()
   /** styles.xml 的 office:styles 里那批具名样式（Text Body、Heading 1…）：它们的排版是文档默认，不是某段的直接格式 */
   const namedStyles = new Set<string>()
   for (const d of [cdoc, sdoc]) {
@@ -1260,20 +1263,32 @@ export async function odtToHtml(bytes: Uint8Array): Promise<{ html: string; meta
       } else if (el.localName === 'list-style') {
         const name = el.getAttribute('style:name')
         if (!name) continue
-        const lv = new Map<number, boolean>()
+        const lv = new Map<number, ListLevel>()
         for (const x of Array.from(el.getElementsByTagName('*'))) {
           const num = x.localName === 'list-level-style-number'
           if (!num && x.localName !== 'list-level-style-bullet') continue
-          lv.set(Number(x.getAttribute('text:level') ?? '1') || 1, num)
+          lv.set(Number(x.getAttribute('text:level') ?? '1') || 1, {
+            num,
+            fmt: x.getAttribute('style:num-format') ?? '',
+            start: x.getAttribute('text:start-value') ?? '',
+          })
         }
         listLevels.set(name, lv) // 同名档后出现的算赢家——与基座那枚 bool 的 `set` 同一口径
       }
     }
   }
 
-  /** 这一枚 `text:list` 该出 `ol` 还是 `ul`：层由套壳深度决定（ODF 没有「我是第几层」的属性可指），
-   * 而嵌套列表通常只在外层点名，所以无名者向最近的有名祖先借档名，再按自己那一层取型别。 */
-  const listOrdered = (el: Element): boolean => {
+  /** `style:num-format` 的字面里，HTML `<ol type>` 够得着的那四种（`1` 是十进制而不发 type——HTML 默认即它）。 */
+  const OL_TYPE = new Set(['A', 'a', 'I', 'i'])
+  /** 这一枚 `text:list` 出什么形状：`ol` / `ul` 加 `<ol>` 的两枚可选属性。
+   * 层由套壳深度决定（ODF 没有「我是第几层」的属性可指），而嵌套列表通常只在外层点名，
+   * 所以无名者向最近的有名祖先借档名，再按自己那一层取读数。落处三档：
+   *  - 项目符号、图符、档表查无该层 ⇒ `ul`（b40 那一笔的账）；
+   *  - 编号层的 `style:num-format` 落不进上面那五种字面（空串、`001, 002, 003, ...` 那种自定义列、
+   *    单字符…）⇒ 也 `ul`：门面 f0 在空串那一层报 `ns=255`（ArabicHidden，一位数字都不发），
+   *    而自定义列与单字符的号面在 HTML 里没有宿主——造不出号就不装出一个号来；
+   *  - `text:start-value` 是整数才发 `start`（含 0：f0 的 Q 臂在 Word 报 `at=0` 而号面出「0.」）。 */
+  const listShape = (el: Element): { tag: 'ol' | 'ul'; attrs: string } => {
     let name = el.getAttribute('text:style-name') ?? ''
     let level = 1
     for (let n = el.parentElement; n; n = n.parentElement) {
@@ -1281,7 +1296,12 @@ export async function odtToHtml(bytes: Uint8Array): Promise<{ html: string; meta
       level++
       if (!name) name = n.getAttribute('text:style-name') ?? ''
     }
-    return listLevels.get(name)?.get(level) ?? false
+    const lv = listLevels.get(name)?.get(level)
+    if (!lv?.num) return { tag: 'ul', attrs: '' }
+    if (lv.fmt !== '1' && !OL_TYPE.has(lv.fmt)) return { tag: 'ul', attrs: '' }
+    let attrs = lv.fmt === '1' ? '' : ' type="' + lv.fmt + '"'
+    if (/^-?[0-9]+$/.test(lv.start)) attrs += ' start="' + lv.start + '"'
+    return { tag: 'ol', attrs }
   }
 
   const resolveStyle = (name: string | null | undefined, depth = 0): StyleInfo => {
@@ -1939,7 +1959,7 @@ export async function odtToHtml(bytes: Uint8Array): Promise<{ html: string; meta
         return `<p${paraStyle(sn)}>${annWrap(await renderInline(el))}</p>${tail()}`
       }
       case 'list': {
-        const ordered = listOrdered(el)
+        const shape = listShape(el)
         // 包装层里的块各按文档序吃一遍：头排在本列表之前、尾排之后；外壳自己的属性不吃，空壳一枚不出
         let headHtml = ''
         let footHtml = ''
@@ -1962,7 +1982,7 @@ export async function odtToHtml(bytes: Uint8Array): Promise<{ html: string; meta
             else items.push(`<li>${nested}</li>`)
           }
         }
-        return `${headHtml}<${ordered ? 'ol' : 'ul'}>${items.join('')}</${ordered ? 'ol' : 'ul'}>${footHtml}`
+        return `${headHtml}<${shape.tag}${shape.attrs}>${items.join('')}</${shape.tag}>${footHtml}`
       }
       case 'table': {
         const rows: string[] = []
