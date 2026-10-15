@@ -594,12 +594,17 @@ class OdtBuilder {
           `<text:list-level-style-bullet text:level="${l}" text:bullet-char="•"><style:list-level-properties text:list-level-position-and-space-mode="label-alignment"><style:list-level-label-alignment text:label-followed-by="listtab" fo:text-indent="-0.6cm" fo:margin-left="${(0.6 * l).toFixed(2)}cm"/></style:list-level-properties></text:list-level-style-bullet>`,
       )
       .join('')}</text:list-style>`
-    const lo = `<text:list-style style:name="LO">${lv
-      .map(
-        (l) =>
-          `<text:list-level-style-number text:level="${l}" style:num-suffix="." style:num-format="1"><style:list-level-properties text:list-level-position-and-space-mode="label-alignment"><style:list-level-label-alignment text:label-followed-by="listtab" fo:text-indent="-0.7cm" fo:margin-left="${(0.7 * l).toFixed(2)}cm"/></style:list-level-properties></text:list-level-style-number>`,
-      )
-      .join('')}</text:list-style>`
+    const numStyle = (name: string, fmt: string) =>
+      `<text:list-style style:name="${name}">${lv
+        .map(
+          (l) =>
+            `<text:list-level-style-number text:level="${l}" style:num-suffix="." style:num-format="${fmt}"><style:list-level-properties text:list-level-position-and-space-mode="label-alignment"><style:list-level-label-alignment text:label-followed-by="listtab" fo:text-indent="-0.7cm" fo:margin-left="${(0.7 * l).toFixed(2)}cm"/></style:list-level-properties></text:list-level-style-number>`,
+        )
+        .join('')}</text:list-style>`
+    // 型别住在档名里而不住在列表身上：`<ol type>` 的那四种字面各有自己的一枚档，
+    // 而读手本来就按档取层 ⇒ 写侧发哪枚档，号面就是什么型（PM 的 `attrs.type` 曾一字不吃）。
+    const lo =
+      numStyle('LO', '1') + numStyle('LA', 'A') + numStyle('La', 'a') + numStyle('LI', 'I') + numStyle('Li', 'i')
     return (
       this.charStyleXml() +
       this.cellStyleXml() +
@@ -769,9 +774,15 @@ class OdtBuilder {
         case 'bulletList':
           out += `<text:list text:style-name="LB">${this.listItems(n.content ?? [])}</text:list>`
           break
-        case 'orderedList':
-          out += `<text:list text:style-name="LO">${this.listItems(n.content ?? [])}</text:list>`
+        case 'orderedList': {
+          // 型别挑档名、起号写在第一枚项上（LO 真件的写法），两枚都落不了才回 `LO` 而不写起号
+          const fmt = String(n.attrs?.type ?? '')
+          const st = String(n.attrs?.start ?? '')
+          const name = { A: 'LA', a: 'La', I: 'LI', i: 'Li' }[fmt] ?? 'LO'
+          const sv = /^-?[0-9]+$/.test(st) && st !== '1' ? st : undefined
+          out += `<text:list text:style-name="${name}">${this.listItems(n.content ?? [], sv)}</text:list>`
           break
+        }
         case 'table':
           out += this.table(n)
           break
@@ -792,7 +803,7 @@ class OdtBuilder {
     return out
   }
 
-  private listItems(nodes: PMNode[]): string {
+  private listItems(nodes: PMNode[], start?: string): string {
     let out = ''
     for (const li of nodes) {
       if (li.type !== 'listItem') continue
@@ -803,7 +814,9 @@ class OdtBuilder {
           return `<text:p${sn ? ` text:style-name="${sn}"` : ''}>${this.inline(c.content ?? [])}</text:p>`
         })
         .join('')
-      out += `<text:list-item>${inner}</text:list-item>`
+      // 起号的家在文档流里而不在档里：ODF 只认第一枚直属项上那一个，写在后面的会被读手当噪声
+      const sv = start === undefined || out !== '' ? '' : ` text:start-value="${start}"`
+      out += `<text:list-item${sv}>${inner}</text:list-item>`
     }
     return out
   }
@@ -1287,7 +1300,10 @@ export async function odtToHtml(bytes: Uint8Array): Promise<{ html: string; meta
    *  - 编号层的 `style:num-format` 落不进上面那五种字面（空串、`001, 002, 003, ...` 那种自定义列、
    *    单字符…）⇒ 也 `ul`：门面 f0 在空串那一层报 `ns=255`（ArabicHidden，一位数字都不发），
    *    而自定义列与单字符的号面在 HTML 里没有宿主——造不出号就不装出一个号来；
-   *  - `text:start-value` 是整数才发 `start`（含 0：f0 的 Q 臂在 Word 报 `at=0` 而号面出「0.」）。 */
+   *  - `text:start-value` 是整数才发 `start`（含 0 与负数），而它住两家——本 list 第一枚直属
+   *    `text:list-item` 上的盖过档里那一层（编号层元素）上的。门面 f0 记这两家的口径不一样：
+   *    档级那家把号记进 `at`（`at=3`、`at=0` 都在），项级那家只在号面 `lab` 上兑现
+   *    （`lab=7.`／`0.`／`-2.`）而 `at` 照旧报 1 ⇒ 项级那一枚在门面上读不到 `at`，只能读 `lab`。 */
   const listShape = (el: Element): { tag: 'ol' | 'ul'; attrs: string } => {
     let name = el.getAttribute('text:style-name') ?? ''
     let level = 1
@@ -1300,7 +1316,11 @@ export async function odtToHtml(bytes: Uint8Array): Promise<{ html: string; meta
     if (!lv?.num) return { tag: 'ul', attrs: '' }
     if (lv.fmt !== '1' && !OL_TYPE.has(lv.fmt)) return { tag: 'ul', attrs: '' }
     let attrs = lv.fmt === '1' ? '' : ' type="' + lv.fmt + '"'
-    if (/^-?[0-9]+$/.test(lv.start)) attrs += ' start="' + lv.start + '"'
+    // 文档流点名的起号盖过档里那一层的定义：真件两家都住，而本 list 的第一枚直属项离结果更近
+    const itemStart =
+      Array.from(el.children).find((c) => c.localName === 'list-item')?.getAttribute('text:start-value') ?? ''
+    if (/^-?[0-9]+$/.test(itemStart)) attrs += ' start="' + itemStart + '"'
+    else if (/^-?[0-9]+$/.test(lv.start)) attrs += ' start="' + lv.start + '"'
     return { tag: 'ol', attrs }
   }
 
