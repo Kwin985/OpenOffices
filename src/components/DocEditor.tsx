@@ -52,6 +52,7 @@ import { Toc } from '../lib/toc-extension'
 import { PageBreak } from '../lib/page-break-extension'
 import { Indent } from '../lib/indent-extension'
 import { CharSpacing } from '../lib/char-spacing'
+import { BulletChar } from '../lib/bullet-char'
 import {
   BORDER_STYLES,
   BORDER_WIDTH_PT,
@@ -193,6 +194,8 @@ function DocEditor({ tab }: Props) {
       StarterKit.configure({
         heading: { levels: [1, 2, 3, 4] },
       }),
+      // 列表符面（ODT 的 text:bullet-char 走 ul 的行内 list-style-type）：给 bulletList 挂一枚节点属性
+      BulletChar,
       ImgExt.configure({ allowBase64: true }),
       Placeholder.configure({ placeholder: '开始输入内容…' }),
       TextAlign.configure({ types: ['heading', 'paragraph'] }),

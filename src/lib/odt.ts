@@ -223,6 +223,7 @@ class OdtBuilder {
   cellStyles = new Map<string, string>() // 单元格样式键 JSON → 自动样式名（ce1…）
   rowStyles = new Map<string, string>() // 行样式键 JSON → 自动样式名（ro1…）
   tableStyles = new Map<string, string>() // 表格样式键 JSON → 自动样式名（TS1…）
+  bulletStyles = new Map<string, string>() // 符面字符 → 列表档名（LB25C6…），blocks 先跑时注册
   images = new Map<string, ImageEntry>() // src → entry
   private imageSeq = 0
   private paraSeq = 0
@@ -572,6 +573,15 @@ class OdtBuilder {
     return out
   }
 
+  /** 一枚自定义符面 ↔ 一枚档名：`LB` + 码位十六进制（`◆` → `LB25C6`，多字符逐码位以 `-` 相连），同字符复用同档 */
+  private bulletStyleName(ch: string): string {
+    const hit = this.bulletStyles.get(ch)
+    if (hit) return hit
+    const name = 'LB' + Array.from(ch, (c) => (c.codePointAt(0) ?? 0).toString(16).toUpperCase()).join('-')
+    this.bulletStyles.set(ch, name)
+    return name
+  }
+
   private autoStyles(): string {
     const headings = [1, 2, 3, 4]
       .map(
@@ -588,12 +598,16 @@ class OdtBuilder {
     // 所以这一族要铺满 ODF 世界里的通用宽度——真件 113 枚档里 89 枚铺 1..10、24 枚铺 1..9，
     // 而只铺 1..3 的话第四层往后就查无该层，有序嵌套会被读成项目符。
     const lv = Array.from({ length: 10 }, (_, i) => i + 1)
-    const lb = `<text:list-style style:name="LB">${lv
-      .map(
-        (l) =>
-          `<text:list-level-style-bullet text:level="${l}" text:bullet-char="•"><style:list-level-properties text:list-level-position-and-space-mode="label-alignment"><style:list-level-label-alignment text:label-followed-by="listtab" fo:text-indent="-0.6cm" fo:margin-left="${(0.6 * l).toFixed(2)}cm"/></style:list-level-properties></text:list-level-style-bullet>`,
-      )
-      .join('')}</text:list-style>`
+    const bulletStyle = (name: string, ch: string) =>
+      `<text:list-style style:name="${name}">${lv
+        .map(
+          (l) =>
+            `<text:list-level-style-bullet text:level="${l}" text:bullet-char="${esc(ch)}"><style:list-level-properties text:list-level-position-and-space-mode="label-alignment"><style:list-level-label-alignment text:label-followed-by="listtab" fo:text-indent="-0.6cm" fo:margin-left="${(0.6 * l).toFixed(2)}cm"/></style:list-level-properties></text:list-level-style-bullet>`,
+        )
+        .join('')}</text:list-style>`
+    const lb = bulletStyle('LB', '•')
+    // 模型里出现过自定义符面才长出来的档：autoStyles 在 blocks 之后求值（见 build），所以这张表已经填满
+    const lbCustom = Array.from(this.bulletStyles, ([ch, name]) => bulletStyle(name, ch)).join('')
     const numStyle = (name: string, fmt: string) =>
       `<text:list-style style:name="${name}">${lv
         .map(
@@ -616,6 +630,7 @@ class OdtBuilder {
       fn +
       aligns +
       lb +
+      lbCustom +
       lo
     )
   }
@@ -771,9 +786,14 @@ class OdtBuilder {
             }
           }
           break
-        case 'bulletList':
-          out += `<text:list text:style-name="LB">${this.listItems(n.content ?? [])}</text:list>`
+        case 'bulletList': {
+          // 符面住在档名里而不住在列表身上（与 b42 的型别同一条路子）：模型带着自定义符面就注册一枚专属档。
+          // 写手不设闸——读侧那枚私有区/引号的取舍归读侧，模型里有什么就发什么。
+          const ch = String(n.attrs?.bulletChar ?? '')
+          const name = ch ? this.bulletStyleName(ch) : 'LB'
+          out += `<text:list text:style-name="${name}">${this.listItems(n.content ?? [])}</text:list>`
           break
+        }
         case 'orderedList': {
           // 型别挑档名、起号写在第一枚项上（LO 真件的写法），两枚都落不了才回 `LO` 而不写起号
           const fmt = String(n.attrs?.type ?? '')
@@ -1276,8 +1296,9 @@ export async function odtToHtml(bytes: Uint8Array): Promise<{ html: string; meta
    * 真件 1,016 枚层元素全是 `text:level` 而 0 枚写 `style:level`，后者是 `text:outline-level-style` 那一族的名字），
    * 一枚档名压成一颗 bool 就把「这一层是编号」当成了「档里有一层是编号」。 */
   /** 一层的读数：`num` 是编号还是项目符号，`fmt` 是 `style:num-format` 的字面（原样），
-   * `start` 是 `text:start-value` 的字面——「是编号」与「号长什么样」是两件事，前者 b40 已入账而这一笔补后者。 */
-  type ListLevel = { num: boolean; fmt: string; start: string }
+   * `start` 是 `text:start-value` 的字面，`bullet` 是 `text:bullet-char` 的字面——
+   * 「是编号」与「号长什么样」是两件事（b41），「是项目符号」与「符号长什么样」同样是两件事（这一笔）。 */
+  type ListLevel = { num: boolean; fmt: string; start: string; bullet: string }
   const listLevels = new Map<string, Map<number, ListLevel>>()
   /** styles.xml 的 office:styles 里那批具名样式（Text Body、Heading 1…）：它们的排版是文档默认，不是某段的直接格式 */
   const namedStyles = new Set<string>()
@@ -1306,6 +1327,7 @@ export async function odtToHtml(bytes: Uint8Array): Promise<{ html: string; meta
             num,
             fmt: x.getAttribute('style:num-format') ?? '',
             start: x.getAttribute('text:start-value') ?? '',
+            bullet: x.getAttribute('text:bullet-char') ?? '',
           })
         }
         listLevels.set(name, lv) // 同名档后出现的算赢家——与基座那枚 bool 的 `set` 同一口径
@@ -1315,10 +1337,27 @@ export async function odtToHtml(bytes: Uint8Array): Promise<{ html: string; meta
 
   /** `style:num-format` 的字面里，HTML `<ol type>` 够得着的那四种（`1` 是十进制而不发 type——HTML 默认即它）。 */
   const OL_TYPE = new Set(['A', 'a', 'I', 'i'])
+  /** 项目符号层的 `text:bullet-char` ⇒ `<ul>` 上一枚行内 `list-style-type`。
+   * 闸管的是「这串字面能不能安全进 CSS 单引号串」：引号与反斜杠会把串截断，
+   * C0/C1 控制字符会让整条声明被 CSS 解析器整枚丢掉（发了等于没发，还多一枚假出口）。
+   * 私有区（U+E000–U+F8FF）不发是**取舍而不是能力**：c2b 证真件 19/19 符面层带 `style:font-name`
+   * （`U+F0B7` 要 Symbol 字体才有字形），而 c3 只证那枚码位住在字面串里活着、没证屏上有墨——
+   * `::marker{font-family}` 要规则而行内属性给不了规则。整串另限 BMP，码点超出者不发。
+   * 与宿主默认同值（`•`）照发：不发就把「档里写了 •」与「档里没写」两臂读成同一串，尺就没牙了。 */
+  const bulletCss = (ch: string): string => {
+    if (!ch || /['"\\]/.test(ch)) return ''
+    for (const c of Array.from(ch)) {
+      const cp = c.codePointAt(0) ?? 0
+      if (cp < 0x20 || (cp >= 0x7f && cp <= 0x9f)) return ''
+      if (cp > 0xffff || (cp >= 0xe000 && cp <= 0xf8ff)) return ''
+    }
+    return ` style="list-style-type:'${ch}'"`
+  }
   /** 这一枚 `text:list` 出什么形状：`ol` / `ul` 加 `<ol>` 的两枚可选属性。
    * 层由套壳深度决定（ODF 没有「我是第几层」的属性可指），而嵌套列表通常只在外层点名，
    * 所以无名者向最近的有名祖先借档名，再按自己那一层取读数。落处三档：
-   *  - 项目符号、图符、档表查无该层 ⇒ `ul`（b40 那一笔的账）；
+   *  - 项目符号、图符、档表查无该层 ⇒ `ul`（b40 那一笔的账），其中项目符号层带得着的 `text:bullet-char`
+   *    经 `bulletCss` 上到 `ul` 的行内样式（这一笔的账）；
    *  - 编号层的 `style:num-format` 落不进上面那五种字面（空串、`001, 002, 003, ...` 那种自定义列、
    *    单字符…）⇒ 也 `ul`：门面 f0 在空串那一层报 `ns=255`（ArabicHidden，一位数字都不发），
    *    而自定义列与单字符的号面在 HTML 里没有宿主——造不出号就不装出一个号来；
@@ -1335,7 +1374,7 @@ export async function odtToHtml(bytes: Uint8Array): Promise<{ html: string; meta
       if (!name) name = n.getAttribute('text:style-name') ?? ''
     }
     const lv = listLevels.get(name)?.get(level)
-    if (!lv?.num) return { tag: 'ul', attrs: '' }
+    if (!lv?.num) return { tag: 'ul', attrs: bulletCss(lv?.bullet ?? '') }
     if (lv.fmt !== '1' && !OL_TYPE.has(lv.fmt)) return { tag: 'ul', attrs: '' }
     let attrs = lv.fmt === '1' ? '' : ' type="' + lv.fmt + '"'
     // 文档流点名的起号盖过档里那一层的定义：真件两家都住，而本 list 的第一枚直属项离结果更近
