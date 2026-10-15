@@ -1012,6 +1012,21 @@ function pick(el: Element, localName: string): Element | null {
 }
 
 /**
+ * `fo:font-size` 字面 → px；**只吃带单位后缀的字面**。
+ * 那枚换算尺（run 级那一枝在 `resolveStyle` 里）是按尾部正则分枝的，`90%` 会一路掉进「其余按 pt 折」
+ * 而变成 120px——百分比在规格里是「相对父级字号」，折它需要链上求值次序，是另一笔账而不是这一枝的账。
+ * 真件 77 枚段落级链上带字面的 394 段里恰有 5 段踩 `90%`/`130%`（b43 c9 的字面单位榜），
+ * 所以这里明确返回 0：单位不认得就不发，也不许它顺手回退到文档默认层（把 90% 换成默认号是假账）。
+ */
+function fontSizePx(sz: string | null | undefined): number {
+  const t = (sz ?? '').trim()
+  if (!/(pt|mm|cm|px)$/.test(t)) return 0
+  const v = parseFloat(t)
+  if (!Number.isFinite(v) || v <= 0) return 0
+  return /cm$/.test(t) ? Math.round(v * 37.8) : /mm$/.test(t) ? Math.round(v * 3.78) : /px$/.test(t) ? Math.round(v) : Math.round((v * 96) / 72)
+}
+
+/**
  * 表的外壳不是内容而是包装：ODF 1.1 遗留的三枚复数外壳 `table:table-columns`（列集）、
  * `table:table-header-rows` / `table:table-footer-rows`（页首/页尾重复的行集）把自己的孩子挡在表的外面，
  * 而规格里那些孩子就是表自己的列与行，排在宿主序列里外壳所在的那一格（真件 19 张表 251 枚带宽容器的列、
@@ -1266,6 +1281,9 @@ export async function odtToHtml(bytes: Uint8Array): Promise<{ html: string; meta
   const listLevels = new Map<string, Map<number, ListLevel>>()
   /** styles.xml 的 office:styles 里那批具名样式（Text Body、Heading 1…）：它们的排版是文档默认，不是某段的直接格式 */
   const namedStyles = new Set<string>()
+  /** 文档默认层那一枚 `fo:font-size` 字面：`style:default-style style:family="paragraph"` 的孩子写的才是「本文档正文多大」，
+   * 而下面那趟建表只收 `localName === 'style'`（具名档），所以这一层此前对读手整层不可达（真件 74/77 枚带它，b43 c6）。 */
+  let paraDefaultSize = ''
   for (const d of [cdoc, sdoc]) {
     if (!d) continue
     for (const el of Array.from(d.getElementsByTagName('*'))) {
@@ -1273,6 +1291,10 @@ export async function odtToHtml(bytes: Uint8Array): Promise<{ html: string; meta
         const name = el.getAttribute('style:name')
         if (name && !styles.has(name)) styles.set(name, el)
         if (name && el.parentElement?.localName === 'styles') namedStyles.add(name)
+      } else if (el.localName === 'default-style' && el.getAttribute('style:family') === 'paragraph') {
+        // 只认 family="paragraph" 那一枚：graphic/table/table-cell 那几枚同带 text-properties 而定的是图与格（c6 的 family 榜）
+        const sz = pick(el, 'text-properties')?.getAttribute('fo:font-size')
+        if (sz && !paraDefaultSize) paraDefaultSize = sz
       } else if (el.localName === 'list-style') {
         const name = el.getAttribute('style:name')
         if (!name) continue
@@ -1384,6 +1406,32 @@ export async function odtToHtml(bytes: Uint8Array): Promise<{ html: string; meta
       el = styles.get(el.getAttribute('style:parent-style-name') ?? '')
     }
     return out
+  }
+
+  /** 段落基准字号（px）：沿样式链**自下往上**取第一枚写得着的 `fo:font-size`（自己赢，与 `resolveStyle` 同一方向）；
+   * 链走到头也没写才由文档默认层兜底。取到字面而单位不认得（`90%` 那一族）就当「这一层有人定了而定得不吃」，
+   * 直接落 0 而不再往上找、也不回退兜底——往上找会把「自己 90% + 父 12pt」读成 12pt，那是一枚没写过的号。 */
+  const paraFontSizePx = (name: string | null | undefined, useDefault: boolean): number => {
+    const chain = styleChain(name)
+    for (let i = chain.length - 1; i >= 0; i--) {
+      const raw = pick(chain[i], 'text-properties')?.getAttribute('fo:font-size') ?? ''
+      if (!raw) continue
+      return fontSizePx(raw)
+    }
+    return useDefault ? fontSizePx(paraDefaultSize) : 0
+  }
+
+  /**
+   * 段落基准字号的出口：包一枚 run 级 span。
+   * 为什么落 run 而不落块：块上那一枚 `font-size` 进不了编辑器——段落节点是逐属性白名单（`pStyle`/`lineHeight`/
+   * `spaceBefore`… 没有 fontSize），实测把 `<p style="font-size:16px">` 过一遍真 schema 与真 `Editor.setContent`
+   * 两头都整枚丢，而 `<span style="font-size:16px">` 两头都活得下来（b43 c8 七臂）；docx 那一族的段落基准字号
+   * 走的也正是这一枝（`baseRunProps` → `cssOf` 发 run 级 `font-size`）。段内自带的 run 由内层赢，包外层不抢它。
+   */
+  const baseRunWrap = (name: string | null | undefined, inner: string, useDefault = true): string => {
+    if (!inner) return inner
+    const px = paraFontSizePx(name, useDefault)
+    return px ? `<span style="font-size: ${px}px">${inner}</span>` : inner
   }
 
   /** 段落直接格式：对齐 + 缩进（本应用把它写成派生自动样式，第三方文件同理） */
@@ -1953,8 +2001,10 @@ export async function odtToHtml(bytes: Uint8Array): Promise<{ html: string; meta
         const hbrk = styleChain(sn).some(
           (x) => pick(x, 'paragraph-properties')?.getAttribute('fo:break-before') === 'page'
         )
-        return `${hbrk ? '<div data-oo-pagebreak="1"></div>' : ''}<h${level}${paraStyle(sn)}>${annWrap(
-          await renderInline(el)
+        return `${hbrk ? '<div data-oo-pagebreak="1"></div>' : ''}<h${level}${paraStyle(sn)}>${baseRunWrap(
+          sn,
+          annWrap(await renderInline(el)),
+          false,
         )}</h${level}>${tail()}`
       }
       case 'p': {
@@ -1971,12 +2021,12 @@ export async function odtToHtml(bytes: Uint8Array): Promise<{ html: string; meta
           const inner = await renderInline(el)
           return inner.trim() === ''
             ? `<div data-oo-pagebreak="1"></div>`
-            : `<div data-oo-pagebreak="1"></div><p${paraStyle(sn)}>${annWrap(inner)}</p>${tail()}`
+            : `<div data-oo-pagebreak="1"></div><p${paraStyle(sn)}>${baseRunWrap(sn, annWrap(inner))}</p>${tail()}`
         }
         if (names.includes('PC')) return `<pre><code>${await renderInline(el)}</code></pre>${tail()}`
         if (names.includes('PQ'))
-          return `<blockquote><p${paraStyle(sn, 30)}>${annWrap(await renderInline(el))}</p></blockquote>${tail()}`
-        return `<p${paraStyle(sn)}>${annWrap(await renderInline(el))}</p>${tail()}`
+          return `<blockquote><p${paraStyle(sn, 30)}>${baseRunWrap(sn, annWrap(await renderInline(el)))}</p></blockquote>${tail()}`
+        return `<p${paraStyle(sn)}>${baseRunWrap(sn, annWrap(await renderInline(el)))}</p>${tail()}`
       }
       case 'list': {
         const shape = listShape(el)
