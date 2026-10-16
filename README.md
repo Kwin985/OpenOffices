@@ -8320,6 +8320,20 @@ pptx 完整往返（fill/outline/outlineW/几何 1e-6 全对账）、noFill/无 
 - 本轮没动的各开一枚进路线图（共 7 枚）：`e5` 两枚无牙变异没有对应夹具臂（number 层带符面、`text-properties` 住孙层）、`bulletFont` 有账而屏上对「这口字体画成什么」零判据、字体闸三档在 77 枚真件上零命中（牙只住夹具 C/D/E/F）、字体名带 HTML 实体那一档没造臂（`escapeHtml` 那一支必要性无读数）、旧轮期望串在「出口加属性」时整批过期而无机制（`x1` 押 7.4 未兑现）、自家写手发的 `_F` 档件在 Word/LibreOffice 上屏与上纸的画法未量、档名 `_F` 段编码形状跨机同致未量。
 - 收尾：README 新增本节 + 架构两处（`lib/bullet-char.ts` 那条补第二枚槽、`lib/odt.ts` 那句把「`style:font-name` 专字那一半仍未吃」改口为「b46 已吃」）+ 就地改口三处（b44 那节「本轮没动的 13 枚」名单里第一枚按现状标注、b45 的 P 族读数那句「模型层没有字族槽」补 b46 已开第二枚槽而走的不是行内字族、b45 那节「本轮没动的 11 枚」里发射点那一枚写清兑现了一半）+ 路线图 **勾 1 收窄 8 开 7**（勾=「符面字符发了而专字 `style:font-name` 没发」；收窄=私有区读写不对称、符面挂 `ul` 还是逐层挂 `li`、docx `w:sym` 两头不对表、Word 门面对符面族不开张、模型层跨轮账、界面无符面入口、ProseMirror 留前者丢后者的成因、写手两枚发射点不带 `style:text-properties`；开 7 见上条名单）；未勾 415 → 421、已勾 159 → 160（收尾两把尺各 `grep -c` 现算），成品 10,259 行 → 10,285 行 / 1,897,369 字节 → 1,926,711 字节 / CR 字节=0 而「」开闭差与基线同值（−2，3,346 开 / 3,348 闭）而反引号 44,242 为偶；本批不占版本号（`package.json`/`Cargo.toml`/`tauri.conf.json` 一寸没碰，仍 0.95.0），只本地 commit 不 push、不打 tag、不触发 CI；`tmp/b46` 的日志与夹具按家规保留在盘上（`.gitignore` 第 31 行屏蔽 `/tmp/` ⇒ 腿日志不入库），dev 树（vite 1420 / WebView2 CDP 9222）收尾停掉。
 
+## 发行说明：v0.96.0 —— v0.95.0 之后的 26 枚提交打成一次发行（接管两血统合并 + ODT 读侧 b28~b46 + 接管量具 t40~t43），本轮按用户点名占版本号
+
+- **家规的例外由用户点名**：笔账轮一律不占版本号——b28~b46 十九笔与 t40~t43 四批都在 `0.95.0` 那一串下过账（每一节的收尾都写着「本轮不占版本号」）。这一轮是发行轮而 bump 由明确指令触发（「发布一个 release 版本，并推送」+ 追问后选定 `0.96.0`），产品源文除 bump 自身外一字不碰。
+- **发行号为什么不一次追平**：并发线那 28 节的标题自称 v0.98–v0.125，若一次追平就要跨 30 个号，而那批轮次各自的验证腿没在本机重跑（路线图「接管只合到两头不退化」那一枚仍挂着）⇒ 取 `0.96.0` = release 通道上已发布的 v0.95.0 的下一个号；两套编号并存的账不靠一次 tag 抹平（见下面「两套编号」那一条，收窄而不勾）。
+- **版本文件四枚的读数**：`package.json:4`、`src-tauri/Cargo.toml:3`、`src-tauri/tauri.conf.json:4`、`src-tauri/Cargo.lock` 里 `name = "openoffices"` 那条目各命中 `0.95.0` 一枚；`Cargo.lock` 全文那一串只此一枚（改后残留=0 ⇒ 不存在第二处同值要跟着改，而这一格按家规把「集合枚数」与「残留数」并排打而不是只报改成功）；四件改后 CR 字节=0，`git diff --numstat` 四件各 `1 1`（净零）；复读 `package.json=0.96.0 | tauri.conf.json=0.96.0 | Cargo.toml=0.96.0 | Cargo.lock=0.96.0`。
+- **这一版装了什么（范围现量而不凭回忆）**：`git rev-list --count v0.95.0..HEAD` = 26 枚而 `git diff --shortstat v0.95.0..HEAD` = 32 files changed / 12,126 insertions / 490 deletions；分四组——① 接管两枚（`732d448` 代码合并、`72f8e95` README 合并基座按行集比对找）、② ODT 读侧十九笔 b28~b46（表格列宽、文本节、分页档吞字、老式内联锚注正文、注正文块层、块级框、图内题注、页眉页脚档层、表外壳、索引壳、列表头尾包装层、首页另版、列表按层取档、编号形状出口、起号两家与型别写侧、段落基准字号、符面字符、专字三层可达性（只量不改产品）、符面专字）、③ 接管量具四批 t40~t43（docx 屏上/纸面两腿、表宽族那两枚闸回补、合并件闸门全树回核、ODT 列表与字号两腿）、④ 归属改口一枚（`4c05eba`，「另一会话持有 dev 树」是误记）。
+- **代码分布按目录小计**：`src/lib` 16 件 3,602 增 / 302 删、`src/components` 6 件 1,743 / 66、`src/index.css` 418 / 1、`src-tauri` 7 件 4,433 / 60、`README.md` 1,929 / 61；`git diff --diff-filter=A` 的新增件共 7 枚 = `src/lib/bullet-char.ts`（b44 立的符面模型槽）+ `doc-style-css.ts` + `pdf-forms.ts` + `revision-extension.ts` + `table-cond.ts` + `src-tauri/src/xlsx_names.rs` + `xlsx_preserve.rs`（那枚 3,128 行的表格保留式写回）。
+- **新增直接依赖一枚**：`package.json` 在 `v0.95.0..HEAD` 里唯一的 1 插入是 `"xml-js": "1.6.11"`——把它从 `docx` 的传递依赖提为直接依赖，为绕开 docx 库 `ImportedXmlComponent.fromXmlString` 把顶层 JSON 对象当根那一处缺陷（见 README 里 v0.114 那一节）；许可按本机现量 `node_modules/xml-js/package.json` 的 `license` 字段 = MIT，合家规的 MIT/Apache 红线。
+- **发布前三腿在 bump 后的最终源文上复跑**：`pnpm exec tsc --noEmit` 退出码=0 而输出字节=0（无诊断行）；`cargo test --lib`（在 `src-tauri`，bump 触发重编）打印 `test result: ok. 127 passed; 0 failed; 11 ignored; 0 measured; 0 filtered out; finished in 0.19s`；`pnpm build` 打印 `✓ built in 2.77s`，最大 chunk `SheetEditor-DXnkHwgO.js` 6,556.79 kB（gzip 1,806.26 kB）而 `Some chunks are larger than 500 kB` 那一族警告照旧挂着——不是本轮引入（v0.26 起的分包形状）。
+- **CI 与资产这一版实际会出什么**：tag push `v*` 命中 `.github/workflows/release.yml` 的 `linux` job（`ubuntu-22.04`，`timeout-minutes: 30`）并由 `tauri-apps/tauri-action@v0` 建 Release 上传 Linux 包；`windows` job 的条件是 `github.event_name == 'workflow_dispatch' && inputs.build_windows` 而 `build_windows` 默认 false ⇒ 这一枚 tag 只出 Linux；tag 路径不跑 `cargo test --lib`（那道闸是 `if: inputs.run_tests`，只在手动触发时开）⇒ Rust 测试在本机跑过而那一行读数抄在上面。workflow 顶部那条计费注释写的仍是「私有仓库每月 2000 Actions 分钟、Windows runner 按 2× 计」的口径，注释没跟着仓库转公开改过，所以只当注释读。
+- **Windows 安装包与自动更新清单这一版还没上**：`setup.exe` 与 `msi` 需本机 `pnpm tauri build` 出件再手动上传（用户选的正是「两件都要」而先修 `gh` 凭据）；本机 `gh auth status` 现读 `The token in keyring is invalid` ⇒ 上传腿与 `gh run watch` 都阻塞，记为「凭据不到场」而不是「构建失败」；`latest.json` 不由 CI 产出，要 `pnpm release:updater`（`scripts/updater-release.mjs`）在本机签名并上传，而签名私钥只在这台机器上。
+- **两套编号那一枚按现状收窄而不勾**：README 里 `（v0.96）` @4778、`（v0.97）` @4876、`（v0.98）` @6778 一路到 v0.125 是并发线的轮次名，而这次发行的号也叫 v0.96 ⇒ 同一枚字面从今天起有两种意思（一次发行 / 并发线的一轮）；那枚路线图项从「版本文件落后 30 个号」收窄成「发行号追到 0.96.0 而轮次名仍领先到 v0.125 且 v0.96 那一格撞名」，追平与改名两件事一件也没做，所以判「未勾」。
+- **收尾**：README 新增本节 + 路线图那一枚就地收窄（补现状而不改判据、不新开也不勾）；本轮占版本号（四枚版本文件同改，这是笔账轮家规的唯一例外而凭用户点名）；`main` 与附注 tag `v0.96.0` 按用户点名推远端，Windows 资产上传与 `latest.json` 两腿等 `gh` 凭据修复后再走。
+
 ## 性能（v0.3）
 
 
@@ -10274,8 +10288,8 @@ inverse/visible，整根没说话的轴不进载荷（朴素图表载荷与之�
       ⇒ 这四条证的是两条血统都没被对方碰坏，不是她每一轮自己的结论仍在（Excel/PowerPoint 实机腿与 CDP 冒烟本轮一枚没跑）；要把她那 28 节各自的判据腿点名一遍再决定重跑哪些
 - [ ] **README 的合并基座必须按行集比对找而不能拿代码的分叉点**（接管本节）：按代码分叉点 `24311dc` 当基座合出 3 枚冲突且并发那份比它少 1,236 行（那些「少掉的行」会被当成删除静默吃掉），按 v0.97 `631d7210` 当基座只剩 1 枚同锚点插入
       ⇒ 下一次并发还得先跑这一枚「谁是谁的祖先」的腿（对每枚候选提交数「它有而我没有」与「我有而它没有」两个行数），判定要留日志而不是留在记忆里
-- [ ] **发行号与账目编号两套并存**（接管本节）：`package.json` / `Cargo.toml` / `tauri.conf.json` 住 0.95.0，而 README 里并发那 28 节自称 v0.98–v0.125、本会话的 b 轮按内容命名不带号
-      ⇒ 要么把发行号追平（一次跨 30 个号，而 release 通道上已发布的是 v0.95.0），要么把并发那 28 节的编号改成按内容命名；两套并排着读会以为少了 30 轮
+- [ ] **发行号与账目编号两套并存**（接管本节，v0.96.0 发行那一轮按现状收窄而不勾）：版本文件四枚（`package.json` / `Cargo.toml` / `tauri.conf.json` 与 `Cargo.lock` 的 `openoffices` 条目）已从 0.95.0 追到 0.96.0 而 tag 也叫 `v0.96.0`，但 README 里并发那 28 节的轮次名一路自称到 v0.125、本会话的 b 轮按内容命名不带号
+      ⇒ 追平只做了一格（30 个号的差距仍在，只是从「版本文件落后」变成「轮次名领先」），改名一件没做；而 `（v0.96）` @4778 从今天起有两种意思（一次发行 / 并发线的一轮），两套并排着读仍会以为少了 30 轮
       `[1584.05,-648,0,0,72,72]`（页宽翻成 1584.05pt 而页高吃负值、左右边距归零）⇒ 我们的 `n <= 0` 把它们整枚挡掉，这一档要不要照门面进账没定而真件问位上负数 3 枚（`g4b`，住 `table-properties`）
 
 - [ ] macOS 打包（需签名/公证凭据）
