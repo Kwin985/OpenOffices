@@ -223,7 +223,8 @@ class OdtBuilder {
   cellStyles = new Map<string, string>() // 单元格样式键 JSON → 自动样式名（ce1…）
   rowStyles = new Map<string, string>() // 行样式键 JSON → 自动样式名（ro1…）
   tableStyles = new Map<string, string>() // 表格样式键 JSON → 自动样式名（TS1…）
-  bulletStyles = new Map<string, string>() // 符面字符 → 列表档名（LB25C6…），blocks 先跑时注册
+  // 键是 `字符 NUL 专字`——只按字符建键就会把「同一枚 ◆ 换一口字体」并成一档
+  bulletStyles = new Map<string, { name: string; ch: string; font: string }>()
   images = new Map<string, ImageEntry>() // src → entry
   private imageSeq = 0
   private paraSeq = 0
@@ -573,12 +574,15 @@ class OdtBuilder {
     return out
   }
 
-  /** 一枚自定义符面 ↔ 一枚档名：`LB` + 码位十六进制（`◆` → `LB25C6`，多字符逐码位以 `-` 相连），同字符复用同档 */
-  private bulletStyleName(ch: string): string {
-    const hit = this.bulletStyles.get(ch)
-    if (hit) return hit
-    const name = 'LB' + Array.from(ch, (c) => (c.codePointAt(0) ?? 0).toString(16).toUpperCase()).join('-')
-    this.bulletStyles.set(ch, name)
+  /** 一枚自定义符面加一口专字 ↔ 一枚档名：`LB` + 字符码位十六进制（`◆` → `LB25C6`，多字符逐码位以 `-` 相连），
+   * 带专字时再接 `_F` + 字体名逐码位十六进制（`Symbol` → `LB25C6_F53-79-6D-62-6F-6C`）。
+   * 两段各用 `-` 分组而组间以 `_F` 分界，故 (字符, 字体) 与档名一一对应；同 (字符, 字体) 复用同档。 */
+  private bulletStyleName(ch: string, font: string): string {
+    const hit = this.bulletStyles.get(ch + '\u0000' + font)
+    if (hit) return hit.name
+    const cps = (s: string) => Array.from(s, (c) => (c.codePointAt(0) ?? 0).toString(16).toUpperCase())
+    const name = 'LB' + cps(ch).join('-') + (font ? '_F' + cps(font).join('-') : '')
+    this.bulletStyles.set(ch + '\u0000' + font, { name, ch, font })
     return name
   }
 
@@ -598,16 +602,19 @@ class OdtBuilder {
     // 所以这一族要铺满 ODF 世界里的通用宽度——真件 113 枚档里 89 枚铺 1..10、24 枚铺 1..9，
     // 而只铺 1..3 的话第四层往后就查无该层，有序嵌套会被读成项目符。
     const lv = Array.from({ length: 10 }, (_, i) => i + 1)
-    const bulletStyle = (name: string, ch: string) =>
+    const bulletStyle = (name: string, ch: string, font: string) =>
       `<text:list-style style:name="${name}">${lv
         .map(
           (l) =>
-            `<text:list-level-style-bullet text:level="${l}" text:bullet-char="${esc(ch)}"><style:list-level-properties text:list-level-position-and-space-mode="label-alignment"><style:list-level-label-alignment text:label-followed-by="listtab" fo:text-indent="-0.6cm" fo:margin-left="${(0.6 * l).toFixed(2)}cm"/></style:list-level-properties></text:list-level-style-bullet>`,
+            `<text:list-level-style-bullet text:level="${l}" text:bullet-char="${esc(ch)}"><style:list-level-properties text:list-level-position-and-space-mode="label-alignment"><style:list-level-label-alignment text:label-followed-by="listtab" fo:text-indent="-0.6cm" fo:margin-left="${(0.6 * l).toFixed(2)}cm"/></style:list-level-properties>` +
+            // 专字发在层元素自己的 `style:text-properties` 上：真件可达 bullet 层 19/19 就住这一枚子档（b45 c2|D）
+            (font ? `<style:text-properties style:font-name="${esc(font)}"/>` : '') +
+            `</text:list-level-style-bullet>`,
         )
         .join('')}</text:list-style>`
-    const lb = bulletStyle('LB', '•')
+    const lb = bulletStyle('LB', '•', '')
     // 模型里出现过自定义符面才长出来的档：autoStyles 在 blocks 之后求值（见 build），所以这张表已经填满
-    const lbCustom = Array.from(this.bulletStyles, ([ch, name]) => bulletStyle(name, ch)).join('')
+    const lbCustom = Array.from(this.bulletStyles.values(), (b) => bulletStyle(b.name, b.ch, b.font)).join('')
     const numStyle = (name: string, fmt: string) =>
       `<text:list-style style:name="${name}">${lv
         .map(
@@ -787,10 +794,12 @@ class OdtBuilder {
           }
           break
         case 'bulletList': {
-          // 符面住在档名里而不住在列表身上（与 b42 的型别同一条路子）：模型带着自定义符面就注册一枚专属档。
+          // 符面与专字同住在档名里而不住在列表身上（与 b42 的型别同一条路子）：模型带着它们就注册一枚专属档。
           // 写手不设闸——读侧那枚私有区/引号的取舍归读侧，模型里有什么就发什么。
+          // 字符空而字体非空时字体不发：没有符面可挂的一口字族，发出去就是一枚没人读的档。
           const ch = String(n.attrs?.bulletChar ?? '')
-          const name = ch ? this.bulletStyleName(ch) : 'LB'
+          const font = String(n.attrs?.bulletFont ?? '')
+          const name = ch ? this.bulletStyleName(ch, font) : 'LB'
           out += `<text:list text:style-name="${name}">${this.listItems(n.content ?? [])}</text:list>`
           break
         }
@@ -1296,9 +1305,11 @@ export async function odtToHtml(bytes: Uint8Array): Promise<{ html: string; meta
    * 真件 1,016 枚层元素全是 `text:level` 而 0 枚写 `style:level`，后者是 `text:outline-level-style` 那一族的名字），
    * 一枚档名压成一颗 bool 就把「这一层是编号」当成了「档里有一层是编号」。 */
   /** 一层的读数：`num` 是编号还是项目符号，`fmt` 是 `style:num-format` 的字面（原样），
-   * `start` 是 `text:start-value` 的字面，`bullet` 是 `text:bullet-char` 的字面——
-   * 「是编号」与「号长什么样」是两件事（b41），「是项目符号」与「符号长什么样」同样是两件事（这一笔）。 */
-  type ListLevel = { num: boolean; fmt: string; start: string; bullet: string }
+   * `start` 是 `text:start-value` 的字面，`bullet` 是 `text:bullet-char` 的字面，
+   * `font` 是那一层自己的 `style:text-properties@style:font-name` 字面（只有项目符号层吃它）——
+   * 「是编号」与「号长什么样」是两件事（b41），「是项目符号」与「符号长什么样」同样是两件事（b44），
+   * 「符号长什么样」与「这一枚符该用哪一口字体画」同样是两件事（这一笔）。 */
+  type ListLevel = { num: boolean; fmt: string; start: string; bullet: string; font: string }
   const listLevels = new Map<string, Map<number, ListLevel>>()
   /** styles.xml 的 office:styles 里那批具名样式（Text Body、Heading 1…）：它们的排版是文档默认，不是某段的直接格式 */
   const namedStyles = new Set<string>()
@@ -1323,11 +1334,15 @@ export async function odtToHtml(bytes: Uint8Array): Promise<{ html: string; meta
         for (const x of Array.from(el.getElementsByTagName('*'))) {
           const num = x.localName === 'list-level-style-number'
           if (!num && x.localName !== 'list-level-style-bullet') continue
+          // 专字只从这一层自己的直接孩子里取：编号层不吃（真件可达 number 层 0/37 带 text-properties，b45 c2|D），
+          // 父样式链与档级默认字体也不吃（那是另一族）；asian/complex/generic 三枚同名属性本轮不吃。
+          const tp = num ? null : pick(x, 'text-properties')
           lv.set(Number(x.getAttribute('text:level') ?? '1') || 1, {
             num,
             fmt: x.getAttribute('style:num-format') ?? '',
             start: x.getAttribute('text:start-value') ?? '',
             bullet: x.getAttribute('text:bullet-char') ?? '',
+            font: tp?.getAttribute('style:font-name') ?? '',
           })
         }
         listLevels.set(name, lv) // 同名档后出现的算赢家——与基座那枚 bool 的 `set` 同一口径
@@ -1353,6 +1368,20 @@ export async function odtToHtml(bytes: Uint8Array): Promise<{ html: string; meta
     }
     return ` style="list-style-type:'${ch}'"`
   }
+  /** 专字（`style:font-name`）走 `data-*` 而**不走行内 `font-family`**：b45 的 S 族量到行内 `font-family`
+   * 挂在 `<ul>` 上确实换得出符面字形，但连带把 `li` 正文字族一同拖走（子树 10 对直属 4）；
+   * 只换符面不拖正文的那条通道是 `::marker{font-family}` 规则，而 ODT 这头今天没有出规则的地方
+   * （`lib/doc-style-css.ts` 只吃 docx，`DocMeta` 没有 styles 快照）。所以这一枚先把字体存进模型，
+   * 屏上照宿主默认画——「档里写着这枚符该用哪一口字体」从此有账，而「屏上画成哪一口」留给那一族。
+   * 闸与 `bulletCss` 同形（空串、引号与反斜杠、C0/C1 控制符都不发）；字体名可以含空格与中日韩，照吃。 */
+  const bulletFontAttr = (font: string): string => {
+    if (!font || /['"\\]/.test(font)) return ''
+    for (const c of Array.from(font)) {
+      const cp = c.codePointAt(0) ?? 0
+      if (cp < 0x20 || (cp >= 0x7f && cp <= 0x9f)) return ''
+    }
+    return ` data-oo-bullet-font="${escapeHtml(font)}"`
+  }
   /** 这一枚 `text:list` 出什么形状：`ol` / `ul` 加 `<ol>` 的两枚可选属性。
    * 层由套壳深度决定（ODF 没有「我是第几层」的属性可指），而嵌套列表通常只在外层点名，
    * 所以无名者向最近的有名祖先借档名，再按自己那一层取读数。落处三档：
@@ -1374,7 +1403,11 @@ export async function odtToHtml(bytes: Uint8Array): Promise<{ html: string; meta
       if (!name) name = n.getAttribute('text:style-name') ?? ''
     }
     const lv = listLevels.get(name)?.get(level)
-    if (!lv?.num) return { tag: 'ul', attrs: bulletCss(lv?.bullet ?? '') }
+    if (!lv?.num) {
+      // 字体只在字符那一臂发得着时才附带：字符被闸拒（私有区那一族）时，一口没有符面可挂的字体也不发
+      const css = bulletCss(lv?.bullet ?? '')
+      return { tag: 'ul', attrs: css + (css ? bulletFontAttr(lv?.font ?? '') : '') }
+    }
     if (lv.fmt !== '1' && !OL_TYPE.has(lv.fmt)) return { tag: 'ul', attrs: '' }
     let attrs = lv.fmt === '1' ? '' : ' type="' + lv.fmt + '"'
     // 文档流点名的起号盖过档里那一层的定义：真件两家都住，而本 list 的第一枚直属项离结果更近

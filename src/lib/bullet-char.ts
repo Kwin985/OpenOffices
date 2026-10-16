@@ -14,6 +14,11 @@ import { Extension } from '@tiptap/core'
  *
  * 存的形状是符面字符本身（原样，可多字符），不是 CSS 片段：屏上包装成 `list-style-type:'X'`，
  * ODT 包装成 `text:bullet-char="X"`，两头各自拼。
+ *
+ * 第二枚 `bulletFont` 存的是那一层的专字（ODF 的 `style:font-name`，OOXML 那头的对应物是 `w:rFonts`）：
+ * 它走 `data-oo-bullet-font` 而不走行内 `font-family`——后者挂在 `<ul>` 上会把 `li` 正文的字族一同拖走
+ * （b45 的 S 族读数），而只换符面的那条 `::marker` 规则通道在 ODT 这头还没有出规则的地方。
+ * 所以这一层先把「档里写着哪一口字体」存住，屏上照宿主默认画。
  */
 
 /** 宿主默认的那几个关键字不是「档里写了自定义符面」，读回来折成 null */
@@ -56,6 +61,11 @@ export const BulletChar = Extension.create({
             parseHTML: (el) => bulletCharFromCss(el.style?.listStyleType),
             renderHTML: (attrs) =>
               attrs.bulletChar ? { style: `list-style-type:'${cssEscapeChar(attrs.bulletChar)}'` } : {},
+          },
+          bulletFont: {
+            default: null,
+            parseHTML: (el) => el.getAttribute('data-oo-bullet-font') || null,
+            renderHTML: (attrs) => (attrs.bulletFont ? { 'data-oo-bullet-font': attrs.bulletFont } : {}),
           },
         },
       },
