@@ -1355,16 +1355,17 @@ export async function odtToHtml(bytes: Uint8Array): Promise<{ html: string; meta
   /** 项目符号层的 `text:bullet-char` ⇒ `<ul>` 上一枚行内 `list-style-type`。
    * 闸管的是「这串字面能不能安全进 CSS 单引号串」：引号与反斜杠会把串截断，
    * C0/C1 控制字符会让整条声明被 CSS 解析器整枚丢掉（发了等于没发，还多一枚假出口）。
-   * 私有区（U+E000–U+F8FF）不发是**取舍而不是能力**：c2b 证真件 19/19 符面层带 `style:font-name`
-   * （`U+F0B7` 要 Symbol 字体才有字形），而 c3 只证那枚码位住在字面串里活着、没证屏上有墨——
-   * `::marker{font-family}` 要规则而行内属性给不了规则。整串另限 BMP，码点超出者不发。
+   * 私有区（U+E000–U+F8FF）照发（b51 裁定）：c3 证字面活着、b51 的 s1|3.3 量到屏上有墨且字形哈希 ≠ 默认符面，
+   * 拒它就把字体那一账一并吞掉（b50 立案）。取舍落在装机面缺字体时的回退形状未量（未量第 2 枚）。
+   * 整串仍限 BMP：码点超出 BMP 者不发（本轮语料非 BMP 档枚=0，拒它无成本读数）。
    * 与宿主默认同值（`•`）照发：不发就把「档里写了 •」与「档里没写」两臂读成同一串，尺就没牙了。 */
   const bulletCss = (ch: string): string => {
     if (!ch || /['"\\]/.test(ch)) return ''
     for (const c of Array.from(ch)) {
       const cp = c.codePointAt(0) ?? 0
       if (cp < 0x20 || (cp >= 0x7f && cp <= 0x9f)) return ''
-      if (cp > 0xffff || (cp >= 0xe000 && cp <= 0xf8ff)) return ''
+      if (cp > 0xffff) return ''
+      // 私有区（U+E000–U+F8FF）放行：b51 量到屏上有墨（s1|3.3 字形哈希 ≠ 默认符面），吞账在这一族上是「不发字符连带不发字体」
     }
     return ` style="list-style-type:'${ch}'"`
   }
@@ -1407,9 +1408,8 @@ export async function odtToHtml(bytes: Uint8Array): Promise<{ html: string; meta
     }
     const lv = listLevels.get(name)?.get(level)
     if (!lv?.num) {
-      // 字体只在字符那一臂发得着时才附带：字符被闸拒（私有区那一族）时，一口没有符面可挂的字体也不发
-      const css = bulletCss(lv?.bullet ?? '')
-      return { tag: 'ul', attrs: css + (css ? bulletFontAttr(lv?.font ?? '') : '') }
+      // 字体属性与字符出口各自过各自的闸：字符那一臂被拒（非 BMP、控制符、引号）不再顺带吞掉字体那一账（b50 立案的吞账落点）
+      return { tag: 'ul', attrs: bulletCss(lv?.bullet ?? '') + bulletFontAttr(lv?.font ?? '') }
     }
     if (lv.fmt !== '1' && !OL_TYPE.has(lv.fmt)) return { tag: 'ul', attrs: '' }
     let attrs = lv.fmt === '1' ? '' : ' type="' + lv.fmt + '"'
