@@ -232,8 +232,10 @@ export interface DocxStyleInfo {
   id: string
   name: string
   basedOn?: string
-  /** 样式种类（v0.113）：'paragraph'（缺省，旧 meta 无此键）/ 'character' / 'table'（v0.114） */
-  kind?: 'paragraph' | 'character' | 'table'
+  /** 样式种类（v0.113）：'paragraph'（缺省，旧 meta 无此键）/ 'character' / 'table'（v0.114）/
+   * 'list'（b49：ODT 列表符面的专字那一层，只有 `run.font` 而没有任何段落排版——它不进任何写手，
+   * 只被 lib/doc-style-css.ts 的 list 枝读成一条 scoped 的 `::marker{font-family}` 规则） */
+  kind?: 'paragraph' | 'character' | 'table' | 'list'
   /** 标题级别（1..9，outlineLvl+1），非标题没有 */
   level?: number
   run: {
@@ -822,8 +824,10 @@ function styleDefOf(info: DocxStyleInfo): IParagraphStyleOptions | ICharacterSty
 
 /** meta 里带的样式清单 → Document 的样式表参数；一条都落不下时整条不给（不给库就走默认样式表） */
 function paragraphStylesOf(meta: DocMeta | undefined): { paragraphStyles: readonly IParagraphStyleOptions[] } | {} {
+  // 这一枚是**黑名单**：未知 kind 会进桶（b48 裁二）。列表符面的专字（kind='list'）没有段落排版，
+  // 放进这一桶就被写成 word/styles.xml 里一枚假的段落档——它只该由 lib/doc-style-css.ts 出屏上规则，不进任何写手。
   const defs = (meta?.styles ?? [])
-    .filter((s) => s.kind !== 'character' && s.kind !== 'table')
+    .filter((s) => s.kind !== 'character' && s.kind !== 'table' && s.kind !== 'list')
     .map(styleDefOf)
     .filter((d): d is IParagraphStyleOptions => !!d)
   return defs.length ? { paragraphStyles: defs } : {}

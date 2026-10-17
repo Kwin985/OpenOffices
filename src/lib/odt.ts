@@ -1370,16 +1370,19 @@ export async function odtToHtml(bytes: Uint8Array): Promise<{ html: string; meta
   }
   /** 专字（`style:font-name`）走 `data-*` 而**不走行内 `font-family`**：b45 的 S 族量到行内 `font-family`
    * 挂在 `<ul>` 上确实换得出符面字形，但连带把 `li` 正文字族一同拖走（子树 10 对直属 4）；
-   * 只换符面不拖正文的那条通道是 `::marker{font-family}` 规则，而 ODT 这头今天没有出规则的地方
-   * （`lib/doc-style-css.ts` 只吃 docx，`DocMeta` 没有 styles 快照）。所以这一枚先把字体存进模型，
-   * 屏上照宿主默认画——「档里写着这枚符该用哪一口字体」从此有账，而「屏上画成哪一口」留给那一族。
+   * 只换符面不拖正文的那条通道是 `::marker{font-family}` 规则。b47 量到「家在（`styleCssOf`）而形状不含符面族、
+   * 且 ODT 读手压根不喂 `meta.styles` 那一层」，b49 把两处一起接上：这一枚属性先记下字体名，
+   * 下面 meta 装配把它填成清单里的第四型，规则由 `lib/doc-style-css.ts` 的 list 枝出。
    * 闸与 `bulletCss` 同形（空串、引号与反斜杠、C0/C1 控制符都不发）；字体名可以含空格与中日韩，照吃。 */
+  const bulletFonts = new Set<string>()
   const bulletFontAttr = (font: string): string => {
     if (!font || /['"\\]/.test(font)) return ''
     for (const c of Array.from(font)) {
       const cp = c.codePointAt(0) ?? 0
       if (cp < 0x20 || (cp >= 0x7f && cp <= 0x9f)) return ''
     }
+    // 唯一写入点：榜与「HTML 里真挂了这枚属性的那些口」天然同致，不必再实现第二道闸
+    bulletFonts.add(font)
     return ` data-oo-bullet-font="${escapeHtml(font)}"`
   }
   /** 这一枚 `text:list` 出什么形状：`ol` / `ul` 加 `<ol>` 的两枚可选属性。
@@ -2211,6 +2214,18 @@ export async function odtToHtml(bytes: Uint8Array): Promise<{ html: string; meta
   // —— meta：styles.xml 的 master-page 头脚
   const meta: DocMeta = {}
   if (comments.length) meta.comments = comments
+  // 列表符面的专字（b49）：把「这枚符该用哪一口字体」从 ul 上的一枚属性升格成命名样式清单的第四型（kind='list'），
+  // 好让 lib/doc-style-css.ts 出那条 scoped 的 `::marker{font-family}` 规则——行内字族会连带拖走 li 正文（b45/b46 口径）。
+  // 一口字体一枚条目、序按文档流首现；一枚都没有时 `styles` 键照旧不在场（不发空数组，免得下游把「没有」读成「有一份空清单」）。
+  if (bulletFonts.size) {
+    meta.styles = Array.from(bulletFonts, (font) => ({
+      id: `oo-bullet:${font}`,
+      name: `符面专字 ${font}`,
+      kind: 'list' as const,
+      run: { font },
+      para: {},
+    }))
+  }
   if (sdoc) {
     const master = Array.from(sdoc.getElementsByTagName('*')).find((x) => x.localName === 'master-page')
     const plain = (n: Element | null | undefined) => (n ? (n.textContent ?? '').replace(/\s+/g, ' ').trim() : '')
