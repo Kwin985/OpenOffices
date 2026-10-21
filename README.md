@@ -8458,7 +8458,7 @@ v0.131 只做了 Word 那一侧的对象模型；这一轮把 Excel 那侧接上
 
 ### 2. Calc：cellXfs 的 apply* 两层链语义与内建数字格式表（v0.138 W2，`ed6decc`，`src-tauri/src/xlsx_style.rs` +332/−9，单测 13 项）
 
-`cellXfs` 的 `applyFont/applyFill/applyBorder/applyNumberFormat/applyAlignment` 与 `xfId→cellStyleXfs` 链此前的实现是「自槽缺省当常规值」，和规条（「该组与父不同时 applyX 应为 true」）打架。按 [MS-OE376] Part 4 §3.8.45 定案改成**三态合并**：`XfRec` 的五个 apply 槽从 `bool` 改 `Option<bool>`（None=缺省、Some(false)=显式抑制、Some(true)=显式应用），`merge_slot(own, base, apply)` 对 None 且自槽正是常规缺省值（fontId/fillId/borderId=0、numFmtId=0）时回落基样式——因为 cellXfs 里 apply* 的缺省值是 **false**（该组与基样式「连着」）而 cellStyleXfs 里缺省值是 **true**，显式 `="0"` 一律回落；和规文件两种模型结论相同，分歧只落在不和规件上，对自家 round-trip 零影响（`rust_xlsxwriter` 的 `xf_formats[0]` 恒为 `Format::default()`，实测）。对齐组另有判据：`applyAlignment` 缺省时看的是「alignment 子元素整枚缺席」而不是某个属性没写。内建数字格式表补 12/13/37/38/48 五枚，**收录判据是量的不是猜的**：探针测试写六种格式用 calamine 读回类型——日期/时间格式交回 `Data::DateTime`（值已字符串化 ⇒ 模式在屏上不活 ⇒ 不收），分数、科学计数、带括号/红字数值档交回 Float（模式活着 ⇒ 收），5-8/41-44 货币、14-22 日期、45-47 时间、23-36 会计变体保持不映射；`numfmt` 对非数值走文本段直通，格式串挂在字符串值上不会双重格式化。没做：条件格式专属的 `dxf` 链没接；`numFmtId≥164` 的自定义格式串没进样式快照（屏上值照旧走 calamine 的字符串化）。
+`cellXfs` 的 `applyFont/applyFill/applyBorder/applyNumberFormat/applyAlignment` 与 `xfId→cellStyleXfs` 链此前的实现是「自槽缺省当常规值」，和规条（「该组与父不同时 applyX 应为 true」）打架。按 [MS-OE376] Part 4 §3.8.45 定案改成**三态合并**：`XfRec` 的五个 apply 槽从 `bool` 改 `Option<bool>`（None=缺省、Some(false)=显式抑制、Some(true)=显式应用），`merge_slot(own, base, apply)` 对 None 且自槽正是常规缺省值（fontId/fillId/borderId=0、numFmtId=0）时回落基样式——因为 cellXfs 里 apply* 的缺省值是 **false**（该组与基样式「连着」）而 cellStyleXfs 里缺省值是 **true**，显式 `="0"` 一律回落；和规文件两种模型结论相同，分歧只落在不和规件上，对自家 round-trip 零影响（`rust_xlsxwriter` 的 `xf_formats[0]` 恒为 `Format::default()`，实测）。对齐组另有判据：`applyAlignment` 缺省时看的是「alignment 子元素整枚缺席」而不是某个属性没写。内建数字格式表补 12/13/37/38/48 五枚，**收录判据是量的不是猜的**：探针测试写六种格式用 calamine 读回类型——日期/时间格式交回 `Data::DateTime`（值已字符串化 ⇒ 模式在屏上不活 ⇒ 不收），分数、科学计数、带括号/红字数值档交回 Float（模式活着 ⇒ 收），5-8/41-44 货币、14-22 日期、45-47 时间、23-36 会计变体保持不映射；`numfmt` 对非数值走文本段直通，格式串挂在字符串值上不会双重格式化。**就地更正**：上一稿这里写「dxf 链没接、`numFmtId≥164` 自定义格式串没进样式快照」——两条都写错了，回读代码后更正：`<numFmts>` 早已读进 `StyleBook.numfmts` 且 `style_for` 的第 648 行就把它送进 `CellStyle.nf`；`parse_dxfs` 与 `cfRule/@dxfId` 那条链也早就在（`xlsx_rules.rs`）。**真正没做的是 dxf 里的 `<numFmt>`**——见补记一节，本轮已补。屏上值照旧走 calamine 的字符串化（自定义串进了载荷，落不落屏是另一条链）。
 
 ### 3. Impress：读侧属性收拢成单漏斗 + 首份属性覆盖账（v0.138 W3，`05a566e` + `19164bc`）
 
@@ -8468,13 +8468,36 @@ v0.131 只做了 Word 那一侧的对象模型；这一轮把 Excel 那侧接上
 
 `PdfViewer.loadPageGeom` 里那段内联几何（字号取 trm 纵向量、覆盖盒上升 0.85 下降 0.25、PDF 左下→未旋转左上→显示空间三步换算）抽成 `pdf-geo.ts` 的 `textItemBox` 纯函数，组件改调它、本地 `TextGeom` 接口换成导入的 `TextItemGeom`（单一事实来源）。新量具 `scripts/test-pdf-geo-cross.mjs`（92 项全过）把**我们这套纯函数 vs pdfjs-dist 的 PageViewport**（`convertToViewportPoint` / `convertToPdfPoint` / TextLayer 自己用的 `Util.transform(vp, item)`）两条互不依赖的实现对表——两边对不上，意味着要么我们算错（框偏、盖歪），要么对渲染器行为的理解错了。五条腿：A 9×9 网格 × 4 旋转采样点对（正逆两向，mapPoint/unmapPoint 不导出，用零尺寸矩形走公开 API 触达同一函数）；B `displaySize` ↔ viewport 尺寸；C pdf-lib 造带 `/Rotate` 的真件、pdfjs 读回后逐行对（显示基线起点落盒、盒随旋转换互换、`item.width` ↔ pdf-lib 独立步进两份 metrics 差 ≤1.08%、写回 cover 矩形往返）；D 播种随机矩形往返 800 例（LCG 不靠 `Math.random`，跑两遍结果一致）；E `normRot` ↔ 渲染器有效旋转（从 `vp.transform` 反读，不靠我们自己的判据）。两条变异实测有牙：rot=90 映射写错 → 7 项挂；`normRot` 回退旧规则 → 4 项非和规值挂。**量具量出一个真问题并修掉**：旧 `normRot` 是「四舍五入到最近 90°」（45→90），而 pdf.js 的 PageViewport 是 `switch` 精确匹配——非 90 倍数一律按 0 渲染（实测 45→0、135→0、450→90、−90→270；pdf-lib 的 `reduceRotation` 同为「非 90 倍数→0」，三方一致）。非和规 `/Rotate` 上框按 90° 算、页面按 0° 渲，屏幕必然偏；改成与渲染器逐字对齐，和规件上两规则等价、零风险。没做：互证只覆盖横排文字（`item.width` 按水平步进建模，竖排/斜排是近似值——注释里写明受影响的是盖底与命中覆盖面、不是写回位置）；Helvetica 两份 metrics 的 1.08% 差放在容差里如实报差，没有「修齐」的念头（那不是我们的数）。
 
+### 5. 补记：dxf 的数字格式不再丢（v0.138 续，`3e14ed1`）
+
+上轮「Calc 没接 dxf 链」是**记错的**（上面已就地更正）；回读代码后找到的**真**缺口在另一处：
+dxf 只解了底纹/字色/粗/斜/下划线/删除线七枚，`<numFmt>` 一个字不读。于是「大于 0 显示成 0.0%」
+这类**只配数字格式、一个色也不描**的条件格式，打开再存一次格式串就永久没了——**这是数据丢失不是显示问题**，
+所以补上。
+
+- **读侧**：`parse_dxfs` 收 styles.xml 顶层的 `<numFmts>` 表，`<numFmt>` 按三档取：内联 `formatCode` →
+  numFmts 表（按 id）→ 内置表（按 id）；三处都没有就留空，不猜。三档不是凭空设计的——实测
+  `rust_xlsxwriter` 在 dxf 里**内联串且不给 dxf 配 numFmts 表**（`<dxf><numFmt numFmtId="164" formatCode="0.0%"/></dxf>`，
+  而同一次写件里单元格侧是正经写 `<numFmts>` 表 + `cellXfs` 引用 164 并带 `applyNumberFormat="1"`），
+  Excel 侧只写 id 的件也见得到。
+- **写侧**：`dxf_format` 加 `set_num_format`。只带 nf 的规则原来连 Format 都没有 ⇒ rust_xlsxwriter
+  压根不生成 dxf ⇒ 存盘就丢这一条。
+- **判空**：`is_empty_style` 加 `nf`。不加这一条，只配数字格式的 dxf 会被判空、`cfRule` 上整枚 `fmt`
+  被丢掉——往返测试专门压它（两条变异各咬 2 项）。
+- **ODS 侧顺手**：`ods_cf.rs::cf_style_of` 把 `CellStyle.nf` 一起搬过来（它原注释写着「数字格式没开口」）；
+  **边框与对齐仍不开口**——Univer 的条件格式高亮那六枚 `set*` 里没有它们，开了也是存着不用。
+- **屏上诚实边界**：Univer 的 CF 高亮只有底纹/字色/粗/斜/下划线/删除线六枚 `set*`，**没有数字格式槽**
+  ⇒ `nf` 屏上不活，只服务存盘往返。写在 `CondFormatStyle.nf` 的类型注释与 `buildCf` 里。
+- **单测 5 项**（`cargo test --lib` 152 → **157**）：三档取值、查不到的 id 留空、`cfRule` 只带 nf 不被判空、
+  真正的空 dxf 仍不占 fmt、**写件→读回**往返。
+
 ### 这一批的验证（七道闸门）
 
-`cargo test --lib` **152 passed / 0 failed** / `cargo clippy --lib` 29 条（全为 `map_or` / `too many arguments` 一类风格级，无正确性问题）/ `tsc --noEmit` 退出码 0 / `vite build` ✓ / docx selftest 双向断言过（46 对 / 115 次，应看到 26 枚全命中、不该看到 7 枚全落空）/ pptx selftest 77 对 42 查问 / 六套 node 脚本全过：`test-sheet-rules.mjs` 63/63、`test-vba.mjs` 114/114、`test-vba-book.mjs` 61/61、`test-collab.mjs` 12/12、`test-pdf-text-edit.mjs` 全过、`test-pdf-geo-cross.mjs` 92/92。
+`cargo test --lib` **157 passed / 0 failed**（v0.138 新增 5：dxf 数字格式三档/不猜/判空/空 dxf/往返） / `cargo clippy --lib` 29 条（全为 `map_or` / `too many arguments` 一类风格级，无正确性问题）/ `tsc --noEmit` 退出码 0 / `vite build` ✓ / docx selftest 双向断言过（46 对 / 115 次，应看到 26 枚全命中、不该看到 7 枚全落空）/ pptx selftest 77 对 42 查问 / 六套 node 脚本全过：`test-sheet-rules.mjs` 63/63、`test-vba.mjs` 114/114、`test-vba-book.mjs` 61/61、`test-collab.mjs` 12/12、`test-pdf-text-edit.mjs` 全过、`test-pdf-geo-cross.mjs` 92/92。
 
 ### 明确不做的（写下来是为了下次别纠结）
 
-Calc 的 `dxf`/条件格式专属格式链、`numFmtId≥164` 自定义格式串进样式快照、Writer 侧 313 枚语料不在盘时的全量覆盖率重跑、pptx 语料不在盘时的覆盖账全量跑（夹具为宇宙并留口子）、PDF 竖排/斜排文字的轴对齐盒精确化、重排式 PDF 改字（v0.129 已判「原位改字覆盖大多数场景」）。
+dxf 的边框与对齐两族（`CondFormatStyle` 仍只开底纹/字色/粗斜下删/数字格式八枚槽）、Writer 侧 313 枚语料不在盘时的全量覆盖率重跑、pptx 语料不在盘时的覆盖账全量跑（夹具为宇宙并留口子）、PDF 竖排/斜排文字的轴对齐盒精确化、重排式 PDF 改字（v0.129 已判「原位改字覆盖大多数场景」）。
 
 
 ## 性能（v0.3）
