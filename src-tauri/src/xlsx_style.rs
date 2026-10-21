@@ -79,6 +79,16 @@ struct XfRec {
     ho: Option<String>,
     vo: Option<String>,
     wrap: bool,
+    /// cellXfs 的 `xfId`：指着 `<cellStyleXfs>` 里同名的基样式（cellStyleXfs 自己没这一层）
+    xf_id: u32,
+    /// 五组 apply* 旗。三态：`None`=属性缺省，`Some(false)`=显式 ="0"/"false" 抑制，
+    /// `Some(true)`=显式 ="1"/"true"。cellXfs 里缺省值是 **false**（[MS-OE376] Part 4 §3.8.45），
+    /// cellStyleXfs 里缺省值是 **true**——两处相反，合并时分别对待
+    apply_font: Option<bool>,
+    apply_fill: Option<bool>,
+    apply_border: Option<bool>,
+    apply_numfmt: Option<bool>,
+    apply_alignment: Option<bool>,
 }
 
 #[derive(Default)]
@@ -88,6 +98,8 @@ struct StyleBook {
     xfs: Vec<XfRec>,
     borders: Vec<BorderRec>,
     numfmts: HashMap<u32, String>,
+    /// `<cellStyleXfs>`：命名样式的基样式层（Normal 在第 0 条）。文件没这一段就是空表
+    cell_style_xfs: Vec<XfRec>,
 }
 
 pub(crate) fn attr_str(e: &quick_xml::events::BytesStart<'_>, key: &str) -> Option<String> {
@@ -199,7 +211,16 @@ pub(crate) fn sheet_paths<R: std::io::Read + std::io::Seek>(
     out
 }
 
-/// 常用内建数字格式 id → 模式串（日期类 id 不映射：calamine 已把日期转成字符串值）
+/// 内建数字格式 id → 模式串。
+///
+/// 收进来的判据只有一条：**这一格的格式在屏上真的活着**——calamine 得把值当数字交回来，
+/// 屏上（Univer 的 `n.pattern`）与纸面（`formatNumberValue`）才吃得进这个模式。实证见
+/// `builtin_numfmt_liveness_is_measured_not_assumed`：calamine 对日期/时间格式的单元格
+/// 一律交回 `Data::DateTime`（值在 `data_to_value` 里已经字符串化），日期类 id 因此不映射；
+/// 分数（12/13）、科学计数（48）与带括号/红色的数值档（37/38）交回 Float，模式是活的。
+///
+/// 5-8 与 41-44（货币）、14-22（日期）、23-36（会计/日期/分数变体）、45-47（时间）都不收：
+/// 前两类嵌 locale 相关符号，后几类值已被 calamine 字符串化。逐 id 的规范串见 ECMA-376 §18.8.30
 fn builtin_numfmt(id: u32) -> Option<&'static str> {
     Some(match id {
         1 => "0",
@@ -209,11 +230,22 @@ fn builtin_numfmt(id: u32) -> Option<&'static str> {
         9 => "0%",
         10 => "0.00%",
         11 => "0.00E+00",
+        12 => "# ?/?",
+        13 => "# ??/??",
+        37 => "#,##0 ;(#,##0)",
+        38 => "#,##0 ;[Red](#,##0)",
         39 => "0.00",
         40 => "#,##0.00",
+        48 => "##0.0E+0",
         49 => "@",
         _ => return None,
     })
+}
+
+/// apply* 一族的三态读数：缺属性 `None`，"0"/"false" `Some(false)`，其余真值 `Some(true)`。
+/// （与 `bool_attr` 不同：那一支把缺属性当 true，是给 `<b/>` 这种"没写 val 就是真"的元素用的）
+fn bool_attr_opt(e: &quick_xml::events::BytesStart<'_>, key: &str) -> Option<bool> {
+    attr_str(e, key).map(|v| v != "0" && v != "false")
 }
 
 fn xf_from_attrs(e: &quick_xml::events::BytesStart<'_>) -> XfRec {
@@ -222,6 +254,12 @@ fn xf_from_attrs(e: &quick_xml::events::BytesStart<'_>) -> XfRec {
         fill: attr_str(e, "fillId").and_then(|v| v.parse().ok()).unwrap_or(0),
         border: attr_str(e, "borderId").and_then(|v| v.parse().ok()).unwrap_or(0),
         numfmt: attr_str(e, "numFmtId").and_then(|v| v.parse().ok()).unwrap_or(0),
+        xf_id: attr_str(e, "xfId").and_then(|v| v.parse().ok()).unwrap_or(0),
+        apply_font: bool_attr_opt(e, "applyFont"),
+        apply_fill: bool_attr_opt(e, "applyFill"),
+        apply_border: bool_attr_opt(e, "applyBorder"),
+        apply_numfmt: bool_attr_opt(e, "applyNumberFormat"),
+        apply_alignment: bool_attr_opt(e, "applyAlignment"),
         ..Default::default()
     }
 }
@@ -250,7 +288,8 @@ fn parse_styles(xml: &str) -> StyleBook {
     let mut cur_border = BorderRec::default();
     let mut cur_side: Option<(String, BSide)> = None;
     let mut cur_xf: Option<XfRec> = None;
-    let mut sec = String::new(); // fonts | fills | borders | cellXfs | numFmts
+    let mut cur_style_xf: Option<XfRec> = None;
+    let mut sec = String::new(); // fonts | fills | borders | cellStyleXfs | cellXfs | numFmts
     let mut reader = Reader::from_str(xml);
     while let Ok(ev) = reader.read_event() {
         match &ev {
@@ -258,7 +297,9 @@ fn parse_styles(xml: &str) -> StyleBook {
                 let nm = e.local_name();
                 let nm = nm.as_ref();
                 match nm {
-                    "fonts" | "fills" | "borders" | "cellXfs" | "numFmts" => sec = nm.to_string(),
+                    "fonts" | "fills" | "borders" | "cellStyleXfs" | "cellXfs" | "numFmts" => {
+                        sec = nm.to_string()
+                    }
                     "font" => cur_font = FontInfo::default(),
                     "fill" => cur_fill = None,
                     "border" if sec == "borders" => cur_border = BorderRec::default(),
@@ -269,6 +310,7 @@ fn parse_styles(xml: &str) -> StyleBook {
                         ));
                     }
                     "xf" if sec == "cellXfs" => cur_xf = Some(xf_from_attrs(e)),
+                    "xf" if sec == "cellStyleXfs" => cur_style_xf = Some(xf_from_attrs(e)),
                     _ => {}
                 }
             }
@@ -303,8 +345,14 @@ fn parse_styles(xml: &str) -> StyleBook {
                         }
                     }
                     ("cellXfs", "xf") => book.xfs.push(xf_from_attrs(e)),
+                    ("cellStyleXfs", "xf") => book.cell_style_xfs.push(xf_from_attrs(e)),
                     ("cellXfs", "alignment") => {
                         if let Some(rec) = &mut cur_xf {
+                            apply_alignment(rec, e);
+                        }
+                    }
+                    ("cellStyleXfs", "alignment") => {
+                        if let Some(rec) = &mut cur_style_xf {
                             apply_alignment(rec, e);
                         }
                     }
@@ -336,7 +384,14 @@ fn parse_styles(xml: &str) -> StyleBook {
                             book.xfs.push(rec);
                         }
                     }
-                    "fonts" | "fills" | "borders" | "cellXfs" | "numFmts" => sec.clear(),
+                    "xf" if sec == "cellStyleXfs" => {
+                        if let Some(rec) = cur_style_xf.take() {
+                            book.cell_style_xfs.push(rec);
+                        }
+                    }
+                    "fonts" | "fills" | "borders" | "cellStyleXfs" | "cellXfs" | "numFmts" => {
+                        sec.clear()
+                    }
                     _ => {}
                 }
             }
@@ -493,8 +548,92 @@ fn side_to_payload(side: &BSide) -> Option<BorderSide> {
     })
 }
 
+/// 四组索引槽（font/fill/border/numfmt）的合并。自槽 0 = 常规缺省那一档
+/// （fonts[0] 按惯例就是默认字体、fill 0 = 无填充、border 0 = 无边框、numFmtId 0 = General），
+/// 生产方（Excel / LibreOffice / rust_xlsxwriter）都把默认字体登记在 fonts[0]
+fn merge_slot(own: u32, base: u32, apply: Option<bool>) -> u32 {
+    match apply {
+        Some(true) => own,
+        Some(false) => base,
+        // 缺省这一支的口径：[MS-OE376] Part 4 §3.8.45——cellXfs 里 apply* 缺省值是 false，
+        // "这一组与基样式连着"；同节的和规条补上可判定的边界——自槽与父样式不同时应写 true，
+        // 于是缺省且自槽正是常规缺省值时，取基样式那一组才是 Excel 的行为
+        // （MS 支持对 MS-OI29500"只有 cellXfs 定义格式"的补充答复同此：
+        // cellXfs 会为"没有自己设置的项"去取 cellStyleXfs 的值）
+        None => {
+            if own == 0 {
+                base
+            } else {
+                own
+            }
+        }
+    }
+}
+
+/// 对齐组的合并。与索引槽不同的判据是"自槽有没有设"：alignment 子元素整枚缺席
+/// （ho/vo 全空且不折行）算没设——`<alignment wrapText="0"/>` 这种显式写假的也按没设算，
+/// 生产方只在真折行时写 wrapText
+fn merge_alignment(rec: &XfRec, base: &XfRec) -> (Option<String>, Option<String>, bool) {
+    let own_set = rec.ho.is_some() || rec.vo.is_some() || rec.wrap;
+    let apply = rec.apply_alignment;
+    match apply {
+        Some(true) => (rec.ho.clone(), rec.vo.clone(), rec.wrap),
+        Some(false) => (base.ho.clone(), base.vo.clone(), base.wrap),
+        None => {
+            if own_set {
+                (rec.ho.clone(), rec.vo.clone(), rec.wrap)
+            } else {
+                (base.ho.clone(), base.vo.clone(), base.wrap)
+            }
+        }
+    }
+}
+
+/// 把 cellXfs 的一条 xf 与它 `xfId` 指的 cellStyleXfs 基样式按 apply* 语义合成一条有效 xf。
+///
+/// 两层模型（ECMA-376 §18.8.9/§18.8.10 + [MS-OE376] Part 4 §3.8.45）：
+/// - 基样式自己的 apply* 缺省值是 **true**；显式 false 表示命名样式自己不应用那一组，
+///   按常规缺省处理（`<cellStyleXfs><xf fontId="5" applyFont="0"/>` 这类怪件）
+/// - `xfId` 指到表外（或整段 cellStyleXfs 缺席）⇒ 基样式按空 XfRec 的常规缺省算，
+///   自槽该用的值照用——和规文件里 apply* 永远与"自槽是否缺省"一致，两支结论相同，
+///   分歧只出现在不和规的件上，那时按"写了什么算什么"处理
+fn merged_xf(rec: &XfRec, book: &StyleBook) -> XfRec {
+    let base = book
+        .cell_style_xfs
+        .get(rec.xf_id as usize)
+        .cloned()
+        .unwrap_or_default();
+    let base_font = if base.apply_font == Some(false) { 0 } else { base.font };
+    let base_fill = if base.apply_fill == Some(false) { 0 } else { base.fill };
+    let base_border = if base.apply_border == Some(false) {
+        0
+    } else {
+        base.border
+    };
+    let base_numfmt = if base.apply_numfmt == Some(false) {
+        0
+    } else {
+        base.numfmt
+    };
+    let (ho, vo, wrap) = if base.apply_alignment == Some(false) {
+        (None, None, false)
+    } else {
+        merge_alignment(rec, &base)
+    };
+    XfRec {
+        font: merge_slot(rec.font, base_font, rec.apply_font),
+        fill: merge_slot(rec.fill, base_fill, rec.apply_fill),
+        border: merge_slot(rec.border, base_border, rec.apply_border),
+        numfmt: merge_slot(rec.numfmt, base_numfmt, rec.apply_numfmt),
+        ho,
+        vo,
+        wrap,
+        ..Default::default()
+    }
+}
+
 fn style_for(xf: usize, book: &StyleBook) -> Option<CellStyle> {
-    let rec = book.xfs.get(xf)?;
+    let rec = merged_xf(book.xfs.get(xf)?, book);
     let f = book.fonts.get(rec.font as usize).cloned().unwrap_or_default();
     let bg = book.fills.get(rec.fill as usize).cloned().flatten();
     let bd = book.borders.get(rec.border as usize).and_then(|b| {
@@ -633,9 +772,15 @@ pub fn read_xlsx_styles(path: &str) -> (HashMap<String, SheetFmt>, Option<Defaul
     (out, default_font)
 }
 
-/// 工作簿默认字体 = `cellXfs[0]@fontId` 指到的那一条 font。没有 cellXfs 就没有这一层，不凭空造
+/// 工作簿默认字体 = `cellXfs[0]` 与它 `xfId` 指的 cellStyleXfs 基样式合成后的有效字体。
+/// 没有 cellXfs 就没有这一层，不凭空造
+///
+/// 走合成链而不是直接取 `xfs[0].font`：Normal 样式在文件里可以只由 cellStyleXfs[0] 承载
+/// （`<xf xfId="0" fontId="0" .../>` 不带 applyFont，自槽是常规缺省），
+/// 直接读自槽会读成 fonts[0] 而把真正的默认字体（如宋体 14）丢掉
 fn default_font_of(book: &StyleBook) -> Option<DefaultFont> {
-    let font = book.fonts.get(book.xfs.first()?.font as usize)?;
+    let rec = merged_xf(book.xfs.first()?, book);
+    let font = book.fonts.get(rec.font as usize)?;
     if font.ff.is_none() && font.fs.is_none() {
         return None;
     }
@@ -797,8 +942,10 @@ mod tests {
         );
     }
 
-    /// 工作簿默认字体那一层：认的是 `cellXfs[0]@fontId` 指到的那一条，不是"排在 fonts 第一条"。
-    /// 判别件是 `fontId="1"` 那一份——只看位置就会读成等线 11，而文件说的明明是宋体 14
+    /// 工作簿默认字体那一层：认的是 `cellXfs[0]` 合成后的有效字体，不是"排在 fonts 第一条"。
+    /// 判别件是 `fontId="1"` 那一份——只看位置就会读成等线 11，而文件说的明明是宋体 14。
+    /// 合成链的第三条判别件：Normal 只由 cellStyleXfs[0] 承载、cellXfs[0] 自槽全缺省时，
+    /// 有效字体要跟到基样式去（直接读自槽会把真正的默认字体读丢）
     #[test]
     fn workbook_default_font_follows_cell_xfs() {
         let book = |xml: &str| parse_styles(&format!(r#"<?xml version="1.0"?><styleSheet xmlns="x">{xml}</styleSheet>"#, xml = xml));
@@ -826,6 +973,20 @@ mod tests {
                 fs: Some(14.0)
             }),
             "默认样式指着第二条 font ⇒ 读的是那一条（按位置读就错）"
+        );
+
+        // 新支：cellXfs[0] 自槽全缺省（fontId=0，不带 applyFont），Normal 的字体只写在
+        // cellStyleXfs[0] 里——有效字体要跟到基样式，读成 fonts[0]（等线 11）就错了
+        let got = default_font_of(&book(&format!(
+            r#"{deng}<cellStyleXfs count="1"><xf fontId="1" fillId="0" borderId="0"/></cellStyleXfs><cellXfs count="1"><xf fontId="0" fillId="0" borderId="0" xfId="0"/></cellXfs>"#
+        )));
+        assert_eq!(
+            got,
+            Some(DefaultFont {
+                ff: Some("宋体".into()),
+                fs: Some(14.0)
+            }),
+            "Normal 只由 cellStyleXfs 承载时，默认字体跟到基样式"
         );
 
         assert_eq!(
@@ -872,5 +1033,167 @@ mod tests {
         assert_eq!(builtin_numfmt(3), Some("#,##0"));
         assert_eq!(builtin_numfmt(14), None, "日期 id 不映射");
         assert_eq!(builtin_numfmt(0), None);
+        // 本轮补收的：分数、带括号/红字的数值档、科学计数——判据是"屏上活着"（下一条测试量出来）
+        assert_eq!(builtin_numfmt(12), Some("# ?/?"));
+        assert_eq!(builtin_numfmt(13), Some("# ??/??"));
+        assert_eq!(builtin_numfmt(37), Some("#,##0 ;(#,##0)"));
+        assert_eq!(builtin_numfmt(38), Some("#,##0 ;[Red](#,##0)"));
+        assert_eq!(builtin_numfmt(48), Some("##0.0E+0"));
+        // 不映射的与理由：
+        assert_eq!(builtin_numfmt(5), None, "货币类嵌 locale 符号");
+        assert_eq!(builtin_numfmt(41), None, "会计类同");
+        assert_eq!(builtin_numfmt(45), None, "时间类：值已被 calamine 字符串化");
+        assert_eq!(builtin_numfmt(47), None, "时间类：同上");
+        assert_eq!(builtin_numfmt(23), None, "会计变体，locale 相关");
+    }
+
+    /// builtin_numfmt 的收录判据不是猜的，是量的：calamine 把日期/时间格式的单元格交回
+    /// `Data::DateTime`（值在 `data_to_value` 里字符串化 ⇒ 模式在屏上不活 ⇒ 不收），
+    /// 分数与科学计数交回 Float（模式活着 ⇒ 收）。calamine 换大版本若改了这口径，
+    /// 这条测试会红——那时该做的是回来重判收录表，不是把断言改成新的现状
+    #[test]
+    fn builtin_numfmt_liveness_is_measured_not_assumed() {
+        use calamine::{Data, Reader as _};
+        // (内建 id, 模式串, 样本值)——id 就是收录表要判的那个
+        let cases: [(u32, &str, f64); 6] = [
+            (45, "mm:ss", 0.52),       // 时间
+            (46, "[h]:mm:ss", 0.52),   // 时间
+            (47, "mmss.0", 0.52),      // 时间
+            (12, "# ?/?", 1.25),       // 分数
+            (48, "##0.0E+0", 12345.0), // 科学计数
+            (14, "mm-dd-yy", 45000.0), // 日期对照
+        ];
+        let mut path = std::env::temp_dir();
+        path.push("oo_probe_numfmt.xlsx");
+        {
+            let mut book = rust_xlsxwriter::Workbook::new();
+            let sheet = book.add_worksheet();
+            for (i, (_, code, v)) in cases.iter().enumerate() {
+                let fmt = rust_xlsxwriter::Format::new().set_num_format(*code);
+                sheet.write_number_with_format(i as u32, 0, *v, &fmt).unwrap();
+            }
+            book.save(path.to_str().unwrap()).unwrap();
+        }
+        let mut wb = calamine::open_workbook_auto(path.to_str().unwrap()).expect("calamine 打开失败");
+        let range = wb.worksheet_range_at(0).unwrap().unwrap();
+        for (i, (id, code, _)) in cases.iter().enumerate() {
+            let cell = range.get_value((i as u32, 0u32)).unwrap();
+            let is_num = matches!(cell, Data::Float(_) | Data::Int(_));
+            let mapped = builtin_numfmt(*id).is_some();
+            assert_eq!(
+                is_num,
+                mapped,
+                "numFmtId {id}（{code}）：calamine 交回 {cell:?}，收录表须与之一致"
+            );
+        }
+    }
+
+    /// cellStyleXfs 两层链的合并语义（[MS-OE376] Part 4 §3.8.45 + 和规条）：
+    /// 显式 ="0" 抑制自槽回落基样式；缺省且自槽是常规缺省值时也回落基样式；
+    /// 自槽有值就照自槽。三支各自的判别件都在这里
+    #[test]
+    fn named_style_chain_merges() {
+        let book = parse_styles(
+            r#"<?xml version="1.0"?><styleSheet xmlns="x">
+              <fonts count="3"><font><sz val="11"/><name val="Calibri"/></font>
+              <font><sz val="14"/><name val="宋体"/></font>
+              <font><b/><sz val="12"/><name val="Arial"/></font></fonts>
+              <fills count="2"><fill><patternFill patternType="none"/></fill>
+              <fill><patternFill patternType="solid"><fgColor rgb="FF00FF00"/></patternFill></fill></fills>
+              <numFmts count="1"><numFmt numFmtId="164" formatCode="0.0_"/></numFmts>
+              <cellStyleXfs count="1"><xf numFmtId="164" fontId="1" fillId="0" borderId="0"/></cellStyleXfs>
+              <cellXfs count="5">
+                <xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/>
+                <xf numFmtId="0" fontId="2" fillId="0" borderId="0" xfId="0" applyFont="1"/>
+                <xf numFmtId="0" fontId="2" fillId="0" borderId="0" xfId="0" applyFont="0"/>
+                <xf numFmtId="9" fontId="0" fillId="0" borderId="0" xfId="0" applyNumberFormat="1"/>
+                <xf numFmtId="9" fontId="0" fillId="0" borderId="0" xfId="0" applyNumberFormat="0"/>
+              </cellXfs>
+            </styleSheet>"#,
+        );
+        assert_eq!(book.cell_style_xfs.len(), 1, "cellStyleXfs 段要收进来");
+        // ① 全缺省槽 + 无 apply*：numfmt 回落基样式的 164，font 回落基样式的宋体
+        let st = style_for(0, &book).expect("xf0");
+        assert_eq!(st.nf.as_deref(), Some("0.0_"), "缺省槽跟基样式走（MS-OE376 的缺省 false）");
+        assert_eq!(st.ff.as_deref(), Some("宋体"), "font 自槽 0 是常规缺省，回落基样式");
+        assert_eq!(st.fs, Some(14.0));
+        // ② applyFont="1"：断开链接，用自己那一条（粗体 Arial 12）
+        let st = style_for(1, &book).expect("xf1");
+        assert_eq!(st.ff.as_deref(), Some("Arial"));
+        assert!(st.bl);
+        assert_eq!(st.nf.as_deref(), Some("0.0_"), "没说话的那组照旧回落基样式");
+        // ③ applyFont="0"：显式抑制，同样回落基样式的宋体（与 ① 殊途同归，路径不同）
+        let st = style_for(2, &book).expect("xf2");
+        assert_eq!(st.ff.as_deref(), Some("宋体"), "显式 false 也回落基样式");
+        // ④ applyNumberFormat="1"：自槽 9（0%）压过基样式的 164
+        let st = style_for(3, &book).expect("xf3");
+        assert_eq!(st.nf.as_deref(), Some("0%"));
+        // ⑤ applyNumberFormat="0"：显式抑制 ⇒ 用基样式的 164（反例：不抑制就会是 0%）
+        let st = style_for(4, &book).expect("xf4");
+        assert_eq!(st.nf.as_deref(), Some("0.0_"), "显式 0 抑制自槽，回落基样式");
+    }
+
+    /// 对齐组跟索引槽不同：判据是"alignment 子元素整枚缺席"而不是某个槽为 0
+    #[test]
+    fn named_style_alignment_chain() {
+        let book = parse_styles(
+            r#"<?xml version="1.0"?><styleSheet xmlns="x">
+              <fonts count="1"><font><sz val="11"/></font></fonts>
+              <cellStyleXfs count="1"><xf fontId="0" fillId="0" borderId="0"><alignment horizontal="center" vertical="center" wrapText="1"/></xf></cellStyleXfs>
+              <cellXfs count="3">
+                <xf fontId="0" fillId="0" borderId="0" xfId="0"/>
+                <xf fontId="0" fillId="0" borderId="0" xfId="0" applyAlignment="1"><alignment horizontal="right"/></xf>
+                <xf fontId="0" fillId="0" borderId="0" xfId="0" applyAlignment="0"/>
+              </cellXfs>
+            </styleSheet>"#,
+        );
+        // ① 没有 alignment 子元素 ⇒ 整组回落基样式：居中 + 折行都跟来
+        let st = style_for(0, &book).expect("xf0");
+        assert_eq!(st.ho.as_deref(), Some("center"));
+        assert_eq!(st.vo.as_deref(), Some("middle"));
+        assert!(st.wb, "折行也随基样式");
+        // ② applyAlignment="1"：只用自槽——右对齐，基样式的居中与折行都不跟来
+        let st = style_for(1, &book).expect("xf1");
+        assert_eq!(st.ho.as_deref(), Some("right"));
+        assert_eq!(st.vo, None, "自槽没写 vertical，基样式的不跟来");
+        assert!(!st.wb, "折行同");
+        // ③ applyAlignment="0"：显式抑制 ⇒ 回落基样式（与 ① 殊途同归）
+        let st = style_for(2, &book).expect("xf2");
+        assert_eq!(st.ho.as_deref(), Some("center"));
+        assert!(st.wb);
+    }
+
+    /// 没有 cellStyleXfs 段的件（本应用自己的写件、以及一大批第三方件）：
+    /// 基样式是空表，自槽该用的值照用——两层链不改变今天的读数
+    #[test]
+    fn no_cell_style_xfs_keeps_own_values() {
+        let book = parse_styles(
+            r#"<?xml version="1.0"?><styleSheet xmlns="x">
+              <fonts count="2"><font><sz val="11"/><name val="Calibri"/></font>
+              <font><b/><sz val="14"/><color rgb="FFFF0000"/></font></fonts>
+              <cellXfs count="2"><xf fontId="0" fillId="0" borderId="0" numFmtId="0"/>
+              <xf fontId="1" fillId="0" borderId="0" numFmtId="9"/></cellXfs>
+            </styleSheet>"#,
+        );
+        assert!(book.cell_style_xfs.is_empty());
+        let st = style_for(1, &book).expect("xf1");
+        assert_eq!(st.nf.as_deref(), Some("0%"));
+        assert_eq!(st.fs, Some(14.0));
+        assert_eq!(st.cl.as_deref(), Some("#ff0000"));
+    }
+
+    /// xfId 指到 cellStyleXfs 表外：基样式按空 XfRec 算，自槽照用，不许慌
+    #[test]
+    fn xf_id_out_of_range_falls_back_to_own() {
+        let book = parse_styles(
+            r#"<?xml version="1.0"?><styleSheet xmlns="x">
+              <fonts count="2"><font><sz val="11"/></font><font><b/><sz val="16"/></font></fonts>
+              <cellStyleXfs count="1"><xf fontId="0" fillId="0" borderId="0"/></cellStyleXfs>
+              <cellXfs count="1"><xf fontId="1" fillId="0" borderId="0" xfId="7"/></cellXfs>
+            </styleSheet>"#,
+        );
+        let st = style_for(0, &book).expect("xf0");
+        assert_eq!(st.fs, Some(16.0));
+        assert!(st.bl);
     }
 }
