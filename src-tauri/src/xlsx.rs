@@ -327,6 +327,11 @@ pub struct DataValidationPayload {
 }
 
 /// 条件格式的突出显示样式（dxf 的可用子集）
+///
+/// `nf` 是 dxf 的 `<numFmt>`：Excel 给条件格式配数字格式时（比如「大于 0 显示成 0.0%」）
+/// 就写在它身上。**屏上不活**——Univer 的条件格式高亮只有底纹/字色/粗斜下划线删除线六枚
+/// set*，没有数字格式槽（见 `sheet-rules.ts` 的 `buildCf`）。它在载荷里的唯一去处是存盘：
+/// 不读进来，打开再存一次这个串就**永久丢了**（不是显示问题，是数据丢失）。
 #[derive(Serialize, Deserialize, Clone, Debug, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct CondFormatStyle {
@@ -342,6 +347,9 @@ pub struct CondFormatStyle {
     pub ul: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub st: Option<bool>,
+    /// 数字格式串（dxf 内联的 `formatCode`，或按 id 查出来的内置/自定义串）
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub nf: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, Default)]
@@ -811,12 +819,14 @@ pub fn read_xlsx_sync(path: String) -> Result<WorkbookPayload, Error> {
     if path.to_ascii_lowercase().ends_with(".csv") {
         return crate::csv::read_payload(&path);
     }
+    // 这一趟读的是 xlsx 还是 ods：后面样式/侧通道/图表三条路都要按它分流，别各算一次
+    let is_ods = path.to_ascii_lowercase().ends_with(".ods");
     let mut workbook =
         open_workbook_auto(&path).map_err(|e| Error(format!("无法打开文件: {e}")))?;
     // 样式/合并读侧按格式分流：xlsx 直解 zip；ods 走 content.xml 直解；xls/csv 无样式通道
     // 工作簿默认字体两条路都读得到，只是住处不同：xlsx 在 styles.xml 的 cellXfs[0]，ODS 在同一件
     // styles.xml 的 <style:default-style style:family="table-cell">（v0.61 接上，此前 .ods 硬交回 None）
-    let (fmts, default_font) = if path.to_ascii_lowercase().ends_with(".ods") {
+    let (fmts, default_font) = if is_ods {
         crate::ods::read_ods_styles(&path)
     } else {
         xlsx_style::read_xlsx_styles(&path)
@@ -851,7 +861,10 @@ pub fn read_xlsx_sync(path: String) -> Result<WorkbookPayload, Error> {
     };
     rule_notes.extend(dn_notes);
     // 一格值同时进 cells 和"图表取数"用的网格；后者只在簿子真含图表时才需要（多数没有）
-    let keep_grid = xlsx_chart::has_charts(&path);
+        // ODS 的图表住在嵌入对象里（Object N/content.xml），得另开一把嗅探；
+    // 两头都没有图表时整张网格不必克隆（多数簿子走这条）
+    let keep_grid = xlsx_chart::has_charts(&path)
+        || (is_ods && crate::ods_chart::has_ods_charts(&path));
     let mut grids: std::collections::HashMap<String, xlsx_chart::Grid> =
         std::collections::HashMap::new();
     for name in workbook.sheet_names().to_vec() {
@@ -866,14 +879,26 @@ pub fn read_xlsx_sync(path: String) -> Result<WorkbookPayload, Error> {
         }
         let mut cells = Vec::new();
         let mut seen: std::collections::HashSet<(u32, u32)> = std::collections::HashSet::new();
+        // 图表取数的网格：只在真有图表时才建，而且必须在格循环**外面**取一次。
+        // 原先 `grids.entry(name.clone())` 写在格循环里 ⇒ 每格克隆一次表名并查一次哈希，
+        // 百万格又带图表的簿子就是百万次 String 分配，而这一格里要的从来是同一张表。
+        //
+        // （`cells`/`seen` 这里**不**按包围盒 `height*width` 预分配：稀疏表（A1 与
+        //  ZZ1000000 各一格）的包围盒能到百万级而实际只有两格，照包围盒 reserve 会
+        //  一次性吃掉几十 MB——省下的是几次扩容的 memcpy，赌的是稀疏表上的内存，不划算。）
+        let mut grid = if keep_grid {
+            Some(grids.entry(name.clone()).or_default())
+        } else {
+            None
+        };
         let (r0, c0) = range.start().unwrap_or((0, 0));
         for (ri, row) in range.rows().enumerate() {
             for (ci, cell) in row.iter().enumerate() {
                 if let Some(v) = data_to_value(cell) {
                     let (r, c) = (r0 + ri as u32, c0 + ci as u32);
                     seen.insert((r, c));
-                    if keep_grid {
-                        grids.entry(name.clone()).or_default().insert((r, c), v.clone());
+                    if let Some(g) = grid.as_mut() {
+                        g.insert((r, c), v.clone());
                     }
                     cells.push(CellPayload {
                         r,
@@ -946,7 +971,13 @@ pub fn read_xlsx_sync(path: String) -> Result<WorkbookPayload, Error> {
     }
     // 图表部件单独解析：值按引用从上面已建好的网格取
     let charts = if keep_grid {
-        xlsx_chart::read_xlsx_charts(&path, &grids)
+        if is_ods {
+            // ODF 图表的边界账（锚点取自 table:end-cell-address、OLE 对象、不在支持表内的图型）
+            rule_notes.extend(crate::ods_chart::ods_chart_read_accounts(&path));
+            crate::ods_chart::read_ods_charts(&path, &grids)
+        } else {
+            xlsx_chart::read_xlsx_charts(&path, &grids)
+        }
     } else {
         Default::default()
     };
@@ -2302,6 +2333,47 @@ mod tests {
         }
     }
 
+    /// 「大于 0 显示成 0.0%」这类规则：dxf 里只有 `<numFmt>`，一个色也不描。
+    /// 写件 → 读回串不变，是这一槽唯一的理由——不开它，真件打开再存一次这个串就没了。
+    /// 顺带压死了 rust_xlsxwriter 的两种落法：串可能内联在 dxf 里，也可能只写 id 让
+    /// 人去 `<numFmts>` 查——读侧两条路都得认
+    #[test]
+    fn cf_numfmt_alone_survives_a_round_trip() {
+        let path = tmp_path("cf-nf");
+        let wb = WorkbookPayload {
+            sheets: vec![SheetPayload {
+                name: "条件格式".into(),
+                cells: vec![cell(0, 0, json!(1)), cell(1, 0, json!(2))],
+                cond_formats: vec![CondFormatPayload {
+                    ranges: vec![rc(0, 0, 1, 0)],
+                    kind: "cell".into(),
+                    sub: Some("number".into()),
+                    op: Some("greaterThan".into()),
+                    v1: Some(json!(0)),
+                    fmt: Some(CondFormatStyle {
+                        nf: Some("0.0%".into()),
+                        ..Default::default()
+                    }),
+                    ..Default::default()
+                }],
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        write_xlsx_sync(path.clone(), wb).expect("写件");
+        let back = read_xlsx_sync(path.clone()).expect("读回");
+        std::fs::remove_file(&path).ok();
+        let cf = back.sheets[0]
+            .cond_formats
+            .first()
+            .expect("只配数字格式的规则也得读出来");
+        assert_eq!(
+            cf.fmt.as_ref().and_then(|f| f.nf.as_deref()),
+            Some("0.0%"),
+            "dxf 的数字格式串走了个来回"
+        );
+    }
+
     fn entry(path: &str, name: &str) -> String {
         let file = std::fs::File::open(path).expect("打开产物失败");
         let mut zip = zip::ZipArchive::new(file).expect("产物不是 zip");
@@ -2662,7 +2734,7 @@ mod tests {
             <dxf><font><i/><u/><strike/><color indexed="10"/></font></dxf>
             <dxf><fill><patternFill patternType="solid"><fgColor rgb="FFFFFFCC"/></patternFill></fill></dxf>
           </dxfs></styleSheet>"#;
-        let dxfs = crate::xlsx_style::parse_dxfs(xml);
+        let dxfs = crate::xlsx_style::parse_dxfs(xml, &Default::default());
         assert_eq!(dxfs.len(), 3);
         assert_eq!(dxfs[0].bg.as_deref(), Some("#ffc7ce"), "dxf 的底纹住在 bgColor");
         assert_eq!(dxfs[0].cl.as_deref(), Some("#9c0006"));
@@ -2672,7 +2744,7 @@ mod tests {
         assert_eq!(dxfs[1].st, Some(true));
         assert_eq!(dxfs[1].cl, None, "indexed 色我们解不出，宁可不给");
         assert_eq!(dxfs[2].bg.as_deref(), Some("#ffffcc"), "别的工具写 fgColor 也认");
-        assert!(crate::xlsx_style::parse_dxfs(r#"<styleSheet><dxfs count="0"/></styleSheet>"#).is_empty());
+        assert!(crate::xlsx_style::parse_dxfs(r#"<styleSheet><dxfs count="0"/></styleSheet>"#, &Default::default()).is_empty());
     }
 
     #[test]
@@ -3304,3 +3376,4 @@ mod tests {
         }
     }
 }
+

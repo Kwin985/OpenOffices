@@ -158,6 +158,12 @@ export interface CondFormatStyle {
   it?: boolean
   ul?: boolean
   st?: boolean
+  /**
+   * 数字格式串（dxf 的 `<numFmt>`）。**屏上不活**：Univer 的条件格式高亮只有
+   * 底纹/字色/粗/斜/下划线/删除线六枚 set*，没有数字格式槽，所以 `buildCf` 不喂它。
+   * 它待在载荷里的唯一去处是存盘——不带着，打开再存一次这个串就永久没了。
+   */
+  nf?: string
 }
 
 /** 色阶的一档：t=min|max|num|percent|percentile|formula|auto */

@@ -687,7 +687,11 @@ fn parse_range(s: &str) -> Option<MergeRange> {
 ///
 /// dxf 与 cellXfs 不是一套东西——它不写 fontId/fillId 索引，粗斜体与颜色直接住在块里，
 /// 底纹颜色落在 `bgColor`（cellXfs 的实心填充会被 Excel 反过来写成 fgColor），所以单独扫一趟。
-pub(crate) fn parse_dxfs(xml: &str) -> Vec<CondFormatStyle> {
+///
+/// `numfmts` 是 styles.xml 顶层的 `<numFmts>`（id≥164 的自定义串）。dxf 的 `<numFmt>` 通常
+/// 把串直接内联在块里（dxf 是差分格式，不共享 numFmts 表），但只给 `numFmtId` 的件也见得到：
+/// 那时先按 id 查自定义表、再查内置表，两处都没有就留空——不猜。
+pub(crate) fn parse_dxfs(xml: &str, numfmts: &HashMap<u32, String>) -> Vec<CondFormatStyle> {
     let mut out = Vec::new();
     let Some(start) = xml.find("<dxfs") else { return out };
     let Some(rel) = xml[start..].find("</dxfs>") else {
@@ -709,6 +713,13 @@ pub(crate) fn parse_dxfs(xml: &str) -> Vec<CondFormatStyle> {
                 }
                 "font" => in_font = true,
                 "fill" => in_fill = true,
+                "numFmt" => {
+                    let id = attr_str(e, "numFmtId").and_then(|v| v.parse::<u32>().ok());
+                    cur.nf = attr_str(e, "formatCode").or_else(|| {
+                        id.and_then(|i| numfmts.get(&i).cloned())
+                            .or_else(|| id.and_then(builtin_numfmt).map(String::from))
+                    });
+                }
                 "b" if in_font => cur.bl = Some(bool_attr(e)),
                 "i" if in_font => cur.it = Some(bool_attr(e)),
                 "strike" if in_font => cur.st = Some(bool_attr(e)),
@@ -757,7 +768,7 @@ pub fn read_xlsx_styles(path: &str) -> (HashMap<String, SheetFmt>, Option<Defaul
     };
     let book = parse_styles(&styles_xml);
     let default_font = default_font_of(&book);
-    let dxfs = parse_dxfs(&styles_xml);
+    let dxfs = parse_dxfs(&styles_xml, &book.numfmts);
     for (name, p) in sheet_paths(&mut zip) {
         if let Some(xml) = read_entry(&mut zip, &p) {
             let mut fmt = parse_sheet(&xml, &book);
@@ -1195,5 +1206,42 @@ mod tests {
         let st = style_for(0, &book).expect("xf0");
         assert_eq!(st.fs, Some(16.0));
         assert!(st.bl);
+    }
+
+    /// dxf 的 `<numFmt>`：三种形状各归各位——内联串、按 id 查内置表、按 id 查自定义表
+    #[test]
+    fn dxf_numfmt_reads_inline_and_both_tables() {
+        let xml = r#"<styleSheet xmlns="x"><numFmts count="1">
+              <numFmt numFmtId="164" formatCode="0.0_);[Red](0.0\ )"/></numFmts>
+            <dxfs count="3">
+              <dxf><numFmt numFmtId="165" formatCode="0.0%"/></dxf>
+              <dxf><numFmt numFmtId="10"/></dxf>
+              <dxf><numFmt numFmtId="164"/></dxf>
+            </dxfs></styleSheet>"#;
+        let mut numfmts = HashMap::new();
+        numfmts.insert(164, "0.0_);[Red](0.0 )".to_string());
+        let dxfs = parse_dxfs(xml, &numfmts);
+        assert_eq!(dxfs.len(), 3);
+        assert_eq!(dxfs[0].nf.as_deref(), Some("0.0%"), "内联 formatCode 直接用");
+        assert_eq!(dxfs[1].nf.as_deref(), Some("0.00%"), "只给 id 的按内置表 10 展开");
+        assert_eq!(
+            dxfs[2].nf.as_deref(),
+            Some("0.0_);[Red](0.0 )"),
+            "自定义 id 回 styles.xml 顶层的 numFmts 查（dxf 自己不内联时）"
+        );
+    }
+
+    /// 查不到的 id 留空而不是瞎猜：dxf 里 numFmtId=200 而两处表都没有，就当没配格式
+    #[test]
+    fn dxf_numfmt_unknown_id_stays_empty() {
+        let xml = r#"<styleSheet xmlns="x"><dxfs count="2">
+              <dxf><numFmt numFmtId="200"/></dxf>
+              <dxf><font><b/></font></dxf>
+            </dxfs></styleSheet>"#;
+        let dxfs = parse_dxfs(xml, &HashMap::new());
+        assert_eq!(dxfs.len(), 2);
+        assert!(dxfs[0].nf.is_none(), "两处表都没有 ⇒ 不猜");
+        assert!(dxfs[1].nf.is_none(), "没写 numFmt 就没有");
+        assert_eq!(dxfs[1].bl, Some(true), "别的字段不受影响");
     }
 }

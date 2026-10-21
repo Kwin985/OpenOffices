@@ -48,6 +48,16 @@ const FILTER_PLUGIN = 'SHEET_FILTER_PLUGIN'
 /** 门面 builder 能表达的数据验证类型（textLength/time/any/checkbox 这几样这个版本的门面建不出来） */
 const APPLIABLE_DV = new Set(['whole', 'decimal', 'list', 'date', 'custom'])
 
+/**
+ * Univer 给文本类条件的**初值**：面板上新建一条"包含文本"却没填内容时，模型里的 value
+ * 就是这一串。它不是判定值，存进文件会写出一条 `text="abc"` 的规则。
+ *
+ * 代价是用户真把判定文本写成 abc 时这一条不落盘——已知的、故意接受的代价，
+ * 由 `scripts/test-sheet-rules.mjs` 里那两行（abc / abcd）钉住：哪天 Univer 换了初值，
+ * 那两行会红，而不是悄悄多存或少存一批规则。
+ */
+const TEXT_PLACEHOLDER = 'abc'
+
 function rectOf(v: unknown): RangeRect | null {
   const r = v as Partial<RangeRect> | null | undefined
   if (!r) return null
@@ -247,7 +257,7 @@ function cfRuleOf(raw: unknown, notes: string[]): CondFormatPayload | null {
     out.v2 = (value[1] ?? '') as string | number
   } else if (sub === 'timePeriod' || sub === 'average') {
     // 时段与均值的 operator 本身就是判定，Univer 往 value 里塞的是占位串
-  } else if (value !== 'abc' && value != null) {
+  } else if (value !== TEXT_PLACEHOLDER && value != null) {
     out.v1 = value as string | number
   }
   return out
@@ -502,6 +512,8 @@ function buildCf(ws: WorksheetLike, rule: CondFormatPayload): unknown | null {
       } else {
         return null
       }
+      // style?.nf 故意不喂：Univer 的 CF 高亮没有数字格式槽（只有下面这六枚 set*）。
+      // 它在载荷里只服务存盘往返——喂不进去 ≠ 该丢掉
       if (style?.bg) call('setBackground', style.bg)
       if (style?.cl) call('setFontColor', style.cl)
       if (style?.bl) call('setBold', true)
@@ -538,7 +550,7 @@ export function buildDataValidation(api: FUniver, rule: DataValidationPayload): 
       break
     }
     case 'list':
-      if (f1.startsWith('$') || f1.includes(':')) call('requireValueInRange', f1)
+      if (isRangeRef(f1)) call('requireValueInRange', f1)
       else call('requireValueInList', f1.split(','), false, rule.dropdown !== false)
       break
     case 'date': {
@@ -579,6 +591,32 @@ export function buildDataValidation(api: FUniver, rule: DataValidationPayload): 
 
 function asDate(s: string | undefined): Date | null {
   return s ? dateOfIso(normDateValue(s) ?? '') : null
+}
+
+/**
+ * 下拉的来源有两种写法：字面选项（`甲,乙`）与区域引用（`$A$1:$A$3`、`Sheet1!A1:A3`）。
+ *
+ * 判据不能是"含不含冒号"——时间类选项（`08:00,12:00`）含冒号却不是引用，
+ * 判错就会把一整串选项当成区域名交给门面，回界面时下拉整个没了。
+ * 写侧（`src-tauri/src/xlsx_rules.rs` 的 `is_ref`）是同一把尺子，改一头要改另一头。
+ */
+function isRangeRef(s: string): boolean {
+  const t = s.trim()
+  if (!t) return false
+  // `=`/`$` 开头一律当引用：这两条只会多算，而多算的代价（这一条规则不生效并进边界账）
+  // 远小于漏算（把引用当字面值切逗号，`Sheet1!A1:A3` 会变成三个"选项"）
+  if (t.startsWith('$') || t.startsWith('=')) return true
+  const i = t.indexOf(':')
+  if (i < 0) return false
+  return isCellRef(t.slice(0, i)) && isCellRef(t.slice(i + 1))
+}
+
+/** `A1` / `$A$1` / `Sheet1!A1` / `'我的 表'!A1`：列 1~3 位、行 1~7 位，认不出的一律不算 */
+function isCellRef(s: string): boolean {
+  const t = s.trim()
+  // 表名前缀（`Sheet1!`、`'带 空格'!`）与引用无关，只看最后一个感叹号之后
+  const at = t.lastIndexOf('!')
+  return /^\$?[A-Za-z]{1,3}\$?\d{1,7}$/.test(at >= 0 ? t.slice(at + 1) : t)
 }
 
 /** 同一句话出现多次时收成"文案×N"，状态栏只装得下一行 */

@@ -124,10 +124,53 @@ fn number_of(s: &str) -> Option<f64> {
     t.parse::<f64>().ok().filter(|x| x.is_finite())
 }
 
-/// `$A$1`、`=$B$2`、`$A$1:$A$3` 这一类是引用而不是字面值：crate 对"取单元格值"另有入口
+/// `$A$1`、`=$B$2`、`$A$1:$A$3` 这一类是引用而不是字面值：crate 对"取单元格值"另有入口。
+///
+/// 早先这里写成 `contains(':')`，于是**含冒号的字面值**会被当成引用——最典型的是
+/// 时间类下拉选项（`08:00,12:00`）：它被送进 `allow_list_formula`，写出的 `formula1`
+/// 没有引号，Excel 打开就是一条无效公式，下拉整个没了。所以真的去看冒号两边是不是
+/// 单元格，而不是"有没有冒号"。
+///
+/// `=`/`$` 开头仍然一律算引用：这两条只可能**多算**，而多算的代价（走 `*_formula`
+/// 入口，最多是这一条规则不生效并进边界账）远小于漏算（写出坏公式，文件本身出问题）
 fn is_ref(s: &str) -> bool {
     let t = s.trim();
-    t.starts_with('$') || t.starts_with('=') || t.contains(':')
+    if t.starts_with('$') || t.starts_with('=') {
+        return true;
+    }
+    match t.split_once(':') {
+        Some((a, b)) => is_cell(a) && is_cell(b),
+        None => false,
+    }
+}
+
+/// `A1` / `$A$1` / `Sheet1!A1` / `'我的 表'!A1` 这一类。列 1~3 位、行 1~7 位，
+/// 超出的一律不算（与 `rects_of` 那边一样：认不出的形状不猜）
+fn is_cell(s: &str) -> bool {
+    let t = s.trim();
+    // 表名前缀（`Sheet1!`、`'带 空格'!`）与引用无关，只看感叹号后面那一段
+    let t = match t.rfind('!') {
+        Some(i) => &t[i + 1..],
+        None => t,
+    };
+    let (mut col, mut row) = (0usize, 0usize);
+    let mut saw_digit = false;
+    for c in t.chars() {
+        if c == '$' {
+            continue;
+        } else if c.is_ascii_alphabetic() {
+            if saw_digit {
+                return false; // 列号跑到数字后面（1A）不是引用
+            }
+            col += 1;
+        } else if c.is_ascii_digit() {
+            saw_digit = true;
+            row += 1;
+        } else {
+            return false;
+        }
+    }
+    (1..=3).contains(&col) && (1..=7).contains(&row)
 }
 
 /// 载荷里的日期一律 `YYYY-MM-DD`（前端 normDateValue 收过），OOXML 里是序列号
@@ -814,11 +857,17 @@ fn date_rule(op: &str) -> Option<ConditionalFormatDateRule> {
     })
 }
 
-/// 高亮的 dxf：底纹 + 字色 + 粗斜下划线删除线；什么都没带就不设格式（只当判定用）
+/// 高亮的 dxf：底纹 + 字色 + 粗斜下划线删除线 + 数字格式；什么都没带就不设格式（只当判定用）
 fn dxf_format(cf: &CondFormatPayload) -> Option<Format> {
     let s = cf.fmt.as_ref()?;
     let mut f = Format::new();
     let mut any = false;
+    // 数字格式：只带 nf 的规则（Excel 里很常见——「大于 0 显示成 0.0%」不描色只换格式）
+    // 也必须有 Format，否则 rust_xlsxwriter 压根不生成 dxf，存盘就丢了这一条
+    if let Some(nf) = &s.nf {
+        f = f.set_num_format(nf);
+        any = true;
+    }
     if let Some(bg) = &s.bg {
         f = f.set_background_color(Color::from(bg.as_str()));
         any = true;
@@ -1179,8 +1228,16 @@ fn norm_cfvo(t: &str) -> String {
     .to_string()
 }
 
+/// 什么都不带的 dxf 不该占一枚 `fmt`（那种规则只当判定用）。
+/// **nf 也算有内容**：只配数字格式不描色的条件格式在 Excel 里很常见，判空会把它整条丢掉
 fn is_empty_style(s: &CondFormatStyle) -> bool {
-    s.bg.is_none() && s.cl.is_none() && s.bl.is_none() && s.it.is_none() && s.ul.is_none() && s.st.is_none()
+    s.bg.is_none()
+        && s.cl.is_none()
+        && s.bl.is_none()
+        && s.it.is_none()
+        && s.ul.is_none()
+        && s.st.is_none()
+        && s.nf.is_none()
 }
 
 /// `"甲,乙,丙"` → 裸串（list 的候选值在 OOXML 里是一段带引号的文本，Univer 要的是逗号串）
@@ -1543,6 +1600,39 @@ fn tag_attr(tag: &str, key: &str) -> Option<String> {
 mod tests {
     use super::*;
 
+    /// "是不是引用"这条判据上，漏判与误判的代价不对称：
+    /// 误判（把字面值当引用）会写出没有引号的 formula1，Excel 打开是一条无效公式——
+    /// 文件本身就是坏的。所以含冒号的字面值必须判得出来
+    #[test]
+    fn ref_detection_tells_literals_from_ranges() {
+        assert!(is_ref("$A$1:$A$3"), "最普通的区域");
+        assert!(is_ref("A1:A3"), "不带 $ 的区域");
+        assert!(is_ref("Sheet1!A1:A3"), "带表名的区域");
+        assert!(is_ref("'我的 表'!A1:B2"), "表名带空格要用单引号");
+        assert!(is_ref("$A$1"), "单格");
+        assert!(is_ref("=$B$2"), "公式");
+        assert!(is_ref("=TODAY()"), "函数也一律算引用");
+
+        // 反面：含冒号但不是引用。早先 `contains(':')` 会把这几条都当成区域
+        assert!(!is_ref("08:00,12:00"), "时间类下拉选项");
+        assert!(!is_ref("甲,乙"), "普通下拉选项");
+        assert!(!is_ref("2026-01-01"), "载荷里的日期串");
+        assert!(!is_ref("1:2:3"), "三段冒号不是区域");
+        assert!(!is_ref("A:A"), "整列引用这一版不猜（与 sqref 那边同口径）");
+        assert!(!is_ref(""), "空串");
+    }
+
+    #[test]
+    fn cell_shape_is_bounded() {
+        assert!(is_cell("A1"));
+        assert!(is_cell("$AB$12"));
+        assert!(is_cell("Sheet1!ABC1234567"));
+        assert!(!is_cell("1A"), "列号在数字之后");
+        assert!(!is_cell("ABCD1"), "列号超过三位");
+        assert!(!is_cell("A"), "没有行号");
+        assert!(!is_cell("TODAY()"), "函数不是单元格");
+    }
+
     /// 日期换算得有绝对锚点：只验"写出去再读回来"的话，历元整个偏掉 140 年也照样对得上
     #[test]
     fn date_conversions_have_anchors() {
@@ -1593,5 +1683,44 @@ mod tests {
 
     fn rc(start_row: u32, start_column: u32, end_row: u32, end_column: u32) -> RangeRect {
         RangeRect { start_row, start_column, end_row, end_column }
+    }
+
+    /// 「大于 0 显示成 0.0%」这类规则：dxf 里只有 `<numFmt>`，一个色也不描。
+    /// 判空把它整条丢了 ⇒ 打开再存一次这个串就永久没了（数据丢失，不是显示问题）
+    #[test]
+    fn cf_rule_keeps_a_numfmt_only_dxf() {
+        let dxfs = vec![CondFormatStyle {
+            nf: Some("0.0%".into()),
+            ..Default::default()
+        }];
+        let xml = r#"<worksheet xmlns="x"><conditionalFormatting sqref="A1:A9">
+              <cfRule type="cellIs" dxfId="0" priority="1" operator="greaterThan">
+                <formula>0</formula>
+              </cfRule>
+            </conditionalFormatting></worksheet>"#;
+        let out = read_sheet_rules(xml, &[], &dxfs);
+        let cf = out
+            .cond_formats
+            .first()
+            .expect("只配数字格式的规则也得读出来");
+        let fmt = cf.fmt.as_ref().expect("fmt 不能因为没描色就被判空丢掉");
+        assert_eq!(fmt.nf.as_deref(), Some("0.0%"));
+        assert!(fmt.bg.is_none() && fmt.cl.is_none(), "本来就没配颜色");
+    }
+
+    /// 反面：dxf 真的什么都没带（连 nf 也没有）时，仍按「只当判定用」处理
+    #[test]
+    fn cf_rule_without_any_format_has_no_fmt() {
+        let dxfs = vec![CondFormatStyle::default()];
+        let xml = r#"<worksheet xmlns="x"><conditionalFormatting sqref="A1:A9">
+              <cfRule type="cellIs" dxfId="0" priority="1" operator="greaterThan">
+                <formula>0</formula>
+              </cfRule>
+            </conditionalFormatting></worksheet>"#;
+        let out = read_sheet_rules(xml, &[], &dxfs);
+        assert!(
+            out.cond_formats.first().and_then(|c| c.fmt.as_ref()).is_none(),
+            "空 dxf 不占一枚 fmt"
+        );
     }
 }
