@@ -54,6 +54,22 @@ import { Indent } from '../lib/indent-extension'
 import { CharSpacing } from '../lib/char-spacing'
 import { BulletChar } from '../lib/bullet-char'
 import {
+  loadSpellDict,
+  onSpellDictChange,
+  setSpellDeep,
+  spellDeepOn,
+  spellDictState,
+  SpellCheck,
+  spellIgnored,
+  spellPluginKey,
+  spellUnignore,
+  type SpellIssue,
+} from '../lib/spell'
+import { CollabSession, type CollabPeer, type CollabStatus } from '../lib/collab'
+import { loadMacros, newMacro, runMacro, saveMacros, type Macro, type MacroRun } from '../lib/macro'
+import { looksLikeVba, runVba, transpileVba, VBA_SAMPLE } from '../lib/vba'
+import { authorColor, identityName, setIdentityName } from '../lib/identity'
+import {
   BORDER_STYLES,
   BORDER_WIDTH_PT,
   CELL_EDGES,
@@ -66,6 +82,7 @@ import {
   type CellEdge,
 } from '../lib/cell-style'
 import { ParagraphStyle, RStyleMark, ruleOf, type LineRule } from '../lib/paragraph-style'
+import { CharExtra } from '../lib/char-extra'
 import { TableWidth, caretColumn, tableTargetPx } from '../lib/table-width'
 import { FindReplace, frPluginKey, activeIndexOf } from '../lib/find-replace'
 import { docTemplate } from '../lib/templates'
@@ -119,6 +136,22 @@ const FONT_SIZES_PT = [9, 10, 11, 12, 14, 16, 18, 22, 24, 28, 36, 48]
 const pt2px = (pt: number) => Math.round((pt * 96) / 72)
 const px2pt = (px: number) => Math.round((px * 72) / 96)
 
+// 字符间距档位（pt）：Word「字体→高级→间距」只有加宽/紧缩两档，这里给常用刻度。
+// 0 这一档两侧语义不同：ODT 写得下（显式压掉样式层的间距），docx 写不下
+// （库的门是 `if (options.characterSpacing)`，0 整枚不写），落到 docx 即「回到样式默认」。
+const CHAR_SPACING_PT = [-2, -1, -0.5, 0, 0.5, 1, 1.5, 2, 3, 4]
+const spacingLabel = (pt: number) => (pt === 0 ? '标准' : pt > 0 ? `加宽 ${pt}pt` : `紧缩 ${-pt}pt`)
+/** 模型存的是带单位串（"1.5pt"），UI 存数字；两边靠这个函数对齐 */
+const spacingToModel = (pt: number) => `${pt}pt`
+function spacingFromModel(raw: unknown): number {
+  if (raw === null || raw === undefined || raw === '') return 0
+  const n = Number(String(raw).replace(/pt$/i, ''))
+  return Number.isFinite(n) ? n : 0
+}
+
+// 常用符面：前六枚是 ODF/OOXML 双方都落得下的保守集，后几枚是装饰性的
+const BULLET_CHARS = ['•', '○', '■', '□', '◆', '◇', '★', '☆', '▪', '▸', '–', '—', '✓', '✗', '✦', '❖']
+
 // 图片扩展自带 width/height（像素数字），补 align=center：渲染成块级 + 双侧 auto 边距
 const ImgExt = Image.extend({
   addAttributes() {
@@ -162,6 +195,44 @@ function DocEditor({ tab }: Props) {
   const [frOpen, setFrOpen] = useState(false)
   const [frQ, setFrQ] = useState('')
   const [frCs, setFrCs] = useState(false)
+  // 拼写检查：开关与"我的词典"的展示份。词典本身住在 spell.ts（localStorage），
+  // 这里存一份只为面板上能列出并撤掉
+  const [spellOn, setSpellOn] = useState(false)
+  // —— 实时协同：会话对象、状态、面板开关。房间名默认跟着文件路径走，
+  // 同一份文档的两个实例因此自动进同一间；也可以手改成别的（换名字就是换房间）
+  const [collabOpen, setCollabOpen] = useState(false)
+  const [collab, setCollab] = useState<CollabStatus>({
+    state: 'off',
+    room: '',
+    port: 0,
+    peers: [],
+    error: '',
+  })
+  const [collabRoom, setCollabRoom] = useState('')
+  const collabRef = useRef<CollabSession | null>(null)
+  const defaultRoom = () => tab.path || tab.title || '未命名文档'
+  const [myDict, setMyDict] = useState<string[]>(() => spellIgnored())
+  // 全量词典那一档：词表 2.8MB，第一次按才下载，所以界面上得把"加载中/拉不到"说清楚
+  const [dictState, setDictState] = useState(() => spellDictState())
+  const [deep, setDeep] = useState(false)
+  useEffect(() => onSpellDictChange(() => setDictState(spellDictState())), [])
+  // 协同会话跟着这一页走：卸掉它就得把连接和我们起的中继一起收摊。
+  // 标签是常驻挂载的，所以这一路主要在关标签/关窗口时跑——漏了它就是一个
+  // 没人要的 WebSocket 和一个没人要的中继进程留在那儿
+  useEffect(() => () => {
+    collabRef.current?.dispose()
+    collabRef.current = null
+  }, [])
+  // 宏：内置那几条每次都在（删不掉），自己写的那几条存 localStorage
+  const [macros, setMacros] = useState<Macro[]>(() => loadMacros())
+  const [macroOpen, setMacroOpen] = useState(false)
+  const [macroSel, setMacroSel] = useState<string>('')
+  const [macroCode, setMacroCode] = useState('')
+  const [macroOut, setMacroOut] = useState<MacroRun | null>(null)
+  // VBA 那一档：转译预览的开关。默认关着——大多数时候用户只想跑，不想看 JS
+  const [vbaShow, setVbaShow] = useState(false)
+  // 署名（协同的"我是谁"）：修订与批注都按它记作者
+  const [who, setWho] = useState<string>(() => identityName())
   const [frRep, setFrRep] = useState('')
   const frInputRef = useRef<HTMLInputElement>(null)
   const [histOpen, setHistOpen] = useState(false)
@@ -206,6 +277,9 @@ function DocEditor({ tab }: Props) {
       TextStyleKit.configure({ backgroundColor: false, lineHeight: false }),
       // 字符间距挂同一枚 textStyle（保真导入发的 letter-spacing: Npt 靠它才进得了模型）
       CharSpacing,
+      // 拼写检查：默认关。开着时每次文档变更全量重扫，长文档上是一笔输入延迟，
+      // 所以做成"要查才开"而不是常驻——与 Word 那个开关同一条理由
+      SpellCheck,
       // 上下标不在 TextStyleKit 里（它们是独立 mark，渲染成 <sup>/<sub>）
       Superscript,
       Subscript,
@@ -217,6 +291,8 @@ function DocEditor({ tab }: Props) {
       ParagraphStyle,
       // 字符级命名样式标签（v0.113）：w:rStyle 读进来落 span[data-rstyle]，导出写回 w:rStyle
       RStyleMark,
+      // 复杂文字与语言四槽（v0.138）：cs/szCs/lang/hint 读进来落 data-*，导出按库的选项面能写多少写多少
+      CharExtra,
       Highlight.configure({ multicolor: true }),
       CharacterCount,
       Toc,
@@ -891,6 +967,160 @@ function DocEditor({ tab }: Props) {
     editor?.commands.setFindQuery('')
   }
 
+  // —— 拼写检查 ——
+  // 开的时候顺手扫一遍（插件 state 的 on 与命中一起落），关的时候把命中清空
+  const toggleSpell = () => {
+    if (!editor) return
+    const next = !spellOn
+    setSpellOn(next)
+    editor.commands.setSpellCheck(next)
+  }
+  // 插件 state 是唯一真源：命中随文档变，不能把列表复制进 React state 再同步
+  const spellState = editor ? spellPluginKey.getState(editor.state) : undefined
+  const spellIssues: SpellIssue[] = spellOn ? spellState?.issues ?? [] : []
+  const spellTruncated = spellOn && (spellState?.truncated ?? false)
+
+  /** 把光标挪到那一处：选中整段，用户下一步直接打字就替换掉了 */
+  const spellFocus = (i: SpellIssue) => {
+    editor?.chain().focus().setTextSelection({ from: i.from, to: i.to }).run()
+  }
+  /** 采纳建议：选中替换。改完插件自己重扫（docChanged 那一路） */
+  const spellApply = (i: SpellIssue) => {
+    if (!editor || !i.suggest) return
+    editor
+      .chain()
+      .focus()
+      .setTextSelection({ from: i.from, to: i.to })
+      .insertContent(i.suggest)
+      .run()
+    markDirty(tab.id, true)
+  }
+  const spellIgnoreOne = (i: SpellIssue) => {
+    editor?.commands.ignoreSpell(i.text)
+    setMyDict(spellIgnored())
+  }
+  /** 全量词典档的开关。词表没拉到就停在关——这一档缺了词典等于没有，不该假装开着 */
+  const toggleDeep = async () => {
+    if (!editor) return
+    if (spellDeepOn()) {
+      setSpellDeep(false)
+      setDeep(false)
+      editor.commands.rescanSpell()
+      return
+    }
+    const st = await loadSpellDict()
+    setDictState(st)
+    // 下载是异步的：这中间用户可能切了页签，编辑器已经销毁就不能再派事务
+    if (st === 'ready' && !editor.isDestroyed) {
+      setSpellDeep(true)
+      setDeep(true)
+      editor.commands.rescanSpell()
+    }
+  }
+  // —— 实时协同 ——
+  /**
+   * 开/关一次协同会话。
+   *
+   * 三态而不是两态，因为中间那一态（starting）也得能退出：连中继、
+   * 跑握手这几百毫秒里用户改主意，点第二下就该收摊，不能等它自己成败。
+   * error 态同样算"没在协同里"——点一下先收掉残句，再点才是重开。
+   */
+  const toggleCollab = async () => {
+    if (!editor) return
+    const cur = collabRef.current
+    if (cur && collab.state !== 'off') {
+      cur.stop()
+      // stop() 自己会回调置 off；这里再补一次是防它已经 dispose 过（不会再回调），
+      // 那时按钮会永远停在"退出"上
+      setCollab({ state: 'off', room: '', port: 0, peers: [], error: '' })
+      return
+    }
+    const room = collabRoom.trim() || defaultRoom()
+    setCollabRoom(room)
+    const session = new CollabSession(editor, setCollab)
+    collabRef.current = session
+    await session.start(room)
+  }
+  const toggleCollabPanel = () => {
+    const next = !collabOpen
+    setCollabOpen(next)
+    // 第一次打开时把房间名填上默认值（跟着文件路径走）：两个实例打开同一份文件
+    // 就该自动进同一间，不该要求用户先知道"房间"这个词
+    if (next && !collabRoom.trim()) setCollabRoom(defaultRoom())
+  }
+  /** 对端标签：匿名时补上 clientID 尾巴，不然几个"匿名"在面板上分不清是谁 */
+  const peerTag = (p: CollabPeer) => (p.name === '匿名' ? `匿名#${p.id}` : p.name)
+  // —— 宏 ——
+  const macroCurrent = macros.find((m) => m.id === macroSel) ?? null
+  const macroOpenOne = (id: string) => {
+    const m = macros.find((x) => x.id === id)
+    if (!m) return
+    setMacroSel(id)
+    setMacroCode(m.code)
+    setMacroOut(null)
+  }
+  const macroAdd = () => {
+    const m = newMacro()
+    // 内置的可以照着改：新建时把选中那条的代码带过来当起点
+    if (macroCurrent) m.code = macroCurrent.code
+    const next = [...macros, m]
+    setMacros(next)
+    saveMacros(next)
+    macroOpenOne(m.id)
+  }
+  const macroSave = () => {
+    const next = macros.map((m) => (m.id === macroSel ? { ...m, code: macroCode } : m))
+    setMacros(next)
+    saveMacros(next)
+  }
+  const macroDrop = (id: string) => {
+    const next = macros.filter((m) => m.id !== id)
+    setMacros(next)
+    saveMacros(next)
+    if (macroSel === id) {
+      setMacroSel('')
+      setMacroCode('')
+    }
+  }
+  const macroRun = () => {
+    if (!editor || !macroCurrent) return
+    // VBA 与 JS 走同一条沙箱、同一份 api：认得出 VBA 骨架就先转译再跑
+    if (looksLikeVba(macroCode)) {
+      const res = runVba(macroCode, editor, setStatus, tab.path)
+      setMacroOut(res)
+      // 宏改了文档就得标脏：不然这一趟的改动会在切标签时悄悄没了
+      if (res.changed) markDirty(tab.id, true)
+      if (!res.ok) setStatus(`VBA 出错：${res.error ?? '未知原因'}`)
+      return
+    }
+    const res = runMacro(macroCode, editor, setStatus)
+    setMacroOut(res)
+    // 宏改了文档就得标脏：不然这一趟的改动会在切标签时悄悄没了
+    if (res.changed) markDirty(tab.id, true)
+    if (!res.ok) setStatus(`宏出错：${res.error ?? '未知原因'}`)
+  }
+  /** 转译预览：VBA → JS 的产物摊开给人看。转译失败时把错也摊开 */
+  const macroIsVba = looksLikeVba(macroCode)
+  const vbaPreview = macroIsVba && vbaShow ? transpileVba(macroCode) : null
+  /** 一条能跑的 VBA 样例：存成一条真宏，既能直接跑也能照着改 */
+  const macroSampleVba = () => {
+    const m = newMacro('VBA 示例')
+    m.code = VBA_SAMPLE
+    const next = [...macros, m]
+    setMacros(next)
+    saveMacros(next)
+    macroOpenOne(m.id)
+    setMacroOut(null)
+    setVbaShow(true)
+  }
+
+  const spellForget = (w: string) => {
+    spellUnignore(w)
+    setMyDict(spellIgnored())
+    // 撤掉一个忽略词后要重扫，否则那一段的波浪线要等下一次输入才回来
+    editor?.commands.setSpellCheck(true)
+  }
+
   // —— 自动保存与版本历史（会话内）：内容有变化才入栈，最多 20 份 ——
   const pushHist = (note: string) => {
     if (!editor) return
@@ -1232,7 +1462,26 @@ function DocEditor({ tab }: Props) {
           setRevOn(toggleRevMode(editor))
           setStatus(revModeOnState(editor.state) ? '修订模式已开：插入会标记为插入、删除变成删除线留原位' : '修订模式已关')
           setTimeout(() => setStatus(''), 2400)
-        }, revOn, '本应用里改字留痕：开着时打字/粘贴标记为插入（w:ins），退格/删除/剪切变成删除线标记（w:del），署名「我」；用上面的接受/拒绝定稿')}
+        }, revOn, '本应用里改字留痕：开着时打字/粘贴标记为插入（w:ins），退格/删除/剪切变成删除线标记（w:del）；用上面的接受/拒绝定稿')}
+        <label className="doc-who" title="署名：新打的修订与批注都用它标作者，往返 Word 后作者列显示它">
+          署名
+          <input
+            className="tb-input doc-who-input"
+            value={who}
+            maxLength={40}
+            placeholder="你的名字"
+            onChange={(e) => setWho(e.target.value)}
+            onBlur={() => {
+              setIdentityName(who)
+              setWho(identityName())
+              setStatus(`署名已改为「${identityName()}」`)
+              setTimeout(() => setStatus(''), 1800)
+            }}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') (e.target as HTMLInputElement).blur()
+            }}
+          />
+        </label>
         {btn('脚注', () => startNote('footnote'), noteDraft?.kind === 'footnote', '在光标处插入脚注：正文写在文末脚注区，导出 docx/odt 为原生脚注')}
         {btn('尾注', () => startNote('endnote'), noteDraft?.kind === 'endnote', '在光标处插入尾注：编号与脚注各排各的')}
         {noteDraft && (
@@ -1334,6 +1583,24 @@ function DocEditor({ tab }: Props) {
             </option>
           ))}
         </select>
+        <select
+          value={String(spacingFromModel(editor.getAttributes('textStyle').letterSpacing))}
+          onChange={(e) => {
+            const pt = Number(e.target.value)
+            // 0 也照样写串（"0pt"）：它是真值，ODT 那头靠它压掉样式层的间距；
+            // 只有「未声明」才落 null
+            editor.chain().focus().setMark('textStyle', { letterSpacing: spacingToModel(pt) }).run()
+          }}
+          className="tb-select"
+          title="字符间距（Word「字体→高级→间距」）。写 docx 时按缇＝1/20 磅落 w:spacing；0 那一档 docx 写不下，等于回到样式默认"
+        >
+          <option value="">字距</option>
+          {CHAR_SPACING_PT.map((pt) => (
+            <option key={pt} value={pt}>
+              {spacingLabel(pt)}
+            </option>
+          ))}
+        </select>
         {btn('B', () => editor.chain().focus().toggleBold().run(), editor.isActive('bold'), '加粗')}
         {btn('I', () => editor.chain().focus().toggleItalic().run(), editor.isActive('italic'), '斜体')}
         {btn('U', () => editor.chain().focus().toggleUnderline().run(), editor.isActive('underline'), '下划线')}
@@ -1409,7 +1676,280 @@ function DocEditor({ tab }: Props) {
         <span className="tb-sep" />
         {btn('撤销', () => editor.chain().focus().undo().run())}
         {btn('重做', () => editor.chain().focus().redo().run())}
+        <span className="tb-sep" />
+        {btn('拼写', toggleSpell, spellOn, '拼写检查：常见错拼、中文误用、重复字。开着会随输入重扫')}
+        {btn('协同', toggleCollabPanel, collabOpen, '实时协同：同一房间名的多个实例一起改同一份文档，改动自动合并，不用互相锁')}
+        {btn('宏', () => setMacroOpen((v) => !v), macroOpen, '脚本宏：一段 JS 操作这篇文档（只跑自己写的）')}
       </div>
+      {editor.isActive('bulletList') && (
+        <div className="doc-toolbar doc-bullet-bar">
+          <span className="tb-label">符面</span>
+          {BULLET_CHARS.map((c) => (
+            <button
+              key={c}
+              className={`tb-btn tb-bullet${editor.getAttributes('bulletList').bulletChar === c ? ' tb-active' : ''}`}
+              onClick={() => editor.chain().focus().updateAttributes('bulletList', { bulletChar: c }).run()}
+              title={`用「${c}」当这一层的列表符（写 ODT 落 text:bullet-char）`}
+            >
+              {c}
+            </button>
+          ))}
+          <input
+            className="tb-input doc-num"
+            placeholder="自定义"
+            maxLength={4}
+            value={String(editor.getAttributes('bulletList').bulletChar ?? '')}
+            onChange={(e) => {
+              const v = e.target.value.trim()
+              editor.chain().focus().updateAttributes('bulletList', { bulletChar: v || null }).run()
+            }}
+            title="自定义符面（可多字符）。留空＝回到宿主默认圆点，不写进档里"
+          />
+          <span className="tb-sep" />
+          <select
+            value={String(editor.getAttributes('bulletList').bulletFont ?? '')}
+            onChange={(e) =>
+              editor.chain().focus().updateAttributes('bulletList', { bulletFont: e.target.value || null }).run()
+            }
+            className="tb-select"
+            title="符面专用字体（ODF style:font-name / OOXML w:rFonts）。只记档里写的字体名，屏上仍照宿主默认画——这一层还没有 ::marker 出规则的地方"
+          >
+            <option value="">符面字体·默认</option>
+            {FONT_FAMILIES.map(([label, css]) => (
+              <option key={css} value={css}>
+                {label}
+              </option>
+            ))}
+          </select>
+          {btn(
+            '清符面',
+            () =>
+              editor
+                .chain()
+                .focus()
+                .updateAttributes('bulletList', { bulletChar: null, bulletFont: null })
+                .run(),
+            false,
+            '清掉自定义符面与符面字体，回到宿主默认',
+          )}
+        </div>
+      )}
+      {macroOpen && (
+        <div className="doc-toolbar doc-macro-bar">
+          <span className="tb-label">宏</span>
+          <select
+            className="tb-select"
+            value={macroSel}
+            onChange={(e) => macroOpenOne(e.target.value)}
+            title="选一条宏。内置那几条删不掉，可以照着改出自己的"
+          >
+            <option value="">（选一条）</option>
+            {macros.map((m) => (
+              <option key={m.id} value={m.id}>
+                {m.name}
+                {m.builtin ? '（内置）' : ''}
+              </option>
+            ))}
+          </select>
+          {btn('新建', macroAdd, false, '从选中的那条复制一份出来改')}
+          {btn('VBA 样例', macroSampleVba, false, '填一条能跑的 VBA 宏当起点（Sub/With/Find/MsgBox 都在里面）')}
+          {macroIsVba &&
+            btn(vbaShow ? '藏起转译' : '看转译', () => setVbaShow((v) => !v), vbaShow, '把这段 VBA 转出来的 JS 摊开看')}
+          {btn(
+            macroIsVba ? '运行 VBA' : '运行',
+            macroRun,
+            false,
+            macroIsVba
+              ? '先转译成 JS 再跑（转译出错会连行号一起报出来）'
+              : !macroCurrent
+                ? '先选一条宏'
+                : '跑一遍（跑的是文本框里那份代码）',
+          )}
+          {macroCurrent && (
+            <>
+              {btn('保存', macroSave, false, '把文本框里的代码存回这条宏')}
+              {!macroCurrent.builtin &&
+                btn('删除', () => macroDrop(macroCurrent.id), false, '删掉这条宏')}
+            </>
+          )}
+          {macroSel && (
+            <textarea
+              className="doc-macro-code"
+              spellCheck={false}
+              value={macroCode}
+              onChange={(e) => setMacroCode(e.target.value)}
+              placeholder={
+                macroIsVba
+                  ? "' VBA 宏：Sub Main() … End Sub。可用的对象模型见「看转译」旁边的提示"
+                  : '// 可用的东西都在 api 上：getText / insert / replaceAll / stats / log …'
+              }
+            />
+          )}
+          {macroIsVba && (
+            <span className="tb-label doc-macro-vba">
+              认出这是 VBA：会先转译成 JS 再跑。支持 Sub/Function、If/For/Do/Select/With、
+              数组、字符串函数，以及 ActiveDocument / Selection / Range / Find 这一套对象模型；
+              不支持 GoTo、类模块、二维数组——撞上了会报带行号的错
+            </span>
+          )}
+          {vbaPreview && (
+            <pre className={`doc-macro-pre${vbaPreview.ok ? '' : ' err'}`}>
+              {vbaPreview.ok ? vbaPreview.code : `转译失败：${vbaPreview.error}`}
+            </pre>
+          )}
+          {macroOut && (
+            <div className={`doc-macro-out${macroOut.ok ? '' : ' err'}`}>
+              {macroOut.log.map((l, i) => (
+                <div key={i}>{l}</div>
+              ))}
+              {!macroOut.ok && <div>出错：{macroOut.error}</div>}
+              {macroOut.ok && !macroOut.log.length && <div>（跑完了，没输出）</div>}
+            </div>
+          )}
+          <span className="tb-label doc-macro-warn">
+            只跑自己写的宏：`new Function` 不是安全边界，来路不明的脚本能碰到这个页面上的东西
+          </span>
+        </div>
+      )}
+      {spellOn && (
+        <div className="doc-toolbar doc-spell-bar">
+          <span className="tb-label">
+            {spellIssues.length ? `拼写 ${spellIssues.length} 处` : '拼写 没问题'}
+          </span>
+          {btn(
+            dictState === 'loading' ? '词典…' : '全量词典',
+            () => {
+              void toggleDeep()
+            },
+            deep,
+            dictState === 'failed'
+              ? '词表没拉到（离线或资产缺失），全量词典这一档暂时用不了'
+              : '英文全量词典（27.4 万词，第一次按才下载）：也会把人名、品牌、术语划上，误报点「忽略」加进我的词典',
+          )}
+          {spellTruncated && (
+            <span className="tb-label" title="命中太多，只列前 1200 处；改完前面几处后面会补上">
+              （只列了前 1200 处）
+            </span>
+          )}
+          {!spellIssues.length && (
+            <span className="tb-label">
+              {deep
+                ? '全量词典已开：英文查 27.4 万词，中文仍只有错写表与重复——中文的错字要分词加语言模型，这一版没有'
+                : '这一版查的是常见错拼、中文误用与重复字，不是全词典检查——漏报是它的代价'}
+            </span>
+          )}
+          <span className="doc-spell-list">
+            {spellIssues.slice(0, 40).map((i) => (
+              <span key={`${i.from}-${i.to}`} className="doc-spell-item">
+                <button
+                  className="doc-spell-word"
+                  onClick={() => spellFocus(i)}
+                  title={i.note}
+                >
+                  {i.text}
+                </button>
+                {i.suggest && (
+                  <button
+                    className="tb-btn tb-btn-mini"
+                    onClick={() => spellApply(i)}
+                    title={`改成「${i.suggest}」`}
+                  >
+                    →{i.suggest}
+                  </button>
+                )}
+                <button
+                  className="tb-btn tb-btn-mini"
+                  onClick={() => spellIgnoreOne(i)}
+                  title="加进我的词典，以后不划这一处"
+                >
+                  忽略
+                </button>
+              </span>
+            ))}
+          </span>
+          {myDict.length > 0 && (
+            <>
+              <span className="tb-sep" />
+              <span className="tb-label">我的词典</span>
+              <span className="doc-spell-list">
+                {myDict.slice(0, 20).map((w) => (
+                  <button
+                    key={w}
+                    className="tb-btn tb-btn-mini"
+                    onClick={() => spellForget(w)}
+                    title="从我的词典里撤掉（× 一下就恢复检查）"
+                  >
+                    {w} ×
+                  </button>
+                ))}
+              </span>
+            </>
+          )}
+        </div>
+      )}
+      {collabOpen && (
+        <div className="doc-toolbar doc-collab-bar">
+          <span className="tb-label">房间</span>
+          <input
+            className="doc-collab-room"
+            value={collabRoom}
+            onChange={(e) => setCollabRoom(e.target.value)}
+            // 连着的时候不许改名：换房间是另一场会话，改一半最让人误会
+            disabled={collab.state !== 'off' && collab.state !== 'error'}
+            placeholder="同名实例才会互见"
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') void toggleCollab()
+              if (e.key === 'Escape') setCollabOpen(false)
+            }}
+          />
+          {collab.state === 'on' || collab.state === 'starting' || collab.state === 'retrying'
+            ? btn(
+                collab.state === 'starting' ? '连接…' : collab.state === 'retrying' ? '重连…' : '退出',
+                () => void toggleCollab(),
+                collab.state === 'on',
+                collab.state === 'retrying'
+                  ? '连接断了，正在退避重连（间隔逐次翻倍，到 8 秒封顶）：这期间你的改动都还在本地，连上后会补齐给对面'
+                  : '退出协同：摘掉协同插件、断开连接，文档回到单机编辑',
+              )
+            : btn(
+                collab.state === 'error' ? '重试' : '开始',
+                () => void toggleCollab(),
+                false,
+                '开始实时协同：本机没有中继时会自动起一个（仅监听 127.0.0.1）',
+              )}
+          {collab.state === 'retrying' && (
+            <span className="doc-collab-note">连接断了，正在重连…（改动不会丢）</span>
+          )}
+          {collab.state === 'on' && (
+            <>
+              <span className="tb-sep" />
+              <span className="tb-label" title="中继端口（127.0.0.1）：同一台机器上的实例自动互见，跨机器要改协议层">端口 {collab.port}</span>
+              <span className="doc-collab-peers">
+                <span className="doc-collab-me">
+                  <i className="doc-collab-dot" style={{ background: authorColor(identityName()) }} />
+                  {identityName()}（我）
+                </span>
+                {collab.peers.map((p) => (
+                  <span key={p.id} className="doc-collab-peer" title={`clientID ${p.id}`}>
+                    <i className="doc-collab-dot" style={{ background: p.color }} />
+                    {peerTag(p)}
+                  </span>
+                ))}
+              </span>
+              <span className="tb-label">
+                {collab.peers.length ? `房里 ${collab.peers.length + 1} 人` : '房里只有你'}
+              </span>
+            </>
+          )}
+          {collab.state === 'error' && collab.error && (
+            <span className="doc-collab-err">{collab.error}</span>
+          )}
+          <span className="tb-label doc-collab-note">
+            同步的是正文、段落字符属性、表格、图片与批注；页眉页脚等文档级状态不在内。
+            撤销历史从开启那刻起算（之前的编辑不在协同的撤销栈里）
+          </span>
+        </div>
+      )}
       {(editor.isActive('paragraph') || editor.isActive('heading')) && (
         <div className="doc-toolbar doc-para-bar">
           {(() => {

@@ -219,11 +219,13 @@ function headingLevelOf(name: string): number | undefined {
   return undefined
 }
 
-function readStyles(xml: string): StyleBook {
+function readStyles(xml: string, theme?: ThemeFonts): StyleBook {
   const book: StyleBook = { byId: new Map() }
   if (!xml) return book
   const styles = find(parseXml(xml), 'w:styles')
   if (!styles) return book
+  // 主题引用先落地成具名字体（v0.138）：Word 的 Normal 样式只写 asciiTheme，不解析就没有字族
+  applyThemeFonts(styles, theme)
   // docDefaults 不并入基准运行属性：它是"这份文档的默认字体"，而本应用自带版式默认值；
   // 逐 run 盖上 Calibri/宋体 11pt 会把应用级字体选择全部压掉，还会让 HTML 胖一倍。
   for (const s of all(styles, 'w:style')) {
@@ -353,11 +355,13 @@ interface Numbering {
   byId: Map<string, Map<number, { numFmt: string; start: number }>>
 }
 
-function readNumbering(xml: string): Numbering {
+function readNumbering(xml: string, theme?: ThemeFonts): Numbering {
   const out: Numbering = { byId: new Map() }
   if (!xml) return out
   const num = find(parseXml(xml), 'w:numbering')
   if (!num) return out
+  // 编号层级的 rPr 同样可能只写主题引用（v0.138），与 styles 同一趟落地
+  applyThemeFonts(num, theme)
   const abstract = new Map<string, Map<number, { numFmt: string; start: number }>>()
   for (const a of all(num, 'w:abstractNum')) {
     const id = attr(a, 'w:abstractNumId')
@@ -377,6 +381,109 @@ function readNumbering(xml: string): Numbering {
     if (id && aid) out.byId.set(id, abstract.get(aid) ?? new Map())
   }
   return out
+}
+
+// ---- 主题字体（v0.138）------------------------------------------------------
+
+/**
+ * theme1.xml 的六个字体槽。Word 的默认样式（Normal 与 docDefaults）几乎从不写具名字体，
+ * 只写 `asciiTheme="minorHAnsi"` 一类引用——不解析主题，整篇文档的字族就掉回浏览器默认，
+ * 而打开任何一份"没手动设过字体"的真件都是这个形态。这是长尾清单里屏上后果最大的一条。
+ */
+interface ThemeFonts {
+  majorLatin?: string
+  minorLatin?: string
+  majorEa?: string
+  minorEa?: string
+  majorCs?: string
+  minorCs?: string
+}
+
+/** rFonts 上的主题引用属性 → 要填到的具名属性（asciiTheme 与 hAnsiTheme 不同槽，规范如此） */
+const THEME_ATTRS: [attr: string, target: string][] = [
+  ['asciiTheme', 'ascii'],
+  ['hAnsiTheme', 'hAnsi'],
+  ['eastAsiaTheme', 'eastAsia'],
+  ['cstheme', 'cs'],
+]
+
+/** 主题属性值（ST_ThemeFont）→ 槽名 */
+function themeSlot(v: string): keyof ThemeFonts | undefined {
+  switch (v) {
+    case 'majorHAnsi':
+      return 'majorLatin'
+    case 'minorHAnsi':
+      return 'minorLatin'
+    case 'majorEastAsia':
+      return 'majorEa'
+    case 'minorEastAsia':
+      return 'minorEa'
+    case 'majorBidi':
+      return 'majorCs'
+    case 'minorBidi':
+      return 'minorCs'
+    default:
+      return undefined
+  }
+}
+
+/** 读 word/theme/theme1.xml。缺件、缺 fontScheme、或槽位空串都返回undefined（没有就解析不了） */
+function readTheme(xml: string): ThemeFonts | undefined {
+  if (!xml.trim()) return undefined
+  // fontScheme 住在 theme → themeElements 之下，是孙级，用 findDesc 而不是 findL（那个只找直接子节点）
+  const scheme = findDesc(parseXml(xml), 'fontScheme')
+  if (!scheme) return undefined
+  const slot = (family: string, part: string): string | undefined => {
+    // majorFont/minorFont 是 fontScheme 的直接孩子，latin/ea/cs 又是它们的直接孩子
+    const f = findL(scheme, family)
+    const el = f ? findL(f, part) : undefined
+    // 走 attrL 而不是自己扫 attrs：主题属性也是按名查问，得进覆盖率的分子（探针在那枚漏斗上）
+    const t = el ? attrL(el, 'typeface') : undefined
+    return t && t.trim() ? t.trim() : undefined
+  }
+  const out: ThemeFonts = {
+    majorLatin: slot('majorFont', 'latin'),
+    minorLatin: slot('minorFont', 'latin'),
+    majorEa: slot('majorFont', 'ea'),
+    minorEa: slot('minorFont', 'ea'),
+    majorCs: slot('majorFont', 'cs'),
+    minorCs: slot('minorFont', 'cs'),
+  }
+  return Object.values(out).some((v) => v !== undefined) ? out : undefined
+}
+
+/**
+ * 把树里所有 rFonts 的主题引用就地解析成具名属性（只填缺的，显式写了的一律不动）。
+ *
+ * 为什么改成写成树而不是在读手处解析：读手（readRPr）认的是具名属性，而 rFonts 散落在
+ * document / styles / numbering 三棵树里，逐处改读手要动三个入口；在树上跑一遍等价于
+ * "主题先落地、再按普通件读"，也让 w:asciiTheme 这类属性**被真的按名查问过**——
+ * 覆盖率量具的分子就是这么来的。
+ */
+function applyThemeFonts(root: XEl | undefined, theme: ThemeFonts | undefined): void {
+  if (!root || !theme) return
+  const walk = (el: XEl) => {
+    for (const c of el.children) {
+      if (typeof c === 'string') continue
+      if (local(c.name) === 'rFonts') {
+        // 遍历属性而不是查死名字：主题属性的前缀随写件而变（w: 只是最常见那个），
+        // 填进去的具名属性必须沿用同一个前缀——读手查的是 w:ascii 这一族
+        for (const k in c.attrs) {
+          const spec = THEME_ATTRS.find(([a]) => a === local(k))
+          if (!spec) continue
+          const slotKey = themeSlot(c.attrs[k])
+          const font = slotKey ? theme[slotKey] : undefined
+          if (!font) continue
+          const prefix = k.includes(':') ? k.slice(0, k.indexOf(':') + 1) : ''
+          // 两枚都走 attrL：查问主题属性与查问具名属性都如实进分子（探针只认那两枚漏斗）
+          if (attrL(c, spec[0]) === undefined) continue
+          if (attrL(c, spec[1]) === undefined) c.attrs[`${prefix}${spec[1]}`] = font
+        }
+      }
+      walk(c)
+    }
+  }
+  walk(root)
 }
 
 // ---- 运行属性 → marks ------------------------------------------------------
@@ -399,6 +506,24 @@ interface RunProps {
   rev?: { kind: 'ins' | 'del'; author: string; date: string }
   /** 字符级命名样式标签（v0.113）：w:rStyle 的 styleId，随 run 输出 data-rstyle；不继承，无即清 */
   rstyle?: string
+  /**
+   * rFonts/@w:hint（v0.138）：eastAsia | default。只在这一枚上影响屏上——
+   * 含混字符（引号/破折号/希腊/西里尔，见 emitRunText 那张表）该用哪一口字体画。
+   * 其余三枚（cs / szCs / lang）在 HTML 里没有对应物，只随 data-* 属性进模型再走往返。
+   */
+  hint?: 'eastasia' | 'default'
+  /** rFonts/@w:cs：复杂文字（阿拉伯/希伯来/泰文）的字族 */
+  cs?: string
+  /** w:szCs/@w:val：复杂文字的字号（半点）。CSS 的 font-size 不分文字系统，屏上不兑现 */
+  szCs?: number
+  /** w:lang/@w:val：这一段文字的语言（拼写检查与断行的判据） */
+  lang?: string
+  /** w:lang/@w:eastAsia：东亚文字的语言 */
+  langEa?: string
+  /** w:kern/@w:val：小于这个缇数的字对才做字偶距（0 = 关掉） */
+  kern?: number
+  /** w:pos/@w:val：基线升降，半点，正升负降（手工调的上下标走这里，不走 vertAlign） */
+  pos?: number
 }
 
 const NONE: RunProps = {}
@@ -438,7 +563,26 @@ function readRPr(el: XEl | undefined, p: RunProps): RunProps {
     const ea = attr(rf, 'w:eastAsia')
     if (ea && !fams.includes(ea)) fams.push(ea)
     if (fams.length) o.fonts = fams
+    const hint = (attr(rf, 'w:hint') ?? '').toLowerCase()
+    // 只认规范里的两个值；写别的（大小写变体除外）按没说话处理
+    if (hint === 'eastasia' || hint === 'default') o.hint = hint
+    const cs = attr(rf, 'w:cs')
+    if (cs) o.cs = cs
   }
+  const szCs = valNum(el, 'w:szCs')
+  if (szCs !== undefined && szCs > 0) o.szCs = szCs
+  const langEl = find(el, 'w:lang')
+  if (langEl) {
+    const v = attr(langEl, 'w:val')
+    if (v) o.lang = v
+    const ea = attr(langEl, 'w:eastAsia')
+    if (ea) o.langEa = ea
+  }
+  const kern = valNum(el, 'w:kern')
+  if (kern !== undefined && kern >= 0) o.kern = kern
+  const pos = valNum(el, 'w:pos')
+  // 0 是"没升降"而不是"升降 0"，与 w:spacing 那枚字符间距不同口径——那一枚 0 是真值（见上）
+  if (pos !== undefined && pos !== 0) o.pos = pos
   return o
 }
 
@@ -467,6 +611,12 @@ function cssOf(p: RunProps): string {
   // 缇 → 磅是整数除以 20，Word 门面在 ±20/±200 缇四臂上分别读回 ±1/±10 磅；
   // 最短写法就够（整数除以 20 最多两位小数，JS 打出来就是最短形）
   if (p.sp !== undefined) bits.push(`letter-spacing: ${p.sp / 20}pt`)
+  // w:kern=0 是"这一口字体不做字偶距"（浏览器默认 normal，只有 0 这一档有屏上后果）；
+  // 写了正数等于浏览器的默认行为，也照样显式写出来——闸看"这一层有没有说这枚数"
+  if (p.kern === 0) bits.push('font-kerning: none')
+  else if (p.kern !== undefined) bits.push('font-kerning: normal')
+  // w:pos 与 vertAlign 同时出现时 Word 按 vertAlign 渲染，故只在没有上下标时才兑现升降
+  if (p.va === undefined && p.pos !== undefined) bits.push(`vertical-align: ${px2((p.pos / 2) * PT_PX)}px`)
   return bits.join('; ')
 }
 
@@ -475,12 +625,96 @@ function attrEsc(s: string): string {
   return esc(s).replace(/"/g, '&quot;')
 }
 
+/**
+ * Unicode East Asian Width = Ambiguous 的子集（v0.138）：宽窄两可的字符。
+ *
+ * 全表很大（整个拉丁补充、希腊、西里尔、一堆符号），这里只收**中文文档里真会与汉字
+ * 混排、且拉丁字体里确实有字形**的那几族——引号/破折号/项目符/ primes、希腊、西里尔、
+ * 以及拉丁区里那几个两可符号。漏收的后果只是那一枚字符仍按拉丁字体画（与不加 hint 相同），
+ * 错收才会把明显是拉丁的字符换成中文字体，所以边界取窄。
+ * 完整表见 Unicode EastAsianWidth.txt 的 A 类。
+ */
+const EA_AMBIGUOUS: [number, number][] = [
+  [0x00a1, 0x00a1],
+  [0x00a4, 0x00a4],
+  [0x00a7, 0x00a8],
+  [0x00aa, 0x00aa],
+  [0x00ad, 0x00ae],
+  [0x00b0, 0x00b4],
+  [0x00b6, 0x00ba],
+  [0x00bc, 0x00bf],
+  [0x00c6, 0x00c6],
+  [0x00d0, 0x00d0],
+  [0x00d7, 0x00d8],
+  [0x00de, 0x00e1],
+  [0x00e6, 0x00e6],
+  [0x00e8, 0x00ea],
+  [0x00ec, 0x00ed],
+  [0x00f0, 0x00f0],
+  [0x00f2, 0x00f3],
+  [0x00f7, 0x00fa],
+  [0x00fc, 0x00fc],
+  [0x0391, 0x03a9], // 希腊大写
+  [0x03b1, 0x03c9], // 希腊小写
+  [0x0400, 0x04ff], // 西里尔
+  [0x2010, 0x2027], // 连字符/破折号/引号/项目符/†‡•…‰
+  [0x2030, 0x2033], // ‰′″‴
+  [0x203b, 0x203b],
+  [0x203d, 0x203e],
+  [0x2103, 0x2103], // ℃
+  [0x2109, 0x2109], // ℉
+  [0x2116, 0x2116], // №
+  [0x2160, 0x217f], // 罗马数字
+]
+
+/** 这一个字符是不是宽窄两可（表外用二分；表只有 28 段，顺序扫也够快） */
+function isEaAmbiguous(ch: string): boolean {
+  const cp = ch.codePointAt(0) ?? 0
+  for (const [lo, hi] of EA_AMBIGUOUS) if (cp >= lo && cp <= hi) return true
+  return false
+}
+
+/**
+ * 发一段 run 文字。hint=eastAsia 且拉丁/东亚两族字体不同时，**含混字符单独成段并把
+ * 东亚字体排到栈首**：CSS 字体栈是"第一个含有该字形的字体赢"，而含混字符在拉丁字体里
+ * 也有字形，不换序就永远画在拉丁字体上——Word 的 hint=eastAsia 说的正是这件事。
+ */
+function emitRunText(text: string, rp: RunProps): string {
+  const [asciiF, eaF] = rp.fonts ?? []
+  // \u0001 是软换行的占位（w:br），发射时换成 <br>；含混字符里不会有它，切段不受影响
+  const body = () => escText(text).replace(/\u0001/g, '<br>')
+  if (rp.hint !== 'eastasia' || !eaF || !asciiF || asciiF === eaF) return marked(body(), rp)
+  // 按含混性切段，相邻同类合并；切完逐段各自 escaped（nbsp 那一套在 escText 里）
+  const parts: { amb: boolean; text: string }[] = []
+  for (const ch of text) {
+    const amb = isEaAmbiguous(ch)
+    const last = parts[parts.length - 1]
+    if (last && last.amb === amb) last.text += ch
+    else parts.push({ amb, text: ch })
+  }
+  return parts
+    .filter((p) => p.text.length > 0)
+    .map((p) => marked(escText(p.text).replace(/\u0001/g, '<br>'), p.amb ? { ...rp, fonts: [eaF, asciiF] } : rp))
+    .join('')
+}
+
 /** 套 marks：从内到外 样式属性 → 高亮 → 删除线 → 下划线 → 斜体 → 粗体 */
 function marked(inner: string, p: RunProps): string {
   if (!inner) return ''
   let s = inner
   const css = cssOf(p)
-  if (css) s = `<span style="${css}">${s}</span>`
+  // 复杂文字三件套与 hint（v0.138）：HTML 里没有对应物，随 data-* 进模型再走往返。
+  // 由 lib/char-extra.ts 的 charExtra mark 接住（cs/hint 写回 docx，szCs/lang 见该文件头注）
+  const extra = [
+    p.cs ? ` data-cs="${attrEsc(p.cs)}"` : '',
+    p.szCs !== undefined ? ` data-szcs="${p.szCs}"` : '',
+    p.lang ? ` data-lang="${attrEsc(p.lang)}"` : '',
+    p.langEa ? ` data-lang-ea="${attrEsc(p.langEa)}"` : '',
+    p.hint ? ` data-hint="${attrEsc(p.hint)}"` : '',
+    p.pos !== undefined ? ` data-pos="${p.pos}"` : '',
+    p.kern !== undefined ? ` data-kern="${p.kern}"` : '',
+  ].join('')
+  if (css || extra) s = `<span${css ? ` style="${css}"` : ''}${extra}>${s}</span>`
   if (p.hl) s = `<mark data-color="${p.hl}" style="background-color: ${p.hl}; color: inherit">${s}</mark>`
   if (p.strike) s = `<s>${s}</s>`
   if (p.u) s = `<u>${s}</u>`
@@ -639,6 +873,8 @@ class Fidelity {
     private numbering: Numbering,
     /** 嵌套深度：文档里嵌文档再嵌文档会没完，展平到这一层就停手记边界 */
     private depth = 0,
+    /** 主题字体槽（v0.138）：document 树在 run() 里落地，styles/numbering 在读入时已落地 */
+    private theme?: ThemeFonts,
   ) {}
 
   private warn(msg: string) {
@@ -680,6 +916,8 @@ class Fidelity {
 
   async run(documentXml: string): Promise<{ html: string; blocks: number }> {
     const doc = parseXml(documentXml)
+    // 主题引用在 document 树上落地（v0.138）：与 styles/numbering 同一趟，赶在一切读手之前
+    applyThemeFonts(doc, this.theme)
     // w:body 是 w:document 的孩子，而 parseXml 的根是 '#doc'，所以要深找一层
     const body = findDesc(doc, 'w:body')
     if (!body) throw new Error('document.xml 缺 w:body')
@@ -1358,7 +1596,7 @@ class Fidelity {
         // 走默认的 children 会把 m:t 的字符粘成 "a2b2"，这里至少把 a/b、x^2、√y 那层意思写出来
         if (st.fld > 0 && (!st.show || suppressField(st))) return
         this.warn('公式（OMML）已线性化为文本，结构（分式/根号/上下标/矩阵）不保真')
-        push(st, marked(escText(ommlLinear(node)).replace(/\u0001/g, '<br>'), props))
+        push(st, emitRunText(ommlLinear(node), props))
         return
       }
       case 'drawing':
@@ -1462,7 +1700,7 @@ class Fidelity {
         let text = ''
         const flush = () => {
           if (!text) return
-          push(st, marked(escText(text).replace(/\u0001/g, '<br>'), rp))
+          push(st, emitRunText(text, rp))
           text = ''
         }
         for (const c of node.children) {
@@ -1515,7 +1753,7 @@ class Fidelity {
     if (!recomputable(i)) return false
     f.done = true
     f.suppress = true
-    push(st, marked(escText(this.fields.seqValue(i.arg, i.switches)), props))
+    push(st, emitRunText(this.fields.seqValue(i.arg, i.switches), props))
     return true
   }
 
@@ -1529,7 +1767,7 @@ class Fidelity {
     if (f.cmd === 'REF' && f.arg) {
       const t = this.fields.refText(f.arg)
       if (t) {
-        push(st, marked(escText(t), props))
+        push(st, emitRunText(t, props))
         this.warn(`交叉引用（${f.arg}）没有缓存结果，已按书签所在段落文本补`)
         return
       }
@@ -2522,10 +2760,13 @@ export async function docxToHtmlFidelity(bytes: Uint8Array, depth = 0): Promise<
   const read = async (p: string): Promise<string> => (await zip.file(p)?.async('string')) ?? ''
   const documentXml = await read('word/document.xml')
   if (!documentXml) throw new Error('缺 word/document.xml')
+  // 主题字体（v0.138）：Normal 与各级标题只写 asciiTheme 一类引用，解析不了整篇掉回默认字体
+  const theme = readTheme(await read('word/theme/theme1.xml'))
   const f = new Fidelity(
-    readStyles(await read('word/styles.xml')),
-    readNumbering(await read('word/numbering.xml')),
+    readStyles(await read('word/styles.xml'), theme),
+    readNumbering(await read('word/numbering.xml'), theme),
     depth,
+    theme,
   )
   f.load(zip)
   f.setRels(await read('word/_rels/document.xml.rels'))

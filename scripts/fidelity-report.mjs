@@ -54,13 +54,22 @@ const NOISE = /^(rsid[A-Za-z]*|paraId|textId)$/
 // 应当看不到哪些」可以事先写死。MUST_SEE 是读手真会按名查问的，MUST_NOT_SEE 是我故意放进去、
 // 而读手（按源码现状）确实一寸都不查的——两边都断言才叫量具，只断一边等于自说自话。
 const W = 'http://schemas.openxmlformats.org/wordprocessingml/2006/main'
+const FIXTURE_THEME =
+  `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>` +
+  `<a:theme xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main">` +
+  `<a:themeElements><a:fontScheme>` +
+  `<a:majorFont><a:latin typeface="Calibri Light"/><a:ea typeface="等线 Light"/></a:majorFont>` +
+  `<a:minorFont><a:latin typeface="Calibri"/><a:ea typeface="等线"/></a:minorFont>` +
+  `</a:fontScheme></a:themeElements></a:theme>`
+
 const FIXTURE_STYLES =
   `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>` +
   `<w:styles xmlns:w="${W}">` +
   `<w:style w:type="paragraph" w:default="1" w:styleId="Normal">` +
   `<w:name w:val="Normal"/><w:pPr><w:spacing w:line="276" w:lineRule="auto" w:before="0" w:after="0"/>` +
   `<w:ind w:left="0" w:right="0"/></w:pPr>` +
-  `<w:rPr><w:rFonts w:ascii="Calibri" w:eastAsia="等线"/><w:sz w:val="22"/><w:szCs w:val="22"/></w:rPr>` +
+  // v0.138：Word 的 Normal 只写主题引用，不写具名字体——主题解析那一链就从这里过
+  `<w:rPr><w:rFonts w:asciiTheme="minorHAnsi" w:eastAsiaTheme="minorEastAsia" w:hAnsiTheme="minorHAnsi"/><w:sz w:val="22"/><w:szCs w:val="22"/></w:rPr>` +
   `</w:style>` +
   `<w:style w:type="paragraph" w:styleId="ReportHead"><w:name w:val="report head"/>` +
   `<w:basedOn w:val="Normal"/><w:pPr><w:spacing w:after="120"/><w:ind w:left="420"/></w:pPr>` +
@@ -77,8 +86,9 @@ const FIXTURE_DOC =
   `<w:jc w:val="both"/>` +
   `<w:pBdr><w:top w:val="single" w:sz="8" w:space="1" w:color="FF0000"/>` +
   `<w:left w:val="dotted" w:sz="4" w:space="2" w:color="00FF00"/></w:pBdr></w:pPr>` +
-  `<w:r><w:rPr><w:rFonts w:ascii="Times New Roman" w:eastAsia="宋体" w:hint="eastAsia"/>` +
-  `<w:sz w:val="24"/><w:szCs w:val="28"/><w:b w:val="0"/></w:rPr>` +
+  `<w:r><w:rPr><w:rFonts w:ascii="Times New Roman" w:eastAsia="宋体" w:hint="eastAsia" w:cs="Arial"/>` +
+  `<w:sz w:val="24"/><w:szCs w:val="28"/><w:b w:val="0"/>` +
+  `<w:lang w:val="en-US" w:eastAsia="zh-CN"/><w:kern w:val="2"/><w:pos w:val="12"/></w:rPr>` +
   `<w:t xml:space="preserve"> 带空白的正文 </w:t></w:r></w:p>` +
   `<w:sectPr><w:pgSz w:w="11906" w:h="16838" w:orient="portrait"/>` +
   `<w:pgMar w:top="1440" w:right="1800" w:bottom="1440" w:left="1800" w:header="851" w:footer="992" w:gutter="0"/></w:sectPr>` +
@@ -102,15 +112,26 @@ const MUST_SEE = [
   'rFonts|eastAsia',
   'sz|val',
   'b|val',
+  // v0.138：主题引用、hint、cs、szCs、lang、kern、pos 这一批都在读手里有按名查问处
+  'rFonts|asciiTheme',
+  'rFonts|hAnsiTheme',
+  'rFonts|eastAsiaTheme',
+  'rFonts|hint',
+  'rFonts|cs',
+  'szCs|val',
+  'lang|val',
+  'lang|eastAsia',
+  'kern|val',
+  'pos',
 ]
-// 我放进夹具而读手一寸不查的：hangingChars 在合并里被搬而没人读（段落读侧第一笔账记过同一件事），
-// beforeAutospacing / hint / szCs / 非顶边的 space / t 的 xml:space 在源码里都没有查问处
+// 我放进夹具而读手一寸不查的：hangingChars 在合并里被搬而没人读（段落读侧第一笔账记过同一件事）；
+// beforeAutospacing / 非顶边的 space 在源码里没有查问处；t 的 xml:space 是**裁定不查**——escText
+// 无条件保留空白（连续空格第二个起换 nbsp），强于 preserve 所需，查了也没有第二行代码可写；
+// pgSz|orient 与 pgMar|gutter 走 docxToDocMeta 另一条路，不在本读手的账上
 const MUST_NOT_SEE = [
   'ind|hangingChars',
   'spacing|beforeAutospacing',
   'spacing|afterAutospacing',
-  'rFonts|hint',
-  'szCs|val',
   'left|space',
   't|space',
   'pgSz|orient',
@@ -267,6 +288,7 @@ async function runSelftest(reader, probe) {
   const zip = new JSZip()
   zip.file('word/document.xml', FIXTURE_DOC)
   zip.file('word/styles.xml', FIXTURE_STYLES)
+  zip.file('word/theme/theme1.xml', FIXTURE_THEME)
   const bytes = new Uint8Array(await zip.generateAsync({ type: 'arraybuffer', compression: 'STORE' }))
   seen.clear()
   const out = await reader.docxToHtmlFidelity(bytes)

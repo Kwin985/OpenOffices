@@ -620,12 +620,19 @@ function inlineToChildren(node: PMNode, inherited: Inherited = {}, cs?: CommentT
       // 字符串绕开门会被 signedTwipsMeasureValue 涂成 w:val="00"，而 Word 16.0 另存时把那枚 00 整枚丢弃
       // （同批夹具里字符串写的 w:val="200" 原样保留），所以 0 这一档只能记账不能上纸。
       const lsTw = letterSpacingToTwips(ts('letterSpacing'))
+      // 复杂文字与语言（v0.138）：cs/hint 走库的 font 对象，szCs/lang/pos/kern 四枚在库里
+      // 实现着但类型面没暴露，由 withCharExtra 按库外槽并进去（见 lib/char-extra.ts 头注）
+      const cx = (a: string) => markAttr(child, 'charExtra', a)
+      const csFont = cx('cs')
+      const hintVal = cx('hint')
+      const baseFont = docFont(ts('fontFamily')) ?? (mono ? 'Consolas' : undefined)
+      const font = csFont || hintVal ? fontWithCsHint(baseFont, csFont, hintVal) : baseFont
       const runOpts = {
         text,
         bold,
         italics: italic,
         strike,
-        font: docFont(ts('fontFamily')) ?? (mono ? 'Consolas' : undefined),
+        font,
         ...(Number.isFinite(fsPx) && fsPx > 0 ? { size: Math.round(fsPx * 1.5) } : {}),
         ...(lsTw !== null && lsTw !== 0 ? { characterSpacing: lsTw } : {}),
         ...(color ? { color } : {}),
@@ -640,7 +647,7 @@ function inlineToChildren(node: PMNode, inherited: Inherited = {}, cs?: CommentT
         out.push(
           new ExternalHyperlink({
             link: href,
-            children: [new TextRun({ ...runOpts, style: 'Hyperlink' })],
+            children: [new TextRun(withCharExtra({ ...runOpts, style: 'Hyperlink' }, child))],
           }),
         )
       } else if (dt && (hasMark(child, 'revDel') || hasMark(child, 'revIns'))) {
@@ -652,9 +659,9 @@ function inlineToChildren(node: PMNode, inherited: Inherited = {}, cs?: CommentT
         const author = markAttr(child, markName, 'author') || '未知'
         const date = markAttr(child, markName, 'date') || new Date().toISOString()
         const revOpts = { ...runOpts, id: dt.revId++, author, date }
-        out.push(isDel ? new DeletedTextRun(revOpts) : new InsertedTextRun(revOpts))
+        out.push(isDel ? new DeletedTextRun(withCharExtra(revOpts, child)) : new InsertedTextRun(withCharExtra(revOpts, child)))
       } else {
-        out.push(new TextRun(runOpts))
+        out.push(new TextRun(withCharExtra(runOpts, child)))
       }
     } else if (child.type === 'hardBreak') {
       out.push(new TextRun({ text: '', break: 1 }))
@@ -1124,6 +1131,59 @@ export function docFont(family: string | undefined): string | IFontAttributesPro
   const latin = names.find((n) => n !== cjk) ?? names[0]
   if (!cjk) return names[0]
   return { ascii: latin, hAnsi: latin, eastAsia: cjk, cs: cjk }
+}
+
+/**
+ * 把 charExtra mark 带来的 cs / hint 并进字体对象（v0.138）。
+ * 显式 cs 压过 docFont 的推测（那个把中文字族当 cs 只是"没别的线索时的默认"）；
+ * 单名字体先拆成 ascii/hAnsi 两槽再并——库对字符串只写 ascii/hAnsi，并不上 cs/hint。
+ */
+function fontWithCsHint(
+  base: string | IFontAttributesProperties | undefined,
+  cs?: string,
+  hint?: string,
+): IFontAttributesProperties {
+  const merged: IFontAttributesProperties =
+    typeof base === 'string' ? { ascii: base, hAnsi: base } : { ...(base ?? {}) }
+  // 库的类型是 readonly，按不可变合并重建（显式 cs 压过 docFont 的推测）
+  // 导入侧按小写存 hint（'eastasia'），而 ST_Hint 的字面是 eastAsia——写回前归一回位，
+  // 免得严格校验的读手（Word 自己）对大小写挑刺
+  const canon = hint ? (hint.toLowerCase() === 'eastasia' ? 'eastAsia' : 'default') : undefined
+  return { ...merged, ...(cs ? { cs } : {}), ...(canon ? { hint: canon } : {}) }
+}
+
+/**
+ * charExtra mark 的四枚库外槽（v0.138）：szCs / lang / pos / kern。
+ *
+ * 它们在 docx 库的 RunProperties 里逐枚实现着（options.sizeComplexScript → w:szCs、
+ * options.language → w:lang、options.position → w:position、options.kern → w:kern），
+ * 只是 IRunStylePropertiesOptions 的类型面没列这几枚——传进去要靠这一个断言。
+ * 判据是库的 dist（node_modules/docx/dist/index.cjs 的 RunProperties 构造器），不是猜的。
+ */
+function withCharExtra<T extends object>(opts: T, child: PMNode): T {
+  const mark = child.marks?.find((x) => x.type === 'charExtra')
+  // 数值槽不能走 markAttr——那个只返字符串，szcs/pos/kern 三枚在模型里是 number
+  const num = (a: string): number | undefined => {
+    const v = mark?.attrs?.[a]
+    if (typeof v === 'number') return Number.isFinite(v) ? v : undefined
+    if (typeof v === 'string' && v.trim()) {
+      const n = Number(v)
+      return Number.isFinite(n) ? n : undefined
+    }
+    return undefined
+  }
+  const str = (a: string) => markAttr(child, 'charExtra', a)
+  const szcs = num('szcs')
+  const lang = str('lang')
+  const langEa = str('langEa')
+  const pos = num('pos')
+  const kern = num('kern')
+  const extra: Record<string, unknown> = {}
+  if (szcs !== undefined && szcs > 0) extra.sizeComplexScript = szcs
+  if (lang || langEa) extra.language = { value: lang || undefined, eastAsia: langEa || undefined }
+  if (pos !== undefined && pos !== 0) extra.position = pos
+  if (kern !== undefined && kern > 0) extra.kern = kern
+  return Object.keys(extra).length ? ({ ...opts, ...extra } as unknown as T) : opts
 }
 
 interface DocTrack {
