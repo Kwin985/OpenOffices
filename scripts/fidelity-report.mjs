@@ -122,7 +122,7 @@ const MUST_SEE = [
   'lang|val',
   'lang|eastAsia',
   'kern|val',
-  'pos',
+  'pos|val',
 ]
 // 我放进夹具而读手一寸不查的：hangingChars 在合并里被搬而没人读（段落读侧第一笔账记过同一件事）；
 // beforeAutospacing / 非顶边的 space 在源码里没有查问处；t 的 xml:space 是**裁定不查**——escText
