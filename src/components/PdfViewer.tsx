@@ -20,9 +20,13 @@ import {
   fromDisplayRect,
   normRot,
   parsePageSpec,
+  textItemBox,
   toDisplayPoints,
   toDisplayRect,
+  type PdfRect,
+  type TextItemGeom,
 } from '../lib/pdf-geo'
+import { sampleBackdrop, applyTextEdits, type TextEdit } from '../lib/pdf-text-edit'
 import {
   extractPages,
   mergePdfs,
@@ -94,7 +98,7 @@ interface AnnoRect {
 
 interface PdfAnno {
   id: string
-  kind: 'highlight' | 'note' | 'rect' | 'ellipse' | 'line' | 'ink' | 'stamp'
+  kind: 'highlight' | 'note' | 'rect' | 'ellipse' | 'line' | 'ink' | 'stamp' | 'textbox'
   page: number
   rects: AnnoRect[]
   // 形状几何：line=[[p1,p2]]、ink=多笔折线；rect/ellipse 只存 rects[0] 包围盒
@@ -102,9 +106,19 @@ interface PdfAnno {
   color: string
   text?: string
   content?: string
+  // 文本框（FreeText）的字号，单位是 PDF 点。缺省按 12 落
+  fs?: number
   // 图章的图片（dataURL，png/jpg）；尺寸在 rects[0] 里
   data?: string
 }
+
+// 文本框（v0.128）：PDF 没有"可编辑的文字层"这回事——页面内容流里的文字是一串
+// 「在这个坐标画这个字形」，改一个字要重排整行。所有真正的 PDF 编辑器（Acrobat/WPS/预览）
+// 走的都是同一条路：**另起一枚 /FreeText 注解**叠在原文字上，字由阅读器按 /DA 自己画。
+// 好处是不必嵌字体（中文也就不会画成方块），坏处是它不是原文档的文字——
+// 别人拿到的文件里，这是一枚批注，不是被改过的正文。这一版的诚实说法就叫「加字」而不是「改字」。
+const TEXTBOX_FS_DEFAULT = 12
+const TEXTBOX_W_PT = 180
 
 const SHAPE_KINDS = new Set(['rect', 'ellipse', 'line', 'ink'])
 const isShape = (a: PdfAnno) => SHAPE_KINDS.has(a.kind)
@@ -215,11 +229,19 @@ function PdfViewer({ tab }: Props) {
   const keepPageRef = useRef(0)
   const [outline, setOutline] = useState<OutlineEntry[]>([])
   const [annos, setAnnos] = useState<PdfAnno[]>([])
+  // —— 真·原地改字：草稿（正在改的那一条）与已提交的清单。提交后不进 annos，
+  // 因为它是"烧进内容流"的破坏性操作，保存时才真正落盘（落盘前只是页面上的虚线框）
+  const [textEdits, setTextEdits] = useState<TextEdit[]>([])
+  const [teDraft, setTeDraft] = useState<{ page: number; box: PdfRect; from: string; bg: string; edit: Omit<TextEdit, 'rect' | 'text' | 'bg' | 'from'> } | null>(null)
+  const [teInput, setTeInput] = useState('')
+  const [teErr, setTeErr] = useState('')
   const [pop, setPop] = useState<AnnoPop | null>(null)
   const [noteOpen, setNoteOpen] = useState('')
-  const [tool, setTool] = useState<'text' | 'anno'>('text')
-  type DrawKind = 'rect' | 'ellipse' | 'line' | 'ink' | 'stamp'
+  const [tool, setTool] = useState<'text' | 'anno' | 'textedit'>('text')
+  type DrawKind = 'rect' | 'ellipse' | 'line' | 'ink' | 'stamp' | 'textbox'
   const [drawTool, setDrawTool] = useState<DrawKind | null>(null)
+  // 文本框正在编辑的那枚 id（与便签的 noteOpen 同理：屏上那块是可点的，编辑框是浮层）
+  const [textBoxOpen, setTextBoxOpen] = useState('')
   const [draft, setDraft] = useState<{ kind: DrawKind; page: number; polys: number[][][] } | null>(null)
   const drawToolRef = useRef(drawTool)
   drawToolRef.current = drawTool
@@ -440,6 +462,12 @@ function PdfViewer({ tab }: Props) {
     bmpCache.current.clear()
     // 全文索引只按页号缓存，换文档不清会把上一本的文本当这一本命中
     pageTexts.current.clear()
+    // 改字清单同理：上一本烧进去的文字与这一本无关（且页号会错位）
+    pageGeoms.current.clear()
+    setTextEdits([])
+    setTeDraft(null)
+    setTeInput('')
+    teWritten.current = 0
     renderStats.current = { full: 0, hit: 0 }
     thumbSlots.current.clear()
     setQuery('')
@@ -558,6 +586,20 @@ function PdfViewer({ tab }: Props) {
             out.push({ id: nid(), kind: 'highlight', page: n, rects: [r], color: rgbHex(a.color), text: txt })
           } else if (a.subtype === 'Text') {
             out.push({ id: nid(), kind: 'note', page: n, rects: [r], color: rgbHex(a.color), content: txt })
+          } else if (a.subtype === 'FreeText') {
+            // 别人加的字（Acrobat 的打字机、WPS 的自由文本）读回来接着能改。
+            // 字号从 /DA 那串默认外观里抠（"… 12 Tf"）；抠不出就按 12，不猜
+            const da = (a as { defaultAppearance?: string }).defaultAppearance ?? ''
+            const m = /([0-9]+(?:\.[0-9]+)?)\s+Tf/.exec(da)
+            out.push({
+              id: nid(),
+              kind: 'textbox',
+              page: n,
+              rects: [r],
+              color: rgbHex(a.color),
+              content: txt,
+              fs: m ? Number(m[1]) : undefined,
+            })
           } else if (a.subtype === 'Square' || a.subtype === 'Circle') {
             out.push({
               id: nid(),
@@ -909,6 +951,97 @@ function PdfViewer({ tab }: Props) {
   const pageTexts = useRef(new Map<number, PageText>())
   const searchSeq = useRef(0)
 
+  // 保存回调要读最新的清单，用 ref 而不是把 textEdits 塞依赖（那个 effect 会跟着每次输入重跑）
+  const textEditsRef = useRef(textEdits)
+  textEditsRef.current = textEdits
+  // 已经烧进文件的条数。保存失败时不推进——否则下一次保存会漏掉没写成的那几条
+  const teWritten = useRef(0)
+
+  // —— 真·原地改字：每页文字项的几何（未旋转 PDF 空间的起点/基线/字号 + 显示空间的框）。
+  // 与 pageTexts 分开缓存：那一份只存纯字符串给搜索用，这一份要多留 transform 才能定位
+  const pageGeoms = useRef(new Map<number, TextItemGeom[]>())
+  const loadPageGeom = async (d: PDFDocumentProxy, n: number): Promise<TextItemGeom[]> => {
+    const hit = pageGeoms.current.get(n)
+    if (hit) return hit
+    const p = await d.getPage(n)
+    const rot = normRot(p.rotate ?? 0)
+    // rotation:0 拿未旋转基准尺寸：transform 的 e/f 就在这个空间里，不能再按旋转视口算
+    const vp0 = p.getViewport({ scale: 1, rotation: 0 })
+    const base = { w: vp0.width, h: vp0.height }
+    const tc = await p.getTextContent()
+    const out: TextItemGeom[] = []
+    for (const raw of tc.items) {
+      const it = raw as { str?: string; transform?: number[]; width?: number }
+      // 双空间几何的算法在 pdf-geo.ts（textItemBox），node 侧有 pdfjs 互证测试；
+      // 这里只做 pdf.js TextItem → 纯函数的适配
+      const g = textItemBox(it.transform, it.width, it.str, rot, base)
+      if (g) out.push(g)
+    }
+    pageGeoms.current.set(n, out)
+    return out
+  }
+
+  /** 改字模式下点页面：命中最贴近点击点的文字项，弹出输入框 */
+  const tePick = async (e: React.MouseEvent, n: number) => {
+    const d = docRef.current
+    const el = pageEl(n)
+    if (!d || !el) return
+    const r = el.getBoundingClientRect()
+    const px = (e.clientX - r.left) / scaleRef.current
+    const py = (e.clientY - r.top) / scaleRef.current
+    setTeErr('')
+    let geoms: TextItemGeom[]
+    try {
+      geoms = await loadPageGeom(d, n)
+    } catch (err) {
+      setTeErr(failRaw(err))
+      return
+    }
+    // 命中多个（嵌套/相邻）时取面积最小的那个：最贴近用户点的那一格
+    let best: TextItemGeom | null = null
+    let bestArea = Infinity
+    for (const g of geoms) {
+      if (px < g.box.x || px > g.box.x + g.box.w || py < g.box.y || py > g.box.y + g.box.h) continue
+      const a = g.box.w * g.box.h
+      if (a < bestArea) {
+        bestArea = a
+        best = g
+      }
+    }
+    if (!best) {
+      setTeDraft(null)
+      return
+    }
+    // 底色从已渲染的画布上采样：原文字后面是图或彩底时，白块会露馅
+    const canvas = el.querySelector('canvas')
+    const bg = sampleBackdrop(canvas, window.devicePixelRatio || 1, scaleRef.current, best.box)
+    setTeDraft({
+      page: n,
+      box: best.box,
+      from: best.str,
+      bg,
+      edit: { page: n, x: best.x, y: best.y, size: best.size, rot: normRot((await d.getPage(n)).rotate ?? 0) },
+    })
+    setTeInput(best.str)
+  }
+
+  /** 提交草稿：进待写清单（此时还没动文件，保存时才烧进去） */
+  const teCommit = () => {
+    if (!teDraft) return
+    const text = teInput
+    if (!text.trim()) {
+      setTeErr('新文字不能为空')
+      return
+    }
+    setTextEdits((prev) => [
+      ...prev,
+      { ...teDraft.edit, rect: teDraft.box, text, bg: teDraft.bg, from: teDraft.from },
+    ])
+    setTeDraft(null)
+    setTeInput('')
+    setTeErr('')
+  }
+
   const runSearch = async (raw: string, seq: number) => {
     const d = docRef.current
     const q = raw.trim().toLowerCase()
@@ -1208,6 +1341,12 @@ function PdfViewer({ tab }: Props) {
     markDirty(tab.id, true)
   }
 
+  /** 改一枚标注上的任意几个字段（文本框用它改字与字号） */
+  const updateAnno = (id: string, patch: Partial<PdfAnno>) => {
+    setAnnos((a) => a.map((x) => (x.id === id ? { ...x, ...patch } : x)))
+    markDirty(tab.id, true)
+  }
+
   // 表单值编辑：进了 touched 账才会在保存时写回文件
   const setFormValue = (name: string, v: string | boolean | string[]) => {
     touchedFormRef.current.add(name)
@@ -1281,6 +1420,24 @@ function PdfViewer({ tab }: Props) {
       const r = { x: pt[0] - w / 2, y: pt[1] - h / 2, w, h }
       setAnnos((list) => [...list, { id: nid(), kind: 'stamp', page: n, rects: [r], color: ANNO_COLORS[0], data: img.src }])
       markDirty(tab.id, true)
+      e.stopPropagation()
+      return
+    }
+    if (kind === 'textbox') {
+      // 文本框点击即落：宽固定、高按字号给一行半，落完自动进编辑态（不然用户得再点一次）
+      const fs = TEXTBOX_FS_DEFAULT
+      const w = TEXTBOX_W_PT
+      const h = fs * 1.6
+      const r = { x: pt[0], y: pt[1] - fs * 1.2, w, h }
+      const id = nid()
+      setAnnos((list) => [
+        ...list,
+        { id, kind: 'textbox', page: n, rects: [r], color: ANNO_COLORS[0], content: '', fs },
+      ])
+      markDirty(tab.id, true)
+      setDrawTool(null)
+      setSelAnno(id)
+      setTextBoxOpen(id)
       e.stopPropagation()
       return
     }
@@ -1398,7 +1555,31 @@ function PdfViewer({ tab }: Props) {
       const { PDFDocument, PDFName, PDFDict, PDFHexString, PDFBool } = await import('pdf-lib')
       const bytes = await readBytes(path)
       const pdoc = await PDFDocument.load(bytes, { updateMetadata: false, parseSpeed: PDF_OBJECTS_PER_TICK })
+      const stampAccounts: string[] = []
+      const teAccounts: string[] = []
       const pages = pdoc.getPages()
+
+      // —— 真·原地改字：把待写的烧进内容流（盖原字形 + 同基线重画 + 必要时嵌字体）。
+      // 只写没写过的：同一批再写一遍会拿底色把上一轮的新字也盖掉，虽不至于错但越叠越厚。
+      // 计数在 writeBytes 成功之后才推进，保存失败时漏写的几条下次还在
+      const teAll = textEditsRef.current
+      const tePending = teAll.slice(teWritten.current)
+      if (tePending.length) {
+        try {
+          const r = await applyTextEdits(pdoc, tePending)
+          for (const pg of r.skipped) {
+            teAccounts.push(`第 ${pg} 页有一处改字没写成（多半是系统里找不到中文字体）`)
+          }
+          teWritten.current += r.applied
+          if (r.fontEmbedded) {
+            teAccounts.push('改字嵌入了中文字体（子集，只多用几 KB）——字形与原文件用的字体不同，这是所有 PDF 编辑器共有的代价')
+          }
+        } catch (e) {
+          // 改字失败不该把整个保存拖死：标注与表单值照写，这一条记账
+          teAccounts.push(`改字没写进文件：${e instanceof Error ? e.message : String(e)}`)
+        }
+      }
+
       for (const pg of pages) {
         const arr = pg.node.Annots()
         if (!arr) continue
@@ -1406,7 +1587,7 @@ function PdfViewer({ tab }: Props) {
           const obj = pdoc.context.lookup(arr.get(i))
           if (!(obj instanceof PDFDict)) continue
           const st = obj.get(PDFName.of('Subtype'))
-          const owned = ['Highlight', 'Text', 'Square', 'Circle', 'Line', 'Ink']
+          const owned = ['Highlight', 'Text', 'Square', 'Circle', 'Line', 'Ink', 'FreeText']
           if (owned.some((s) => st === PDFName.of(s))) arr.remove(i)
         }
       }
@@ -1415,7 +1596,6 @@ function PdfViewer({ tab }: Props) {
         parseInt(h.slice(3, 5), 16) / 255,
         parseInt(h.slice(5, 7), 16) / 255,
       ]
-      const stampAccounts: string[] = []
       for (const a of list) {
         const pg = pages[a.page - 1]
         if (!pg) continue
@@ -1534,11 +1714,39 @@ function PdfViewer({ tab }: Props) {
               stampAccounts.push('有一枚图章的图片编码不对（既不是有效 PNG 也不是 JPEG），没写进文件')
             }
           }
+        } else if (a.kind === 'textbox') {
+          // 文本框 → /FreeText 注解。两个刻意的选择：
+          // 1. 不嵌字体：/DA 只写 "Helv <size> Tf"，字形由打开文件的阅读器自己配。
+          //    嵌字体的代价是要带一份 CJK 字体（几 MB），换来的只是"在我们这儿画得准"；
+          //    而不嵌的代价是别处可能换一种字体画（位置不变）。
+          // 2. 用 PDFHexString 写 /Contents：UTF-16BE + BOM 是 PDF 对 Unicode 正文的标准写法，
+          //    直接塞 PDFString 会被当 WinAnsi，中文落成乱码
+          const r = rects[0]
+          const fs = a.fs && a.fs > 0 ? a.fs : TEXTBOX_FS_DEFAULT
+          let arr = pg.node.Annots()
+          if (!arr) {
+            arr = pdoc.context.obj([])
+            pg.node.set(PDFName.of('Annots'), arr)
+          }
+          arr.push(
+            pdoc.context.register(
+              pdoc.context.obj({
+                Type: PDFName.of('Annot'),
+                Subtype: PDFName.of('FreeText'),
+                Rect: [r.x, height - r.y - r.h, r.x + r.w, height - r.y],
+                Contents: PDFHexString.fromText(a.content ?? ''),
+                // 无边框无底色：只是往页面上加一段字，不该顺手画个框
+                Border: { S: PDFName.of('S'), W: 0 },
+                C: colorArr(a.color),
+                DA: `/Helv ${fs} Tf ${colorArr(a.color).join(' ')} rg`,
+              }),
+            ),
+          )
         }
       }
       // —— 表单值写回：只写用户点过名的字段（touched）——文件里的值 pdf.js 读不全的
       //（密码框、富文本、签名域）一个字节都不动。没有 AcroForm / 单字段失败都记账，不让整趟保存失败
-      const accounts: string[] = [...stampAccounts]
+      const accounts: string[] = [...stampAccounts, ...teAccounts]
       const touched = touchedFormRef.current
       if (touched.size) {
         try {
@@ -2149,6 +2357,24 @@ function PdfViewer({ tab }: Props) {
           >
             ✎
           </button>
+          <button
+            className={`pdf-tool${tool === 'textedit' ? ' on' : ''}`}
+            title="原地改字：点原文输入新文字，保存时烧进文件（不可撤销，动手前请备份）"
+            onClick={() => {
+              setTool(tool === 'textedit' ? 'text' : 'textedit')
+              setDrawTool(null)
+              setSelAnno(null)
+              setTeDraft(null)
+            }}
+          >
+            字
+          </button>
+          {tool === 'textedit' && (
+            <span className="pdf-tools-note">
+              点要改的字 → 输入新文字 → 保存后生效
+              {textEdits.length > 0 && `（已排 ${textEdits.length} 处待写入）`}
+            </span>
+          )}
           {tool === 'anno' && (
             <>
               {(['rect', 'ellipse', 'line', 'ink'] as const).map((k) => (
@@ -2167,6 +2393,14 @@ function PdfViewer({ tab }: Props) {
                 onClick={() => void pickStampAndArm()}
               >
                 🖼
+              </button>
+              <span className="tb-sep" />
+              <button
+                className={`pdf-tool${drawTool === 'textbox' ? ' on' : ''}`}
+                title="加字：在页面上点击落一个文本框，往 PDF 上加一段自己的字（叠在原文档之上，是一枚可被其他阅读器看到的批注）"
+                onClick={() => setDrawTool(drawTool === 'textbox' ? null : 'textbox')}
+              >
+                🆎
               </button>
             </>
           )}
@@ -2400,11 +2634,75 @@ function PdfViewer({ tab }: Props) {
                 <div
                   key={n}
                   data-page={n}
-                  className={`pdf-page${tool === 'anno' ? ' anno-mode' : ''}`}
+                  className={`pdf-page${tool === 'anno' ? ' anno-mode' : ''}${tool === 'textedit' ? ' textedit-mode' : ''}`}
                   style={{ width: Math.floor(sz.w * scale), height: Math.floor(sz.h * scale) }}
+                  onClickCapture={tool === 'textedit' ? (e) => void tePick(e, n) : undefined}
                 >
                   <canvas className="pdf-canvas" />
                   <div className="pdf-textlayer" />
+                  {tool === 'textedit' && teDraft && teDraft.page === n && (
+                    <div
+                      className="pdf-te-draft"
+                      style={{
+                        left: teDraft.box.x * scale,
+                        top: teDraft.box.y * scale,
+                        width: teDraft.box.w * scale,
+                        height: teDraft.box.h * scale,
+                      }}
+                    />
+                  )}
+                  {textEdits
+                    .filter((e) => e.page === n)
+                    .map((e, i) => (
+                      <div
+                        key={`te-${i}`}
+                        className="pdf-te-pending"
+                        title={`将「${e.from}」改为「${e.text}」（保存后生效）`}
+                        style={{
+                          left: e.rect.x * scale,
+                          top: e.rect.y * scale,
+                          width: e.rect.w * scale,
+                          height: e.rect.h * scale,
+                        }}
+                      />
+                    ))}
+                  {tool === 'textedit' && teDraft && teDraft.page === n && (
+                    <div
+                      className="pdf-te-pop"
+                      onMouseDown={(e) => e.stopPropagation()}
+                      style={{
+                        left: teDraft.box.x * scale,
+                        top: (teDraft.box.y + teDraft.box.h) * scale + 6,
+                      }}
+                    >
+                      <div className="pdf-te-row">
+                        <span className="tb-label">原文</span>
+                        <span className="pdf-te-from">{teDraft.from || '（空）'}</span>
+                      </div>
+                      <div className="pdf-te-row">
+                        <input
+                          className="pdf-te-input"
+                          value={teInput}
+                          autoFocus
+                          placeholder="输入新文字"
+                          onChange={(e) => setTeInput(e.target.value)}
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter') teCommit()
+                            if (e.key === 'Escape') setTeDraft(null)
+                            e.stopPropagation()
+                          }}
+                        />
+                      </div>
+                      {teErr && <div className="pdf-te-err">{teErr}</div>}
+                      <div className="pdf-te-row pdf-te-btns">
+                        <button onClick={teCommit}>排队</button>
+                        <button onClick={() => setTeDraft(null)}>取消</button>
+                      </div>
+                      <div className="pdf-te-hint">
+                        保存后才真正改进文件；中文会嵌入系统字体（子集），字形可能与原文件不同
+                      </div>
+                    </div>
+                  )}
                   {pageAnnos.map((a) =>
                     a.kind === 'highlight' ? (
                       a.rects.map((r, i) => (
@@ -2445,6 +2743,51 @@ function PdfViewer({ tab }: Props) {
                             <div className="pdf-note-acts">
                               {btn('删除', () => removeAnno(a.id))}
                               {btn('完成', () => setNoteOpen(''))}
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    ) : a.kind === 'textbox' ? (
+                      <div
+                        key={a.id}
+                        data-anno={a.id}
+                        className={`pdf-anno-textbox${selAnno === a.id ? ' sel' : ''}`}
+                        style={{
+                          left: a.rects[0].x * scale,
+                          top: a.rects[0].y * scale,
+                          width: a.rects[0].w * scale,
+                          minHeight: a.rects[0].h * scale,
+                          color: a.color,
+                          fontSize: (a.fs ?? TEXTBOX_FS_DEFAULT) * scale,
+                        }}
+                        onPointerDown={(e) => startAnnoDrag(e, a.id)}
+                        onClick={() => {
+                          if (suppressClick.current === a.id) {
+                            suppressClick.current = ''
+                            return
+                          }
+                          if (tool === 'anno') setSelAnno(a.id)
+                          setTextBoxOpen(textBoxOpen === a.id ? '' : a.id)
+                        }}
+                        onDoubleClick={() => setTextBoxOpen(a.id)}
+                        title={a.content || '（空文本框）'}
+                      >
+                        {a.content || '双击加字…'}
+                        {textBoxOpen === a.id && (
+                          <div className="pdf-note-pop" onMouseDown={(e) => e.stopPropagation()}>
+                            <textarea
+                              className="pdf-note-ta"
+                              value={a.content ?? ''}
+                              placeholder="要加到页面上的字…"
+                              autoFocus
+                              onChange={(e) => updateAnno(a.id, { content: e.target.value })}
+                            />
+                            <div className="pdf-note-acts">
+                              {btn('删除', () => {
+                                setTextBoxOpen('')
+                                removeAnno(a.id)
+                              })}
+                              {btn('完成', () => setTextBoxOpen(''))}
                             </div>
                           </div>
                         )}
@@ -2631,6 +2974,36 @@ function PdfViewer({ tab }: Props) {
                         >
                           🗒
                         </button>
+                      )}
+                      {selA.kind === 'textbox' && (
+                        <>
+                          <button
+                            className="tb-btn"
+                            title="编辑这段字"
+                            onClick={() => setTextBoxOpen(textBoxOpen === selA.id ? '' : selA.id)}
+                          >
+                            🆎
+                          </button>
+                          <select
+                            className="tb-select"
+                            title="字号（PDF 点）。写进 /DA，由打开文件的阅读器按它画"
+                            value={String(selA.fs ?? TEXTBOX_FS_DEFAULT)}
+                            onChange={(e) => {
+                              const fs = Number(e.target.value)
+                              updateAnno(selA.id, {
+                                fs,
+                                // 高度跟着字号走：框太矮会被阅读器截断，太高又会挡住底下的原文
+                                rects: [{ ...selA.rects[0], h: fs * 1.6 }],
+                              })
+                            }}
+                          >
+                            {[8, 9, 10, 11, 12, 14, 16, 18, 24, 36].map((fs) => (
+                              <option key={fs} value={fs}>
+                                {fs}pt
+                              </option>
+                            ))}
+                          </select>
+                        </>
                       )}
                       <button
                         className="tb-btn"
