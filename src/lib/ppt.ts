@@ -68,13 +68,58 @@ export interface Slide {
   animOrder?: string[] // v0.115：放映/导出的揭示序；键形如 'l0'（正文第 1 条）、's2'（第 3 个形状）
 }
 
+export type SlideChartType = 'column' | 'bar' | 'line' | 'pie' | 'area'
+
+export const SLIDE_CHART_NAMES: Record<SlideChartType, string> = {
+  column: '柱形图',
+  bar: '条形图',
+  line: '折线图',
+  pie: '饼图',
+  area: '面积图',
+}
+
+/**
+ * 幻灯片表格（v0.127）：只存文字与行列结构，不存格级样式——
+ * 落 pptx 时交给 PowerPoint 自己的表样式，回读也只认文字。
+ * `rows` 是行优先的二维数组，`hasHeader` 时第 0 行是表头行。
+ */
+export interface SlideTableData {
+  rows: string[][]
+  hasHeader: boolean
+  /** 表头行底色 #rrggbb，未设 = 随主题强调色 */
+  headerFill?: string
+  /** 是否画格线；未设 = 画 */
+  border?: boolean
+  /** 表内字号（磅，6~96）；未设 = 14 */
+  sizePt?: number
+}
+
+/**
+ * 幻灯片图表（v0.127）：**只存数据，图由 VChart 现渲**。
+ * 于是 .opd 里这一枚形状永远可再编辑（改数改图型都是重渲一张 PNG），
+ * 而导出的 pptx 里它是图片——PowerPoint 拿不到原生图表对象，这是这一片的诚实边界。
+ */
+export interface SlideChartData {
+  chartType: SlideChartType
+  title?: string
+  /** 类目（饼图即扇区名） */
+  cats: string[]
+  /** 系列；饼图只用第 0 条 */
+  series: { name: string; vals: (number | null)[] }[]
+  stacked?: boolean
+}
+
+/** 新建表格形状时的默认行列数（Word/PowerPoint 插入表格对话框都是这个起步尺寸） */
+export const DEFAULT_TABLE_ROWS = 3
+export const DEFAULT_TABLE_COLS = 3
+
 /**
  * 自由形状（画布驱动第一片）：坐标是相对整页宽高的分数（0..1，允许少许越界——
  * 真实版面里就有出血元素），字号用 PowerPoint 的磅值（10 英寸页宽的语义）。
  */
 export interface SlideShape {
   id: string
-  kind: 'text' | 'image'
+  kind: 'text' | 'image' | 'table' | 'chart'
   x: number
   y: number
   w: number
@@ -88,6 +133,10 @@ export interface SlideShape {
   outline?: string // 边框色 #rrggbb（v0.108；导出仅文本形状落，图片边框只进渲染）
   outlineW?: number // 边框宽（磅，0.25~20；缺省 1）
   image?: string // kind=image：data URI
+  /** kind=table：表格的文字与结构（v0.127） */
+  table?: SlideTableData
+  /** kind=chart：图表的数据（v0.127）；图不入库，按它现渲 */
+  chart?: SlideChartData
   // 形状自己的逐条动画（v0.111）：带动画的形状各占揭示序里的一票，
   // 导出各占一枚 PowerPoint clickEffect（spTgt 指这个形状）；
   // v0.115 起次序可调，默认仍是「正文逐条在前、形状按数组序（= 层叠序）在后」
@@ -146,6 +195,64 @@ export function newSlide(layout: SlideLayout = 'bullets'): Slide {
     layout,
     title: layout === 'title' ? '演示文稿标题' : '',
     body: layout === 'title' ? '副标题 / 日期 / 作者' : '',
+  }
+}
+
+/**
+ * 新建表格形状（v0.127）：默认 3×3 带表头，落点避开标题条那一带。
+ * 表头格先填占位字——全空的表会被 parseTable 判为「没数据」整枚丢掉。
+ */
+export function newTableShape(x = 0.15, y = 0.32, w = 0.7, h = 0.42): SlideShape {
+  const rows = Array.from({ length: DEFAULT_TABLE_ROWS }, (_, r) =>
+    Array.from({ length: DEFAULT_TABLE_COLS }, (_, c) => (r === 0 ? `表头${c + 1}` : '')),
+  )
+  return {
+    id: newId(),
+    kind: 'table',
+    x,
+    y,
+    w,
+    h,
+    table: { rows, hasHeader: true },
+  }
+}
+
+/** 新建图表形状（v0.127）：起手一支柱形图带四个月份，好过一枚空框不知道要填什么 */
+export function newChartShape(x = 0.15, y = 0.3, w = 0.7, h = 0.45): SlideShape {
+  return {
+    id: newId(),
+    kind: 'chart',
+    x,
+    y,
+    w,
+    h,
+    chart: {
+      chartType: 'column',
+      cats: ['一月', '二月', '三月', '四月'],
+      series: [{ name: '系列1', vals: [12, 19, 8, 15] }],
+    },
+  }
+}
+
+/**
+ * 改表格行列数（v0.127）：短了裁掉、长了补空串，行 1..64 / 列 1..32。
+ * 裁掉的那几行文字随之没了——这是「删行」的本来意思，不做撤销栈之外的保留。
+ */
+export function resizeTable(t: SlideTableData, rows: number, cols: number): SlideTableData {
+  const R = Math.max(1, Math.min(Math.round(rows) || 1, 64))
+  const C = Math.max(1, Math.min(Math.round(cols) || 1, 32))
+  const out = Array.from({ length: R }, (_, r) => {
+    const src = t.rows[r] ?? []
+    return Array.from({ length: C }, (_, c) => src[c] ?? '')
+  })
+  return { ...t, rows: out }
+}
+
+/** 表格形状的行列数（UI 与导出共用同一份读法：行数是 rows.length，列数取最宽那行） */
+export function tableDims(t: SlideTableData): { rows: number; cols: number } {
+  return {
+    rows: t.rows.length,
+    cols: t.rows.reduce((m, r) => Math.max(m, r.length), 0),
   }
 }
 
@@ -382,6 +489,54 @@ function parseMaster(v: unknown): MasterStyle | undefined {
   return Object.values(out).some((x) => x !== undefined) ? out : undefined
 }
 
+/** 表格守卫（v0.127）：行数封顶 64、每行 32 格，非字符串按空串收；整张空表不出形状 */
+function parseTable(v: unknown): SlideTableData | undefined {
+  if (typeof v !== 'object' || v === null) return undefined
+  const r = v as Record<string, unknown>
+  if (!Array.isArray(r.rows)) return undefined
+  const rows = r.rows.slice(0, 64).map((row) =>
+    Array.isArray(row) ? row.slice(0, 32).map((c) => (typeof c === 'string' ? c : c == null ? '' : String(c))) : [],
+  )
+  if (!rows.length || !rows.some((row) => row.some((c) => c.trim()))) return undefined
+  const sizePt = typeof r.sizePt === 'number' && r.sizePt >= 6 && r.sizePt <= 96 ? r.sizePt : undefined
+  const hex = /^#[0-9a-fA-F]{6}$/
+  return {
+    rows,
+    hasHeader: r.hasHeader === true,
+    headerFill: typeof r.headerFill === 'string' && hex.test(r.headerFill) ? r.headerFill : undefined,
+    border: r.border === false ? false : undefined,
+    sizePt,
+  }
+}
+
+/** 图表守卫（v0.127）：图型认不出即弃，类目 64 / 系列 16 / 值 64 三道封顶；一条像样的系列都没有就不出形状 */
+function parseChart(v: unknown): SlideChartData | undefined {
+  if (typeof v !== 'object' || v === null) return undefined
+  const r = v as Record<string, unknown>
+  const ct = r.chartType
+  if (typeof ct !== 'string' || !(ct in SLIDE_CHART_NAMES)) return undefined
+  const cats = Array.isArray(r.cats)
+    ? r.cats.slice(0, 64).map((c) => (typeof c === 'string' ? c : String(c ?? '')))
+    : []
+  const series = Array.isArray(r.series)
+    ? r.series.slice(0, 16).map((raw) => {
+        const s = (typeof raw === 'object' && raw !== null ? raw : {}) as Record<string, unknown>
+        const vals = Array.isArray(s.vals)
+          ? s.vals.slice(0, 64).map((n) => (typeof n === 'number' && Number.isFinite(n) ? n : null))
+          : []
+        return { name: typeof s.name === 'string' ? s.name : '', vals }
+      })
+    : []
+  if (!series.length) return undefined
+  return {
+    chartType: ct as SlideChartType,
+    title: typeof r.title === 'string' ? r.title : undefined,
+    cats,
+    series,
+    stacked: r.stacked === true ? true : undefined,
+  }
+}
+
 /** 形状守卫：坐标必须是有限数、宽高为正，字号/对齐/颜色越界即弃（.opd 是 JSON，别信旧文件的内容） */
 function parseShapes(v: unknown): SlideShape[] | undefined {
   if (!Array.isArray(v)) return undefined
@@ -392,8 +547,17 @@ function parseShapes(v: unknown): SlideShape[] | undefined {
     const num = (k: string) => (typeof r[k] === 'number' && Number.isFinite(r[k]) ? r[k] : NaN)
     const [x, y, w, h] = ['x', 'y', 'w', 'h'].map(num)
     if ([x, y, w, h].some((n) => Number.isNaN(n)) || w <= 0 || h <= 0) continue
-    const kind = r.kind === 'image' ? 'image' : r.kind === 'text' ? 'text' : null
+    const kind =
+      r.kind === 'image' ? 'image'
+        : r.kind === 'text' ? 'text'
+        : r.kind === 'table' ? 'table'
+        : r.kind === 'chart' ? 'chart'
+        : null
     if (!kind) continue
+    // 表格/图表没有数据就没得画：整枚形状丢掉，而不是落一个空盒子
+    const table = kind === 'table' ? parseTable(r.table) : undefined
+    const chart = kind === 'chart' ? parseChart(r.chart) : undefined
+    if ((kind === 'table' && !table) || (kind === 'chart' && !chart)) continue
     const str = (k: string) => (typeof r[k] === 'string' ? (r[k] as string) : undefined)
     const align = ['left', 'center', 'right'].includes(String(r.align)) ? (r.align as SlideShape['align']) : undefined
     const sizePt =
@@ -421,6 +585,8 @@ function parseShapes(v: unknown): SlideShape[] | undefined {
       outline: hex('outline'),
       outlineW,
       image: kind === 'image' ? str('image') : undefined,
+      table,
+      chart,
       anim: isBulletAnim(r.anim) ? r.anim : undefined,
       animDir: r.anim && isAnimDir(r.animDir) ? r.animDir : undefined,
       exitAnim: r.anim && isBulletExit(r.exitAnim) ? r.exitAnim : undefined,

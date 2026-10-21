@@ -13,7 +13,9 @@ import {
   type Slide,
   type SlideTransition,
   type Deck,
+  tableDims,
 } from './ppt'
+import { renderSlideChartPng } from './chart'
 
 const W = 10 // inches, LAYOUT_16x9
 const H = 5.625
@@ -178,6 +180,54 @@ export async function deckToPptxBytes(deck: Deck): Promise<Uint8Array> {
           valign: 'top',
         })
         names.push({ idx, name: objectName })
+      } else if (sh.kind === 'table' && sh.table) {
+        // 表格落**原生 PowerPoint 表格**（v0.127）：对方拿到手能接着改字改行，
+        // 而不是一张截屏。表头行按强调色铺底，格线可关。
+        const t = sh.table
+        const cols = Math.max(1, tableDims(t).cols)
+        const rows = t.rows.map((row, ri) =>
+          row.map((cell) => {
+            const head = t.hasHeader && ri === 0
+            return {
+              text: cell,
+              options: {
+                ...(head ? { bold: true, align: 'center' as const } : { align: 'left' as const }),
+                color: head ? 'FFFFFF' : fg,
+                ...(head
+                  ? { fill: { color: (t.headerFill ?? accent).replace('#', '') } }
+                  : {}),
+              },
+            }
+          }),
+        )
+        slide.addTable(rows, {
+          ...r,
+          objectName,
+          colW: Array.from({ length: cols }, () => r.w / cols),
+          fontSize: t.sizePt ?? 14,
+          // 关掉格线时 type:'none'，否则 PowerPoint 会自作主张给一张无框表
+          border:
+            t.border === false
+              ? { type: 'none' }
+              : { type: 'solid', pt: 1, color: 'BFBFBF' },
+          valign: 'middle',
+        })
+        names.push({ idx, name: objectName })
+      } else if (sh.kind === 'chart' && sh.chart) {
+        // 图表落**图片**（v0.127）：pptxgenjs 只给得出原生图表的骨架，
+        // 而这一片要的是「幻灯片上有一张对的图」。数据在 .opd 里留着，回应用内可再编辑。
+        // 渲不出来就整枚不落——宁可少一枚形状，也不要在 pptx 里塞一张坏的图。
+        try {
+          const png = await renderSlideChartPng(
+            sh.chart,
+            Math.round(sh.w * 960),
+            Math.round(sh.h * 540),
+          )
+          slide.addImage({ data: png, ...r, objectName })
+          names.push({ idx, name: objectName })
+        } catch {
+          /* 图表渲染失败：跳过这一枚，其余形状照常落盘 */
+        }
       }
     }
     shapeNames.push(names)

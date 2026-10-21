@@ -32,10 +32,18 @@ import {
   type Deck,
   type RevealItem,
   type Slide,
+  type SlideChartType,
   type SlideLayout,
   type SlideShape,
+  type SlideTableData,
   type SlideTransition,
+  newTableShape,
+  newChartShape,
+  resizeTable,
+  tableDims,
+  SLIDE_CHART_NAMES,
 } from '../lib/ppt'
+import { chartToCsv, dropSlideChart, parseChartCsv, useSlideChartPng } from '../lib/slide-chart'
 import { deckToPptxBytes } from '../lib/pptx-export'
 import { pptxBytesToDeck } from '../lib/pptx-import'
 import { exportPdfWithOverlay } from '../lib/pdfprint'
@@ -67,9 +75,125 @@ function revealName(s: Slide, it: RevealItem): string {
   if (it.kind === 'line') return `要点 ${it.idx + 1} · ${cut(bodyLines(s)[it.idx] ?? '', 14)}`
   const sh = revealItemShape(s, it)
   if (!sh) return `形状 ${it.idx + 1}`
-  const tag = sh.kind === 'image' ? '图片' : '文本框'
-  const head = sh.kind === 'image' ? '' : cut((sh.text ?? '').split('\n')[0] ?? '', 12)
+  const tag =
+    sh.kind === 'image' ? '图片'
+      : sh.kind === 'table' ? '表格'
+      : sh.kind === 'chart' ? '图表'
+      : '文本框'
+  const head =
+    sh.kind === 'image' ? ''
+      : sh.kind === 'table' ? cut(sh.table?.rows[0]?.[0] ?? '', 12)
+      : sh.kind === 'chart' ? (sh.chart ? SLIDE_CHART_NAMES[sh.chart.chartType] : '')
+      : cut((sh.text ?? '').split('\n')[0] ?? '', 12)
   return `${tag} ${it.idx + 1}${head ? ` · ${head}` : ''}`
+}
+
+
+/**
+ * 表格里层（v0.127）：放映预览与编辑台共用同一份格线/表头口径，
+ * 免得「编辑时看到的」和「放映时看到的」是两张表。
+ */
+function TableInner({
+  t,
+  fg,
+  accent,
+  sizeEm,
+}: {
+  t: SlideTableData
+  fg: string
+  accent: string
+  sizeEm: string
+}) {
+  const line = t.border === false ? 'none' : '1px solid rgba(128,128,128,0.45)'
+  return (
+    <table
+      style={{
+        width: '100%',
+        height: '100%',
+        borderCollapse: 'collapse',
+        tableLayout: 'fixed',
+        fontSize: sizeEm,
+        color: fg,
+      }}
+    >
+      <tbody>
+        {t.rows.map((row, ri) => (
+          <tr key={ri}>
+            {row.map((cell, ci) => {
+              const head = t.hasHeader && ri === 0
+              const st: CSSProperties = {
+                border: line,
+                padding: '0.2em 0.4em',
+                textAlign: head ? 'center' : 'left',
+                fontWeight: head ? 600 : undefined,
+                overflow: 'hidden',
+                textOverflow: 'ellipsis',
+              }
+              if (head) {
+                st.background = t.headerFill ?? accent
+                st.color = '#ffffff'
+              }
+              return head ? (
+                <th key={ci} style={st}>
+                  {cell}
+                </th>
+              ) : (
+                <td key={ci} style={st}>
+                  {cell}
+                </td>
+              )
+            })}
+          </tr>
+        ))}
+      </tbody>
+    </table>
+  )
+}
+
+/** 表格编辑网格：一格一枚 input。拦掉 pointerdown，免得点格子变成拖形状 */
+function TableGrid({ t, onChange }: { t: SlideTableData; onChange: (rows: string[][]) => void }) {
+  const line = t.border === false ? 'none' : '1px solid rgba(128,128,128,0.45)'
+  return (
+    <div className="ppt-table-grid" onPointerDown={(e) => e.stopPropagation()}>
+      <table
+        style={{
+          width: '100%',
+          borderCollapse: 'collapse',
+          tableLayout: 'fixed',
+          fontSize: `${(t.sizePt ?? 14) / 18}em`,
+        }}
+      >
+        <tbody>
+          {t.rows.map((row, ri) => (
+            <tr key={ri}>
+              {row.map((cell, ci) => (
+                <td key={ci} style={{ border: line, padding: 0 }}>
+                  <input
+                    className="ppt-table-cell"
+                    value={cell}
+                    onChange={(e) => {
+                      const rows = t.rows.map((r) => [...r])
+                      rows[ri][ci] = e.target.value
+                      onChange(rows)
+                    }}
+                  />
+                </td>
+              ))}
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  )
+}
+
+/** 图表预览（编辑台）：图是现渲的 PNG，渲好之前画占位框 */
+function ChartPreview({ sh }: { sh: SlideShape }) {
+  const w = Math.max(64, Math.round(sh.w * 960))
+  const h = Math.max(64, Math.round(sh.h * 540))
+  const png = useSlideChartPng(sh, w, h)
+  if (png) return <img className="ppt-shape-img" src={png} alt="" draggable={false} />
+  return <div className="ppt-shape-chart-hollow" />
 }
 
 function PptEditor({ tab }: Props) {
@@ -110,6 +234,8 @@ function PptEditor({ tab }: Props) {
   const stageRef = useRef<HTMLDivElement>(null)
   const [selShape, setSelShape] = useState<string | null>(null)
   const [editingShape, setEditingShape] = useState<string | null>(null)
+  // 图表数据的 CSV 编辑面板：一次只开一枚形状的那一个（形状条很窄，放不下常驻网格）
+  const [chartCsvFor, setChartCsvFor] = useState<string | null>(null)
   const dragRef = useRef<{
     id: string
     mode: 'move' | 'resize'
@@ -434,6 +560,9 @@ function PptEditor({ tab }: Props) {
 
   const removeSlide = () => {
     if (deck.slides.length <= 1) return
+    const gone = deck.slides[cur]
+    // 页删了，页上图表形状的 PNG 缓存也一并清掉，免得 id 复用时串出上一张图
+    for (const sh of gone?.shapes ?? []) if (sh.kind === 'chart') dropSlideChart(sh.id)
     edit((d) => {
       d.slides.splice(cur, 1)
     })
@@ -480,10 +609,30 @@ function PptEditor({ tab }: Props) {
     setEditingShape(id)
   }
 
+  const addTable = () => {
+    const sh = newTableShape()
+    editSlide(cur, (s) => {
+      s.shapes = [...(s.shapes ?? []), sh]
+    })
+    setSelShape(sh.id)
+    setEditingShape(sh.id)
+  }
+
+  const addChart = () => {
+    const sh = newChartShape()
+    editSlide(cur, (s) => {
+      s.shapes = [...(s.shapes ?? []), sh]
+    })
+    setSelShape(sh.id)
+    setEditingShape(null)
+  }
+
   const removeShape = (sid: string) => {
     editSlide(cur, (s) => {
       s.shapes = (s.shapes ?? []).filter((sh) => sh.id !== sid)
     })
+    dropSlideChart(sid)
+    if (chartCsvFor === sid) setChartCsvFor(null)
     setSelShape(null)
     setEditingShape(null)
   }
@@ -639,6 +788,20 @@ function PptEditor({ tab }: Props) {
         <button className="tool-btn" onClick={removeSlide} title="删除本页">删页</button>
         <button className="tool-btn" onClick={addTextBox} title="在页面上加一个可自由拖动/缩放的文本框（画布层，随 pptx 往返）">
           ＋文本框
+        </button>
+        <button
+          className="tool-btn"
+          onClick={addTable}
+          title="在页面上加一张可拖动/缩放的表格（导出为 PowerPoint 原生表格，对方还能继续编辑）"
+        >
+          ＋表格
+        </button>
+        <button
+          className="tool-btn"
+          onClick={addChart}
+          title="在页面上加一张图表（柱/条/线/饼/面积；导出落图片，数据留在 .opd 里随时可改）"
+        >
+          ＋图表
         </button>
         <span className="tool-sep" />
         <select
@@ -925,6 +1088,22 @@ function PptEditor({ tab }: Props) {
                 >
                   {sh.kind === 'image' ? (
                     <img className="ppt-shape-img" src={sh.image} alt="" draggable={false} />
+                  ) : sh.kind === 'table' && sh.table ? (
+                    editingShape === sh.id ? (
+                      <TableGrid
+                        t={sh.table}
+                        onChange={(rows) => patchShape(sh.id, { table: { ...sh.table!, rows } })}
+                      />
+                    ) : (
+                      <TableInner
+                        t={sh.table}
+                        fg={fgColor}
+                        accent={accentColor}
+                        sizeEm={`${(sh.table.sizePt ?? 14) / 18}em`}
+                      />
+                    )
+                  ) : sh.kind === 'chart' && sh.chart ? (
+                    <ChartPreview sh={sh} />
                   ) : editingShape === sh.id ? (
                     <textarea
                       className="ppt-shape-textedit"
@@ -1031,6 +1210,156 @@ function PptEditor({ tab }: Props) {
                             )}
                           </>
                         )}
+                        {sh.kind === 'table' && sh.table && (
+                          <>
+                            <button
+                              className="tool-btn tool-btn-mini"
+                              title="加一行"
+                              onClick={() => {
+                                const d = tableDims(sh.table!)
+                                patchShape(sh.id, { table: resizeTable(sh.table!, d.rows + 1, d.cols) })
+                              }}
+                            >
+                              行＋
+                            </button>
+                            <button
+                              className="tool-btn tool-btn-mini"
+                              title="删一行（至少留 1 行）"
+                              onClick={() => {
+                                const d = tableDims(sh.table!)
+                                patchShape(sh.id, {
+                                  table: resizeTable(sh.table!, Math.max(1, d.rows - 1), d.cols),
+                                })
+                              }}
+                            >
+                              行－
+                            </button>
+                            <button
+                              className="tool-btn tool-btn-mini"
+                              title="加一列"
+                              onClick={() => {
+                                const d = tableDims(sh.table!)
+                                patchShape(sh.id, { table: resizeTable(sh.table!, d.rows, d.cols + 1) })
+                              }}
+                            >
+                              列＋
+                            </button>
+                            <button
+                              className="tool-btn tool-btn-mini"
+                              title="删一列（至少留 1 列）"
+                              onClick={() => {
+                                const d = tableDims(sh.table!)
+                                patchShape(sh.id, {
+                                  table: resizeTable(sh.table!, d.rows, Math.max(1, d.cols - 1)),
+                                })
+                              }}
+                            >
+                              列－
+                            </button>
+                            <button
+                              className={`tool-btn tool-btn-mini${sh.table!.hasHeader ? ' tool-btn-primary' : ''}`}
+                              title="首行当表头（导出时 PowerPoint 认它是表头行）"
+                              onClick={() =>
+                                patchShape(sh.id, {
+                                  table: { ...sh.table!, hasHeader: !sh.table!.hasHeader },
+                                })
+                              }
+                            >
+                              表头
+                            </button>
+                            <button
+                              className={`tool-btn tool-btn-mini${sh.table!.border !== false ? ' tool-btn-primary' : ''}`}
+                              title="显示格线"
+                              onClick={() =>
+                                patchShape(sh.id, {
+                                  table: {
+                                    ...sh.table!,
+                                    border: sh.table!.border === false ? undefined : false,
+                                  },
+                                })
+                              }
+                            >
+                              格线
+                            </button>
+                            <input
+                              className="tool-num-input"
+                              type="number"
+                              min={6}
+                              max={96}
+                              value={sh.table!.sizePt ?? 14}
+                              title="表内字号（磅）"
+                              onChange={(e) =>
+                                patchShape(sh.id, {
+                                  table: {
+                                    ...sh.table!,
+                                    sizePt: Math.min(96, Math.max(6, Number(e.target.value) || 14)),
+                                  },
+                                })
+                              }
+                            />
+                            <input
+                              type="color"
+                              className="ppt-shape-color"
+                              title="表头底色"
+                              value={
+                                /^#[0-9a-fA-F]{6}$/.test(sh.table!.headerFill ?? '')
+                                  ? sh.table!.headerFill!
+                                  : accentColor
+                              }
+                              onChange={(e) =>
+                                patchShape(sh.id, { table: { ...sh.table!, headerFill: e.target.value } })
+                              }
+                            />
+                            <button
+                              className={`tool-btn tool-btn-mini${editingShape === sh.id ? ' tool-btn-primary' : ''}`}
+                              title="逐个格子改字（也可以直接双击表格）"
+                              onClick={() => setEditingShape(editingShape === sh.id ? null : sh.id)}
+                            >
+                              {editingShape === sh.id ? '改完' : '改字'}
+                            </button>
+                          </>
+                        )}
+                        {sh.kind === 'chart' && sh.chart && (
+                          <>
+                            <select
+                              className="tool-select"
+                              value={sh.chart!.chartType}
+                              title="图型"
+                              onChange={(e) =>
+                                patchShape(sh.id, {
+                                  chart: {
+                                    ...sh.chart!,
+                                    chartType: e.target.value as SlideChartType,
+                                  },
+                                })
+                              }
+                            >
+                              {(Object.entries(SLIDE_CHART_NAMES) as [SlideChartType, string][]).map(
+                                ([k, nm]) => (
+                                  <option key={k} value={k}>
+                                    {nm}
+                                  </option>
+                                ),
+                              )}
+                            </select>
+                            <button
+                              className={`tool-btn tool-btn-mini${chartCsvFor === sh.id ? ' tool-btn-primary' : ''}`}
+                              title="改数据（首行系列名，首列类目，逗号分隔）"
+                              onClick={() => setChartCsvFor(chartCsvFor === sh.id ? null : sh.id)}
+                            >
+                              数据
+                            </button>
+                            <button
+                              className={`tool-btn tool-btn-mini${sh.chart!.stacked ? ' tool-btn-primary' : ''}`}
+                              title="堆叠（饼图不认这一档）"
+                              onClick={() =>
+                                patchShape(sh.id, { chart: { ...sh.chart!, stacked: !sh.chart!.stacked } })
+                              }
+                            >
+                              堆叠
+                            </button>
+                          </>
+                        )}
                         <button
                           className="tool-btn tool-btn-mini"
                           title="上一层（后画在上）"
@@ -1097,6 +1426,29 @@ function PptEditor({ tab }: Props) {
                           删除
                         </button>
                       </div>
+                      {chartCsvFor === sh.id && sh.chart && (
+                        <div className="ppt-chart-data" onPointerDown={(e) => e.stopPropagation()}>
+                          <span className="ppt-chart-data-label">
+                            首行系列名 · 首列类目 · 逗号分隔
+                          </span>
+                          <textarea
+                            key={sh.id}
+                            className="ppt-chart-data-csv"
+                            defaultValue={chartToCsv(sh.chart)}
+                            onChange={(e) => {
+                              const { cats, series } = parseChartCsv(e.target.value)
+                              if (!series.length) return
+                              patchShape(sh.id, { chart: { ...sh.chart!, cats, series } })
+                            }}
+                          />
+                          <button
+                            className="tool-btn tool-btn-mini"
+                            onClick={() => setChartCsvFor(null)}
+                          >
+                            收起
+                          </button>
+                        </div>
+                      )}
                     </>
                   )}
                 </div>

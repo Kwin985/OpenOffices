@@ -497,7 +497,8 @@ async function slideToDeckSlide(
     const ordered: Element[] = []
     const walk = (n: Element) => {
       for (const c of kids(n)) {
-        if (c.localName === 'sp' || c.localName === 'pic') ordered.push(c)
+        if (c.localName === 'sp' || c.localName === 'pic' || c.localName === 'graphicFrame')
+          ordered.push(c)
         walk(c)
       }
     }
@@ -522,6 +523,33 @@ async function slideToDeckSlide(
           continue
         }
         boxes.push({ lines, y: pos ? pos.y : 999, ph })
+      } else if (el.localName === 'graphicFrame') {
+        // PowerPoint 原生表格（v0.127）：<a:tbl> → 表格形状，位置取 graphicFrame 自己的 xfrm。
+        // 首行是不是表头由 <a:tblPr firstRow="1"> 说了算。
+        // 图表（<c:chart>）这一片**不接**：它的数据住在另一份 chartN.xml 里，硬读进来
+        // 也只能落一张改不了的死图，宁可这一枚形状不认，其余照常导入。
+        const tbl = descendantsByName(el, 'tbl')[0]
+        if (!tbl) continue
+        const pos = shapeExt(el)
+        if (!pos) continue
+        const rows = childrenByName(tbl, 'tr').map((tr) =>
+          childrenByName(tr, 'tc').map((tc) =>
+            descendantsByName(tc, 't')
+              .map((t) => t.textContent ?? '')
+              .join('')
+              .trim(),
+          ),
+        )
+        if (!rows.length || !rows.some((r) => r.some((c) => c))) continue
+        const tblPr = descendantsByName(tbl, 'tblPr')[0]
+        const sh: SlideShape = {
+          id: newId(),
+          kind: 'table',
+          ...pos,
+          table: { rows, hasHeader: tblPr?.getAttribute('firstRow') === '1' },
+        }
+        shapes.push(sh)
+        shapeSpids.push(spidOf(el) ?? '')
       } else {
         // 图片：一律进形状层（v0.107）——位置原样保住，不再有「第一张塞版式槽、其余丢弃」的
         // 有损近似；版式槽的 image 只留给用户在图片页手工插入与单页背景图回退
