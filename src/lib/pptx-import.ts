@@ -18,10 +18,29 @@ import {
 const EMU_PER_IN = 914400
 const SLIDE_W_IN = 10
 const SLIDE_H_IN = 5.625
+const R_NS = 'http://schemas.openxmlformats.org/officeDocument/2006/relationships'
 
 // @xmldom/xmldom 0.8 不实现 Element.children，统一用 childNodes 过滤（浏览器同样适用）
 function kids(n: Element): Element[] {
   return Array.from(n.childNodes).filter((c) => c.nodeType === 1) as Element[]
+}
+
+// ---- 属性查问漏斗 ----------------------------------------------------------------
+//
+// 整条读入链按名取属性只走 ga 这一枚（与 docx 侧 ooxml.ts 的 attr/attrL 同一副家什）。
+// 产品行为上它就是 getAttribute 的一层直通；scripts/fidelity-report-pptx.mjs 从 git HEAD
+// 取一次性副本、只改写这一枚的躯体注入探针，于是运行期每一次「问过哪枚元素上的哪个名」
+// 都记在账上——分子（查问过的）与分母（部件里真实存在的字面）才对得上，
+// pptx 属性覆盖账才立得起来。产品源一行不改，探针只活在副本里。
+//
+// 带 r: 前缀的名取空时按关系命名空间再取一次：个别生产方把关系命名空间铺成默认命名空间
+// （<blip embed="rId2" xmlns="...relationships">），前缀那一支会落空。两路记的是同一对
+// （blip|embed），探针不重复计数。
+function ga(el: Element | null | undefined, name: string): string | null {
+  if (!el) return null
+  const v = el.getAttribute(name)
+  if (v !== null || !name.startsWith('r:')) return v
+  return el.getAttributeNS(R_NS, name.slice(2))
 }
 
 function childrenByName(node: Element, name: string): Element[] {
@@ -59,16 +78,16 @@ function shapeExt(sp: Element): { x: number; y: number; w: number; h: number } |
   const off = childrenByName(xfrm, 'off')[0]
   const ext = childrenByName(xfrm, 'ext')[0]
   if (!off || !ext) return null
-  const ex = Number(off.getAttribute('x') ?? 0) / EMU_PER_IN / SLIDE_W_IN
-  const ey = Number(off.getAttribute('y') ?? 0) / EMU_PER_IN / SLIDE_H_IN
-  const ew = Number(ext.getAttribute('cx') ?? 0) / EMU_PER_IN / SLIDE_W_IN
-  const eh = Number(ext.getAttribute('cy') ?? 0) / EMU_PER_IN / SLIDE_H_IN
+  const ex = Number(ga(off, 'x') ?? 0) / EMU_PER_IN / SLIDE_W_IN
+  const ey = Number(ga(off, 'y') ?? 0) / EMU_PER_IN / SLIDE_H_IN
+  const ew = Number(ga(ext, 'cx') ?? 0) / EMU_PER_IN / SLIDE_W_IN
+  const eh = Number(ga(ext, 'cy') ?? 0) / EMU_PER_IN / SLIDE_H_IN
   return { x: ex, y: ey, w: ew, h: eh }
 }
 
 function phType(sp: Element): string | null {
   const ph = descendantsByName(sp, 'ph')[0]
-  return ph?.getAttribute('type') ?? null
+  return ga(ph, 'type')
 }
 
 // 形状文本的字符样式：首个 rPr（run 级）优先，退而求其次取 defRPr；对齐取首个 pPr 的 algn
@@ -78,14 +97,14 @@ function shapeStyleOf(
 ): Partial<SlideShape> {
   const out: Partial<SlideShape> = {}
   const rPr = descendantsByName(sp, 'rPr')[0] ?? descendantsByName(sp, 'defRPr')[0]
-  const sz = Number(rPr?.getAttribute('sz') ?? NaN) // OOXML：百分之一磅
+  const sz = Number(ga(rPr, 'sz') ?? NaN) // OOXML：百分之一磅
   if (Number.isFinite(sz) && sz >= 400 && sz <= 40000) out.sizePt = Math.round(sz) / 100
-  if (rPr?.getAttribute('b') === '1') out.bold = true
+  if (ga(rPr, 'b') === '1') out.bold = true
   if (rPr) {
     const color = solidFillToHex(childrenByName(rPr, 'solidFill')[0], env.colors, env.clrMap)
     if (color) out.color = color
   }
-  const algn = descendantsByName(sp, 'pPr')[0]?.getAttribute('algn')
+  const algn = ga(descendantsByName(sp, 'pPr')[0], 'algn')
   if (algn === 'ctr') out.align = 'center'
   else if (algn === 'r') out.align = 'right'
   else if (algn === 'just') out.align = 'left'
@@ -109,7 +128,7 @@ function boxStyleOf(
     const c = solidFillToHex(childrenByName(ln, 'solidFill')[0], env.colors, env.clrMap)
     if (c) {
       out.outline = c
-      const wEmu = Number(ln.getAttribute('w') ?? NaN)
+      const wEmu = Number(ga(ln, 'w') ?? NaN)
       if (Number.isFinite(wEmu) && wEmu >= 3175 && wEmu <= 254000)
         out.outlineW = Math.round((wEmu / 12700) * 100) / 100
     }
@@ -139,8 +158,8 @@ function parseRels(text: string): Map<string, string> {
   const map = new Map<string, string>()
   const doc = new DOMParser().parseFromString(text, 'application/xml')
   for (const rel of descendantsByName(doc.documentElement, 'Relationship')) {
-    const id = rel.getAttribute('Id')
-    const target = rel.getAttribute('Target')
+    const id = ga(rel, 'Id')
+    const target = ga(rel, 'Target')
     if (id && target) map.set(id, target)
   }
   return map
@@ -168,7 +187,7 @@ function colorScheme(themeDoc: Document): Record<string, string> {
   for (const c of kids(scheme)) {
     const srgb = childrenByName(c, 'srgbClr')[0]
     const sys = childrenByName(c, 'sysClr')[0]
-    const val = srgb?.getAttribute('val') ?? sys?.getAttribute('lastClr')
+    const val = ga(srgb, 'val') ?? ga(sys, 'lastClr')
     if (val) out[c.localName] = `#${val}`
   }
   return out
@@ -182,10 +201,10 @@ function solidFillToHex(
 ): string | undefined {
   if (!fill) return undefined
   const srgb = childrenByName(fill, 'srgbClr')[0]
-  if (srgb?.getAttribute('val')) return `#${srgb.getAttribute('val')}`
+  if (ga(srgb, 'val')) return `#${ga(srgb, 'val')}`
   const sys = childrenByName(fill, 'sysClr')[0]
-  if (sys?.getAttribute('lastClr')) return `#${sys.getAttribute('lastClr')}`
-  const scheme = childrenByName(fill, 'schemeClr')[0]?.getAttribute('val')
+  if (ga(sys, 'lastClr')) return `#${ga(sys, 'lastClr')}`
+  const scheme = ga(childrenByName(fill, 'schemeClr')[0], 'val')
   if (!scheme) return undefined
   return colors[clrMap[scheme] ?? scheme] ?? colors[scheme]
 }
@@ -193,9 +212,9 @@ function solidFillToHex(
 function relsEntries(text: string): { id?: string; type: string; target: string }[] {
   const doc = parseXml(text)
   return descendantsByName(doc.documentElement, 'Relationship').map((r) => ({
-    id: r.getAttribute('Id') ?? undefined,
-    type: r.getAttribute('Type') ?? '',
-    target: r.getAttribute('Target') ?? '',
+    id: ga(r, 'Id') ?? undefined,
+    type: ga(r, 'Type') ?? '',
+    target: ga(r, 'Target') ?? '',
   }))
 }
 
@@ -230,11 +249,7 @@ async function bgOf(
   const fill = descendantsByName(bg, 'blipFill')[0]
   if (fill && relsText) {
     const blip = descendantsByName(fill, 'blip')[0]
-    const rid = blip?.getAttribute('r:embed') ??
-      blip?.getAttributeNS(
-        'http://schemas.openxmlformats.org/officeDocument/2006/relationships',
-        'embed',
-      )
+    const rid = ga(blip, 'r:embed')
     if (rid) {
       const data = await imageFromRid(zip, relsText, rid, baseDir)
       if (data) return { bgImage: data }
@@ -267,7 +282,9 @@ async function parseMaster(zip: JSZip): Promise<{
   const root = parseXml(await masterFile.async('string')).documentElement
   const clrMapEl = descendantsByName(root, 'clrMap')[0]
   const clrMap: Record<string, string> = {}
-  if (clrMapEl) for (const a of Array.from(clrMapEl.attributes)) clrMap[a.localName] = a.value
+  // 照单全收也按名逐枚问：clrMap 上有哪些名是文件说的，每一个名的值都过 ga 漏斗——
+  // 探针的分子这才看得见这一族查问（直接读 a.value 就绕过了漏斗）
+  if (clrMapEl) for (const a of Array.from(clrMapEl.attributes)) clrMap[a.localName] = ga(clrMapEl, a.localName) ?? a.value
 
   const masterRelText = await zip.file('ppt/slideMasters/_rels/slideMaster1.xml.rels')?.async('string')
   const master: MasterStyle = {}
@@ -330,7 +347,7 @@ function parseTransition(root: Element): {
   const tr = descendantsByName(root, 'transition')[0]
   if (!tr) return {}
   const out: { transition?: SlideTransition; autoAdvance?: number } = {}
-  const advTm = Number(tr.getAttribute('advTm') ?? 0)
+  const advTm = Number(ga(tr, 'advTm') ?? 0)
   if (Number.isFinite(advTm) && advTm >= 1000 && advTm <= 3_600_000)
     out.autoAdvance = Math.round(advTm / 1000)
   for (const c of kids(tr)) {
@@ -365,14 +382,14 @@ function flyStartDir(effect: Element): AnimDir | undefined {
 
 /// 形状的 spid：`<p:cNvPr id="N">`（sp/pic 都是这一枚，且都在自己那一层里）
 function spidOf(el: Element): string | undefined {
-  return descendantsByName(el, 'cNvPr')[0]?.getAttribute('id') ?? undefined
+  return ga(descendantsByName(el, 'cNvPr')[0], 'id') ?? undefined
 }
 
 /// 一枚 clickEffect 的效果：filter 判定 wipe/fade，`ppt_x`/`ppt_y` 位移判定 fly，
 /// 方向按 presetSubtype → 滤镜名 → 起始位移三路认
 function animEffectOf(c: Element): { anim: BulletAnim; dir?: AnimDir } {
   const filter = (
-    descendantsByName(c, 'animEffect')[0]?.getAttribute('filter') ?? ''
+    ga(descendantsByName(c, 'animEffect')[0], 'filter') ?? ''
   ).toLowerCase()
   let anim: BulletAnim
   if (filter.startsWith('wipe')) anim = 'wipe'
@@ -388,7 +405,7 @@ function animEffectOf(c: Element): { anim: BulletAnim; dir?: AnimDir } {
   else anim = 'fade'
   if (anim === 'fade') return { anim }
   const dir =
-    SUBTYPE_DIR[Number(c.getAttribute('presetSubtype') ?? 0)] ??
+    SUBTYPE_DIR[Number(ga(c, 'presetSubtype') ?? 0)] ??
     WIPE_FILTER_DIR[filter] ??
     flyStartDir(c)
   return dir ? { anim, dir } : { anim }
@@ -420,9 +437,9 @@ function parseAnim(
   }
   const timing = childrenByName(root, 'timing')[0]
   if (!timing) return empty
-  const bodySpid = descendantsByName(timing, 'bldP')[0]?.getAttribute('spid') ?? undefined
+  const bodySpid = ga(descendantsByName(timing, 'bldP')[0], 'spid') ?? undefined
   const clicks = descendantsByName(timing, 'cTn').filter(
-    (c) => c.getAttribute('nodeType') === 'clickEffect',
+    (c) => ga(c, 'nodeType') === 'clickEffect',
   )
   const out: {
     anim?: BulletAnim
@@ -437,10 +454,10 @@ function parseAnim(
   }
   let bodySeen = 0
   for (const c of clicks) {
-    const spid = descendantsByName(c, 'spTgt')[0]?.getAttribute('spid')
+    const spid = ga(descendantsByName(c, 'spTgt')[0], 'spid')
     if (!spid) continue
-    if (c.getAttribute('presetClass') === 'exit') {
-      if (!descendantsByName(c, 'animEffect').some((a) => a.getAttribute('transition') === 'out'))
+    if (ga(c, 'presetClass') === 'exit') {
+      if (!descendantsByName(c, 'animEffect').some((a) => ga(a, 'transition') === 'out'))
         continue
       if (spid === bodySpid) out.exitAnim = 'fade'
       else {
@@ -449,7 +466,7 @@ function parseAnim(
       }
       continue
     }
-    if (c.getAttribute('presetClass') !== 'entr') continue
+    if (ga(c, 'presetClass') !== 'entr') continue
     const eff = animEffectOf(c)
     if (spid === bodySpid) {
       out.anim = eff.anim
@@ -546,7 +563,7 @@ async function slideToDeckSlide(
           id: newId(),
           kind: 'table',
           ...pos,
-          table: { rows, hasHeader: tblPr?.getAttribute('firstRow') === '1' },
+          table: { rows, hasHeader: ga(tblPr, 'firstRow') === '1' },
         }
         shapes.push(sh)
         shapeSpids.push(spidOf(el) ?? '')
@@ -554,9 +571,7 @@ async function slideToDeckSlide(
         // 图片：一律进形状层（v0.107）——位置原样保住，不再有「第一张塞版式槽、其余丢弃」的
         // 有损近似；版式槽的 image 只留给用户在图片页手工插入与单页背景图回退
         const blip = descendantsByName(el, 'blip')[0]
-        const embed =
-          blip?.getAttribute('r:embed') ??
-          blip?.getAttributeNS('http://schemas.openxmlformats.org/officeDocument/2006/relationships', 'embed')
+        const embed = ga(blip, 'r:embed')
         if (!embed || !rels) continue
         const target = rels.get(embed)
         if (!target) continue
