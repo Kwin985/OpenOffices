@@ -256,6 +256,22 @@ function injectProbe(file, mut) {
   return applied
 }
 
+// 读手副本再导出探针：脚本只从 reader.__PROBE 取账，不另开一份 ooxml.ts 的导入。
+// 为什么必须这样——vite-node 下同一个 .ts 文件按不同路径形状导入是两个模块实例
+// （实测：入口脚本按绝对路径 `E:/…/ooxml.ts` 动态导入 vs docx-fidelity.ts 内按
+// './ooxml' 相对导入，`__PROBE.seen` 是两个不同的 Map，脚本读的那份永远是空的；
+// 入口按相对路径导入学能合上，但那是路径形状的巧合）。再导出把「读到读手那一份」
+// 变成模块图的基本保证：reader.__PROBE 就是读手自己 import 的那个 __PROBE。
+function injectReaderReexport(file) {
+  let src = fs.readFileSync(file, 'utf8')
+  const anchor = "} from './table-cond'\n"
+  const hits = src.split(anchor).length - 1
+  if (hits !== 1) throw new Error(`再导出锚点命中 ${hits} 次（应为 1）`)
+  src = src.replace(anchor, anchor + "export { __PROBE } from './ooxml'\n")
+  fs.writeFileSync(file, src, 'utf8')
+  return 'reader.__PROBE(再导出)'
+}
+
 // ---- 3. 一趟读手 + 一份分母 --------------------------------------------------
 
 function errClass(e) {
@@ -283,8 +299,8 @@ function countAttrsOurParser(parseXml, root) {
   return { pairs, total }
 }
 
-async function runSelftest(reader, probe) {
-  const seen = probe.__PROBE.seen
+async function runSelftest(reader) {
+  const seen = reader.__PROBE.seen
   const zip = new JSZip()
   zip.file('word/document.xml', FIXTURE_DOC)
   zip.file('word/styles.xml', FIXTURE_STYLES)
@@ -315,12 +331,12 @@ async function main() {
   const t0 = Date.now()
   const { count: modFiles, fromGit } = materialize(MOD_DIR)
   const applied = injectProbe(path.join(MOD_DIR, 'ooxml.ts'), MUT)
+  applied.push(injectReaderReexport(path.join(MOD_DIR, 'docx-fidelity.ts')))
   const reader = await import(`${path.join(MOD_DIR, 'docx-fidelity.ts').replace(/\\/g, '/')}`)
   const { parseXml } = await import(`${path.join(MOD_DIR, 'ooxml.ts').replace(/\\/g, '/')}`)
-  const probe = await import(`${path.join(MOD_DIR, 'ooxml.ts').replace(/\\/g, '/')}`)
-  const seen = probe.__PROBE.seen
+  const seen = reader.__PROBE.seen
 
-  if (has('selftest')) await runSelftest(reader, probe)
+  if (has('selftest')) await runSelftest(reader)
 
   let files = []
   try {
@@ -518,7 +534,7 @@ function renderMd(d) {
     `Measured on the committed product at \`${d.measured.ref}\` (\`${d.measured.source}\`, ${d.measured.modules} modules,`,
   )
   L.push(
-    `probe injected into ${d.measured.injections.length} accessor${d.measured.injections.length === 1 ? '' : 's'}: ${d.measured.injections.join(', ')}).`,
+    `probe injected at ${d.measured.injections.length} points: ${d.measured.injections.join(', ')}).`,
   )
   L.push('')
   L.push('## Headline')
