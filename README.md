@@ -8550,8 +8550,48 @@ pptx 那本账 v0.138 只说了「哪 35 对没被问过」，没说该不该问
 ### 明确不做的（这一节只留三条，其余已在上文兑现）
 
 - **合成语料不等于真件语料**：按对可比、按字面不可比，已写进 `docs/fidelity.md` 的出处节；真件重跑仍要等一份可发布的 docx 语料（`--corpus` 口子一直开着）。
-- **pptx 那 12 对真丢账一枚没修**：本轮只做审计，不动读手——动它要同时动 `pptx-export.ts`，是一整轮的量。
 - **PDF 改字仍按横排画**：竖排盒已准，但写回时方向不保持（端到端腿钉住了这个已知代价）。
+- **pptx 那 12 对真丢账一枚没修**：本轮只做审计，不动读手——**v0.140 已闭**，见下一节。
+
+
+## 发行说明：v0.140 —— pptx 审计裁出的 12 对真丢账补完（读写两侧 + 屏上观感）
+
+一句立项：v0.139 第 4 节把 pptx 的 35 对未查问裁成「真丢账 12 / 裁定不读 23」，并写明「补读侧要同时看写侧」。这一节就是那 12 对的施工。判据同上一节：**量具上的数动了**——夹具自检里这 12 枚从 `MUST_NOT_SEE` 搬进 `MUST_SEE`，未查问档从 35 对掉到 23 对，一对不多一对不少。
+
+### 1. 屏上直接看得见的四对：斜体、下划线、垂直锚点、主题字族（`5413253`）
+
+`shapeStyleOf` 过去只认 `sz`/`b`/`solidFill`/`algn`，斜体下划线整族不问；`bodyPr` 一次不查；`fontScheme` 一次不读。四对全部补读（走既有的 `ga()` 漏斗，账自动记分子），模型开 `SlideShape.italic`/`underline`/`anchor`、`MasterStyle.majorFont`/`minorFont`，渲染（StaticSlide + 编辑器画布）与导出同步：斜体/下划线落 `font-style`/`text-decoration`，锚点用弹性盒表达（块内文本没有 CSS 垂直对齐），字族导出落 `pptx.theme` 的 `headFontFace`/`bodyFontFace` → theme1.xml 的 fontScheme。下划线只表达单线（点线/双线降级），锚点只收 `t/ctr/b`（`just`/`dist` 在 CSS 里无处安放）。
+
+### 2. 往返保真八对：形状名、替代文本、列宽行高、隔行底纹、动画时长、点击换页、不换行
+
+- `cNvPr|name`：页内唯一时直接拿它当 objectName——PowerPoint 选择窗格里就是导入时的那个名；重名才退回 `ooShapeN`（反查按名认人，重名会指错形状，宁可丢名字）。
+- `cNvPr|descr`：image/chart 有原生 `altText`，文本/表格 pptxgenjs 不写——走既有的解包注入路子。**这一枚当场抓住一个真 bug**：第一版注入把 `cNvPr` 标签结尾的 `>` 切掉了，自闭合与开标签两支全哑，而图片那枚因为走原生通道看起来是好的——tmp 往返脚本（读→写→再读逐字段比对）不跑这一趟根本发现不了。
+- `gridCol|w`/`tr|h`：模型存**相对总和的分数**而不是 EMU（换页宽照样翻得回来），渲染进 `<colgroup>`/`<tr>` 百分比，导出按表框实宽高折算回英寸。
+- `tblPr|bandRow`：pptxgenjs 写永空 `tblPr`（bandRow 那行在它源码里是注释），只能注。
+- `cTn|dur`：入场时长进模型（页级 `Slide.animDur` 管正文逐条、形状级管自己那枚），导出替换 timing 树里的硬编码 `dur="500"`；出场时长不捕（模型无槽，保持默认）。
+- `transition|advClick`：`"0"` 且无 `advTm` 的页以前导出后会变回「点击就翻」，现在 `advClick="0"` 跟着走；模型只存 `false`（缺省与 `"1"` 同义）。
+- `bodyPr|wrap`：`wrap="none"` 进模型，渲染压过默认 pre-wrap，导出走 pptxgenjs `wrap:false`。
+
+夹具随之扩容：自由文本框补 i/u/anchor/descr 当断言载体（占位符那支按设计不取字符样式，只有真进形状层的 sp 才算数），表/图/母版/时长各加内容断言——「查问过」与「真的落进模型」两件事分开断。
+
+### 3. 账上的数与两处记下的账
+
+| 腿 | 数 |
+|---|---|
+| 分母（夹具宇宙） | 77 对 / 222 字面（夹具本身 +5 字面：自由文本框补的 i/u/anchor/descr 与一枚 solidFill） |
+| 探针腿 | 已查问 42 → **54 对**（132 → 165 字面）；按对 54.5% → **70.1%**、按字面 60.8% → **74.3%** |
+| 未查问 | 35 → **23 对 / 57 字面**，与审计裁定的「不读」名单逐枚相同 |
+| 等价腿 | 1/1 相同（探针不扰动产品） |
+| 变异腿 `--mut no-ga` | 自检 42 条断言转红（漏斗拔掉，MUST_SEE 全灭） |
+| 往返（tmp 脚本） | 12 枚字段读→写→再读全部一致；另抓住 descr 注入 bug 一枚 |
+
+两处**既有**往返不对称记入审计文档备查（与本轮无关）：标题/正文槽导出后无占位符身份，再导入会多出两枚自由文本形状；母版的 `titleRect`/`bodyRect` 导出不写回 slideMaster。
+
+### 明确不做的（这一节）
+
+- **12 枚没有 inspector 控件**：导入进来的值重新导出时原样保留（`patchShape` 是展开赋值，不会冲掉），但用户想手改斜体/锚点/列宽还得等下一轮。
+- **出场动画时长仍不捕**：模型只有一枚入场时长槽；`transition|spd`（过渡速度档）维持裁定不读。
+- **pptx 真件语料仍不在盘**：这一账的 Universe 还是夹具；`--corpus` 口子开着，真件数要以真件语料重跑为准。
 
 
 ## 性能（v0.3）
@@ -8783,6 +8823,8 @@ scripts/              copy-pdfjs-assets.mjs（dev/build 前复制 cmaps/标准�
                       gen-docx-fidelity-corpus.mjs（按 universe 的 count/100 造 5 个合成 docx，承放位置
                       逐族按读手源码定；`missing` 非空即 exit 1 自检承放完整性） /
                       fidelity-report-pptx.mjs（pptx 属性覆盖账生成器，三腿：selftest / clean-pass / --mut no-ga）
+docs/                  pptx-fidelity-audit.md（35 对未查问的逐枚裁定：真丢账 12 / 裁定不读 23，
+                      v0.140 起兼记 12 对的补法与往返证据）
 .github/workflows/    release.yml——tag v* 触发只打 Linux（1× 计费）；Windows（2×）与 cargo test 改手动 dispatch 勾选
 ```
 

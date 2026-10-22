@@ -34,65 +34,52 @@ probe injected into 1 accessor: ga).
 
 | | pairs | attribute literals |
 |---|---:|---:|
-| In scope (fixture) | 77 | 217 |
-| Meaningful universe | 77 | 217 |
-| Consulted | 42 | 132 |
-| Never consulted | 35 | 85 |
+| In scope (fixture) | 77 | 222 |
+| Meaningful universe | 77 | 222 |
+| Consulted | 54 | 165 |
+| Never consulted | 23 | 57 |
 
-**Coverage: 54.5% of distinct pairs, 60.8% of literals.**
+**Coverage: 70.1% of distinct pairs, 74.3% of literals.**
 
 ## Never consulted — largest first
 
 | `element|attribute` | literals |
 |---|---:|
 | `cTn|id` | 11 |
-| `cNvPr|name` | 9 |
 | `cond|delay` | 7 |
 | `cTn|fill` | 7 |
 | `cTn|presetID` | 6 |
-| `cTn|dur` | 5 |
 | `ph|idx` | 4 |
 | `cTn|grpId` | 3 |
-| `bodyPr|anchor` | 2 |
 | `cTn|restart` | 2 |
-| `gridCol|w` | 2 |
-| `latin|typeface` | 2 |
 | `sysClr|val` | 2 |
-| `tr|h` | 2 |
 | `bldP|build` | 1 |
 | `bldP|grpId` | 1 |
-| `bodyPr|wrap` | 1 |
 | `clrScheme|name` | 1 |
-| `cNvPr|descr` | 1 |
 | `fontScheme|name` | 1 |
 | `graphicData|uri` | 1 |
 | `graphicFrameLocks|noGrp` | 1 |
 | `ln|cap` | 1 |
 | `rPr|dirty` | 1 |
-| `rPr|i` | 1 |
 | `rPr|lang` | 1 |
-| `rPr|u` | 1 |
 | `seq|concurrent` | 1 |
 | `seq|nextAc` | 1 |
 | `spLocks|noGrp` | 1 |
+| `strVal|val` | 1 |
+| `theme|name` | 1 |
+| `transition|spd` | 1 |
 
 ## Which elements the missing literals sit on
 
 | element | never-consulted literals |
 |---|---:|
-| `cTn` | 34 |
-| `cNvPr` | 10 |
+| `cTn` | 29 |
 | `cond` | 7 |
 | `ph` | 4 |
-| `rPr` | 4 |
-| `bodyPr` | 3 |
 | `bldP` | 2 |
-| `gridCol` | 2 |
-| `latin` | 2 |
+| `rPr` | 2 |
 | `seq` | 2 |
 | `sysClr` | 2 |
-| `tr` | 2 |
-| `transition` | 2 |
 | `clrScheme` | 1 |
 | `fontScheme` | 1 |
 | `graphicData` | 1 |
@@ -100,13 +87,16 @@ probe injected into 1 accessor: ga).
 | `ln` | 1 |
 | `spLocks` | 1 |
 | `strVal` | 1 |
+| `theme` | 1 |
+| `transition` | 1 |
 
 ## Consulted — the work already paid for
 
 | `element|attribute` | literals |
 |---|---:|
-| `srgbClr|val` | 13 |
+| `srgbClr|val` | 14 |
 | `cNvPr|id` | 9 |
+| `cNvPr|name` | 9 |
 | `ext|cx` | 7 |
 | `ext|cy` | 7 |
 | `off|x` | 7 |
@@ -114,6 +104,7 @@ probe injected into 1 accessor: ga).
 | `cTn|presetClass` | 6 |
 | `cTn|presetSubtype` | 6 |
 | `ph|type` | 6 |
+| `cTn|dur` | 5 |
 | `cTn|nodeType` | 5 |
 | `Relationship|Id` | 5 |
 | `Relationship|Target` | 5 |
@@ -121,20 +112,18 @@ probe injected into 1 accessor: ga).
 | `pPr|algn` | 4 |
 | `rPr|b` | 4 |
 | `rPr|sz` | 4 |
+| `bodyPr|anchor` | 3 |
 | `spTgt|spid` | 3 |
 | `animEffect|filter` | 2 |
 | `animEffect|transition` | 2 |
+| `cNvPr|descr` | 2 |
+| `gridCol|w` | 2 |
+| `latin|typeface` | 2 |
 | `ln|w` | 2 |
+| `rPr|i` | 2 |
+| `rPr|u` | 2 |
 | `sysClr|lastClr` | 2 |
-| `bldP|spid` | 1 |
-| `blip|embed` | 1 |
-| `clrMap|accent1` | 1 |
-| `clrMap|accent2` | 1 |
-| `clrMap|accent3` | 1 |
-| `clrMap|accent4` | 1 |
-| `clrMap|accent5` | 1 |
-| `clrMap|accent6` | 1 |
-| `clrMap|bg1` | 1 |
+| `tr|h` | 2 |
 
 ## Caveats, stated before anyone reads them off
 

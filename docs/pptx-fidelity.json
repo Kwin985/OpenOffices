@@ -13,7 +13,7 @@
     "files": 1,
     "readable": 1,
     "unreadable": 0,
-    "bytes": 10926,
+    "bytes": 11033,
     "scopeParts": [
       "ppt/theme/theme1.xml",
       "ppt/slideMasters/slideMaster1.xml",
@@ -23,27 +23,31 @@
   },
   "totals": {
     "distinctPairs": 77,
-    "occurrences": 217,
+    "occurrences": 222,
     "noisePairs": 0,
     "noiseOccurrences": 0,
     "meaningfulPairs": 77,
-    "meaningfulOccurrences": 217
+    "meaningfulOccurrences": 222
   },
   "coverage": {
-    "byPair": 0.5454545454545454,
-    "byOccurrence": 0.6082949308755761,
-    "consultedPairs": 42,
-    "consultedOccurrences": 132,
-    "neverConsultedPairs": 35,
-    "neverConsultedOccurrences": 85
+    "byPair": 0.7012987012987013,
+    "byOccurrence": 0.7432432432432432,
+    "consultedPairs": 54,
+    "consultedOccurrences": 165,
+    "neverConsultedPairs": 23,
+    "neverConsultedOccurrences": 57
   },
   "consulted": [
     [
       "srgbClr|val",
-      13
+      14
     ],
     [
       "cNvPr|id",
+      9
+    ],
+    [
+      "cNvPr|name",
       9
     ],
     [
@@ -75,6 +79,10 @@
       6
     ],
     [
+      "cTn|dur",
+      5
+    ],
+    [
       "cTn|nodeType",
       5
     ],
@@ -103,6 +111,10 @@
       4
     ],
     [
+      "bodyPr|anchor",
+      3
+    ],
+    [
       "spTgt|spid",
       3
     ],
@@ -115,11 +127,35 @@
       2
     ],
     [
+      "cNvPr|descr",
+      2
+    ],
+    [
+      "gridCol|w",
+      2
+    ],
+    [
+      "latin|typeface",
+      2
+    ],
+    [
       "ln|w",
       2
     ],
     [
+      "rPr|i",
+      2
+    ],
+    [
+      "rPr|u",
+      2
+    ],
+    [
       "sysClr|lastClr",
+      2
+    ],
+    [
+      "tr|h",
       2
     ],
     [
@@ -128,6 +164,10 @@
     ],
     [
       "blip|embed",
+      1
+    ],
+    [
+      "bodyPr|wrap",
       1
     ],
     [
@@ -199,7 +239,15 @@
       1
     ],
     [
+      "tblPr|bandRow",
+      1
+    ],
+    [
       "tblPr|firstRow",
+      1
+    ],
+    [
+      "transition|advClick",
       1
     ],
     [
@@ -211,10 +259,6 @@
     [
       "cTn|id",
       11
-    ],
-    [
-      "cNvPr|name",
-      9
     ],
     [
       "cond|delay",
@@ -229,10 +273,6 @@
       6
     ],
     [
-      "cTn|dur",
-      5
-    ],
-    [
       "ph|idx",
       4
     ],
@@ -241,27 +281,11 @@
       3
     ],
     [
-      "bodyPr|anchor",
-      2
-    ],
-    [
       "cTn|restart",
       2
     ],
     [
-      "gridCol|w",
-      2
-    ],
-    [
-      "latin|typeface",
-      2
-    ],
-    [
       "sysClr|val",
-      2
-    ],
-    [
-      "tr|h",
       2
     ],
     [
@@ -273,15 +297,7 @@
       1
     ],
     [
-      "bodyPr|wrap",
-      1
-    ],
-    [
       "clrScheme|name",
-      1
-    ],
-    [
-      "cNvPr|descr",
       1
     ],
     [
@@ -305,15 +321,7 @@
       1
     ],
     [
-      "rPr|i",
-      1
-    ],
-    [
       "rPr|lang",
-      1
-    ],
-    [
-      "rPr|u",
       1
     ],
     [
@@ -333,15 +341,7 @@
       1
     ],
     [
-      "tblPr|bandRow",
-      1
-    ],
-    [
       "theme|name",
-      1
-    ],
-    [
-      "transition|advClick",
       1
     ],
     [
@@ -352,11 +352,7 @@
   "neverConsultedByElement": [
     [
       "cTn",
-      34
-    ],
-    [
-      "cNvPr",
-      10
+      29
     ],
     [
       "cond",
@@ -367,23 +363,11 @@
       4
     ],
     [
-      "rPr",
-      4
-    ],
-    [
-      "bodyPr",
-      3
-    ],
-    [
       "bldP",
       2
     ],
     [
-      "gridCol",
-      2
-    ],
-    [
-      "latin",
+      "rPr",
       2
     ],
     [
@@ -392,14 +376,6 @@
     ],
     [
       "sysClr",
-      2
-    ],
-    [
-      "tr",
-      2
-    ],
-    [
-      "transition",
       2
     ],
     [
@@ -431,11 +407,11 @@
       1
     ],
     [
-      "tblPr",
+      "theme",
       1
     ],
     [
-      "theme",
+      "transition",
       1
     ]
   ],
