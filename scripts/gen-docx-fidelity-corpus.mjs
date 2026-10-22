@@ -120,6 +120,17 @@ const CTX = {
   't:tcborders': { f: '02-tables', part: 'document', open: `${TBL_HEAD}<w:tr><w:tc><w:tcPr><w:tcBorders>`, close: `</w:tcBorders></w:tcPr>${CELL_BODY}${ROW_CLOSE}${TBL_CLOSE}` },
   't:tcmar': { f: '02-tables', part: 'document', open: `${TBL_HEAD}<w:tr><w:tc><w:tcPr><w:tcMar>`, close: `</w:tcMar></w:tcPr>${CELL_BODY}${ROW_CLOSE}${TBL_CLOSE}` },
   't:b0': { f: '02-tables', part: 'document', open: '', close: '' },
+  // 00-base 的正文只有这一张表：它引用 styles 里的 TableCond，让读手走到
+  // styleCondCells（w:tblStylePr 的 w:type 与条件行高 w:trHeight 的 val/hRule
+  // 三处查问全在那条路上，没有引用就一对都踩不到）
+  'd0:tbl': {
+    f: '00-base',
+    part: 'document',
+    open:
+      '<w:tbl><w:tblPr><w:tblStyle w:val="TableCond"/></w:tblPr>' +
+      '<w:tblGrid><w:gridCol w:w="2000"/></w:tblGrid><w:tr><w:tc>',
+    close: '</w:tc></w:tr></w:tbl>',
+  },
   // ── 03-drawings：DrawingML ──
   'd:inline': { f: '03-drawings', part: 'document', open: '<w:p><w:r><w:drawing>', close: '</w:drawing></w:r></w:p>' },
   'd:anchor-kids': {
@@ -239,6 +250,11 @@ const PART_CTX = {
   's:latent': { f: '00-base', part: 'styles', open: '<w:latentStyles count="376" defLockedState="0" defQFormat="0" defSemiHidden="0" defUIPriority="999" defUnhideWhenUsed="0">', close: '</w:latentStyles>' },
   's:style-kids': { f: '00-base', part: 'styles', open: '<w:style w:type="paragraph" w:styleId="a"><w:name w:val="a"/>', close: '</w:style>' },
   's:style-rpr': { f: '00-base', part: 'styles', open: '<w:style w:type="paragraph" w:styleId="a"><w:name w:val="a"/><w:rPr>', close: '</w:rPr></w:style>' },
+  // 样式级 pPr：读手只从 w:style 的 pPr 认 outlineLvl（正文段落自己那枚不查），
+  // 放在 b:ppr 里等于凭空掉出分子
+  's:style-ppr': { f: '00-base', part: 'styles', open: '<w:style w:type="paragraph" w:styleId="a"><w:name w:val="a"/><w:pPr>', close: '</w:pPr></w:style>' },
+  // 表格样式的条件块（w:tblStylePr）：由 d0:tbl 那张表引用后才会被读
+  's:table-cond': { f: '00-base', part: 'styles', open: '<w:style w:type="table" w:styleId="TableCond"><w:name w:val="Table Cond"/>', close: '</w:style>' },
   's:style-attrs': { f: '00-base', part: 'styles', open: '', close: '' },
   'n:root': { f: '00-base', part: 'numbering', root: true, open: `<w:numbering xmlns:w="${NS.w}" xmlns:mc="${NS.mc}" mc:Ignorable="w14">`, close: '</w:numbering>' },
   'n:b0': { f: '00-base', part: 'numbering', open: '', close: '' },
@@ -265,6 +281,7 @@ const PART_CTX = {
 
 // 每文件里 document.xml 上下文的出场顺序（sectPr 打头，见 CTX['t:sect'] 注）
 const ORDER = {
+  '00-base': ['d0:tbl'],
   '01-body': ['b0', 'b:rpr', 'b:ppr', 'b:run', 'b:numpr', 'b:pbdr', 'b:tabs', 'b:omml'],
   '02-tables': ['t:sect', 't:cols-kids', 't:cols', 't:tblPr', 't:borders', 't:cellmar', 't:grid', 't:tr', 't:trPr', 't:tcPr', 't:tcborders', 't:tcmar', 't:b0'],
   '03-drawings': ['d:inline', 'd:anchor-kids', 'd:pic', 'd:xfrm', 'd:clr', 'd:clr2', 'd:gs', 'd:ln', 'd:fx', 'd:scene', 'd:wps', 'd:bodypr'],
@@ -352,7 +369,7 @@ const PLACE = {
     { c: 't:tcPr', av: { val: 'tbRl' } },
   ],
   textAlignment: [{ c: 'b:ppr', av: { val: 'center' } }],
-  outlineLvl: [{ c: 'b:ppr', av: { val: '1' } }],
+  outlineLvl: [{ c: 's:style-ppr', av: { val: '1' } }],
   ind: [{ c: 'b:ppr', av: { left: '420', leftChars: '200', right: '210', rightChars: '100', firstLine: '240', firstLineChars: '200', hanging: '240', hangingChars: '200' } }],
   framePr: [{ c: 'b:ppr', av: { anchorLock: '0', h: '1', hAnchor: 'page', hRule: 'exact', hSpace: '12', vAnchor: 'text', vSpace: '12', w: '100', wrap: 'around', x: '10', xAlign: 'center', y: '10', yAlign: 'top' } }],
   ilvl: [{ c: 'b:numpr', av: { val: '0' } }],
@@ -614,12 +631,12 @@ const SPECIAL = {
   'sym|font': { c: 'b:run', item: '<w:sym w:font="Wingdings"/>' },
   'fldChar|fldCharType': { c: 'b:run', item: '<w:fldChar w:fldCharType="begin"/>' },
   'fldChar|fldLock': { c: 'b:run', item: '<w:fldChar w:fldLock="1"/>' },
-  'fldSimple|instr': { c: 'b0', item: '<w:fldSimple w:instr=" PAGEREF _Toc1 \\h "><w:r><w:t>1</w:t></w:r></w:fldSimple>' },
-  'hyperlink|anchor': { c: 'b0', item: '<w:hyperlink w:anchor="_Toc1"><w:r><w:t>文</w:t></w:r></w:hyperlink>' },
-  'hyperlink|id': { c: 'b0', item: '<w:hyperlink w:id="rId1"><w:r><w:t>文</w:t></w:r></w:hyperlink>' },
-  'hyperlink|history': { c: 'b0', item: '<w:hyperlink w:history="1"><w:r><w:t>文</w:t></w:r></w:hyperlink>' },
-  'hyperlink|tgtFrame': { c: 'b0', item: '<w:hyperlink w:tgtFrame="blank"><w:r><w:t>文</w:t></w:r></w:hyperlink>' },
-  'hyperlink|tooltip': { c: 'b0', item: '<w:hyperlink w:tooltip="提示"><w:r><w:t>文</w:t></w:r></w:hyperlink>' },
+  'fldSimple|instr': { c: 'b0', item: '<w:p><w:fldSimple w:instr=" PAGEREF _Toc1 \\h "><w:r><w:t>1</w:t></w:r></w:fldSimple></w:p>' },
+  'hyperlink|anchor': { c: 'b0', item: '<w:p><w:hyperlink w:anchor="_Toc1"><w:r><w:t>文</w:t></w:r></w:hyperlink></w:p>' },
+  'hyperlink|id': { c: 'b0', item: '<w:p><w:hyperlink w:id="rId1"><w:r><w:t>文</w:t></w:r></w:hyperlink></w:p>' },
+  'hyperlink|history': { c: 'b0', item: '<w:p><w:hyperlink w:history="1"><w:r><w:t>文</w:t></w:r></w:hyperlink></w:p>' },
+  'hyperlink|tgtFrame': { c: 'b0', item: '<w:p><w:hyperlink w:tgtFrame="blank"><w:r><w:t>文</w:t></w:r></w:hyperlink></w:p>' },
+  'hyperlink|tooltip': { c: 'b0', item: '<w:p><w:hyperlink w:tooltip="提示"><w:r><w:t>文</w:t></w:r></w:hyperlink></w:p>' },
   'bookmarkStart|id': { c: 'b0', item: '<w:bookmarkStart w:id="1"/>' },
   'bookmarkStart|name': { c: 'b0', item: '<w:bookmarkStart w:name="_Toc1"/>' },
   'bookmarkEnd|id': { c: 'b0', item: '<w:bookmarkEnd w:id="1"/>' },
@@ -750,6 +767,21 @@ for (const { pair, count } of uni.pairs) {
     push(c.f, c.part, c.open, c.close, `<${pfx}${el} ${apfx}${attr}="${s.av[attr]}"/>`.repeat(m))
   })
 }
+
+// 表格样式的条件块 + 引用它的那张表：读手的 styleCondCells 只在「表上 w:tblStyle
+// 指着一个带 w:tblStylePr 的样式」时才走这条路——tblStylePr|type 与条件行高那两条
+// （trHeight|val / trHeight|hRule）都住在这条路上；行上的直接值要 val>0 才读 hRule，
+// 所以只靠 t:trPr 那枚 hRule 实例是踩不到的
+const condStyle = PART_CTX['s:table-cond']
+push(
+  '00-base',
+  'styles',
+  condStyle.open,
+  condStyle.close,
+  '<w:tblStylePr w:type="firstRow"><w:tcPr><w:shd w:val="clear" w:fill="FF0000"/></w:tcPr></w:tblStylePr>' +
+    '<w:tblStylePr w:type="band1Horiz"><w:trPr><w:trHeight w:val="400" w:hRule="exact"/></w:trPr></w:tblStylePr>',
+)
+push('00-base', 'document', CTX['d0:tbl'].open, CTX['d0:tbl'].close, '<w:p><w:r><w:t>表</w:t></w:r></w:p>')
 
 // ── 组装文件 ───────────────────────────────────────────────────────────────
 // docHeader = 声明 + 根开串（不含 <w:body>）：w:background 要插在根与 body 之间

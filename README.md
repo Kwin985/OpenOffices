@@ -8500,6 +8500,60 @@ dxf 只解了底纹/字色/粗/斜/下划线/删除线七枚，`<numFmt>` 一个
 dxf 的边框与对齐两族（`CondFormatStyle` 仍只开底纹/字色/粗斜下删/数字格式八枚槽）、Writer 侧 313 枚语料不在盘时的全量覆盖率重跑、pptx 语料不在盘时的覆盖账全量跑（夹具为宇宙并留口子）、PDF 竖排/斜排文字的轴对齐盒精确化、重排式 PDF 改字（v0.129 已判「原位改字覆盖大多数场景」）。
 
 
+## 发行说明：v0.139 —— 上一节「明确不做的」五条里清掉四条（dxf 两族 / PDF 竖排盒 / docx 覆盖率重跑 / pptx 覆盖账审计）
+
+一句立项：v0.138 结尾那份「明确不做的」清单当待办用。四条各自独立，判据都不是「代码动了」，是**量具上的数动了**或者**账从「不知道」变成「知道」**。四笔提交 `a68ae17` / `e3ddf5d` / `c446b39` / 本节。
+
+### 1. dxf 的边框族整个走通来回、对齐族读侧收拢写侧记账（`a68ae17`）
+
+`CondFormatStyle` 开 `bd/ho/vo/wb` 四槽。边框读（`parse_dxfs` 补 `border` 分支：四边 + 颜色、自闭合的空边不占位、空 `border` 标志不泄漏）→ 载荷 → 写（`dxf_format` 补边框族，与 `format_for` 同一副走法，只色无样式的边不计 `any`），整个往返 e2e 钉住；对齐族读侧按单元格侧同白名单收（`center`→`middle`、`wrapText` 三态），写侧 `rust_xlsxwriter` 的 dxf **没有** alignment 分支（crate 文档明说条件格式不可改对齐）——不耍聪明补字节，走 `cf_write_accounts` 边界账一箱一句话。`ods_cf` 透传四槽（`wb` 在三态与 ODS bool 间换算）。`cargo test --lib` 157 → **164**，clippy 29 → 30（新增一枚与 `format_for` 同形的 `type_complexity`，风格级）。
+
+### 2. PDF 竖排文字的盒跟着文字方向换轴（`e3ddf5d`）
+
+`textItemBox` 重写为「真盒四角取轴对齐包围」：从 pdf-lib 造件 + pdfjs 4.10.38 读回实证 `transform` 前四元是按字号缩放的旋转矩阵——`(a,b)` 步进方向、`(c,d)` 字身方向，`width` 是沿步进的步进（**方向无关**，同一串横排竖排报同一个数）。盒 = 起点沿步进走 `width`、沿字身铺开 `0.85/0.25×size`；横排输出与旧行为**逐位一致**，竖排长边贴步进、字头朝向由 inset 体现，斜排取旋转后真盒的包围（比旧的水平近似贴真墨迹）。互证脚本加 F 腿（112 项）：基线起点贴起步边、距下沉侧 `0.25×size`、盒尺寸随页旋转互换、真盒四角含得住、`width` 方向无关、写回 cover 矩形往返——全部断言从渲染器自己的量（`Util.transform` 后的 `tx`）出发。改字脚本补竖排端到端腿（盒贴方向、新文字落原点、按横排画是已知代价，方向保持留待下一档，已钉住）。**92 → 204 项互证全绿**。
+
+### 3. docx 覆盖率全量重跑：语料不在盘，就把语料钉成可重建的（`c446b39` + 本节）
+
+上一节写着「313 枚语料不在盘（`D:/docs` 已不在），老账（120 对 / 17.6%）原样留着」——这条是真问题：**分母不可复核，账就没法重跑**，而 v0.138 W1 落地的十枚长尾属性正等着这一跑。
+
+做法不是「找一份别的语料凑」，是**把宇宙冻结进库**：旧账（`040dffb` 那一跑）见过的 701 对 `element|attribute` 连同字面计数写进 `docs/fidelity-universe.json`，再由 `scripts/gen-docx-fidelity-corpus.mjs` 按 `count/100` 缩放生成 5 个合成 docx。**幂等靠固定输入**：同一个宇宙文件跑多少遍都是同一批件、同一批字面。承放位置不是均匀撒的，逐族按读手源码定死——`sectPr` 打头（`contentTwipsOf` 找的是第一个）、`rFonts` 三棵树（`applyThemeFonts` 走 document/styles/numbering）、OMML 不带前缀（`findL` 按全名精确匹配，带 `m:` 就找不到）、`bitmap()` 的短路链要真 rels + 真 PNG（任一环断则 `extent`/`docPr`/`shape@style` 三族一起掉）、`tblStylePr` 与条件行高只有「表上 `w:tblStyle` 引用了带条件块的样式」才会被查问（造一枚表格样式 + 一张引用它的表）。生成器自带自检：`missing` 非空即 exit 1，现为 **701/701、零缺失、零多余**。
+
+报告脚本加 `--synth` 旗：JSON 记语料出处（`rebuiltBy`/`universe`/`scale`/对齐全景/字面漂移），MD 播「Corpus provenance」节，白纸黑字写明**按对与旧账可比、按字面不可比**。
+
+跑出来的账（三腿 + 普查腿 + 变异腿）：
+
+| 腿 | 数 |
+|---|---|
+| 分母（普查脚本独立解析，第二台解析器） | 701 对 / 31,455 字面（缩放期望 31,321，**+0.43%**） |
+| 探针腿 | 已查问 **136 对 / 16,869 字面**；按对 **19.9%**、按字面 **71.0%**（旧：120 对 17.6% / 50.7%） |
+| selftest | 46 对 / 115 次查问，应看到 26 枚全命中、不该看到 7 枚全落空 |
+| 等价腿 | 5/5 字节相同（探针不扰动产品） |
+| 变异腿 `--mut no-attrL` | 按对 19.9% → **18.2%**、按字面 71.0% → **63.3%**（漏一枚漏斗，账必须掉） |
+
+**逐对比对旧账**：跳变 18 对（全部能指到代码行：`readRPr` 那族的 `rFonts|hint`/`rFonts|cs`/`szCs|val`/`lang@val`/`lang@eastAsia`/`kern|val`/`spacing|val` 七枚 + 四个主题槽 `asciiTheme`/`hAnsiTheme`/`eastAsiaTheme`/`cstheme`，加 `OLEObject|Type`、`footnote|id`、`endnote|id`、`ins|author`、`ins|date`、`tblW|type`、`tblW|w`）；掉出只有 **2 对**，且都是读手**有意不读**：`bookmarkStart|name`（`visit()` 对 `bookmarkStart` 直接 return，名字一次不问）与 `tblLook|val`（代码注释里就写着「`w:val` 那枚十六进制从不被读」，闸门只吃四位 `firstRow`/`firstColumn` 这些）。**零档位错乱**。
+
+按字面 50.7% → 71.0% 这一跳要拆开说：一部分是读手真长（上面 18 对的字面都很大，`rFonts|hint` 单枚 136,408），一部分是**口径变了**（按对可比、按字面不可比）——所以这个数只跟它自己那一列比，不拿去跟旧账比。
+
+### 4. pptx 覆盖账全量审计：35 对未查问逐枚裁「真丢账 vs 裁定不读」（本节）
+
+pptx 那本账 v0.138 只说了「哪 35 对没被问过」，没说该不该问。逐枚回 `pptx-import.ts`（723 行）与 `ppt.ts` 裁一遍，落成 `docs/pptx-fidelity-audit.md`：
+
+- **真丢账 12 对 / 28 字面**：`cNvPr|name`（9）、`cTn|dur`（5）、`bodyPr|anchor`（2）、`gridCol|w`（2）、`tr|h`（2）、`latin|typeface`（2）、`bodyPr|wrap`、`rPr|i`、`rPr|u`、`cNvPr|descr`、`transition|advClick`、`tblPr|bandRow`。其中**四对会直接改屏上观感**（垂直锚点、斜体、下划线、主题字族），其余八对是往返保真度。
+- **裁定不读 23 对 / 57 字面**：动画时间轴内部 11 对（`cTn|id` 11 枚是最大的一笔，timing 树内部流水号）、锁定标志 2、主题/方案命名 3、系统色名 2（`sysClr@val` 是色名，读手取 `lastClr` 实值）、`graphicData|uri` 与 `ln|cap` 2、保存会话记账 2（`dirty`/`lang`）、过渡速度 1、占位符序号 1（版式按 `ph@type` 映射，`idx` 没有落点）。
+
+审计里有两条结论值得单独记：**按字面量排序会把两类搞反**——`cTn|id` 11 枚字面最大却不该读，`rPr|i` 1 枚字面最小却屏上看得见；以及**写侧同样没有这 12 对的输出**，补读侧要同时看写侧，否则读进来也存不回去。
+
+### 这一批的验证（八道闸门）
+
+`cargo test --lib` **164 passed / 0 failed**（v0.139 新增 7：dxf 边框四槽读/写/往返 3 + 对齐族 4） / `cargo clippy --lib` 30 条（全为风格级，无正确性问题） / `tsc --noEmit` 退出码 0 / `vite build` ✓ / docx 覆盖率四腿（selftest 46 对 · 等价 5/5 · 合成 701 对 19.9% · 变异 18.2%） + 独立普查腿（701 对 / 31,455 字面，与探针腿分毫不差） / pptx 三腿（selftest 77 对 42 查问 · clean-pass · `--mut no-ga`） / PDF 互证 204 项全绿 / 六套 node 脚本全过（`test-sheet-rules` 63/63、`test-vba` 114/114、`test-vba-book` 61/61、`test-collab` 12/12、`test-pdf-text-edit`、`test-pdf-geo-cross` 204/204）。
+
+### 明确不做的（这一节只留三条，其余已在上文兑现）
+
+- **合成语料不等于真件语料**：按对可比、按字面不可比，已写进 `docs/fidelity.md` 的出处节；真件重跑仍要等一份可发布的 docx 语料（`--corpus` 口子一直开着）。
+- **pptx 那 12 对真丢账一枚没修**：本轮只做审计，不动读手——动它要同时动 `pptx-export.ts`，是一整轮的量。
+- **PDF 改字仍按横排画**：竖排盒已准，但写回时方向不保持（端到端腿钉住了这个已知代价）。
+
+
 ## 性能（v0.3）
 
 
@@ -8722,8 +8776,13 @@ scripts/              copy-pdfjs-assets.mjs（dev/build 前复制 cmaps/标准�
                       updater-release.mjs（发版：开 createUpdaterArtifacts 本机建签名包 → 读回真 .sig 与产物 →
                       出带三平台键的 latest.json → 打印要上传的清单；私钥只走子进程环境变量，`pnpm release:updater`）
                       fidelity-report.mjs（属性级覆盖率生成器：注入探针取分子、全树普查取分母，写
-                      docs/fidelity.md 与 .json——产物只有聚合数字，不含任何路径） /
-                      fidelity-census.py（独立分母腿：zipfile + xml.etree 换一条解析路，验分母不自说自话）
+                      docs/fidelity.md 与 .json——产物只有聚合数字，不含任何路径；`--synth` 记合成语料出处） /
+                      fidelity-census.py（独立分母腿：zipfile + xml.etree 换一条解析路，验分母不自说自话） /
+                      freeze-docx-fidelity-universe.mjs（一次性：把旧账 701 对连同字面计数冻进
+                      docs/fidelity-universe.json） /
+                      gen-docx-fidelity-corpus.mjs（按 universe 的 count/100 造 5 个合成 docx，承放位置
+                      逐族按读手源码定；`missing` 非空即 exit 1 自检承放完整性） /
+                      fidelity-report-pptx.mjs（pptx 属性覆盖账生成器，三腿：selftest / clean-pass / --mut no-ga）
 .github/workflows/    release.yml——tag v* 触发只打 Linux（1× 计费）；Windows（2×）与 cargo test 改手动 dispatch 勾选
 ```
 
@@ -10334,9 +10393,9 @@ inverse/visible，整根没说话的轴不进载荷（朴素图表载荷与之�
 - [ ] **`letter-spacing: 0pt` 的字面形状与 Word 不同**（字符读侧第一笔账 A3/A7）：Word 门面在样式链无账时把 run 写的 0 **整枚丢弃**
       （另存回来 `val=NONE`），而按「这一层有没有写」的闸门我们落 `letter-spacing: 0pt`；屏上等值（0pt 就是不加不减）而字节形状不等 ⇒
       往返腿只能按「值袋」比而不是按字面比，本轮照实记而不改成 Word 的丢弃口径
-- [ ] **报告里那枚 `spacing|val` 要重跑才搬得动，而重跑要先复现同批清单**（字符读侧第一笔账）：`docs/fidelity.md` 那批是 313 枚
-      而本轮的普查与后果腿都在 299 枚上 ⇒ 直接重跑会同时改分子（探针查问集）与分母（件里字面全集），两笔账混成一笔没法归因；
-      要搬那一档得先把清单钉成一份可发布的固定语料（与「语料不可复核」那枚同根）
+- [x] **报告里那枚 `spacing|val` 要重跑才搬得动，而重跑要先复现同批清单**（字符读侧第一笔账；**v0.139 已闭**：宇宙冻结进 `docs/fidelity-universe.json` + 合成语料按 `count/100` 重建，`spacing|val`（25,271 枚）已随重跑搬进「已查问」）：
+      原先那批是 313 枚而本轮的普查与后果腿在 299 枚上 ⇒ 直接重跑会同时改分子（探针查问集）与分母（件里字面全集），两笔账混成一笔没法归因；
+      要搬那一档得先把清单钉成一份可发布的固定语料——做的就是这个，只是语料本身是真件不可得，改成「宇宙固定 + 合成件可重建」，按对可比、按字面不可比
 - [ ] **只有图片/域代码这类不落文本的 run 拿不到这一枚 CSS，同族分支没穷举**（字符读侧第一笔账 v7b 归因）：那 2 枚「有声明而零字面」
       归因到 `case 'drawing'` push 一块就 `return`（run 文本长度=0，且 `val` 都是 0），但同一条早退路上还住着 `w:pict`、OLE、
       图示/图表部件这些分支——它们的 `w:rPr` 带不带间距没逐枚数过，「没量过的形状不改道」这条纪律在这里同样成立
@@ -10361,9 +10420,9 @@ inverse/visible，整根没说话的轴不进载荷（朴素图表载荷与之�
 - [ ] **同族的 `w:w`（字符缩放）与 `w:position`（升高/降低）没量**（字符写侧第一笔账 c5 名单）：它们与 `w:spacing` 住同一枚
       `w:rPr`、走同一条 `readRPr` 梯子，而 `c5` 打的 ODT 字符样式发射名单（16 枚）里没有这两族；本轮只搬间距而不碰它们，
       「没量过的形状不改道」在这里同样成立
-- [ ] **三批清单三个数（313 / 299 / 307）⇒ 跨轮的枚数不可互引**（字符写侧第一笔账 c4）：`docs/fidelity.md` 那批 313 枚、
-      字符读侧那节的普查在 299 枚上、本轮供给普查与后果腿在 307 枚（可读 269、抛 38）上 ⇒ 写侧那 24,644 枚字面与 153 枚
-      不同值只在 307 这批内成立；把清单钉成可发布的固定语料之前，任何「按枚数跨轮比较」都是把两笔账混成一笔
+- [x] **三批清单三个数（313 / 299 / 307）⇒ 跨轮的枚数不可互引**（字符写侧第一笔账 c4；**v0.139 已闭 docx 这一头**：313 那批的 701 对连同字面冻结进 `docs/fidelity-universe.json`，从此可重建可重跑，`docs/fidelity.md` 的数字有了出处）：
+      原先 313 枚、字符读侧那节的普查在 299 枚上、本轮供给普查与后果腿在 307 枚（可读 269、抛 38）上 ⇒ 写侧那 24,644 枚字面与 153 枚
+      不同值只在 307 这批内成立；现在 docx 那一头按对可比、按字面仍不可比（合成件），另两批（299 / 307）要同样的处置得各自冻一份宇宙
 - [x] **ODT 字符间距读侧只在 34 枚夹具上量过（真件 `.odt` 一头没量）**（ODT 字符间距读侧第一笔账 e10）：盘上 od 族件数=34 而它们全是本轮造的夹具，
       docx 那两批真件清单（313 / 307 枚）里一枚 `.odt` 都没有 ⇒ 「真件里这一族有多少枚、住哪一层」至今没底数；要跑得先攒一份可发布的 ODT 语料
       （与「语料不可复核」那枚同根）

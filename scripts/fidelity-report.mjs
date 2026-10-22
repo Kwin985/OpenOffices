@@ -465,14 +465,17 @@ async function main() {
       pairsExtra: extra.length,
       pairsMissingList: missing.sort().slice(0, 20),
       scaledLiteralSum: wantSum,
+      // 缩放这一步自己抬了多少：裸 count/100 与「取整 + max(1,·)」之差
+      rawScaledSum: uni.pairs.reduce((a, p) => a + p.count / uni.scale, 0),
+      scaleInflationPct: (wantSum / (uni.pairs.reduce((a, p) => a + p.count / uni.scale, 0)) - 1) * 100,
       actualLiteralSum: gotSum,
       literalDriftPct: (gotSum / wantSum - 1) * 100,
       comparableByPair: true,
       comparableByOccurrence: false,
       note:
         '按对覆盖率与旧账（313 件真件语料）可比；按字面不可比——重建按 count/100 缩放，' +
-        '取整偏差约 0.9%，另有少量承重包裹属性（bitmap 链的 r:embed/extent/docPr、numbering 关联的 ' +
-        'abstractNumId 等）在包裹处顺带出现，两笔合计实测漂移见 literalDriftPct',
+        '取整与 max(1,·) 会把稀有对抬起来（见「scaling step itself」那一行），另有少量承重包裹属性（bitmap 链的 r:embed/extent/docPr、numbering 关联的 ' +
+        'abstractNumId 等）在包裹处顺带出现；末行是「实测 vs 缩放期望」，与缩放那行基准不同，别混读',
     }
   }
 
@@ -601,7 +604,9 @@ function renderMd(d) {
   )
   L.push('')
   L.push(
-    `The corpus held ${n(d.corpus.files)} ${d.synth ? 'synthetic ' : ''}.docx files (${(d.corpus.bytes / 1048576).toFixed(0)} MiB); ${d.corpus.unreadable} were`,
+    `The corpus held ${n(d.corpus.files)} ${d.synth ? 'synthetic ' : ''}.docx files (${
+      d.corpus.bytes < 1048576 ? `${(d.corpus.bytes / 1024).toFixed(0)} KiB` : `${(d.corpus.bytes / 1048576).toFixed(0)} MiB`
+    }); ${d.corpus.unreadable} were`,
   )
   L.push('unreadable as archives and are reported by failure class only, never by name.')
   L.push('')
@@ -627,7 +632,11 @@ function renderMd(d) {
     L.push(`| universe pairs present in the corpus | ${n(s.pairsPresent)} / ${n(s.universePairs)} |`)
     L.push(`| pairs missing / extra | ${n(s.pairsMissing)} / ${n(s.pairsExtra)} |`)
     L.push(
-      `| literals: scaled expectation vs actual | ${n(s.scaledLiteralSum)} vs ${n(s.actualLiteralSum)} ` +
+      `| literals: scaling step itself (raw ÷ ${s.scale} → rounded, min 1) | ${n(Math.round(s.rawScaledSum))} → ${n(s.scaledLiteralSum)} ` +
+        `(${s.scaleInflationPct >= 0 ? '+' : ''}${s.scaleInflationPct.toFixed(2)}%) |`,
+    )
+    L.push(
+      `| literals: scaled expectation vs actual rebuild | ${n(s.scaledLiteralSum)} vs ${n(s.actualLiteralSum)} ` +
         `(${s.literalDriftPct >= 0 ? '+' : ''}${s.literalDriftPct.toFixed(2)}%) |`,
     )
     L.push('')
