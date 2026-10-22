@@ -11,13 +11,16 @@
 // 渲染，屏幕上的框会偏。现在 normRot 与渲染器逐字对齐（pdf-lib 的
 // reduceRotation 同为"非 90 倍数→0"，三方一致）。
 //
-// 五条腿：
+// 六条腿：
 //   A 采样点对    9×9 网格 × 4 旋转：toDisplayRect(零尺寸矩形) ↔ convertToViewportPoint
 //   B 视口尺寸    displaySize ↔ viewport.width/height
 //   C 真件文字项  pdf-lib 造带 /Rotate 的件，pdfjs 读回，textItemBox 的显示盒对
 //                 TextLayer 同款算法的基线起点，再走一遍写回路径的 cover 矩形往返
 //   D 矩形往返    fromDisplayRect(toDisplayRect(r)) === r（播种随机 × 4 旋转）
 //   E 旋转归一    normRot ↔ 渲染器有效旋转（从 vp.transform 反读），含非和规值
+//   F 竖排/斜排   pdf-lib 的 rotate 走 rotateAndSkewTextRadiansAndTranslate 发真 Tm
+//                 （不是画布变换）：同一串文字横排/竖排向下/竖排向上/斜排各画一遍，
+//                 验 textItemBox 的盒跟着文字方向换轴
 import { PDFDocument, PDFName, PDFNumber, StandardFonts, degrees, rgb } from 'pdf-lib'
 import * as pdfjs from 'pdfjs-dist/legacy/build/pdf.mjs'
 import {
@@ -236,6 +239,190 @@ for (const rot of ROTS) {
       normRot(raw) === eff && normRot(p.rotate) === eff,
       `normRot=${normRot(raw)} p.rotate=${p.rotate} 渲染器=${eff}`,
     )
+  }
+}
+
+// ── F 竖排/斜排文字项：盒跟着文字方向换轴 ──
+// pdf-lib 的 drawText rotate 不是画布变换，是 rotateAndSkewTextRadiansAndTranslate
+// 发出的真 Tm（[cos,sin,-sin,cos,x,y] × 字号）。实证过的方向语义：
+//   rotate 0    → Tm=[s,0,0,s]    横排，步进 +x、字身 +y
+//   rotate -90° → Tm=[0,-s,s,0]   竖排文字向下、字头朝右（步进 -y、字身 +x）
+//   rotate +90° → Tm=[0,s,-s,0]   竖排文字向上、字头朝左
+//   rotate 30°  → 斜排（步进与字身都斜）
+// 每条断言都从渲染器自己的量出发（Util.transform 后的 tx = TextLayer 同款），
+// 不拿 textItemBox 的中间量自证：
+//   - 基线起点落在盒内，且贴在步进侧的起步边缘上（竖排向下在顶边、向上在底边、
+//     横排在左边），距字身侧（下沉侧）边缘 0.25×size——"字头朝哪"由这个 inset 体现
+//   - 盒尺寸 = 1.1×size × 步进，随页旋转互换；面积与页旋转无关
+//   - 真盒四角（本腿按 transform 独立算的）全部含在 AABB 内
+//   - width 方向无关：同一串文字横排与竖排，pdf.js 报出同一个步进
+//   - 写回 cover 矩形往返（applyTextEdits 那条路）回到 PDF 空间的真盒 AABB
+{
+  const inside = (x, y, r) => x >= r.x - 1e-6 && x <= r.x + r.w + 1e-6 && y >= r.y - 1e-6 && y <= r.y + r.h + 1e-6
+  // 真盒四角（PDF 空间）：起点/步进终点 × 字身方向 [-0.25s, +0.85s]。
+  // 与 textItemBox 同一副模型，但在这里独立算一遍——验的是"AABB 含得住真盒"
+  const trueCorners = (t, w, size) => {
+    const al = Math.hypot(t[0], t[1])
+    const ux = al > 0 ? t[0] / al : 1
+    const uy = al > 0 ? t[1] / al : 0
+    const vx = t[2] / size
+    const vy = t[3] / size
+    const pts = []
+    for (const step of [0, w]) {
+      for (const off of [-0.25 * size, 0.85 * size]) {
+        pts.push([t[4] + step * ux + off * vx, t[5] + step * uy + off * vy])
+      }
+    }
+    return pts
+  }
+  const CASES = [
+    { tag: '横排对照', str: 'Vertical', x: 72, y: 700, rotate: 0 },
+    { tag: '竖排向下', str: 'Vertical', x: 300, y: 500, rotate: -90 },
+    { tag: '竖排向上', str: 'Vertical', x: 450, y: 500, rotate: 90 },
+    { tag: '斜排30°', str: 'Skewed', x: 72, y: 400, rotate: 30 },
+  ]
+  for (const rot of ROTS) {
+    const d = await PDFDocument.create()
+    const helv = await d.embedFont(StandardFonts.Helvetica)
+    const pg = d.addPage([612, 792])
+    pg.setRotation(degrees(rot))
+    for (const c of CASES) {
+      pg.drawText(c.str, {
+        x: c.x,
+        y: c.y,
+        size: 24,
+        font: helv,
+        rotate: degrees(c.rotate),
+        color: rgb(0, 0, 0),
+      })
+    }
+    const bytes = await d.save()
+    const loaded = await pdfjs
+      .getDocument({ data: new Uint8Array(bytes), useSystemFonts: false })
+      .promise
+    const p = await loaded.getPage(1)
+    const r = normRot(p.rotate)
+    const v0 = p.getViewport({ scale: 1, rotation: 0 })
+    const b = { w: v0.width, h: v0.height }
+    const vp = p.getViewport({ scale: 1 })
+    const tc = await p.getTextContent()
+    const items = tc.items.filter((i) => i.str && i.transform)
+    check(`F: rot=${rot} 读到 ${CASES.length} 个文字项`, items.length === CASES.length, `实到 ${items.length}`)
+    if (items.length !== CASES.length) continue
+
+    const byCase = CASES.map((c) => ({
+      c,
+      it: items.find((i) => i.str === c.str && Math.abs(i.transform[4] - c.x) < 0.01),
+    }))
+
+    // width 方向无关：横排与竖排向下是同一串文字，pdf.js 报的步进必须相同
+    const hItem = byCase[0].it
+    const vItem = byCase[1].it
+    check(
+      `F: rot=${rot} width 方向无关（横排↔竖排同一串）`,
+      near(hItem.width, vItem.width),
+      `横排 ${hItem.width.toFixed(3)} vs 竖排 ${vItem.width.toFixed(3)}`,
+    )
+
+    for (const { c, it } of byCase) {
+      if (!it) {
+        check(`F: rot=${rot} 找到「${c.tag}」`, false)
+        continue
+      }
+      const g = textItemBox(it.transform, it.width, it.str, r, b)
+      if (!g) {
+        check(`F: rot=${rot}「${c.tag}」textItemBox 有产出`, false)
+        continue
+      }
+      const tag = `F: rot=${rot}「${c.tag}」`
+      const tx = pdfjs.Util.transform(vp.transform, it.transform)
+      const adv = Math.abs(it.width ?? 0)
+      const axisAligned = c.tag !== '斜排30°'
+
+      check(`${tag} size==24`, near(g.size, 24), `${g.size}`)
+      check(
+        `${tag} 基线起点落盒内`,
+        inside(tx[4], tx[5], g.box),
+        `(${tx[4].toFixed(2)}, ${tx[5].toFixed(2)}) vs 盒 (${g.box.x.toFixed(2)}, ${g.box.y.toFixed(2)}, ${g.box.w.toFixed(2)}, ${g.box.h.toFixed(2)})`,
+      )
+
+      // 真盒四角含得住（AABB 的基本性质，四角按 transform 独立算）
+      const corners = trueCorners(it.transform, adv, g.size)
+      const cornersIn = corners.map(([px, py]) => {
+        const [dx, dy] = vp.convertToViewportPoint(px, py)
+        return inside(dx, dy, g.box)
+      })
+      check(`${tag} 真盒四角含得住`, cornersIn.every(Boolean), `含住 ${cornersIn.filter(Boolean).length}/4`)
+
+      if (axisAligned) {
+        // 渲染器自己的文字方向：TextLayer 的 angle = atan2(tx[1], tx[0])，
+        // 字身方向取 tx 的 (c,d)。步进沿哪根轴、起点贴哪条边、inset 在哪侧，
+        // 全部由这两个向量现算，不按用例写死
+        const ang = Math.atan2(tx[1], tx[0])
+        const advx = Math.cos(ang)
+        const advy = Math.sin(ang)
+        const upLen = Math.hypot(tx[2], tx[3])
+        const upx = tx[2] / upLen
+        const upy = tx[3] / upLen
+        const s = g.size
+        if (Math.abs(advx) > Math.abs(advy)) {
+          check(
+            `${tag} 起点贴步进起步边`,
+            near(tx[4], advx > 0 ? g.box.x : g.box.x + g.box.w),
+            `${tx[4].toFixed(2)} vs ${(advx > 0 ? g.box.x : g.box.x + g.box.w).toFixed(2)}`,
+          )
+          // 下沉侧 = up 的反向边：up 朝右则盒左边是下沉侧，起点距它 0.25×size
+          check(
+            `${tag} 起点距下沉侧 0.25×size`,
+            near(tx[5], upy > 0 ? g.box.y + 0.25 * s : g.box.y + g.box.h - 0.25 * s),
+            `${tx[5].toFixed(2)} vs ${(upy > 0 ? g.box.y + 0.25 * s : g.box.y + g.box.h - 0.25 * s).toFixed(2)}`,
+          )
+        } else {
+          check(
+            `${tag} 起点贴步进起步边`,
+            near(tx[5], advy > 0 ? g.box.y : g.box.y + g.box.h),
+            `${tx[5].toFixed(2)} vs ${(advy > 0 ? g.box.y : g.box.y + g.box.h).toFixed(2)}`,
+          )
+          check(
+            `${tag} 起点距下沉侧 0.25×size`,
+            near(tx[4], upx > 0 ? g.box.x + 0.25 * s : g.box.x + g.box.w - 0.25 * s),
+            `${tx[4].toFixed(2)} vs ${(upx > 0 ? g.box.x + 0.25 * s : g.box.x + g.box.w - 0.25 * s).toFixed(2)}`,
+          )
+        }
+        // 盒尺寸：未旋转盒的形状由**文字自己的方向**定（竖排窄高、横排宽扁），
+        // 页旋转 90/270 再把整个盒转过去（宽高互换）
+        const textVertical = Math.abs(it.transform[1]) > Math.abs(it.transform[0])
+        const urW = textVertical ? 1.1 * s : adv
+        const urH = textVertical ? adv : 1.1 * s
+        const swap = r === 90 || r === 270
+        check(
+          `${tag} 盒尺寸随页旋转互换`,
+          near(g.box.w, swap ? urH : urW) && near(g.box.h, swap ? urW : urH),
+          `${g.box.w.toFixed(3)}×${g.box.h.toFixed(3)} vs 期望 ${(swap ? urH : urW).toFixed(3)}×${(swap ? urW : urH).toFixed(3)}`,
+        )
+      } else {
+        // 斜排：AABB 不贴真盒的边，但面积必须不小于真盒（旋转矩形的包围只会更大）
+        check(
+          `${tag} 斜排 AABB 面积≥真盒`,
+          g.box.w * g.box.h >= adv * 1.1 * g.size - 1e-6,
+          `${(g.box.w * g.box.h).toFixed(1)} vs 真盒 ${(adv * 1.1 * g.size).toFixed(1)}`,
+        )
+      }
+
+      // 写回路径往返：applyTextEdits 的 cover 矩形必须回到 PDF 空间的真盒 AABB
+      const u = fromDisplayRect(g.box, r, b)
+      const coverY = b.h - u.y - u.h
+      const cs = corners
+      const ex0 = Math.min(...cs.map((q) => q[0]))
+      const ey0 = Math.min(...cs.map((q) => q[1]))
+      const ex1 = Math.max(...cs.map((q) => q[0]))
+      const ey1 = Math.max(...cs.map((q) => q[1]))
+      check(
+        `${tag} 写回 cover 矩形往返`,
+        near(u.x, ex0) && near(coverY, ey0) && near(u.w, ex1 - ex0) && near(u.h, ey1 - ey0),
+        `cover (${u.x.toFixed(3)}, ${coverY.toFixed(3)}, ${u.w.toFixed(3)}, ${u.h.toFixed(3)}) vs 真盒 (${ex0.toFixed(3)}, ${ey0.toFixed(3)}, ${(ex1 - ex0).toFixed(3)}, ${(ey1 - ey0).toFixed(3)})`,
+      )
+    }
   }
 }
 
