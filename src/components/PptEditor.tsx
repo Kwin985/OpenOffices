@@ -105,6 +105,10 @@ function TableInner({
   sizeEm: string
 }) {
   const line = t.border === false ? 'none' : '1px solid rgba(128,128,128,0.45)'
+  // v0.140：列宽/行高比例 → CSS 百分比（长度对不上退回等分/自适应）；隔行底纹同 StaticSlide
+  const colW = t.colW && t.colW.length === (t.rows.reduce((m, r) => Math.max(m, r.length), 0)) ? t.colW : undefined
+  const rowH = t.rowH && t.rowH.length === t.rows.length ? t.rowH : undefined
+  const band = t.bandRow ? 'rgba(127,127,127,0.14)' : undefined
   return (
     <table
       style={{
@@ -116,9 +120,16 @@ function TableInner({
         color: fg,
       }}
     >
+      {colW && (
+        <colgroup>
+          {colW.map((f, ci) => (
+            <col key={ci} style={{ width: `${(f * 100).toFixed(2)}%` }} />
+          ))}
+        </colgroup>
+      )}
       <tbody>
         {t.rows.map((row, ri) => (
-          <tr key={ri}>
+          <tr key={ri} style={rowH ? { height: `${(rowH[ri] * 100).toFixed(2)}%` } : undefined}>
             {row.map((cell, ci) => {
               const head = t.hasHeader && ri === 0
               const st: CSSProperties = {
@@ -132,7 +143,7 @@ function TableInner({
               if (head) {
                 st.background = t.headerFill ?? accent
                 st.color = '#ffffff'
-              }
+              } else if (band && ri % 2 === 1) st.background = band
               return head ? (
                 <th key={ci} style={st}>
                   {cell}
@@ -1074,7 +1085,19 @@ function PptEditor({ tab }: Props) {
                 color: sh.color ?? fgColor,
                 fontSize: `${(sh.sizePt ?? 18) / 18}em`,
                 fontWeight: sh.bold ? 700 : undefined,
+                fontStyle: sh.italic ? 'italic' : undefined, // v0.140
+                textDecoration: sh.underline ? 'underline' : undefined, // v0.140
                 textAlign: sh.align,
+                ...(sh.anchor
+                  ? {
+                      display: 'flex',
+                      flexDirection: 'column',
+                      justifyContent:
+                        sh.anchor === 'middle' ? 'center' : sh.anchor === 'bottom' ? 'flex-end' : 'flex-start',
+                    }
+                  : {}), // v0.140
+                ...(sh.wrap === false ? { whiteSpace: 'nowrap' } : {}), // v0.140
+                ...(m?.minorFont ? { fontFamily: m.minorFont } : {}), // v0.140：导入的主题正文字族
               }
               return (
                 <div

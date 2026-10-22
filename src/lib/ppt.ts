@@ -49,6 +49,10 @@ export interface MasterStyle {
   bodyColor?: string
   titleRect?: MasterRect
   bodyRect?: MasterRect
+  /** 主题标题字族（v0.140：theme1.xml fontScheme 的 majorFont/latin） */
+  majorFont?: string
+  /** 主题正文字族（v0.140：fontScheme 的 minorFont/latin） */
+  minorFont?: string
 }
 
 export interface Slide {
@@ -64,6 +68,10 @@ export interface Slide {
   animDir?: AnimDir // 入场方向（fly/wipe 有意义，缺省从下方）
   exitAnim?: BulletExit // 逐条出场（须先有入场）；揭示满后每击退一条
   autoAdvance?: number // 自动换页秒数；导出为 OOXML advTm
+  /** v0.140：false = 点击不换页（advClick="0" 且无 advTm 的页只能等自动翻）；未设 = 点击翻页 */
+  advClick?: boolean
+  /** v0.140：正文逐条入场时长（毫秒）；未设 = 导出默认 500 */
+  animDur?: number
   shapes?: SlideShape[] // 自由形状层（v0.107）：不占版式槽的文本框与图片，绝对定位随导出入往返
   animOrder?: string[] // v0.115：放映/导出的揭示序；键形如 'l0'（正文第 1 条）、's2'（第 3 个形状）
 }
@@ -92,6 +100,12 @@ export interface SlideTableData {
   border?: boolean
   /** 表内字号（磅，6~96）；未设 = 14 */
   sizePt?: number
+  /** v0.140：列宽——相对表总宽的分数（和为 1）；未设 = 等分 */
+  colW?: number[]
+  /** v0.140：行高——相对表总高的分数（和为 1）；未设 = PowerPoint 自适应 */
+  rowH?: number[]
+  /** v0.140：隔行底纹（tblPr@bandRow） */
+  bandRow?: boolean
 }
 
 /**
@@ -128,6 +142,16 @@ export interface SlideShape {
   color?: string // 文字色 #rrggbb
   sizePt?: number // 字号（磅，4~400）
   bold?: boolean
+  italic?: boolean // v0.140：斜体（rPr@i）
+  underline?: boolean // v0.140：下划线（rPr@u；只表达单线，双线/点线导入降级）
+  /** v0.140：文本在框内的垂直锚点（bodyPr@anchor） */
+  anchor?: 'top' | 'middle' | 'bottom'
+  /** v0.140：false = 文本不换行、溢出框外（bodyPr@wrap="none"）；未设 = 换行 */
+  wrap?: boolean
+  /** v0.140：形状名（cNvPr@name）——PowerPoint 选择窗格与动画目标用它认人 */
+  name?: string
+  /** v0.140：替代文本（cNvPr@descr）——屏幕阅读器念的图说 */
+  alt?: string
   align?: 'left' | 'center' | 'right'
   fill?: string // 文本框底色 #rrggbb（v0.108；kind=text；缺省透明）
   outline?: string // 边框色 #rrggbb（v0.108；导出仅文本形状落，图片边框只进渲染）
@@ -143,6 +167,8 @@ export interface SlideShape {
   anim?: BulletAnim
   animDir?: AnimDir
   exitAnim?: BulletExit
+  /** v0.140：入场时长（毫秒，50~600000）；未设 = 导出默认 500 */
+  animDur?: number
 }
 
 export interface DeckTheme {
@@ -485,6 +511,8 @@ function parseMaster(v: unknown): MasterStyle | undefined {
     bodyColor: str('bodyColor'),
     titleRect: parseRect(m.titleRect),
     bodyRect: parseRect(m.bodyRect),
+    majorFont: str('majorFont'),
+    minorFont: str('minorFont'),
   }
   return Object.values(out).some((x) => x !== undefined) ? out : undefined
 }
@@ -500,12 +528,24 @@ function parseTable(v: unknown): SlideTableData | undefined {
   if (!rows.length || !rows.some((row) => row.some((c) => c.trim()))) return undefined
   const sizePt = typeof r.sizePt === 'number' && r.sizePt >= 6 && r.sizePt <= 96 ? r.sizePt : undefined
   const hex = /^#[0-9a-fA-F]{6}$/
+  // v0.140：列宽/行高是「相对总宽/总高的分数」——每枚 0<f<=1，长度与行列数对齐才收，
+  // 和是不是 1 不强求（导出时按和归一，手改过的 .opd 也翻不了天）
+  const fracs = (v: unknown, max: number): number[] | undefined => {
+    if (!Array.isArray(v)) return undefined
+    const out = v
+      .slice(0, max)
+      .filter((f) => typeof f === 'number' && Number.isFinite(f) && f > 0 && f <= 1)
+    return out.length ? out : undefined
+  }
   return {
     rows,
     hasHeader: r.hasHeader === true,
     headerFill: typeof r.headerFill === 'string' && hex.test(r.headerFill) ? r.headerFill : undefined,
     border: r.border === false ? false : undefined,
     sizePt,
+    colW: fracs(r.colW, 32),
+    rowH: fracs(r.rowH, 64),
+    bandRow: r.bandRow === true ? true : undefined,
   }
 }
 
@@ -569,6 +609,13 @@ function parseShapes(v: unknown): SlideShape[] | undefined {
       typeof r.outlineW === 'number' && Number.isFinite(r.outlineW) && r.outlineW >= 0.25 && r.outlineW <= 20
         ? r.outlineW
         : undefined
+    // v0.140：斜体/下划线/锚点/换行 + 形状名/替代文本 + 动画时长。text 才有的样式别泄到别的 kind 上
+    const dur = (k: string) =>
+      typeof r[k] === 'number' && Number.isFinite(r[k] as number) && (r[k] as number) >= 50 && (r[k] as number) <= 600000
+        ? (r[k] as number)
+        : undefined
+    const anchor = ['top', 'middle', 'bottom'].includes(String(r.anchor)) ? (r.anchor as SlideShape['anchor']) : undefined
+    const short = (k: string) => (typeof r[k] === 'string' && (r[k] as string).trim() ? (r[k] as string).slice(0, 256) : undefined)
     out.push({
       id: typeof r.id === 'string' && r.id ? r.id : newId(),
       kind,
@@ -580,6 +627,12 @@ function parseShapes(v: unknown): SlideShape[] | undefined {
       color: kind === 'text' && /^#[0-9a-fA-F]{6}$/.test(String(r.color)) ? (r.color as string) : undefined,
       sizePt,
       bold: kind === 'text' && r.bold === true ? true : undefined,
+      italic: kind === 'text' && r.italic === true ? true : undefined,
+      underline: kind === 'text' && r.underline === true ? true : undefined,
+      anchor: kind === 'text' ? anchor : undefined,
+      wrap: kind === 'text' && r.wrap === false ? false : undefined,
+      name: short('name'),
+      alt: short('alt'),
       align,
       fill: kind === 'text' ? hex('fill') : undefined,
       outline: hex('outline'),
@@ -590,6 +643,7 @@ function parseShapes(v: unknown): SlideShape[] | undefined {
       anim: isBulletAnim(r.anim) ? r.anim : undefined,
       animDir: r.anim && isAnimDir(r.animDir) ? r.animDir : undefined,
       exitAnim: r.anim && isBulletExit(r.exitAnim) ? r.exitAnim : undefined,
+      animDur: dur('animDur'),
     })
   }
   return out.length ? out : undefined
@@ -635,6 +689,12 @@ export function parseDeck(text: string): Deck {
       autoAdvance:
         typeof s.autoAdvance === 'number' && s.autoAdvance > 0 && s.autoAdvance <= 3600
           ? s.autoAdvance
+          : undefined,
+      // v0.140：advClick 只存 false（「点击不换页」）；true 与未设同义，不占字节
+      advClick: s.advClick === false ? false : undefined,
+      animDur:
+        typeof s.animDur === 'number' && Number.isFinite(s.animDur) && s.animDur >= 50 && s.animDur <= 600000
+          ? s.animDur
           : undefined,
       shapes: parseShapes(s.shapes),
       ...(parseAnimOrder(s.animOrder) ?? {}), // v0.115：认不出的排坏了的次序不进模型（退化成默认序）

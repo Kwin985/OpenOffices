@@ -122,10 +122,14 @@ const FIXTURE_SLIDE =
   `<p:spPr><a:xfrm><a:off x="838200" y="1736592"/><a:ext cx="7772400" cy="1828800"/></a:xfrm></p:spPr>` +
   `<p:txBody><a:bodyPr/><a:p><a:pPr algn="l"/><a:r><a:rPr sz="2400" b="0"/><a:t>第一行正文</a:t></a:r></a:p>` +
   `<a:p><a:pPr algn="l"/><a:r><a:rPr sz="2400" b="0"/><a:t>第二行正文</a:t></a:r></a:p></p:txBody></p:sp>` +
-  `<p:sp><p:nvSpPr><p:cNvPr id="4" name="自由文本框"/><p:cNvSpPr/><p:nvPr/></p:nvSpPr>` +
+  // 自由文本框：v0.140 起它同时是斜体/下划线/锚点/形状名/替代文本的断言载体——
+  // 这几枚只有落在「真进形状层」的 sp 上才算数（占位符那支按设计丢字符样式）
+  `<p:sp><p:nvSpPr><p:cNvPr id="4" name="自由文本框" descr="自由文本"/><p:cNvSpPr/><p:nvPr/></p:nvSpPr>` +
   `<p:spPr><a:xfrm><a:off x="1143000" y="3879216"/><a:ext cx="3657600" cy="914400"/></a:xfrm>` +
   `<a:ln w="12700"><a:solidFill><a:srgbClr val="4472C4"/></a:solidFill></a:ln></p:spPr>` +
-  `<p:txBody><a:bodyPr wrap="square"/><a:p><a:pPr algn="r"/><a:r><a:rPr sz="1800" b="1"/><a:t>自由文本</a:t></a:r></a:p></p:txBody></p:sp>` +
+  `<p:txBody><a:bodyPr anchor="ctr" wrap="square"/><a:p><a:pPr algn="r"/>` +
+  `<a:r><a:rPr sz="1800" b="1" i="1" u="sng"><a:solidFill><a:srgbClr val="2F5496"/></a:solidFill></a:rPr>` +
+  `<a:t>自由文本</a:t></a:r></a:p></p:txBody></p:sp>` +
   `<p:pic><p:nvPicPr><p:cNvPr id="5" name="图片 4" descr="一张 1×1 的 PNG"/><p:cNvPicPr/><p:nvPr/></p:nvPicPr>` +
   `<p:blipFill><a:blip r:embed="rId3"/><a:stretch><a:fillRect/></a:stretch></p:blipFill>` +
   `<p:spPr><a:xfrm><a:off x="6858000" y="1828800"/><a:ext cx="2286000" cy="1714500"/></a:xfrm></p:spPr></p:pic>` +
@@ -198,6 +202,12 @@ const MUST_SEE = [
   'off|x', 'off|y', 'ext|cx', 'ext|cy', 'ph|type',
   // 形状身份与字符样式
   'cNvPr|id', 'rPr|sz', 'rPr|b', 'pPr|algn', 'ln|w',
+  // v0.140：本轮补上的十二枚真丢账（原先在 MUST_NOT_SEE，审计见 docs/pptx-fidelity-audit.md）
+  'cNvPr|name', 'cNvPr|descr',
+  'rPr|i', 'rPr|u',
+  'bodyPr|anchor', 'bodyPr|wrap',
+  'tblPr|bandRow', 'gridCol|w', 'tr|h',
+  'transition|advClick', 'cTn|dur', 'latin|typeface',
   // 颜色三兄弟（theme 的 clrScheme、各处 solidFill、母版背景的 schemeClr）
   'srgbClr|val', 'sysClr|lastClr', 'schemeClr|val',
   // clrMap 照单全收：十二枚名一一过漏斗（取几枚代表性的点名，其余同族）
@@ -209,18 +219,17 @@ const MUST_SEE = [
   'Relationship|Id', 'Relationship|Target', 'Relationship|Type',
 ]
 
-// 故意放进去、而读手确实一寸不查的（两侧都断才叫量具）
+// 故意放进去、而读手确实一寸不查的（两侧都断才叫量具）。
+// v0.140：原在这张表上的十二枚真丢账已补读，移到 MUST_SEE；剩下的是审计裁定的「不读」
 const MUST_NOT_SEE = [
-  'cNvPr|name', 'cNvPr|descr', // 形状名与替换文字：模型里没有这一层
-  'rPr|i', 'rPr|u', 'rPr|lang', 'rPr|dirty', // 斜体/下划线/语言：shapeStyleOf 只吃 sz/b
+  'rPr|lang', 'rPr|dirty', // 拼写语言与会话脏标记：都不进呈现
   'ph|idx', // 占位序号不读（同型占位按 kind 认，不按 idx）
-  'tblPr|bandRow', // 表格镶边行：hasHeader 只看 firstRow
-  'transition|spd', 'transition|advClick', // 切页速度与点击换页：只认 advTm 与效果名
-  'theme|name', 'clrScheme|name', 'fontScheme|name', 'latin|typeface', // 主题字族整族不读
+  'transition|spd', // 切页速度档：效果名已建模，速度导出侧固定
+  'theme|name', 'clrScheme|name', 'fontScheme|name', // 主题/方案的命名不参与呈现
   'sysClr|val', // 系统色只读 lastClr（val 是 "windowText" 这类枚举名）
-  'graphicData|uri', 'bodyPr|anchor', 'bodyPr|wrap', 'cTn|presetID', 'cTn|grpId', 'cTn|fill', 'cTn|dur', 'cTn|restart', 'cTn|id',
+  'graphicData|uri', // 内容类型标签：按子元素（tbl/blip/c:chart）分派，不看标签
+  'cTn|presetID', 'cTn|grpId', 'cTn|fill', 'cTn|restart', 'cTn|id',
   'graphicFrameLocks|noGrp', 'spLocks|noGrp', 'cond|delay', 'seq|concurrent', 'seq|nextAc',
-  'gridCol|w', 'tr|h', // 表格列宽行高：只读格文本与 firstRow
 ]
 
 const md5 = (s) => createHash('md5').update(s).digest('hex')
@@ -453,8 +462,32 @@ async function runSelftest(reader, probe) {
   const table = s0 && s0.shapes && s0.shapes.find((x) => x.kind === 'table')
   if (!table) fails.push('表格形状没读出来')
   else if (!table.table || !table.table.hasHeader) fails.push('表头行没读对（firstRow）')
+  else {
+    // v0.140：列宽/行高是「相对总和的分数」——两枚等宽列/两枚等高行 ⇒ 各 0.5
+    if (table.table.bandRow !== true) fails.push('隔行底纹没读对（bandRow）')
+    const cw = table.table.colW
+    if (!cw || cw.length !== 2 || Math.abs(cw[0] - 0.5) > 1e-9) fails.push(`列宽没读对：${JSON.stringify(cw)}`)
+    const rh = table.table.rowH
+    if (!rh || rh.length !== 2 || Math.abs(rh[0] - 0.5) > 1e-9) fails.push(`行高没读对：${JSON.stringify(rh)}`)
+  }
   const img = s0 && s0.shapes && s0.shapes.find((x) => x.kind === 'image')
   if (!img || !img.image || !img.image.startsWith('data:image/png;base64,')) fails.push('图片形状没读成 data URI')
+  else if (img.alt !== '一张 1×1 的 PNG') fails.push(`图片替代文本没读对：${img.alt}`)
+  // v0.140：自由文本框是斜体/下划线/锚点/形状名/替代文本的载体（占位符那支按设计不取字符样式）
+  const txt = s0 && s0.shapes && s0.shapes.find((x) => x.kind === 'text')
+  if (!txt) fails.push('自由文本框没读出来')
+  else {
+    if (txt.italic !== true) fails.push('斜体没读对（rPr@i）')
+    if (txt.underline !== true) fails.push('下划线没读对（rPr@u）')
+    if (txt.anchor !== 'middle') fails.push(`垂直锚点没读对：${txt.anchor}`)
+    if (txt.name !== '自由文本框') fails.push(`形状名没读对：${txt.name}`)
+    if (txt.alt !== '自由文本') fails.push(`替代文本没读对：${txt.alt}`)
+  }
+  if (!deck.master || deck.master.majorFont !== 'Calibri Light')
+    fails.push(`主题标题字族没读对：${deck.master && deck.master.majorFont}`)
+  if (!deck.master || deck.master.minorFont !== 'Calibri')
+    fails.push(`主题正文字族没读对：${deck.master && deck.master.minorFont}`)
+  if (!s0 || s0.animDur !== 500) fails.push(`入场时长没读对：${s0 && s0.animDur}`)
   let notes = 0
   for (const v of seen.values()) notes += v
   console.log(`SELFTEST|夹具 查问对=${got.size} 查问次数=${notes} 形状=${s0 && s0.shapes ? s0.shapes.length : 0}`)

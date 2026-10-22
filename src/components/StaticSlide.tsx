@@ -56,6 +56,11 @@ const TableShape = memo(function TableShape({
   const t = sh.table
   if (!t) return null
   const line = t.border === false ? 'none' : '1px solid rgba(128,128,128,0.45)'
+  // v0.140：导入的列宽/行高是比例，直接当 CSS 百分比用（长度对不上就整组不用，退回等分/自适应）
+  const colW = t.colW && t.colW.length === (t.rows.reduce((m, r) => Math.max(m, r.length), 0)) ? t.colW : undefined
+  const rowH = t.rowH && t.rowH.length === t.rows.length ? t.rowH : undefined
+  // 隔行底纹（bandRow）： PowerPoint 数的是第 2、4、6…行；深浅主题都能用的一层中性罩
+  const band = t.bandRow ? 'rgba(127,127,127,0.14)' : undefined
   return (
     <div className={`ppt-shape-table${phase ? ` ${phase}` : ''}`} style={{ ...box, ...boxFace(sh) }}>
       <table
@@ -68,9 +73,16 @@ const TableShape = memo(function TableShape({
           color: fg,
         }}
       >
+        {colW && (
+          <colgroup>
+            {colW.map((f, ci) => (
+              <col key={ci} style={{ width: `${(f * 100).toFixed(2)}%` }} />
+            ))}
+          </colgroup>
+        )}
         <tbody>
           {t.rows.map((row, ri) => (
-            <tr key={ri}>
+            <tr key={ri} style={rowH ? { height: `${(rowH[ri] * 100).toFixed(2)}%` } : undefined}>
               {row.map((cell, ci) => {
                 const head = t.hasHeader && ri === 0
                 const style: CSSProperties = {
@@ -84,7 +96,7 @@ const TableShape = memo(function TableShape({
                 if (head) {
                   style.background = t.headerFill ?? accent
                   style.color = '#ffffff'
-                }
+                } else if (band && ri % 2 === 1) style.background = band
                 return head ? (
                   <th key={ci} style={style}>
                     {cell}
@@ -249,6 +261,10 @@ export default memo(function StaticSlide({
           )
         }
         if (sh.kind === 'text' && sh.text) {
+          // v0.140：斜体/下划线/垂直锚点/不换行 + 导入的主题字族。
+          // 锚点用弹性盒表达（块内文本没有 CSS 的垂直对齐），不换行压过默认的 pre-wrap
+          const anchorJustify =
+            sh.anchor === 'middle' ? 'center' : sh.anchor === 'bottom' ? 'flex-end' : undefined
           return (
             <div
               key={sh.id}
@@ -259,7 +275,14 @@ export default memo(function StaticSlide({
                 color: sh.color ?? fg,
                 fontSize: `${(sh.sizePt ?? 18) / 18}em`,
                 fontWeight: sh.bold ? 700 : undefined,
+                fontStyle: sh.italic ? 'italic' : undefined,
+                textDecoration: sh.underline ? 'underline' : undefined,
                 textAlign: sh.align,
+                ...(anchorJustify
+                  ? { display: 'flex', flexDirection: 'column', justifyContent: anchorJustify }
+                  : {}),
+                ...(sh.wrap === false ? { whiteSpace: 'nowrap' } : {}),
+                ...(master?.minorFont ? { fontFamily: master.minorFont } : {}),
               }}
             >
               {sh.text}

@@ -100,6 +100,11 @@ function shapeStyleOf(
   const sz = Number(ga(rPr, 'sz') ?? NaN) // OOXML：百分之一磅
   if (Number.isFinite(sz) && sz >= 400 && sz <= 40000) out.sizePt = Math.round(sz) / 100
   if (ga(rPr, 'b') === '1') out.bold = true
+  // v0.140：斜体/下划线。u 是枚举（none/sng/dbl/…），模型只有一枚布尔——
+  // 「有线」即真，双线/点线降级成单线（导出侧只写得出 sng）
+  if (ga(rPr, 'i') === '1') out.italic = true
+  const u = ga(rPr, 'u')
+  if (u && u !== 'none') out.underline = true
   if (rPr) {
     const color = solidFillToHex(childrenByName(rPr, 'solidFill')[0], env.colors, env.clrMap)
     if (color) out.color = color
@@ -109,6 +114,45 @@ function shapeStyleOf(
   else if (algn === 'r') out.align = 'right'
   else if (algn === 'just') out.align = 'left'
   return out
+}
+
+/// 形状名与替代文本（v0.140）：`<p:cNvPr name= descr=>`——sp/pic/graphicFrame 各层都有自己的那一枚。
+/// 名字是 PowerPoint 选择窗格与动画目标的认人凭据，descr 是屏幕阅读器念的图说
+function nameOf(el: Element): string | undefined {
+  const v = ga(descendantsByName(el, 'cNvPr')[0], 'name')
+  return v && v.trim() ? v : undefined
+}
+
+function altOf(el: Element): string | undefined {
+  const v = ga(descendantsByName(el, 'cNvPr')[0], 'descr')
+  return v && v.trim() ? v : undefined
+}
+
+// bodyPr@anchor 的枚举 → 模型锚点（just/dist 在「块内垂直分布」，CSS 无从表达，不收）
+const ANCHOR_MAP: Record<string, NonNullable<SlideShape['anchor']>> = {
+  t: 'top',
+  ctr: 'middle',
+  b: 'bottom',
+}
+
+/// 文本框的垂直锚点与换行（v0.140）：`<a:bodyPr anchor="t|ctr|b" wrap="none|square">`。
+/// wrap="square"（缺省）= 换行；只有 "none" 值得记——模型里 false 才是「说了话」
+function bodyStyleOf(sp: Element): { anchor?: NonNullable<SlideShape['anchor']>; wrap?: boolean } {
+  const out: { anchor?: NonNullable<SlideShape['anchor']>; wrap?: boolean } = {}
+  const bodyPr = descendantsByName(sp, 'bodyPr')[0]
+  const anchor = ANCHOR_MAP[ga(bodyPr, 'anchor') ?? '']
+  if (anchor) out.anchor = anchor
+  if (ga(bodyPr, 'wrap') === 'none') out.wrap = false
+  return out
+}
+
+/// EMU 列宽/行高 → 相对总和的分数（v0.140）：只留正数，和归一后恒为 1，
+/// 于是 .opd 里存的是「比例」而不是绝对 EMU——换页宽照样翻得回来
+function fractions(emu: number[]): number[] | undefined {
+  const pos = emu.filter((v) => Number.isFinite(v) && v > 0)
+  const sum = pos.reduce((a, b) => a + b, 0)
+  if (!pos.length || sum <= 0) return undefined
+  return pos.map((v) => v / sum)
 }
 
 // 形状盒子外观（v0.108）：spPr 的 solidFill → 底色、ln → 边框色 + 磅宽（w 是 EMU，12700=1pt）。
@@ -268,15 +312,35 @@ function luminance(hex: string): number {
   return (0.2126 * r + 0.7152 * g + 0.0722 * b) / 255
 }
 
+// theme1.xml 的 fontScheme：major/minor 的 latin 字族（v0.140）。名字（@name）不读——
+// 主题名不参与呈现，字族名才是换机器后会回落的东西
+function fontSchemeOf(themeDoc: Document): { majorFont?: string; minorFont?: string } {
+  const out: { majorFont?: string; minorFont?: string } = {}
+  const scheme = descendantsByName(themeDoc.documentElement, 'fontScheme')[0]
+  if (!scheme) return out
+  for (const c of kids(scheme)) {
+    if (c.localName !== 'majorFont' && c.localName !== 'minorFont') continue
+    const latin = childrenByName(c, 'latin')[0]
+    const face = ga(latin, 'typeface')
+    if (face && face.trim()) out[c.localName === 'majorFont' ? 'majorFont' : 'minorFont'] = face
+  }
+  return out
+}
+
 // 母版：背景（色/图）+ 主题色 + 标题/正文占位几何
 async function parseMaster(zip: JSZip): Promise<{
   master: MasterStyle
   colors: Record<string, string>
   clrMap: Record<string, string>
 }> {
-  const colors = zip.file('ppt/theme/theme1.xml')
-    ? colorScheme(parseXml(await zip.file('ppt/theme/theme1.xml')!.async('string')))
-    : {}
+  let colors: Record<string, string> = {}
+  let fonts: { majorFont?: string; minorFont?: string } = {}
+  const themeFile = zip.file('ppt/theme/theme1.xml')
+  if (themeFile) {
+    const themeDoc = parseXml(await themeFile.async('string'))
+    colors = colorScheme(themeDoc)
+    fonts = fontSchemeOf(themeDoc)
+  }
   const masterFile = zip.file('ppt/slideMasters/slideMaster1.xml')
   if (!masterFile) return { master: {}, colors, clrMap: {} }
   const root = parseXml(await masterFile.async('string')).documentElement
@@ -298,6 +362,8 @@ async function parseMaster(zip: JSZip): Promise<{
   )
   if (bg.bg) master.bg = bg.bg
   if (bg.bgImage) master.bgImage = bg.bgImage
+  if (fonts.majorFont) master.majorFont = fonts.majorFont
+  if (fonts.minorFont) master.minorFont = fonts.minorFont
 
   const bgColor = master.bg ?? colors[clrMap.bg1 ?? 'bg1'] ?? colors.bg1 ?? '#ffffff'
   const txColor = colors[clrMap.tx1 ?? 'tx1'] ?? colors.tx1 ?? '#000000'
@@ -339,17 +405,21 @@ async function parseNotes(zip: JSZip, slideName: string): Promise<string | undef
   return text || undefined
 }
 
-// <p:transition spd="med" advTm="5000"><p:fade/></p:transition>：效果名 + 自动换页毫秒数
+// <p:transition spd="med" advTm="5000"><p:fade/></p:transition>：效果名 + 自动换页毫秒数。
+// v0.140 加 advClick：显式 "0" = 点击不换页（这类页若无 advTm 就只剩自动翻一条路）——
+// 「没说话」（缺省）与「点击翻页」（"1"）在文件里同义，模型只记说了话的那一半
 function parseTransition(root: Element): {
   transition?: SlideTransition
   autoAdvance?: number
+  advClick?: boolean
 } {
   const tr = descendantsByName(root, 'transition')[0]
   if (!tr) return {}
-  const out: { transition?: SlideTransition; autoAdvance?: number } = {}
+  const out: { transition?: SlideTransition; autoAdvance?: number; advClick?: boolean } = {}
   const advTm = Number(ga(tr, 'advTm') ?? 0)
   if (Number.isFinite(advTm) && advTm >= 1000 && advTm <= 3_600_000)
     out.autoAdvance = Math.round(advTm / 1000)
+  if (ga(tr, 'advClick') === '0') out.advClick = false
   for (const c of kids(tr)) {
     if (c.localName === 'fade' || c.localName === 'push' || c.localName === 'wipe' || c.localName === 'split') {
       out.transition = c.localName as SlideTransition
@@ -386,11 +456,12 @@ function spidOf(el: Element): string | undefined {
 }
 
 /// 一枚 clickEffect 的效果：filter 判定 wipe/fade，`ppt_x`/`ppt_y` 位移判定 fly，
-/// 方向按 presetSubtype → 滤镜名 → 起始位移三路认
-function animEffectOf(c: Element): { anim: BulletAnim; dir?: AnimDir } {
-  const filter = (
-    ga(descendantsByName(c, 'animEffect')[0], 'filter') ?? ''
-  ).toLowerCase()
+/// 方向按 presetSubtype → 滤镜名 → 起始位移三路认。
+/// v0.140 加 dur：效果行为自己的 cTn 上的毫秒数（50ms~10min 外不收）——
+/// 没有 animEffect 的淡入（set/visibility 那一支）dur="1" 是瞬时显隐，不是时长，不读
+function animEffectOf(c: Element): { anim: BulletAnim; dir?: AnimDir; dur?: number } {
+  const effect = descendantsByName(c, 'animEffect')[0]
+  const filter = (ga(effect, 'filter') ?? '').toLowerCase()
   let anim: BulletAnim
   if (filter.startsWith('wipe')) anim = 'wipe'
   else if (filter.startsWith('fade')) anim = 'fade'
@@ -403,12 +474,14 @@ function animEffectOf(c: Element): { anim: BulletAnim; dir?: AnimDir } {
   )
     anim = 'fly'
   else anim = 'fade'
-  if (anim === 'fade') return { anim }
+  const dur = Number(ga(effect ? descendantsByName(effect, 'cTn')[0] : undefined, 'dur') ?? NaN)
+  const durOk = Number.isFinite(dur) && dur >= 50 && dur <= 600_000 ? Math.round(dur) : undefined
+  if (anim === 'fade') return { anim, ...(durOk ? { dur: durOk } : {}) }
   const dir =
     SUBTYPE_DIR[Number(ga(c, 'presetSubtype') ?? 0)] ??
     WIPE_FILTER_DIR[filter] ??
     flyStartDir(c)
-  return dir ? { anim, dir } : { anim }
+  return dir ? { anim, dir, ...(durOk ? { dur: durOk } : {}) } : { anim, ...(durOk ? { dur: durOk } : {}) }
 }
 
 /**
@@ -428,12 +501,13 @@ function parseAnim(
   anim?: BulletAnim
   animDir?: AnimDir
   exitAnim?: BulletExit
+  animDur?: number
   order: string[]
-  shapeAnims: Map<number, { anim: BulletAnim; animDir?: AnimDir; exitAnim?: BulletExit }>
+  shapeAnims: Map<number, { anim: BulletAnim; animDir?: AnimDir; exitAnim?: BulletExit; dur?: number }>
 } {
   const empty = {
     order: [] as string[],
-    shapeAnims: new Map<number, { anim: BulletAnim; animDir?: AnimDir; exitAnim?: BulletExit }>(),
+    shapeAnims: new Map<number, { anim: BulletAnim; animDir?: AnimDir; exitAnim?: BulletExit; dur?: number }>(),
   }
   const timing = childrenByName(root, 'timing')[0]
   if (!timing) return empty
@@ -445,8 +519,9 @@ function parseAnim(
     anim?: BulletAnim
     animDir?: AnimDir
     exitAnim?: BulletExit
+    animDur?: number
     order: string[]
-    shapeAnims: Map<number, { anim: BulletAnim; animDir?: AnimDir; exitAnim?: BulletExit }>
+    shapeAnims: Map<number, { anim: BulletAnim; animDir?: AnimDir; exitAnim?: BulletExit; dur?: number }>
   } = empty
   const shapeAt = (spid: string) => {
     const i = shapeSpids.indexOf(spid)
@@ -471,6 +546,7 @@ function parseAnim(
     if (spid === bodySpid) {
       out.anim = eff.anim
       if (eff.dir) out.animDir = eff.dir
+      if (eff.dur) out.animDur = eff.dur
       out.order.push(`l${bodySeen++}`)
     } else {
       const i = shapeAt(spid)
@@ -479,6 +555,7 @@ function parseAnim(
           ...(out.shapeAnims.get(i) ?? { anim: eff.anim }),
           anim: eff.anim,
           ...(eff.dir ? { animDir: eff.dir } : {}),
+          ...(eff.dur ? { dur: eff.dur } : {}),
         })
         out.order.push(`s${i}`)
       }
@@ -535,6 +612,12 @@ async function slideToDeckSlide(
             ...shapeStyleOf(el, env),
           }
           Object.assign(sh, boxStyleOf(el, env)) // fill/outline/outlineW 按接口序落在 align 之后
+          // v0.140：锚点/换行（bodyPr）+ 形状名/替代文本（cNvPr）
+          Object.assign(sh, bodyStyleOf(el))
+          const nm = nameOf(el)
+          if (nm) sh.name = nm
+          const alt = altOf(el)
+          if (alt) sh.alt = alt
           shapes.push(sh)
           shapeSpids.push(spidOf(el) ?? '')
           continue
@@ -559,12 +642,26 @@ async function slideToDeckSlide(
         )
         if (!rows.length || !rows.some((r) => r.some((c) => c))) continue
         const tblPr = descendantsByName(tbl, 'tblPr')[0]
+        // v0.140：列宽/行高按 EMU 读进来折成比例（和归一），隔行底纹读 bandRow
+        const grid = childrenByName(tbl, 'tblGrid')[0]
+        const colW = grid ? fractions(childrenByName(grid, 'gridCol').map((c) => Number(ga(c, 'w') ?? 0))) : undefined
+        const rowH = fractions(childrenByName(tbl, 'tr').map((tr) => Number(ga(tr, 'h') ?? 0)))
         const sh: SlideShape = {
           id: newId(),
           kind: 'table',
           ...pos,
-          table: { rows, hasHeader: ga(tblPr, 'firstRow') === '1' },
+          table: {
+            rows,
+            hasHeader: ga(tblPr, 'firstRow') === '1',
+            ...(colW ? { colW } : {}),
+            ...(rowH ? { rowH } : {}),
+            ...(ga(tblPr, 'bandRow') === '1' ? { bandRow: true } : {}),
+          },
         }
+        const nm = nameOf(el)
+        if (nm) sh.name = nm
+        const alt = altOf(el)
+        if (alt) sh.alt = alt
         shapes.push(sh)
         shapeSpids.push(spidOf(el) ?? '')
       } else {
@@ -585,6 +682,10 @@ async function slideToDeckSlide(
         const sh: SlideShape = { id: newId(), kind: 'image', ...pos }
         Object.assign(sh, boxStyleOf(el, env))
         sh.image = bytesToDataUri(bytes, MIME_BY_EXT[ext] ?? 'image/png')
+        const nm = nameOf(el) // v0.140：图片也带名与替代文本（PowerPoint 选择窗格认得出）
+        if (nm) sh.name = nm
+        const alt = altOf(el)
+        if (alt) sh.alt = alt
         shapes.push(sh)
         shapeSpids.push(spidOf(el) ?? '')
       }
@@ -624,6 +725,7 @@ async function slideToDeckSlide(
   let notes: string | undefined
   let transition: SlideTransition | undefined
   let autoAdvance: number | undefined
+  let advClick: boolean | undefined
   try {
     const relsText = await zip
       .file(slideXml.name.replace(/slides\/(slide\d+\.xml)$/, 'slides/_rels/$1.rels'))
@@ -631,7 +733,7 @@ async function slideToDeckSlide(
     const slideBg = await bgOf(root, zip, relsText, 'ppt/slides', env.colors, env.clrMap)
     bg = slideBg.bg
     notes = await parseNotes(zip, slideXml.name)
-    ;({ transition, autoAdvance } = parseTransition(root))
+    ;({ transition, autoAdvance, advClick } = parseTransition(root))
     if (slideBg.bgImage && !image) {
       // 单页背景图当作整页图片还原
       image = slideBg.bgImage
@@ -641,7 +743,7 @@ async function slideToDeckSlide(
     console.warn('页背景/备注解析失败，忽略', e)
   }
 
-  const { anim, animDir, exitAnim, order, shapeAnims } = parseAnim(root, shapeSpids)
+  const { anim, animDir, exitAnim, animDur, order, shapeAnims } = parseAnim(root, shapeSpids)
   // 形状动画按 spid 归位：出场那条可能先于入场被遇到，两条并进同一格
   for (const [i, a] of shapeAnims) {
     const sh = shapes[i]
@@ -649,6 +751,7 @@ async function slideToDeckSlide(
     sh.anim = a.anim
     if (a.animDir) sh.animDir = a.animDir
     if (a.exitAnim) sh.exitAnim = a.exitAnim
+    if (a.dur) sh.animDur = a.dur
   }
   // 播放序：read 出来的先后就是 PowerPoint 的放映序，只有真被排过（≠ 默认序）才写回模型
   let animOrder: string[] | undefined
@@ -685,7 +788,9 @@ async function slideToDeckSlide(
     anim,
     animDir,
     exitAnim,
+    animDur,
     autoAdvance,
+    advClick,
     animOrder,
     ...(shapes.length ? { shapes } : {}),
   }
