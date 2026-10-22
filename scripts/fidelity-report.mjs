@@ -10,6 +10,9 @@
 //   ... --selftest        用内置夹具证明分子语义（不依赖任何语料）
 //   ... --clean-pass      再跑一遍不带探针的副本，证明观察者不扰动产品
 //   ... --mut no-attrL    变异档：故意漏注入一枚漏斗，覆盖率必须下降
+//   ... --synth           语料是合成重建件（scripts/gen-docx-fidelity-corpus.mjs 按
+//                         docs/fidelity-universe.json 的冻结计数 1/100 缩放生成）：
+//                         与旧账「按对」可比、「按字面」不可比，报告里播出处节
 //
 // 报告里不许出现任何文件路径或文件名：语料是每个人的本地件，公开的只有聚合数字。
 import { createHash } from 'node:crypto'
@@ -34,6 +37,7 @@ const LIMIT = Number(flag('limit', '0'))
 const MUT = flag('mut', '')
 const CLIST_FILE = flag('clist', '')
 const CORPUS = flag('corpus', '')
+const SYNTH = has('synth')
 
 // 读手真正吃进去的部件：分母只算这些，别把没打算读的部件算成丢账
 const PARTS = [
@@ -439,9 +443,53 @@ async function main() {
     byElement.set(p, (byElement.get(p) ?? 0) + v)
   }
 
+  // 合成语料腿：与冻结宇宙自比——701 对该不该一对不缺、字面该多接近缩放期望。
+  // 这一块只回答「重建得像不像旧账」，不参与覆盖率计算
+  let synth = null
+  if (SYNTH) {
+    const uniPath = path.join(REPO, 'docs/fidelity-universe.json')
+    const uni = JSON.parse(fs.readFileSync(uniPath, 'utf8'))
+    const want = new Map(uni.pairs.map((p) => [p.pair, Math.max(1, Math.round(p.count / uni.scale))]))
+    const missing = [...want.keys()].filter((k) => !pairs.has(k))
+    const extra = [...pairs.keys()].filter((k) => !want.has(k))
+    const wantSum = sum(Object.fromEntries(want))
+    const gotSum = [...pairs.values()].reduce((a, b) => a + b, 0)
+    synth = {
+      rebuiltBy: 'scripts/gen-docx-fidelity-corpus.mjs',
+      universe: 'docs/fidelity-universe.json',
+      universePairs: uni.pairs.length,
+      universeLiterals: uni.pairs.reduce((a, p) => a + p.count, 0),
+      scale: uni.scale,
+      pairsPresent: uni.pairs.length - missing.length,
+      pairsMissing: missing.length,
+      pairsExtra: extra.length,
+      pairsMissingList: missing.sort().slice(0, 20),
+      scaledLiteralSum: wantSum,
+      actualLiteralSum: gotSum,
+      literalDriftPct: (gotSum / wantSum - 1) * 100,
+      comparableByPair: true,
+      comparableByOccurrence: false,
+      note:
+        '按对覆盖率与旧账（313 件真件语料）可比；按字面不可比——重建按 count/100 缩放，' +
+        '取整偏差约 0.9%，另有少量承重包裹属性（bitmap 链的 r:embed/extent/docPr、numbering 关联的 ' +
+        'abstractNumId 等）在包裹处顺带出现，两笔合计实测漂移见 literalDriftPct',
+    }
+  }
+
   const data = {
     measured: { ref: REF, source: fromGit ? `git:${REF}` : 'worktree', modules: modFiles, injections: applied },
-    corpus: { files: files.length, readable: ok, unreadable: files.length - ok, bytes: bytesTotal, scopeParts: PARTS },
+    corpus: SYNTH
+      ? {
+          files: files.length,
+          readable: ok,
+          unreadable: files.length - ok,
+          bytes: bytesTotal,
+          scopeParts: PARTS,
+          synthetic: true,
+          rebuiltBy: 'scripts/gen-docx-fidelity-corpus.mjs',
+          universe: 'docs/fidelity-universe.json',
+        }
+      : { files: files.length, readable: ok, unreadable: files.length - ok, bytes: bytesTotal, scopeParts: PARTS },
     totals: {
       distinctPairs: pairs.size,
       occurrences: totalOcc,
@@ -466,6 +514,7 @@ async function main() {
     errors: Object.fromEntries(errs),
   }
   if (clean) data.equivalence = { identical: eqSame, differing: eqDiff, bothFailed: eqErrBoth, onlyOneFailed: eqErrOne }
+  if (synth) data.synth = synth
 
   const mdPath = path.join(OUT_DIR, 'fidelity.md')
   const jsonPath = path.join(OUT_DIR, 'fidelity.json')
@@ -552,10 +601,41 @@ function renderMd(d) {
   )
   L.push('')
   L.push(
-    `The corpus held ${n(d.corpus.files)} .docx files (${(d.corpus.bytes / 1048576).toFixed(0)} MiB); ${d.corpus.unreadable} were`,
+    `The corpus held ${n(d.corpus.files)} ${d.synth ? 'synthetic ' : ''}.docx files (${(d.corpus.bytes / 1048576).toFixed(0)} MiB); ${d.corpus.unreadable} were`,
   )
   L.push('unreadable as archives and are reported by failure class only, never by name.')
   L.push('')
+  if (d.synth) {
+    const s = d.synth
+    L.push('## Corpus provenance — this is a synthetic rebuild')
+    L.push('')
+    L.push(
+      'The 313-file real corpus this ledger was first measured on is not in the repository (it is',
+    )
+    L.push(
+      "everyone's local documents). What you are reading was measured on a **synthetic corpus**:",
+    )
+    L.push(
+      `${n(s.universePairs)} element|attribute pairs with their literal counts, frozen from the original`,
+    )
+    L.push(
+      `run into \`${s.universe}\` and rebuilt at 1/${s.scale} scale by \`${s.rebuiltBy}\`.`,
+    )
+    L.push('')
+    L.push('| rebuild check | value |')
+    L.push('|---|---:|')
+    L.push(`| universe pairs present in the corpus | ${n(s.pairsPresent)} / ${n(s.universePairs)} |`)
+    L.push(`| pairs missing / extra | ${n(s.pairsMissing)} / ${n(s.pairsExtra)} |`)
+    L.push(
+      `| literals: scaled expectation vs actual | ${n(s.scaledLiteralSum)} vs ${n(s.actualLiteralSum)} ` +
+        `(${s.literalDriftPct >= 0 ? '+' : ''}${s.literalDriftPct.toFixed(2)}%) |`,
+    )
+    L.push('')
+    L.push(
+      `**By-pair coverage is comparable with the original run; by-literal coverage is not.** ${s.note}`,
+    )
+    L.push('')
+  }
   L.push('## Never consulted — largest first')
   L.push('')
   L.push('| `element|attribute` | literals |')
@@ -609,6 +689,13 @@ function renderMd(d) {
   L.push('pnpm exec vite-node scripts/fidelity-report.mjs --corpus /path/to/docx')
   L.push('pnpm exec vite-node scripts/fidelity-report.mjs --corpus /path/to/docx --selftest --clean-pass')
   L.push('python3 scripts/fidelity-census.py        # independent denominator, second parser')
+  L.push('')
+  L.push('# 真件语料不在库时：先按冻结宇宙重建合成语料，再跑同一套腿')
+  L.push('node scripts/gen-docx-fidelity-corpus.mjs')
+  L.push(
+    'pnpm exec vite-node scripts/fidelity-report.mjs --clist tmp/docx-fidelity-corpus/clist.txt --selftest --clean-pass --synth',
+  )
+  L.push('python3 scripts/fidelity-census.py --clist tmp/docx-fidelity-corpus/clist.txt')
   L.push('```')
   L.push('')
   L.push('The report is deterministic: same corpus list and same source revision give byte-identical')

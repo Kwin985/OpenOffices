@@ -1,0 +1,3538 @@
+{
+  "what": "DOCX 属性级覆盖率量具的「宇宙」：旧跑（313 件真件语料）见过的全部 element|attribute 对及其字面计数",
+  "source": "docs/fidelity.json @ 040dffb（v0.138 时代那一跑；此后 fidelity.json 会被重跑覆盖，宇宙由此文件固定）",
+  "scale": 100,
+  "scaleNote": "合成语料按 count/100 均匀缩放（max(1, round(c/100))）：按对覆盖率不受影响；按字面覆盖率与旧值同权重结构，偏差约 0.9%（缩放取整所致），fidelity.md 已如实标注",
+  "measured": {
+    "ref": "HEAD",
+    "source": "git:HEAD",
+    "modules": 50,
+    "injections": [
+      "attr",
+      "attrL"
+    ]
+  },
+  "oldTotals": {
+    "distinctPairs": 701,
+    "occurrences": 3108523,
+    "noisePairs": 19,
+    "noiseOccurrences": 770634,
+    "meaningfulPairs": 682,
+    "meaningfulOccurrences": 2337889
+  },
+  "oldCoverage": {
+    "byPair": 0.17595307917888564,
+    "byOccurrence": 0.506564682925494,
+    "consultedPairs": 120,
+    "consultedOccurrences": 1184292,
+    "neverConsultedPairs": 562,
+    "neverConsultedOccurrences": 1153597
+  },
+  "pairs": [
+    {
+      "pair": "Choice|Requires",
+      "count": 357,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "OLEObject|DrawAspect",
+      "count": 3,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "OLEObject|ObjectID",
+      "count": 3,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "OLEObject|ProgID",
+      "count": 3,
+      "bucket": "consulted"
+    },
+    {
+      "pair": "OLEObject|ShapeID",
+      "count": 3,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "OLEObject|Type",
+      "count": 3,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "OLEObject|id",
+      "count": 3,
+      "bucket": "consulted"
+    },
+    {
+      "pair": "abstractNumId|val",
+      "count": 932,
+      "bucket": "consulted"
+    },
+    {
+      "pair": "abstractNum|abstractNumId",
+      "count": 916,
+      "bucket": "consulted"
+    },
+    {
+      "pair": "abstractNum|restartNumberingAfterBreak",
+      "count": 392,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "adjustRightInd|val",
+      "count": 4806,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "aliases|val",
+      "count": 2,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "alphaOff|val",
+      "count": 60,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "alpha|val",
+      "count": 67,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "anchor|allowOverlap",
+      "count": 587,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "anchor|anchorId",
+      "count": 47,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "anchor|behindDoc",
+      "count": 587,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "anchor|distB",
+      "count": 587,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "anchor|distL",
+      "count": 587,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "anchor|distR",
+      "count": 587,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "anchor|distT",
+      "count": 587,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "anchor|editId",
+      "count": 47,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "anchor|layoutInCell",
+      "count": 587,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "anchor|locked",
+      "count": 587,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "anchor|relativeHeight",
+      "count": 587,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "anchor|simplePos",
+      "count": 587,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "appearance|val",
+      "count": 4,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "attr|name",
+      "count": 460,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "attr|val",
+      "count": 460,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "autoSpaceDE|val",
+      "count": 1197,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "autoSpaceDN|val",
+      "count": 1167,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "bCs|val",
+      "count": 1071,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "background|color",
+      "count": 8,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "background|themeColor",
+      "count": 1,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "background|themeShade",
+      "count": 1,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "bar|color",
+      "count": 9,
+      "bucket": "consulted"
+    },
+    {
+      "pair": "bar|sz",
+      "count": 9,
+      "bucket": "consulted"
+    },
+    {
+      "pair": "bar|val",
+      "count": 9,
+      "bucket": "consulted"
+    },
+    {
+      "pair": "basedOn|val",
+      "count": 3402,
+      "bucket": "consulted"
+    },
+    {
+      "pair": "bdr|color",
+      "count": 173,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "bdr|space",
+      "count": 173,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "bdr|sz",
+      "count": 173,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "bdr|val",
+      "count": 173,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "begChr|val",
+      "count": 1,
+      "bucket": "consulted"
+    },
+    {
+      "pair": "between|color",
+      "count": 9,
+      "bucket": "consulted"
+    },
+    {
+      "pair": "between|space",
+      "count": 9,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "between|sz",
+      "count": 9,
+      "bucket": "consulted"
+    },
+    {
+      "pair": "between|val",
+      "count": 9,
+      "bucket": "consulted"
+    },
+    {
+      "pair": "bidi|val",
+      "count": 1278,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "blipFill|rotWithShape",
+      "count": 22,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "blip|cstate",
+      "count": 451,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "blip|embed",
+      "count": 1827,
+      "bucket": "consulted"
+    },
+    {
+      "pair": "bodyPr|anchor",
+      "count": 500,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "bodyPr|anchorCtr",
+      "count": 330,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "bodyPr|bIns",
+      "count": 330,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "bodyPr|compatLnSpc",
+      "count": 293,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "bodyPr|forceAA",
+      "count": 71,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "bodyPr|fromWordArt",
+      "count": 71,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "bodyPr|horzOverflow",
+      "count": 27,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "bodyPr|lIns",
+      "count": 330,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "bodyPr|numCol",
+      "count": 301,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "bodyPr|rIns",
+      "count": 330,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "bodyPr|rot",
+      "count": 100,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "bodyPr|rtlCol",
+      "count": 343,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "bodyPr|spcCol",
+      "count": 79,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "bodyPr|spcFirstLastPara",
+      "count": 79,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "bodyPr|tIns",
+      "count": 330,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "bodyPr|upright",
+      "count": 147,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "bodyPr|vert",
+      "count": 331,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "bodyPr|vertOverflow",
+      "count": 27,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "bodyPr|wrap",
+      "count": 444,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "bookmarkEnd|id",
+      "count": 3254,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "bookmarkStart|id",
+      "count": 3254,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "bookmarkStart|name",
+      "count": 3254,
+      "bucket": "consulted"
+    },
+    {
+      "pair": "bottom|color",
+      "count": 18414,
+      "bucket": "consulted"
+    },
+    {
+      "pair": "bottom|space",
+      "count": 18417,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "bottom|sz",
+      "count": 18418,
+      "bucket": "consulted"
+    },
+    {
+      "pair": "bottom|themeColor",
+      "count": 910,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "bottom|themeShade",
+      "count": 131,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "bottom|themeTint",
+      "count": 67,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "bottom|type",
+      "count": 5019,
+      "bucket": "consulted"
+    },
+    {
+      "pair": "bottom|val",
+      "count": 19298,
+      "bucket": "consulted"
+    },
+    {
+      "pair": "bottom|w",
+      "count": 5019,
+      "bucket": "consulted"
+    },
+    {
+      "pair": "br|type",
+      "count": 255,
+      "bucket": "consulted"
+    },
+    {
+      "pair": "b|val",
+      "count": 2212,
+      "bucket": "consulted"
+    },
+    {
+      "pair": "cNvPr|descr",
+      "count": 647,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "cNvPr|id",
+      "count": 2476,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "cNvPr|name",
+      "count": 2476,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "cNvSpPr|txBox",
+      "count": 147,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "calcOnExit|val",
+      "count": 10,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "caps|val",
+      "count": 1102,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "chExt|cx",
+      "count": 113,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "chExt|cy",
+      "count": 113,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "chOff|x",
+      "count": 113,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "chOff|y",
+      "count": 113,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "cnfStyle|evenHBand",
+      "count": 40,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "cnfStyle|evenVBand",
+      "count": 40,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "cnfStyle|firstColumn",
+      "count": 40,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "cnfStyle|firstRow",
+      "count": 40,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "cnfStyle|firstRowFirstColumn",
+      "count": 40,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "cnfStyle|firstRowLastColumn",
+      "count": 40,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "cnfStyle|lastColumn",
+      "count": 40,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "cnfStyle|lastRow",
+      "count": 40,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "cnfStyle|lastRowFirstColumn",
+      "count": 40,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "cnfStyle|lastRowLastColumn",
+      "count": 40,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "cnfStyle|oddHBand",
+      "count": 40,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "cnfStyle|oddVBand",
+      "count": 40,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "cnfStyle|val",
+      "count": 40,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "cntxtalts|val",
+      "count": 1,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "color|themeColor",
+      "count": 9168,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "color|themeShade",
+      "count": 299,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "color|themeTint",
+      "count": 318,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "color|val",
+      "count": 40932,
+      "bucket": "consulted"
+    },
+    {
+      "pair": "cols|equalWidth",
+      "count": 12,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "cols|num",
+      "count": 174,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "cols|space",
+      "count": 487,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "col|space",
+      "count": 8,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "col|w",
+      "count": 19,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "commentEx|done",
+      "count": 5,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "commentEx|paraId",
+      "count": 7,
+      "bucket": "noise"
+    },
+    {
+      "pair": "commentRangeEnd|id",
+      "count": 17,
+      "bucket": "consulted"
+    },
+    {
+      "pair": "commentRangeStart|id",
+      "count": 17,
+      "bucket": "consulted"
+    },
+    {
+      "pair": "commentReference|id",
+      "count": 18,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "commentsEx|Ignorable",
+      "count": 3,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "comments|Ignorable",
+      "count": 2,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "comment|author",
+      "count": 18,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "comment|date",
+      "count": 18,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "comment|id",
+      "count": 18,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "comment|initials",
+      "count": 15,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "creationId|id",
+      "count": 5,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "cxnSpLocks|noChangeShapeType",
+      "count": 8,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "cxn|ang",
+      "count": 6382,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "default|val",
+      "count": 9,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "docGrid|charSpace",
+      "count": 156,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "docGrid|linePitch",
+      "count": 358,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "docGrid|type",
+      "count": 267,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "docPartGallery|val",
+      "count": 10,
+      "bucket": "consulted"
+    },
+    {
+      "pair": "docPr|descr",
+      "count": 688,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "docPr|id",
+      "count": 2085,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "docPr|name",
+      "count": 2085,
+      "bucket": "consulted"
+    },
+    {
+      "pair": "document|Ignorable",
+      "count": 208,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "dstrike|val",
+      "count": 89,
+      "bucket": "consulted"
+    },
+    {
+      "pair": "effectExtent|b",
+      "count": 2085,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "effectExtent|l",
+      "count": 2085,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "effectExtent|r",
+      "count": 2085,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "effectExtent|t",
+      "count": 2085,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "effectRef|idx",
+      "count": 348,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "emboss|val",
+      "count": 3,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "em|val",
+      "count": 5,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "endChr|val",
+      "count": 1,
+      "bucket": "consulted"
+    },
+    {
+      "pair": "endnotes|Ignorable",
+      "count": 74,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "endnote|id",
+      "count": 274,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "endnote|type",
+      "count": 274,
+      "bucket": "consulted"
+    },
+    {
+      "pair": "entryMacro|val",
+      "count": 4,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "extent|cx",
+      "count": 2085,
+      "bucket": "consulted"
+    },
+    {
+      "pair": "extent|cy",
+      "count": 2085,
+      "bucket": "consulted"
+    },
+    {
+      "pair": "ext|cx",
+      "count": 2781,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "ext|cy",
+      "count": 2781,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "ext|uri",
+      "count": 422,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "fillRect|b",
+      "count": 10,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "fillRect|t",
+      "count": 10,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "fillRef|idx",
+      "count": 348,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "fillToRect|b",
+      "count": 4,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "fillToRect|l",
+      "count": 4,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "fillToRect|r",
+      "count": 4,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "fillToRect|t",
+      "count": 4,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "fill|color2",
+      "count": 31,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "fill|colors",
+      "count": 10,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "fill|ext",
+      "count": 5,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "fill|focus",
+      "count": 4,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "fill|focusposition",
+      "count": 4,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "fill|focussize",
+      "count": 1012,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "fill|id",
+      "count": 12,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "fill|on",
+      "count": 1004,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "fill|opacity",
+      "count": 84,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "fill|opacity2",
+      "count": 4,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "fill|recolor",
+      "count": 12,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "fill|rotate",
+      "count": 22,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "fill|title",
+      "count": 12,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "fill|type",
+      "count": 27,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "fldChar|fldCharType",
+      "count": 4205,
+      "bucket": "consulted"
+    },
+    {
+      "pair": "fldChar|fldLock",
+      "count": 9,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "fldSimple|instr",
+      "count": 117,
+      "bucket": "consulted"
+    },
+    {
+      "pair": "fontRef|idx",
+      "count": 348,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "footerReference|id",
+      "count": 190,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "footerReference|type",
+      "count": 190,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "footnotes|Ignorable",
+      "count": 74,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "footnote|id",
+      "count": 274,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "footnote|type",
+      "count": 274,
+      "bucket": "consulted"
+    },
+    {
+      "pair": "formProt|val",
+      "count": 3,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "framePr|anchorLock",
+      "count": 46,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "framePr|h",
+      "count": 37,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "framePr|hAnchor",
+      "count": 81,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "framePr|hRule",
+      "count": 50,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "framePr|hSpace",
+      "count": 56,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "framePr|vAnchor",
+      "count": 63,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "framePr|vSpace",
+      "count": 44,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "framePr|w",
+      "count": 52,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "framePr|wrap",
+      "count": 129,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "framePr|x",
+      "count": 48,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "framePr|xAlign",
+      "count": 17,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "framePr|y",
+      "count": 70,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "framePr|yAlign",
+      "count": 20,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "f|eqn",
+      "count": 139,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "gd|fmla",
+      "count": 13121,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "gd|name",
+      "count": 13121,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "glow|rad",
+      "count": 17,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "gradFill|flip",
+      "count": 4,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "gradFill|rotWithShape",
+      "count": 10,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "graphicData|uri",
+      "count": 2085,
+      "bucket": "consulted"
+    },
+    {
+      "pair": "graphicFrameLocks|noChangeAspect",
+      "count": 1759,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "gridAfter|val",
+      "count": 5,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "gridCol|w",
+      "count": 6146,
+      "bucket": "consulted"
+    },
+    {
+      "pair": "gridSpan|val",
+      "count": 4827,
+      "bucket": "consulted"
+    },
+    {
+      "pair": "group|anchorId",
+      "count": 6,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "group|coordorigin",
+      "count": 178,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "group|coordsize",
+      "count": 242,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "group|editas",
+      "count": 50,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "group|gfxdata",
+      "count": 163,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "group|id",
+      "count": 242,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "group|spid",
+      "count": 165,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "group|spt",
+      "count": 158,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "group|style",
+      "count": 242,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "gs|pos",
+      "count": 35,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "headEnd|len",
+      "count": 98,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "headEnd|type",
+      "count": 98,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "headEnd|w",
+      "count": 98,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "headerReference|id",
+      "count": 195,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "headerReference|type",
+      "count": 195,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "hiddenLine|w",
+      "count": 7,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "highlight|val",
+      "count": 40699,
+      "bucket": "consulted"
+    },
+    {
+      "pair": "hueOff|val",
+      "count": 60,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "hyperlink|anchor",
+      "count": 309,
+      "bucket": "consulted"
+    },
+    {
+      "pair": "hyperlink|history",
+      "count": 335,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "hyperlink|id",
+      "count": 26,
+      "bucket": "consulted"
+    },
+    {
+      "pair": "hyperlink|tgtFrame",
+      "count": 3,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "hyperlink|tooltip",
+      "count": 2,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "h|position",
+      "count": 3,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "h|xrange",
+      "count": 3,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "h|yrange",
+      "count": 3,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "iCs|val",
+      "count": 1260,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "id|val",
+      "count": 14,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "ilvl|val",
+      "count": 3963,
+      "bucket": "consulted"
+    },
+    {
+      "pair": "imagedata|cropbottom",
+      "count": 2,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "imagedata|cropleft",
+      "count": 2,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "imagedata|cropright",
+      "count": 2,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "imagedata|croptop",
+      "count": 2,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "imagedata|id",
+      "count": 201,
+      "bucket": "consulted"
+    },
+    {
+      "pair": "imagedata|title",
+      "count": 1097,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "imprint|val",
+      "count": 3,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "ind|firstLine",
+      "count": 21030,
+      "bucket": "consulted"
+    },
+    {
+      "pair": "ind|firstLineChars",
+      "count": 19143,
+      "bucket": "consulted"
+    },
+    {
+      "pair": "ind|hanging",
+      "count": 7145,
+      "bucket": "consulted"
+    },
+    {
+      "pair": "ind|hangingChars",
+      "count": 467,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "ind|left",
+      "count": 18921,
+      "bucket": "consulted"
+    },
+    {
+      "pair": "ind|leftChars",
+      "count": 6917,
+      "bucket": "consulted"
+    },
+    {
+      "pair": "ind|right",
+      "count": 6408,
+      "bucket": "consulted"
+    },
+    {
+      "pair": "ind|rightChars",
+      "count": 3413,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "inline|anchorId",
+      "count": 323,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "inline|distB",
+      "count": 1496,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "inline|distL",
+      "count": 1496,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "inline|distR",
+      "count": 1496,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "inline|distT",
+      "count": 1496,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "inline|editId",
+      "count": 323,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "insideH|color",
+      "count": 3757,
+      "bucket": "consulted"
+    },
+    {
+      "pair": "insideH|space",
+      "count": 3801,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "insideH|sz",
+      "count": 3802,
+      "bucket": "consulted"
+    },
+    {
+      "pair": "insideH|themeColor",
+      "count": 354,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "insideH|themeShade",
+      "count": 100,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "insideH|themeTint",
+      "count": 32,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "insideH|val",
+      "count": 4382,
+      "bucket": "consulted"
+    },
+    {
+      "pair": "insideV|color",
+      "count": 3801,
+      "bucket": "consulted"
+    },
+    {
+      "pair": "insideV|space",
+      "count": 3845,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "insideV|sz",
+      "count": 3846,
+      "bucket": "consulted"
+    },
+    {
+      "pair": "insideV|themeColor",
+      "count": 396,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "insideV|themeShade",
+      "count": 86,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "insideV|themeTint",
+      "count": 18,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "insideV|val",
+      "count": 4382,
+      "bucket": "consulted"
+    },
+    {
+      "pair": "instrText|space",
+      "count": 1524,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "ins|author",
+      "count": 1,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "ins|date",
+      "count": 1,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "ins|id",
+      "count": 1,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "i|val",
+      "count": 2079,
+      "bucket": "consulted"
+    },
+    {
+      "pair": "jc|val",
+      "count": 34567,
+      "bucket": "consulted"
+    },
+    {
+      "pair": "keepLines|val",
+      "count": 1049,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "keepNext|val",
+      "count": 1050,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "kern|val",
+      "count": 17310,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "kinsoku|val",
+      "count": 9,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "lang|bidi",
+      "count": 6710,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "lang|eastAsia",
+      "count": 29334,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "lang|val",
+      "count": 41620,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "latentStyles|count",
+      "count": 276,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "latentStyles|defLockedState",
+      "count": 276,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "latentStyles|defQFormat",
+      "count": 276,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "latentStyles|defSemiHidden",
+      "count": 276,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "latentStyles|defUIPriority",
+      "count": 276,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "latentStyles|defUnhideWhenUsed",
+      "count": 276,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "left|color",
+      "count": 16374,
+      "bucket": "consulted"
+    },
+    {
+      "pair": "left|space",
+      "count": 16377,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "left|sz",
+      "count": 16378,
+      "bucket": "consulted"
+    },
+    {
+      "pair": "left|themeColor",
+      "count": 610,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "left|themeShade",
+      "count": 104,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "left|themeTint",
+      "count": 60,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "left|type",
+      "count": 5773,
+      "bucket": "consulted"
+    },
+    {
+      "pair": "left|val",
+      "count": 19536,
+      "bucket": "consulted"
+    },
+    {
+      "pair": "left|w",
+      "count": 5773,
+      "bucket": "consulted"
+    },
+    {
+      "pair": "legacy|legacy",
+      "count": 21,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "legacy|legacyIndent",
+      "count": 21,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "legacy|legacySpace",
+      "count": 21,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "ligatures|val",
+      "count": 3,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "lightRig|dir",
+      "count": 1,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "lightRig|rig",
+      "count": 1,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "line|allowincell",
+      "count": 1,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "line|anchorId",
+      "count": 7,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "line|coordsize",
+      "count": 86,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "line|fillcolor",
+      "count": 1,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "line|filled",
+      "count": 80,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "line|from",
+      "count": 10,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "line|gfxdata",
+      "count": 96,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "line|id",
+      "count": 96,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "line|spid",
+      "count": 93,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "line|spt",
+      "count": 86,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "line|strokecolor",
+      "count": 4,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "line|stroked",
+      "count": 80,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "line|strokeweight",
+      "count": 4,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "line|style",
+      "count": 96,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "line|to",
+      "count": 10,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "link|val",
+      "count": 2056,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "lin|ang",
+      "count": 6,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "lin|scaled",
+      "count": 5,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "lnRef|idx",
+      "count": 348,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "ln|cap",
+      "count": 131,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "ln|cmpd",
+      "count": 99,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "ln|w",
+      "count": 733,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "lock|aspectratio",
+      "count": 1172,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "lock|ext",
+      "count": 1198,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "lock|shapetype",
+      "count": 18,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "lsdException|locked",
+      "count": 362,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "lsdException|name",
+      "count": 66628,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "lsdException|qFormat",
+      "count": 6315,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "lsdException|semiHidden",
+      "count": 41087,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "lsdException|uiPriority",
+      "count": 57304,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "lsdException|unhideWhenUsed",
+      "count": 41024,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "lumMod|val",
+      "count": 279,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "lumOff|val",
+      "count": 339,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "lum|bright",
+      "count": 1,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "lum|contrast",
+      "count": 3,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "lvlJc|val",
+      "count": 6879,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "lvlOverride|ilvl",
+      "count": 92,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "lvlPicBulletId|val",
+      "count": 7,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "lvlRestart|val",
+      "count": 5,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "lvlText|val",
+      "count": 6894,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "lvl|ilvl",
+      "count": 6894,
+      "bucket": "consulted"
+    },
+    {
+      "pair": "lvl|tentative",
+      "count": 3653,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "lvl|tplc",
+      "count": 2871,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "maxLength|val",
+      "count": 7,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "miter|lim",
+      "count": 304,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "multiLevelType|val",
+      "count": 916,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "name|val",
+      "count": 5058,
+      "bucket": "consulted"
+    },
+    {
+      "pair": "next|val",
+      "count": 947,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "noWrap|val",
+      "count": 1323,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "nsid|val",
+      "count": 911,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "numFmt|val",
+      "count": 6894,
+      "bucket": "consulted"
+    },
+    {
+      "pair": "numForm|val",
+      "count": 3,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "numIdMacAtCleanup|val",
+      "count": 6,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "numId|val",
+      "count": 4187,
+      "bucket": "consulted"
+    },
+    {
+      "pair": "numPicBullet|numPicBulletId",
+      "count": 7,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "numSpacing|val",
+      "count": 1,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "numbering|Ignorable",
+      "count": 132,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "num|durableId",
+      "count": 107,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "num|numId",
+      "count": 932,
+      "bucket": "consulted"
+    },
+    {
+      "pair": "object|dxaOrig",
+      "count": 1,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "object|dyaOrig",
+      "count": 1,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "off|x",
+      "count": 2781,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "off|y",
+      "count": 2781,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "outerShdw|algn",
+      "count": 17,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "outerShdw|blurRad",
+      "count": 26,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "outerShdw|dir",
+      "count": 26,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "outerShdw|dist",
+      "count": 26,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "outerShdw|rotWithShape",
+      "count": 26,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "outlineLvl|val",
+      "count": 1013,
+      "bucket": "consulted"
+    },
+    {
+      "pair": "outline|val",
+      "count": 3,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "overflowPunct|val",
+      "count": 16,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "pStyle|val",
+      "count": 22621,
+      "bucket": "consulted"
+    },
+    {
+      "pair": "pageBreakBefore|val",
+      "count": 1346,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "path|arrowok",
+      "count": 138,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "path|connectangles",
+      "count": 347,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "path|connectlocs",
+      "count": 347,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "path|connecttype",
+      "count": 116,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "path|extrusionok",
+      "count": 10,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "path|fillok",
+      "count": 9,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "path|gradientshapeok",
+      "count": 18,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "path|h",
+      "count": 284,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "path|path",
+      "count": 4,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "path|textboxrect",
+      "count": 5,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "path|w",
+      "count": 284,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "pgMar|bottom",
+      "count": 495,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "pgMar|footer",
+      "count": 494,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "pgMar|gutter",
+      "count": 495,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "pgMar|header",
+      "count": 494,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "pgMar|left",
+      "count": 495,
+      "bucket": "consulted"
+    },
+    {
+      "pair": "pgMar|right",
+      "count": 495,
+      "bucket": "consulted"
+    },
+    {
+      "pair": "pgMar|top",
+      "count": 495,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "pgNumType|fmt",
+      "count": 16,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "pgNumType|start",
+      "count": 29,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "pgSz|code",
+      "count": 4,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "pgSz|h",
+      "count": 497,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "pgSz|orient",
+      "count": 15,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "pgSz|w",
+      "count": 497,
+      "bucket": "consulted"
+    },
+    {
+      "pair": "picLocks|noChangeArrowheads",
+      "count": 605,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "picLocks|noChangeAspect",
+      "count": 1381,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "positionH|relativeFrom",
+      "count": 589,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "positionV|relativeFrom",
+      "count": 587,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "position|val",
+      "count": 338,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "pos|x",
+      "count": 6382,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "pos|y",
+      "count": 6382,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "proofErr|type",
+      "count": 6414,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "props3d|contourW",
+      "count": 17,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "props3d|extrusionH",
+      "count": 17,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "props3d|prstMaterial",
+      "count": 17,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "prstClr|val",
+      "count": 57,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "prstDash|val",
+      "count": 113,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "prstGeom|prst",
+      "count": 2384,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "prstTxWarp|prst",
+      "count": 2,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "pt|x",
+      "count": 28954,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "pt|y",
+      "count": 28954,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "p|paraId",
+      "count": 48992,
+      "bucket": "noise"
+    },
+    {
+      "pair": "p|rsidDel",
+      "count": 27,
+      "bucket": "noise"
+    },
+    {
+      "pair": "p|rsidP",
+      "count": 133741,
+      "bucket": "noise"
+    },
+    {
+      "pair": "p|rsidR",
+      "count": 145930,
+      "bucket": "noise"
+    },
+    {
+      "pair": "p|rsidRDefault",
+      "count": 145930,
+      "bucket": "noise"
+    },
+    {
+      "pair": "p|rsidRPr",
+      "count": 59451,
+      "bucket": "noise"
+    },
+    {
+      "pair": "p|textId",
+      "count": 44740,
+      "bucket": "noise"
+    },
+    {
+      "pair": "rFonts|ascii",
+      "count": 100937,
+      "bucket": "consulted"
+    },
+    {
+      "pair": "rFonts|asciiTheme",
+      "count": 33198,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "rFonts|cs",
+      "count": 60132,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "rFonts|cstheme",
+      "count": 5480,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "rFonts|eastAsia",
+      "count": 57261,
+      "bucket": "consulted"
+    },
+    {
+      "pair": "rFonts|eastAsiaTheme",
+      "count": 15650,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "rFonts|hAnsi",
+      "count": 92695,
+      "bucket": "consulted"
+    },
+    {
+      "pair": "rFonts|hAnsiTheme",
+      "count": 33130,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "rFonts|hint",
+      "count": 136408,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "rStyle|val",
+      "count": 2126,
+      "bucket": "consulted"
+    },
+    {
+      "pair": "rect|allowincell",
+      "count": 3,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "rect|b",
+      "count": 284,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "rect|coordsize",
+      "count": 74,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "rect|fillcolor",
+      "count": 37,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "rect|filled",
+      "count": 74,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "rect|gfxdata",
+      "count": 75,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "rect|id",
+      "count": 92,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "rect|l",
+      "count": 284,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "rect|r",
+      "count": 284,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "rect|spid",
+      "count": 85,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "rect|spt",
+      "count": 74,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "rect|strokecolor",
+      "count": 4,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "rect|stroked",
+      "count": 81,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "rect|strokeweight",
+      "count": 4,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "rect|style",
+      "count": 92,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "rect|t",
+      "count": 284,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "reflection|algn",
+      "count": 17,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "reflection|blurRad",
+      "count": 17,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "reflection|dir",
+      "count": 17,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "reflection|dist",
+      "count": 17,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "reflection|endA",
+      "count": 17,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "reflection|endPos",
+      "count": 17,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "reflection|fadeDir",
+      "count": 17,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "reflection|kx",
+      "count": 17,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "reflection|ky",
+      "count": 17,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "reflection|stA",
+      "count": 17,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "reflection|stPos",
+      "count": 17,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "reflection|sx",
+      "count": 17,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "reflection|sy",
+      "count": 17,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "right|color",
+      "count": 17876,
+      "bucket": "consulted"
+    },
+    {
+      "pair": "right|space",
+      "count": 17879,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "right|sz",
+      "count": 17880,
+      "bucket": "consulted"
+    },
+    {
+      "pair": "right|themeColor",
+      "count": 623,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "right|themeShade",
+      "count": 131,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "right|themeTint",
+      "count": 60,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "right|type",
+      "count": 5773,
+      "bucket": "consulted"
+    },
+    {
+      "pair": "right|val",
+      "count": 19031,
+      "bucket": "consulted"
+    },
+    {
+      "pair": "right|w",
+      "count": 5773,
+      "bucket": "consulted"
+    },
+    {
+      "pair": "rot|lat",
+      "count": 1,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "rot|lon",
+      "count": 1,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "rot|rev",
+      "count": 1,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "roundrect|anchorId",
+      "count": 9,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "roundrect|arcsize",
+      "count": 135,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "roundrect|coordsize",
+      "count": 114,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "roundrect|fillcolor",
+      "count": 28,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "roundrect|filled",
+      "count": 114,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "roundrect|gfxdata",
+      "count": 135,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "roundrect|id",
+      "count": 135,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "roundrect|spid",
+      "count": 135,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "roundrect|spt",
+      "count": 114,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "roundrect|strokecolor",
+      "count": 18,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "roundrect|stroked",
+      "count": 114,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "roundrect|strokeweight",
+      "count": 12,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "roundrect|style",
+      "count": 135,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "rsid|val",
+      "count": 2681,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "rtlGutter|val",
+      "count": 4,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "r|rsidDel",
+      "count": 1,
+      "bucket": "noise"
+    },
+    {
+      "pair": "r|rsidR",
+      "count": 20013,
+      "bucket": "noise"
+    },
+    {
+      "pair": "r|rsidRPr",
+      "count": 149188,
+      "bucket": "noise"
+    },
+    {
+      "pair": "satOff|val",
+      "count": 60,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "schemeClr|val",
+      "count": 7668,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "scrgbClr|b",
+      "count": 12,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "scrgbClr|g",
+      "count": 12,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "scrgbClr|r",
+      "count": 12,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "sectPr|rsidR",
+      "count": 325,
+      "bucket": "noise"
+    },
+    {
+      "pair": "sectPr|rsidRPr",
+      "count": 207,
+      "bucket": "noise"
+    },
+    {
+      "pair": "sectPr|rsidSect",
+      "count": 144,
+      "bucket": "noise"
+    },
+    {
+      "pair": "shade|val",
+      "count": 217,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "shadow|algn",
+      "count": 28,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "shadow|blurRad",
+      "count": 28,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "shadow|dir",
+      "count": 28,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "shadow|dist",
+      "count": 28,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "shadow|kx",
+      "count": 28,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "shadow|ky",
+      "count": 28,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "shadow|offset",
+      "count": 9,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "shadow|on",
+      "count": 9,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "shadow|opacity",
+      "count": 9,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "shadow|origin",
+      "count": 9,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "shadow|sx",
+      "count": 28,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "shadow|sy",
+      "count": 28,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "shadow|val",
+      "count": 3,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "shapetype|adj",
+      "count": 3,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "shapetype|anchorId",
+      "count": 3,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "shapetype|coordsize",
+      "count": 30,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "shapetype|filled",
+      "count": 19,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "shapetype|id",
+      "count": 30,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "shapetype|oned",
+      "count": 9,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "shapetype|path",
+      "count": 30,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "shapetype|preferrelative",
+      "count": 10,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "shapetype|spt",
+      "count": 30,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "shapetype|stroked",
+      "count": 10,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "shape|adj",
+      "count": 99,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "shape|alt",
+      "count": 63,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "shape|anchorId",
+      "count": 8,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "shape|bullet",
+      "count": 7,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "shape|connectortype",
+      "count": 15,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "shape|coordorigin",
+      "count": 104,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "shape|coordsize",
+      "count": 824,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "shape|fillcolor",
+      "count": 313,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "shape|filled",
+      "count": 742,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "shape|gfxdata",
+      "count": 696,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "shape|id",
+      "count": 995,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "shape|ole",
+      "count": 3,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "shape|path",
+      "count": 450,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "shape|preferrelative",
+      "count": 116,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "shape|spid",
+      "count": 768,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "shape|spt",
+      "count": 679,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "shape|strokecolor",
+      "count": 16,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "shape|stroked",
+      "count": 832,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "shape|strokeweight",
+      "count": 13,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "shape|style",
+      "count": 995,
+      "bucket": "consulted"
+    },
+    {
+      "pair": "shape|type",
+      "count": 496,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "shd|color",
+      "count": 16911,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "shd|fill",
+      "count": 17937,
+      "bucket": "consulted"
+    },
+    {
+      "pair": "shd|themeFill",
+      "count": 1636,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "shd|themeFillShade",
+      "count": 254,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "shd|themeFillTint",
+      "count": 953,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "shd|val",
+      "count": 17968,
+      "bucket": "consulted"
+    },
+    {
+      "pair": "simplePos|x",
+      "count": 587,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "simplePos|y",
+      "count": 587,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "sizeRelH|relativeFrom",
+      "count": 54,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "sizeRelV|relativeFrom",
+      "count": 54,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "smallCaps|val",
+      "count": 54,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "smartTag|element",
+      "count": 80,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "smartTag|uri",
+      "count": 80,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "snapToGrid|val",
+      "count": 3613,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "spLocks|noChangeArrowheads",
+      "count": 20,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "spLocks|noEditPoints",
+      "count": 72,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "spPr|bwMode",
+      "count": 573,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "spacing|after",
+      "count": 6820,
+      "bucket": "consulted"
+    },
+    {
+      "pair": "spacing|afterAutospacing",
+      "count": 1380,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "spacing|afterLines",
+      "count": 1049,
+      "bucket": "consulted"
+    },
+    {
+      "pair": "spacing|before",
+      "count": 8138,
+      "bucket": "consulted"
+    },
+    {
+      "pair": "spacing|beforeAutospacing",
+      "count": 1390,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "spacing|beforeLines",
+      "count": 1255,
+      "bucket": "consulted"
+    },
+    {
+      "pair": "spacing|line",
+      "count": 22836,
+      "bucket": "consulted"
+    },
+    {
+      "pair": "spacing|lineRule",
+      "count": 22836,
+      "bucket": "consulted"
+    },
+    {
+      "pair": "spacing|val",
+      "count": 25271,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "srcRect|b",
+      "count": 98,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "srcRect|l",
+      "count": 50,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "srcRect|r",
+      "count": 66,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "srcRect|t",
+      "count": 78,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "srgbClr|val",
+      "count": 563,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "startOverride|val",
+      "count": 86,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "start|val",
+      "count": 6037,
+      "bucket": "consulted"
+    },
+    {
+      "pair": "strike|val",
+      "count": 682,
+      "bucket": "consulted"
+    },
+    {
+      "pair": "stroke|color",
+      "count": 344,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "stroke|dashstyle",
+      "count": 17,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "stroke|endarrow",
+      "count": 16,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "stroke|endcap",
+      "count": 24,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "stroke|joinstyle",
+      "count": 556,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "stroke|miterlimit",
+      "count": 315,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "stroke|on",
+      "count": 662,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "stroke|startarrow",
+      "count": 3,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "stroke|weight",
+      "count": 463,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "styleLink|val",
+      "count": 1,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "styles|Ignorable",
+      "count": 208,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "style|customStyle",
+      "count": 2106,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "style|default",
+      "count": 994,
+      "bucket": "consulted"
+    },
+    {
+      "pair": "style|styleId",
+      "count": 5113,
+      "bucket": "consulted"
+    },
+    {
+      "pair": "style|type",
+      "count": 5113,
+      "bucket": "consulted"
+    },
+    {
+      "pair": "suff|val",
+      "count": 350,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "suppressAutoHyphens|val",
+      "count": 14,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "suppressLineNumbers|val",
+      "count": 738,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "sym|char",
+      "count": 27,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "sym|font",
+      "count": 27,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "szCs|val",
+      "count": 96610,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "sz|val",
+      "count": 99708,
+      "bucket": "consulted"
+    },
+    {
+      "pair": "tab|leader",
+      "count": 401,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "tab|pos",
+      "count": 4191,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "tab|val",
+      "count": 4191,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "tailEnd|len",
+      "count": 100,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "tailEnd|type",
+      "count": 111,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "tailEnd|w",
+      "count": 100,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "tblCellSpacing|type",
+      "count": 71,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "tblCellSpacing|w",
+      "count": 71,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "tblInd|type",
+      "count": 943,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "tblInd|w",
+      "count": 943,
+      "bucket": "consulted"
+    },
+    {
+      "pair": "tblLayout|type",
+      "count": 2554,
+      "bucket": "consulted"
+    },
+    {
+      "pair": "tblLook|firstColumn",
+      "count": 608,
+      "bucket": "consulted"
+    },
+    {
+      "pair": "tblLook|firstRow",
+      "count": 608,
+      "bucket": "consulted"
+    },
+    {
+      "pair": "tblLook|lastColumn",
+      "count": 608,
+      "bucket": "consulted"
+    },
+    {
+      "pair": "tblLook|lastRow",
+      "count": 608,
+      "bucket": "consulted"
+    },
+    {
+      "pair": "tblLook|noHBand",
+      "count": 608,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "tblLook|noVBand",
+      "count": 608,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "tblLook|val",
+      "count": 943,
+      "bucket": "consulted"
+    },
+    {
+      "pair": "tblOverlap|val",
+      "count": 73,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "tblStyleColBandSize|val",
+      "count": 205,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "tblStylePr|type",
+      "count": 1373,
+      "bucket": "consulted"
+    },
+    {
+      "pair": "tblStyleRowBandSize|val",
+      "count": 205,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "tblStyle|val",
+      "count": 663,
+      "bucket": "consulted"
+    },
+    {
+      "pair": "tblW|type",
+      "count": 1383,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "tblW|w",
+      "count": 1383,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "tblpPr|bottomFromText",
+      "count": 1,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "tblpPr|horzAnchor",
+      "count": 24,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "tblpPr|leftFromText",
+      "count": 41,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "tblpPr|rightFromText",
+      "count": 41,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "tblpPr|tblpX",
+      "count": 17,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "tblpPr|tblpXSpec",
+      "count": 10,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "tblpPr|tblpY",
+      "count": 40,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "tblpPr|topFromText",
+      "count": 1,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "tblpPr|vertAnchor",
+      "count": 41,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "tcW|type",
+      "count": 41582,
+      "bucket": "consulted"
+    },
+    {
+      "pair": "tcW|w",
+      "count": 41582,
+      "bucket": "consulted"
+    },
+    {
+      "pair": "textAlignment|val",
+      "count": 2093,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "textDirection|val",
+      "count": 1,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "textOutline|algn",
+      "count": 1,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "textOutline|cap",
+      "count": 1,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "textOutline|cmpd",
+      "count": 1,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "textOutline|w",
+      "count": 1,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "textbox|inset",
+      "count": 32,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "textbox|style",
+      "count": 134,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "tint|val",
+      "count": 36,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "tl2br|val",
+      "count": 97,
+      "bucket": "consulted"
+    },
+    {
+      "pair": "tmpl|val",
+      "count": 912,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "topLinePunct|val",
+      "count": 1353,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "top|color",
+      "count": 17669,
+      "bucket": "consulted"
+    },
+    {
+      "pair": "top|space",
+      "count": 17672,
+      "bucket": "consulted"
+    },
+    {
+      "pair": "top|sz",
+      "count": 17673,
+      "bucket": "consulted"
+    },
+    {
+      "pair": "top|themeColor",
+      "count": 897,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "top|themeShade",
+      "count": 132,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "top|themeTint",
+      "count": 81,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "top|type",
+      "count": 5019,
+      "bucket": "consulted"
+    },
+    {
+      "pair": "top|val",
+      "count": 18580,
+      "bucket": "consulted"
+    },
+    {
+      "pair": "top|w",
+      "count": 5019,
+      "bucket": "consulted"
+    },
+    {
+      "pair": "tr2bl|val",
+      "count": 97,
+      "bucket": "consulted"
+    },
+    {
+      "pair": "trHeight|hRule",
+      "count": 1776,
+      "bucket": "consulted"
+    },
+    {
+      "pair": "trHeight|val",
+      "count": 4821,
+      "bucket": "consulted"
+    },
+    {
+      "pair": "tr|paraId",
+      "count": 3779,
+      "bucket": "noise"
+    },
+    {
+      "pair": "tr|rsidR",
+      "count": 7549,
+      "bucket": "noise"
+    },
+    {
+      "pair": "tr|rsidRPr",
+      "count": 1576,
+      "bucket": "noise"
+    },
+    {
+      "pair": "tr|rsidTr",
+      "count": 5450,
+      "bucket": "noise"
+    },
+    {
+      "pair": "tr|textId",
+      "count": 3584,
+      "bucket": "noise"
+    },
+    {
+      "pair": "type|val",
+      "count": 61,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "t|space",
+      "count": 34771,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "uiPriority|val",
+      "count": 3952,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "useLocalDpi|val",
+      "count": 378,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "u|color",
+      "count": 5,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "u|themeColor",
+      "count": 1,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "u|themeTint",
+      "count": 1,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "u|val",
+      "count": 1940,
+      "bucket": "consulted"
+    },
+    {
+      "pair": "vAlign|val",
+      "count": 20872,
+      "bucket": "consulted"
+    },
+    {
+      "pair": "vMerge|val",
+      "count": 1023,
+      "bucket": "consulted"
+    },
+    {
+      "pair": "vanish|val",
+      "count": 88,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "vertAlign|val",
+      "count": 555,
+      "bucket": "consulted"
+    },
+    {
+      "pair": "wAfter|type",
+      "count": 5,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "wAfter|w",
+      "count": 5,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "widowControl|val",
+      "count": 1701,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "wordWrap|val",
+      "count": 16,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "wrapSquare|wrapText",
+      "count": 3,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "wrap|anchorx",
+      "count": 88,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "wrap|anchory",
+      "count": 15,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "wrap|side",
+      "count": 2,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "wrap|type",
+      "count": 56,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "w|val",
+      "count": 3998,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "xfrm|flipH",
+      "count": 23,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "xfrm|flipV",
+      "count": 12,
+      "bucket": "neverConsulted"
+    },
+    {
+      "pair": "xfrm|rot",
+      "count": 61,
+      "bucket": "neverConsulted"
+    }
+  ]
+}
