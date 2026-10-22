@@ -691,6 +691,10 @@ fn parse_range(s: &str) -> Option<MergeRange> {
 /// `numfmts` 是 styles.xml 顶层的 `<numFmts>`（id≥164 的自定义串）。dxf 的 `<numFmt>` 通常
 /// 把串直接内联在块里（dxf 是差分格式，不共享 numFmts 表），但只给 `numFmtId` 的件也见得到：
 /// 那时先按 id 查自定义表、再查内置表，两处都没有就留空——不猜。
+///
+/// 边框与对齐两族也在这里收（v0.139）：`<border>` 四边与 `<alignment>` 三槽都按单元格侧
+/// 同一套形状搬进 `CellBorder`/ho/vo/wb。它们屏上不活（Univer 的 CF 高亮没有这两族的槽），
+/// 收着只为存盘往返——边框一族写侧写得出去，对齐一族写侧写不出（见 `xlsx_rules.rs` 的账）。
 pub(crate) fn parse_dxfs(xml: &str, numfmts: &HashMap<u32, String>) -> Vec<CondFormatStyle> {
     let mut out = Vec::new();
     let Some(start) = xml.find("<dxfs") else { return out };
@@ -702,6 +706,10 @@ pub(crate) fn parse_dxfs(xml: &str, numfmts: &HashMap<u32, String>) -> Vec<CondF
     let mut cur = CondFormatStyle::default();
     let mut in_font = false;
     let mut in_fill = false;
+    let mut in_border = false;
+    // 边框的一条边：开标签里只有 style，颜色住在子元素 `<color rgb>` 里（与 cellXfs 的
+    // `<borders>` 同形），所以要等边关标签才拼得出完整的一条
+    let mut cur_side: Option<(String, BorderSide)> = None;
     let mut reader = Reader::from_str(body);
     while let Ok(ev) = reader.read_event() {
         match &ev {
@@ -713,6 +721,8 @@ pub(crate) fn parse_dxfs(xml: &str, numfmts: &HashMap<u32, String>) -> Vec<CondF
                 }
                 "font" => in_font = true,
                 "fill" => in_fill = true,
+                // 空 `<border/>` 不开标志：没有 End 事件来关它，开了会漏进下一条 dxf
+                "border" if matches!(ev, Event::Start(_)) => in_border = true,
                 "numFmt" => {
                     let id = attr_str(e, "numFmtId").and_then(|v| v.parse::<u32>().ok());
                     cur.nf = attr_str(e, "formatCode").or_else(|| {
@@ -735,11 +745,67 @@ pub(crate) fn parse_dxfs(xml: &str, numfmts: &HashMap<u32, String>) -> Vec<CondF
                 "fgColor" if in_fill && cur.bg.is_none() => {
                     cur.bg = attr_str(e, "rgb").as_deref().and_then(argb_to_hex)
                 }
+                "left" | "right" | "top" | "bottom" if in_border => {
+                    let side = BorderSide {
+                        s: attr_str(e, "style"),
+                        c: None,
+                    };
+                    let key = e.local_name().as_ref().to_string();
+                    if matches!(ev, Event::Empty(_)) {
+                        // 自闭合边：`<right/>` 这种"没边说辞"不进载荷——rust_xlsxwriter 的
+                        // 亲笔每回都把没配的边写成空标签，收进来只会让四条边全 Some(空)
+                        if !side.is_empty() {
+                            set_dxf_side(cur.bd.get_or_insert_with(CellBorder::default), &key, side);
+                        }
+                    } else {
+                        cur_side = Some((key, side));
+                    }
+                }
+                // 边里的颜色子元素：只认 rgb（theme/indexed 那一族与单元格边框同规，不收）
+                "color" if in_border => {
+                    if let Some((_, side)) = &mut cur_side {
+                        side.c = attr_str(e, "rgb").as_deref().and_then(argb_to_hex);
+                    }
+                }
+                // 对齐三槽：水平/垂直按单元格侧同一张白名单收，换行是三态（见 CondFormatStyle.wb）
+                "alignment" => {
+                    cur.ho = attr_str(e, "horizontal").and_then(|h| match h.as_str() {
+                        "left" | "center" | "right" | "justify" => Some(h),
+                        _ => None,
+                    });
+                    cur.vo = attr_str(e, "vertical").and_then(|v| match v.as_str() {
+                        "top" => Some("top".to_string()),
+                        "center" => Some("middle".to_string()),
+                        "bottom" => Some("bottom".to_string()),
+                        _ => None,
+                    });
+                    cur.wb = match attr_str(e, "wrapText").as_deref() {
+                        Some("1") | Some("true") => Some(true),
+                        Some("0") | Some("false") => Some(false),
+                        _ => None,
+                    };
+                }
                 _ => {}
             },
             Event::End(e) => match e.local_name().as_ref() {
                 "font" => in_font = false,
                 "fill" => in_fill = false,
+                "left" | "right" | "top" | "bottom" if in_border => {
+                    if let Some((key, side)) = cur_side.take() {
+                        if !side.is_empty() {
+                            set_dxf_side(cur.bd.get_or_insert_with(CellBorder::default), &key, side);
+                        }
+                    }
+                }
+                "border" => {
+                    // 关边框时还有没落下的边（缺了 End 的残件）：补一手，别让半条边蒸发
+                    if let Some((key, side)) = cur_side.take() {
+                        if !side.is_empty() {
+                            set_dxf_side(cur.bd.get_or_insert_with(CellBorder::default), &key, side);
+                        }
+                    }
+                    in_border = false;
+                }
                 "dxf" => out.push(std::mem::take(&mut cur)),
                 _ => {}
             },
@@ -748,6 +814,17 @@ pub(crate) fn parse_dxfs(xml: &str, numfmts: &HashMap<u32, String>) -> Vec<CondF
         }
     }
     out
+}
+
+/// dxf 边框的一条边落进 `CellBorder`（与 cellXfs 侧的 `set_border_side` 同形，只是目标是载荷结构）
+fn set_dxf_side(bd: &mut CellBorder, key: &str, side: BorderSide) {
+    match key {
+        "left" => bd.l = Some(side),
+        "right" => bd.r = Some(side),
+        "top" => bd.t = Some(side),
+        "bottom" => bd.b = Some(side),
+        _ => {}
+    }
 }
 
 /// 三类规则的部件在不在文件里。多数表一样都没有，此时不必再跑一遍 XML
@@ -1243,5 +1320,67 @@ mod tests {
         assert!(dxfs[0].nf.is_none(), "两处表都没有 ⇒ 不猜");
         assert!(dxfs[1].nf.is_none(), "没写 numFmt 就没有");
         assert_eq!(dxfs[1].bl, Some(true), "别的字段不受影响");
+    }
+
+    /// dxf 的 `<border>`：四边样式 + 颜色子元素，自闭合的"没边"不占位。
+    /// 形状照 rust_xlsxwriter 的亲笔（探针实录）：`<left style="thin"><color rgb="FF112233"/></left>`
+    /// 与 `<right/>` 混在同一株里
+    #[test]
+    fn dxf_border_reads_sides_and_colors() {
+        let xml = r#"<styleSheet xmlns="x"><dxfs count="2">
+              <dxf><border><left style="thin"><color rgb="FF112233"/></left><right/>
+                <top/><bottom style="dashed"><color rgb="FF00FF00"/></bottom>
+                <vertical/><horizontal/></border></dxf>
+              <dxf><border><left/></border></dxf>
+            </dxfs></styleSheet>"#;
+        let dxfs = parse_dxfs(xml, &HashMap::new());
+        assert_eq!(dxfs.len(), 2);
+        let bd = dxfs[0].bd.as_ref().expect("第一条有边框");
+        let l = bd.l.as_ref().expect("左边");
+        assert_eq!(l.s.as_deref(), Some("thin"));
+        assert_eq!(l.c.as_deref(), Some("#112233"), "rgb 八位去头成 #rrggbb");
+        let b = bd.b.as_ref().expect("下边");
+        assert_eq!(b.s.as_deref(), Some("dashed"));
+        assert_eq!(b.c.as_deref(), Some("#00ff00"));
+        assert!(bd.r.is_none(), "自闭合的没边说辞不进载荷");
+        assert!(bd.t.is_none());
+        // 整株边框只有空边（`<left/>`）：连 bd 都不该有——判空那侧靠它把
+        // "只当判定用"的规则认出来（rust_xlsxwriter 对没配边的 dxf 就写成这样）
+        assert!(dxfs[1].bd.is_none(), "四条边全空 ⇒ 视同没有边框");
+    }
+
+    /// 边框标志不泄漏：空 `<border/>` 没有 End 事件，若开了标志不关会漏进下一条 dxf
+    #[test]
+    fn dxf_border_flag_does_not_leak() {
+        let xml = r#"<styleSheet xmlns="x"><dxfs count="2">
+              <dxf><border/></dxf>
+              <dxf><font><b/></font></dxf>
+            </dxfs></styleSheet>"#;
+        let dxfs = parse_dxfs(xml, &HashMap::new());
+        assert_eq!(dxfs.len(), 2);
+        assert!(dxfs[0].bd.is_none(), "空 border 不开标志也不落边");
+        assert_eq!(dxfs[1].bl, Some(true));
+        assert!(dxfs[1].bd.is_none(), "标志没漏到第二条：第二条的 font 不受边框态污染");
+    }
+
+    /// dxf 的 `<alignment>`：水平/垂直按单元格侧同一张白名单，center→middle；
+    /// 换行三态——"1"/"true" 真、"0"/"false" 假、缺省不说话
+    #[test]
+    fn dxf_alignment_reads_three_states() {
+        let xml = r#"<styleSheet xmlns="x"><dxfs count="3">
+              <dxf><alignment horizontal="center" vertical="center" wrapText="1"/></dxf>
+              <dxf><alignment horizontal="right" wrapText="0"/></dxf>
+              <dxf><alignment horizontal="distributed"/></dxf>
+            </dxfs></styleSheet>"#;
+        let dxfs = parse_dxfs(xml, &HashMap::new());
+        assert_eq!(dxfs.len(), 3);
+        assert_eq!(dxfs[0].ho.as_deref(), Some("center"));
+        assert_eq!(dxfs[0].vo.as_deref(), Some("middle"), "OOXML 的 center 换算成 middle");
+        assert_eq!(dxfs[0].wb, Some(true));
+        assert_eq!(dxfs[1].ho.as_deref(), Some("right"));
+        assert_eq!(dxfs[1].wb, Some(false), "显式 0 是第三态，不是缺省");
+        assert!(dxfs[1].vo.is_none());
+        assert!(dxfs[2].ho.is_none(), "白名单外的水平值不收（与单元格侧同规）");
+        assert!(dxfs[2].wb.is_none(), "没写 wrapText 就是缺省");
     }
 }

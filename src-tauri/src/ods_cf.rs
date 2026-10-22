@@ -134,9 +134,10 @@ fn strip_sheet(s: &str) -> &str {
     s
 }
 
-/// CellStyle → 条件格式用的那枚样式。只搬条件格式这一族认的字段（底色/字色/粗斜下删/
-/// 数字格式）；**边框与对齐在 OOXML 的 dxf 里还有，这一层仍不开口**——开了就得连
-/// xlsx 写侧与 Univer 高亮一起改，而屏上那六枚 set* 里没有它们。先落能落的
+/// CellStyle → 条件格式用的那枚样式。搬条件格式这一族认的字段（底色/字色/粗斜下删/
+/// 数字格式/四边边框/对齐三槽）；**后两族在 OOXML 的 dxf 里有、这一层的屏上仍然不活**
+/// （Univer 高亮没有边框/对齐槽），搬它们只为存盘往返——ODS 读进来转存 xlsx 时，
+/// 边框一族 xlsx 写侧写得出去，对齐一族只能说"没存下"（见 `xlsx_rules.rs` 的账）
 fn cf_style_of(st: &CellStyle) -> Option<CondFormatStyle> {
     let s = CondFormatStyle {
         bg: st.bg.clone(),
@@ -146,12 +147,21 @@ fn cf_style_of(st: &CellStyle) -> Option<CondFormatStyle> {
         ul: None,
         st: None,
         nf: st.nf.clone(),
+        bd: st.bd.clone(),
+        ho: st.ho.clone(),
+        vo: st.vo.clone(),
+        // ODS 的自动样式里换行是有或没有，没有"显式关掉"第三态
+        wb: st.wb.then_some(true),
     };
     let any = s.bg.is_some()
         || s.cl.is_some()
         || s.bl.is_some()
         || s.it.is_some()
-        || s.nf.is_some();
+        || s.nf.is_some()
+        || s.bd.as_ref().is_some_and(|b| !b.is_empty())
+        || s.ho.is_some()
+        || s.vo.is_some()
+        || s.wb.is_some();
     any.then_some(s)
 }
 

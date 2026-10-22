@@ -328,10 +328,12 @@ pub struct DataValidationPayload {
 
 /// 条件格式的突出显示样式（dxf 的可用子集）
 ///
-/// `nf` 是 dxf 的 `<numFmt>`：Excel 给条件格式配数字格式时（比如「大于 0 显示成 0.0%」）
-/// 就写在它身上。**屏上不活**——Univer 的条件格式高亮只有底纹/字色/粗斜下划线删除线六枚
-/// set*，没有数字格式槽（见 `sheet-rules.ts` 的 `buildCf`）。它在载荷里的唯一去处是存盘：
-/// 不读进来，打开再存一次这个串就**永久丢了**（不是显示问题，是数据丢失）。
+/// 六枚 `set*` 槽（底纹/字色/粗斜下划线删除线）Univer 的界面认；`nf`/`bd`/对齐三槽
+/// 屏上都不活——Univer 的条件格式高亮只有那六枚，没有数字格式/边框/对齐槽
+/// （见 `sheet-rules.ts` 的 `buildCf`）。它们在载荷里的唯一去处是存盘：
+/// 不读进来，打开再存一次这些属性就**永久丢了**（不是显示问题，是数据丢失）。
+/// 其中边框一族 xlsx 写侧真写得出去（rust_xlsxwriter 的 dxf 有 `<border>`）；
+/// 对齐一族读侧收着、写侧只能记账——见 `xlsx_rules.rs` 的写侧边界账。
 #[derive(Serialize, Deserialize, Clone, Debug, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct CondFormatStyle {
@@ -350,6 +352,20 @@ pub struct CondFormatStyle {
     /// 数字格式串（dxf 内联的 `formatCode`，或按 id 查出来的内置/自定义串）
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub nf: Option<String>,
+    /// dxf 的 `<border>`：四边样式 + 颜色（形状与单元格边框同款，直接复用 `CellBorder`）
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bd: Option<CellBorder>,
+    /// dxf 的 `<alignment>`：水平对齐 left|center|right|justify
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ho: Option<String>,
+    /// 垂直对齐 top|middle|bottom（OOXML 的 center 换算成 middle，与单元格侧同规）
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub vo: Option<String>,
+    /// 自动换行。**三态**（与 `CellStyle.wb` 的裸 bool 不同）：dxf 是差分格式，
+    /// `wrapText="0"` 是「显式关掉换行」而缺省是「不说话让单元格自己的来」，
+    /// 压成 bool 就把这两种意思混成一种了
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub wb: Option<bool>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, Default)]
@@ -995,7 +1011,7 @@ pub fn read_xlsx_sync(path: String) -> Result<WorkbookPayload, Error> {
     })
 }
 
-fn border_type(s: &str) -> Option<rust_xlsxwriter::FormatBorder> {
+pub(crate) fn border_type(s: &str) -> Option<rust_xlsxwriter::FormatBorder> {
     use rust_xlsxwriter::FormatBorder as B;
     Some(match s {
         "thin" => B::Thin,
@@ -2378,6 +2394,61 @@ mod tests {
         let file = std::fs::File::open(path).expect("打开产物失败");
         let mut zip = zip::ZipArchive::new(file).expect("产物不是 zip");
         crate::xlsx_style::read_entry(&mut zip, name).unwrap_or_else(|| panic!("产物里没有 {name}"))
+    }
+
+    /// 只描边不染色的条件格式：dxf 里只有 `<border>`。rust_xlsxwriter 的 dxf 真写得出去
+    /// （探针实录：`<border><left style="thin"><color rgb="FF…"/></left>…`），所以这一族
+    /// 能整个走回来——与对齐族不同，那个写侧只能记边界账。顺带压一条写侧不误报：
+    /// 规则只带边框时，账里不该出现"对齐未写入"那种张冠李戴
+    #[test]
+    fn cf_border_alone_survives_a_round_trip() {
+        let path = tmp_path("cf-bd");
+        let wb = WorkbookPayload {
+            sheets: vec![SheetPayload {
+                name: "条件格式".into(),
+                cells: vec![cell(0, 0, json!(1)), cell(1, 0, json!(2))],
+                cond_formats: vec![CondFormatPayload {
+                    ranges: vec![rc(0, 0, 1, 0)],
+                    kind: "cell".into(),
+                    sub: Some("number".into()),
+                    op: Some("greaterThan".into()),
+                    v1: Some(json!(0)),
+                    fmt: Some(CondFormatStyle {
+                        bd: Some(CellBorder {
+                            l: Some(BorderSide {
+                                s: Some("thin".into()),
+                                c: Some("#ff0000".into()),
+                            }),
+                            ..Default::default()
+                        }),
+                        ..Default::default()
+                    }),
+                    ..Default::default()
+                }],
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        let notes = write_xlsx_sync(path.clone(), wb).expect("写件");
+        assert!(
+            notes.iter().all(|n| !n.contains("对齐")),
+            "只带边框的规则不该触发对齐那箱账：{notes:?}"
+        );
+        let back = read_xlsx_sync(path.clone()).expect("读回");
+        std::fs::remove_file(&path).ok();
+        let cf = back.sheets[0]
+            .cond_formats
+            .first()
+            .expect("只配边框的规则也得读出来");
+        let bd = cf
+            .fmt
+            .as_ref()
+            .and_then(|f| f.bd.as_ref())
+            .expect("边框走了个来回");
+        let l = bd.l.as_ref().expect("左边");
+        assert_eq!(l.s.as_deref(), Some("thin"));
+        assert_eq!(l.c.as_deref(), Some("#ff0000"));
+        assert!(bd.r.is_none() && bd.t.is_none() && bd.b.is_none(), "没配的边不占位");
     }
 
     /// 三类规则的形状：写侧结构测试与探针共用同一批字节

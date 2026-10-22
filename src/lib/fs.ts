@@ -164,6 +164,20 @@ export interface CondFormatStyle {
    * 它待在载荷里的唯一去处是存盘——不带着，打开再存一次这个串就永久没了。
    */
   nf?: string
+  /**
+   * dxf 的 `<border>`：四边样式 + 颜色（形状与单元格边框同款）。**屏上不活**：
+   * Univer 的 CF 高亮没有边框槽。这一族 xlsx 存盘往返是真的（读得进也写得出）。
+   */
+  bd?: CellBorder
+  /**
+   * dxf 的 `<alignment>` 三槽：水平/垂直/换行。**屏上不活**（无 Univer 槽），
+   * 且 xlsx 写侧写不出（rust_xlsxwriter 的 dxf 不含 alignment）⇒ 读侧收着、
+   * 存盘时以边界账说明"未写入"，不静默丢。wb 三态：`false` = 显式关换行，
+   * 缺省 = 不说话（dxf 是差分格式，压成裸 bool 会混了这两种意思）。
+   */
+  ho?: 'left' | 'center' | 'right' | 'justify'
+  vo?: 'top' | 'middle' | 'bottom'
+  wb?: boolean
 }
 
 /** 色阶的一档：t=min|max|num|percent|percentile|formula|auto */

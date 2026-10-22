@@ -512,8 +512,10 @@ function buildCf(ws: WorksheetLike, rule: CondFormatPayload): unknown | null {
       } else {
         return null
       }
-      // style?.nf 故意不喂：Univer 的 CF 高亮没有数字格式槽（只有下面这六枚 set*）。
-      // 它在载荷里只服务存盘往返——喂不进去 ≠ 该丢掉
+      // style?.nf / style?.bd / 对齐三槽故意不喂：Univer 的 CF 高亮没有这些槽
+      // （只有下面这六枚 set*）。它们在载荷里只服务存盘往返——喂不进去 ≠ 该丢掉。
+      // 其中 bd 一族 Rust 存盘侧真写得出去；nf 写得出去；对齐三槽写不出
+      // （rust_xlsxwriter 的 dxf 不含 alignment），存盘时以边界账说明
       if (style?.bg) call('setBackground', style.bg)
       if (style?.cl) call('setFontColor', style.cl)
       if (style?.bl) call('setBold', true)
