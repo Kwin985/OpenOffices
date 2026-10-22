@@ -9,9 +9,10 @@
 //      （+各自的 rels）、全部 ppt/notesSlides/notesSlideN.xml。
 //      slideLayouts 整个不读、themeN/slideMasterN（N>1）不读——不打算读的部件不算丢账；
 //   3. 入口是 pptxBytesToDeck(bytes)（docx 那侧是 docxToHtmlFidelity）；
-//   4. 读手跑在 node 里，DOMParser 由 devDependency @xmldom/xmldom 提供（浏览器端用原生的）——
-//      模块注释里点名的那只解析器，语义与原生 DOMParser 在这一族用法上同值
-//      （localName / getAttribute('r:x') / getAttributeNS 三件都实测过）。
+//   4. 读手自己那只解析器是 ooxml.ts 的 parseXml（v0.141 起，此前是 @xmldom/xmldom 的 DOMParser）；
+//      分母这一腿故意用另一只（@xmldom/xmldom）——两条腿不共一只解析器，
+//      同一处解析口径出错不会同时污染分子与分母。r: 前缀那一支的回退
+//      （读手按 local name 找、xmldom 走 getAttributeNS）两路都实测过同值。
 //
 // 语料不在盘上时（本轮就是）：--selftest 用内置夹具当宇宙出一份账，报告头部如实标注。
 //
@@ -319,12 +320,14 @@ function injectProbe(file, mut) {
     {
       id: 'ga',
       skip: mut === 'no-ga',
+      // v0.141：读手换成自家元素视图（PEl）后，漏斗躯体跟着换——锚点里的类型与取值都要跟着改，
+      // 否则注入命中 0 次直接中止（这本身就是一层保险：读手改了形状，量具会先炸而不是悄悄失真）
       find:
-        'function ga(el: Element | null | undefined, name: string): string | null {\n' +
-        '  if (!el) return null\n  const v = el.getAttribute(name)',
+        'function ga(el: PEl | null | undefined, name: string): string | null {\n' +
+        '  if (!el) return null\n  const v = el.attrs[name]',
       put:
-        'function ga(el: Element | null | undefined, name: string): string | null {\n' +
-        '  if (!el) return null\n  __PROBE.note(el.localName, name)\n  const v = el.getAttribute(name)',
+        'function ga(el: PEl | null | undefined, name: string): string | null {\n' +
+        '  if (!el) return null\n  __PROBE.note(el.localName, name)\n  const v = el.attrs[name]',
     },
   ]
   // 注入块落在 import 段之后：pptx-import.ts 的 import 段以 `} from './ppt'` 收头
@@ -622,7 +625,8 @@ async function main() {
       modules: modFiles,
       injections: applied,
       mode,
-      domParser: '@xmldom/xmldom 0.8（devDependency；浏览器端用原生 DOMParser）',
+      readerParser: 'ooxml.ts parseXml（v0.141 起；此前为 @xmldom/xmldom）',
+      domParser: '@xmldom/xmldom 0.8（分母腿专用，与读手不共用）',
     },
     corpus: {
       files: jobs.length,
@@ -793,16 +797,16 @@ function renderMd(d) {
     '  whether the value changed the deck is a separate question this ledger does not answer.',
   )
   L.push(
-    '- **The denominator uses the reader\'s own parser, in node.** The product parses with the',
+    '- **The two legs do not share a parser.** The reader parses with its own `parseXml`',
   )
   L.push(
-    `  browser DOMParser; this script substitutes \`${d.measured.domParser}\``,
+    '  (v0.141); this script counts the denominator with a second, independent parser',
   )
   L.push(
-    '  (the library `pptx-import.ts` names in its comments) so the same code runs headless.',
+    `  \`${d.measured.domParser}\` — a namespace/entity quirk in one does not move both sides.`,
   )
   L.push(
-    '  `localName`, `getAttribute("r:embed")` and `getAttributeNS` were verified to agree.',
+    '  The `r:`-prefixed fallback (reader: local-name lookup; census: `getAttributeNS`) agrees.',
   )
   L.push(
     '- **Occurrence attribution is pair-level, like the docx report.** A pair consulted on one',

@@ -1,4 +1,5 @@
 import type JSZip from 'jszip'
+import { local, parseXml as parseXEl, type XEl } from './ooxml'
 import {
   emptyDeck,
   newId,
@@ -18,39 +19,83 @@ import {
 const EMU_PER_IN = 914400
 const SLIDE_W_IN = 10
 const SLIDE_H_IN = 5.625
-const R_NS = 'http://schemas.openxmlformats.org/officeDocument/2006/relationships'
 
-// @xmldom/xmldom 0.8 不实现 Element.children，统一用 childNodes 过滤（浏览器同样适用）
-function kids(n: Element): Element[] {
-  return Array.from(n.childNodes).filter((c) => c.nodeType === 1) as Element[]
+// ---- 元素视图（v0.141）：自家解析器出树，一次成型 --------------------------------
+//
+// 原先整条读入手骑在 @xmldom/xmldom 的 DOM 上：它要建属性节点、解命名空间、维护活 NodeList，
+// 一篇 669 KiB 的幻灯片 XML（60 页）它要 99ms，自家 parseXml 只要 26ms（同字节实测 3.8×），
+// 而且 DOM 这一层还逼着每次查问都把 childNodes 过滤一遍（v0.141 前一版最热的一枚就是它）。
+// 换成下面的视图之后：属性是普通对象（ga 一次哈希），子元素是建树时就排好的数组。
+//
+// 刻意只留读手真正用的那几样：名 / 属性 / 子元素 / 文本。不实现 Node、命名空间解析与写操作——
+// 读手不写回 XML，写侧走 pptx-export 那条路。
+export interface PEl {
+  name: string // 原样名（含前缀，如 a:off）
+  localName: string // 去前缀名（off）
+  attrs: Record<string, string>
+  kids: PEl[]
+  /** 直接子文本（不含后代）；textOf 才拼后代 */
+  direct: string
+  _text?: string
+}
+
+const EMPTY_PEL: PEl = { name: '#empty', localName: '#empty', attrs: {}, kids: [], direct: '' }
+
+/** ooxml 的 XEl → 视图。建树一遍成：名去前缀、子元素数组、直接文本都在这一趟里落定 */
+function view(e: XEl): PEl {
+  const kids: PEl[] = []
+  let direct = ''
+  for (const c of e.children) {
+    if (typeof c === 'string') direct += c
+    else kids.push(view(c))
+  }
+  return { name: e.name, localName: local(e.name), attrs: e.attrs, kids, direct }
+}
+
+/** 解析一件部件：返回根元素（DOM 那边的 documentElement） */
+function parseXml(text: string): PEl {
+  const doc = parseXEl(text)
+  for (const c of doc.children) if (typeof c !== 'string') return view(c)
+  return EMPTY_PEL
+}
+
+/** textContent 等价物：拼接所有后代文本，问过一次就记住 */
+function textOf(el: PEl): string {
+  if (el._text !== undefined) return el._text
+  let s = el.direct
+  for (const k of el.kids) s += textOf(k)
+  el._text = s
+  return s
 }
 
 // ---- 属性查问漏斗 ----------------------------------------------------------------
 //
 // 整条读入链按名取属性只走 ga 这一枚（与 docx 侧 ooxml.ts 的 attr/attrL 同一副家什）。
-// 产品行为上它就是 getAttribute 的一层直通；scripts/fidelity-report-pptx.mjs 从 git HEAD
+// 产品行为上它就是取属性的一层直通；scripts/fidelity-report-pptx.mjs 从 git HEAD
 // 取一次性副本、只改写这一枚的躯体注入探针，于是运行期每一次「问过哪枚元素上的哪个名」
 // 都记在账上——分子（查问过的）与分母（部件里真实存在的字面）才对得上，
 // pptx 属性覆盖账才立得起来。产品源一行不改，探针只活在副本里。
 //
-// 带 r: 前缀的名取空时按关系命名空间再取一次：个别生产方把关系命名空间铺成默认命名空间
+// 带 r: 前缀的名取空时按 local name 再取一次：个别生产方把关系命名空间铺成默认命名空间
 // （<blip embed="rId2" xmlns="...relationships">），前缀那一支会落空。两路记的是同一对
 // （blip|embed），探针不重复计数。
-function ga(el: Element | null | undefined, name: string): string | null {
+function ga(el: PEl | null | undefined, name: string): string | null {
   if (!el) return null
-  const v = el.getAttribute(name)
-  if (v !== null || !name.startsWith('r:')) return v
-  return el.getAttributeNS(R_NS, name.slice(2))
+  const v = el.attrs[name]
+  if (v !== undefined || !name.startsWith('r:')) return v ?? null
+  const bare = name.slice(2)
+  for (const k in el.attrs) if (local(k) === bare) return el.attrs[k]
+  return null
 }
 
-function childrenByName(node: Element, name: string): Element[] {
-  return kids(node).filter((c) => c.localName === name)
+function childrenByName(node: PEl, name: string): PEl[] {
+  return node.kids.filter((c) => c.localName === name)
 }
 
-function descendantsByName(node: Element, name: string): Element[] {
-  const out: Element[] = []
-  const walk = (n: Element) => {
-    for (const c of kids(n)) {
+function descendantsByName(node: PEl, name: string): PEl[] {
+  const out: PEl[] = []
+  const walk = (n: PEl) => {
+    for (const c of n.kids) {
       if (c.localName === name) out.push(c)
       walk(c)
     }
@@ -59,21 +104,39 @@ function descendantsByName(node: Element, name: string): Element[] {
   return out
 }
 
+/**
+ * 前序第一枚同名后代：命中即返回，不摊平整棵子树。
+ * 读手绝大多数查问是「有一枚就够」（xfrm / ph / rPr / cNvPr / tblPr / blip……），
+ * 而 descendantsByName 那一支每次都要走完子树并攒一个数组——形状一多就是 O(查问数 × 子树)。
+ * 与 descendantsByName(...)[0] 取到的是同一枚（同为前序）。
+ */
+function firstDesc(node: PEl | null | undefined, name: string): PEl | undefined {
+  if (!node) return undefined
+  const stack: PEl[] = [node]
+  while (stack.length) {
+    const n = stack.pop()!
+    if (n !== node && n.localName === name) return n // 判定放在出栈时：入栈逆序 + 出栈顺序 = 文档序
+    const ks = n.kids
+    for (let i = ks.length - 1; i >= 0; i--) stack.push(ks[i])
+  }
+  return undefined
+}
+
 // 一个 <a:p> 内的所有 <a:t> 拼接为一行
-function paragraphText(p: Element): string {
+function paragraphText(p: PEl): string {
   return descendantsByName(p, 't')
-    .map((t) => t.textContent ?? '')
+    .map((t) => textOf(t))
     .join('')
 }
 
-function shapeParagraphs(sp: Element): string[] {
-  const txBody = childrenByName(sp, 'txBody')[0] ?? descendantsByName(sp, 'txBody')[0]
+function shapeParagraphs(sp: PEl): string[] {
+  const txBody = childrenByName(sp, 'txBody')[0] ?? firstDesc(sp, 'txBody')
   if (!txBody) return []
   return childrenByName(txBody, 'p').map(paragraphText)
 }
 
-function shapeExt(sp: Element): { x: number; y: number; w: number; h: number } | null {
-  const xfrm = descendantsByName(sp, 'xfrm')[0]
+function shapeExt(sp: PEl): { x: number; y: number; w: number; h: number } | null {
+  const xfrm = firstDesc(sp, 'xfrm')
   if (!xfrm) return null
   const off = childrenByName(xfrm, 'off')[0]
   const ext = childrenByName(xfrm, 'ext')[0]
@@ -85,18 +148,18 @@ function shapeExt(sp: Element): { x: number; y: number; w: number; h: number } |
   return { x: ex, y: ey, w: ew, h: eh }
 }
 
-function phType(sp: Element): string | null {
-  const ph = descendantsByName(sp, 'ph')[0]
+function phType(sp: PEl): string | null {
+  const ph = firstDesc(sp, 'ph')
   return ga(ph, 'type')
 }
 
 // 形状文本的字符样式：首个 rPr（run 级）优先，退而求其次取 defRPr；对齐取首个 pPr 的 algn
 function shapeStyleOf(
-  sp: Element,
+  sp: PEl,
   env: { colors: Record<string, string>; clrMap: Record<string, string> },
 ): Partial<SlideShape> {
   const out: Partial<SlideShape> = {}
-  const rPr = descendantsByName(sp, 'rPr')[0] ?? descendantsByName(sp, 'defRPr')[0]
+  const rPr = firstDesc(sp, 'rPr') ?? firstDesc(sp, 'defRPr')
   const sz = Number(ga(rPr, 'sz') ?? NaN) // OOXML：百分之一磅
   if (Number.isFinite(sz) && sz >= 400 && sz <= 40000) out.sizePt = Math.round(sz) / 100
   if (ga(rPr, 'b') === '1') out.bold = true
@@ -109,7 +172,7 @@ function shapeStyleOf(
     const color = solidFillToHex(childrenByName(rPr, 'solidFill')[0], env.colors, env.clrMap)
     if (color) out.color = color
   }
-  const algn = ga(descendantsByName(sp, 'pPr')[0], 'algn')
+  const algn = ga(firstDesc(sp, 'pPr'), 'algn')
   if (algn === 'ctr') out.align = 'center'
   else if (algn === 'r') out.align = 'right'
   else if (algn === 'just') out.align = 'left'
@@ -118,13 +181,13 @@ function shapeStyleOf(
 
 /// 形状名与替代文本（v0.140）：`<p:cNvPr name= descr=>`——sp/pic/graphicFrame 各层都有自己的那一枚。
 /// 名字是 PowerPoint 选择窗格与动画目标的认人凭据，descr 是屏幕阅读器念的图说
-function nameOf(el: Element): string | undefined {
-  const v = ga(descendantsByName(el, 'cNvPr')[0], 'name')
+function nameOf(el: PEl): string | undefined {
+  const v = ga(firstDesc(el, 'cNvPr'), 'name')
   return v && v.trim() ? v : undefined
 }
 
-function altOf(el: Element): string | undefined {
-  const v = ga(descendantsByName(el, 'cNvPr')[0], 'descr')
+function altOf(el: PEl): string | undefined {
+  const v = ga(firstDesc(el, 'cNvPr'), 'descr')
   return v && v.trim() ? v : undefined
 }
 
@@ -137,9 +200,9 @@ const ANCHOR_MAP: Record<string, NonNullable<SlideShape['anchor']>> = {
 
 /// 文本框的垂直锚点与换行（v0.140）：`<a:bodyPr anchor="t|ctr|b" wrap="none|square">`。
 /// wrap="square"（缺省）= 换行；只有 "none" 值得记——模型里 false 才是「说了话」
-function bodyStyleOf(sp: Element): { anchor?: NonNullable<SlideShape['anchor']>; wrap?: boolean } {
+function bodyStyleOf(sp: PEl): { anchor?: NonNullable<SlideShape['anchor']>; wrap?: boolean } {
   const out: { anchor?: NonNullable<SlideShape['anchor']>; wrap?: boolean } = {}
-  const bodyPr = descendantsByName(sp, 'bodyPr')[0]
+  const bodyPr = firstDesc(sp, 'bodyPr')
   const anchor = ANCHOR_MAP[ga(bodyPr, 'anchor') ?? '']
   if (anchor) out.anchor = anchor
   if (ga(bodyPr, 'wrap') === 'none') out.wrap = false
@@ -158,7 +221,7 @@ function fractions(emu: number[]): number[] | undefined {
 // 形状盒子外观（v0.108）：spPr 的 solidFill → 底色、ln → 边框色 + 磅宽（w 是 EMU，12700=1pt）。
 // noFill/渐变等不认的填充按「无」落；ln 里没有 solidFill 视作无边框
 function boxStyleOf(
-  sp: Element,
+  sp: PEl,
   env: { colors: Record<string, string>; clrMap: Record<string, string> },
 ): { fill?: string; outline?: string; outlineW?: number } {
   const out: { fill?: string; outline?: string; outlineW?: number } = {}
@@ -200,8 +263,8 @@ function bytesToDataUri(bytes: Uint8Array, mime: string): string {
 
 function parseRels(text: string): Map<string, string> {
   const map = new Map<string, string>()
-  const doc = new DOMParser().parseFromString(text, 'application/xml')
-  for (const rel of descendantsByName(doc.documentElement, 'Relationship')) {
+  const doc = parseXml(text)
+  for (const rel of descendantsByName(doc, 'Relationship')) {
     const id = ga(rel, 'Id')
     const target = ga(rel, 'Target')
     if (id && target) map.set(id, target)
@@ -219,16 +282,12 @@ function resolveRel(baseDir: string, target: string): string {
   return parts.join('/')
 }
 
-function parseXml(text: string): Document {
-  return new DOMParser().parseFromString(text, 'application/xml')
-}
-
 // theme1.xml 的 clrScheme：{dk1,lt1,accent1,...} → '#rrggbb'
-function colorScheme(themeDoc: Document): Record<string, string> {
+function colorScheme(themeDoc: PEl): Record<string, string> {
   const out: Record<string, string> = {}
-  const scheme = descendantsByName(themeDoc.documentElement, 'clrScheme')[0]
+  const scheme = firstDesc(themeDoc, 'clrScheme')
   if (!scheme) return out
-  for (const c of kids(scheme)) {
+  for (const c of scheme.kids) {
     const srgb = childrenByName(c, 'srgbClr')[0]
     const sys = childrenByName(c, 'sysClr')[0]
     const val = ga(srgb, 'val') ?? ga(sys, 'lastClr')
@@ -239,7 +298,7 @@ function colorScheme(themeDoc: Document): Record<string, string> {
 
 // 把一个 solidFill 元素解析成 '#rrggbb'（支持 srgbClr/sysClr/schemeClr+clrMap）
 function solidFillToHex(
-  fill: Element | undefined,
+  fill: PEl | undefined,
   colors: Record<string, string>,
   clrMap: Record<string, string>,
 ): string | undefined {
@@ -255,7 +314,7 @@ function solidFillToHex(
 
 function relsEntries(text: string): { id?: string; type: string; target: string }[] {
   const doc = parseXml(text)
-  return descendantsByName(doc.documentElement, 'Relationship').map((r) => ({
+  return descendantsByName(doc, 'Relationship').map((r) => ({
     id: ga(r, 'Id') ?? undefined,
     type: ga(r, 'Type') ?? '',
     target: ga(r, 'Target') ?? '',
@@ -280,7 +339,7 @@ async function imageFromRid(
 
 // 解析 cSld/bg：母版或单页的背景（纯色或图片）
 async function bgOf(
-  root: Element,
+  root: PEl,
   zip: JSZip,
   relsText: string | undefined,
   baseDir: string,
@@ -290,16 +349,16 @@ async function bgOf(
   const cSld = childrenByName(root, 'cSld')[0]
   const bg = cSld ? childrenByName(cSld, 'bg')[0] : undefined
   if (!bg) return {}
-  const fill = descendantsByName(bg, 'blipFill')[0]
+  const fill = firstDesc(bg, 'blipFill')
   if (fill && relsText) {
-    const blip = descendantsByName(fill, 'blip')[0]
+    const blip = firstDesc(fill, 'blip')
     const rid = ga(blip, 'r:embed')
     if (rid) {
       const data = await imageFromRid(zip, relsText, rid, baseDir)
       if (data) return { bgImage: data }
     }
   }
-  const hex = solidFillToHex(descendantsByName(bg, 'solidFill')[0], colors, clrMap)
+  const hex = solidFillToHex(firstDesc(bg, 'solidFill'), colors, clrMap)
   return hex ? { bg: hex } : {}
 }
 
@@ -314,11 +373,11 @@ function luminance(hex: string): number {
 
 // theme1.xml 的 fontScheme：major/minor 的 latin 字族（v0.140）。名字（@name）不读——
 // 主题名不参与呈现，字族名才是换机器后会回落的东西
-function fontSchemeOf(themeDoc: Document): { majorFont?: string; minorFont?: string } {
+function fontSchemeOf(themeDoc: PEl): { majorFont?: string; minorFont?: string } {
   const out: { majorFont?: string; minorFont?: string } = {}
-  const scheme = descendantsByName(themeDoc.documentElement, 'fontScheme')[0]
+  const scheme = firstDesc(themeDoc, 'fontScheme')
   if (!scheme) return out
-  for (const c of kids(scheme)) {
+  for (const c of scheme.kids) {
     if (c.localName !== 'majorFont' && c.localName !== 'minorFont') continue
     const latin = childrenByName(c, 'latin')[0]
     const face = ga(latin, 'typeface')
@@ -343,12 +402,13 @@ async function parseMaster(zip: JSZip): Promise<{
   }
   const masterFile = zip.file('ppt/slideMasters/slideMaster1.xml')
   if (!masterFile) return { master: {}, colors, clrMap: {} }
-  const root = parseXml(await masterFile.async('string')).documentElement
-  const clrMapEl = descendantsByName(root, 'clrMap')[0]
+  const root = parseXml(await masterFile.async('string'))
+  const clrMapEl = firstDesc(root, 'clrMap')
   const clrMap: Record<string, string> = {}
   // 照单全收也按名逐枚问：clrMap 上有哪些名是文件说的，每一个名的值都过 ga 漏斗——
   // 探针的分子这才看得见这一族查问（直接读 a.value 就绕过了漏斗）
-  if (clrMapEl) for (const a of Array.from(clrMapEl.attributes)) clrMap[a.localName] = ga(clrMapEl, a.localName) ?? a.value
+  if (clrMapEl)
+    for (const a of Object.keys(clrMapEl.attrs)) clrMap[local(a)] = ga(clrMapEl, local(a)) ?? clrMapEl.attrs[a]
 
   const masterRelText = await zip.file('ppt/slideMasters/_rels/slideMaster1.xml.rels')?.async('string')
   const master: MasterStyle = {}
@@ -394,7 +454,7 @@ async function parseNotes(zip: JSZip, slideName: string): Promise<string | undef
   const notesPath = resolveRel('ppt/slides', rel.target)
   const notesFile = zip.file(notesPath)
   if (!notesFile) return undefined
-  const root = parseXml(await notesFile.async('string')).documentElement
+  const root = parseXml(await notesFile.async('string'))
   const lines: string[] = []
   for (const sp of descendantsByName(root, 'sp')) {
     const ph = phType(sp)
@@ -408,19 +468,19 @@ async function parseNotes(zip: JSZip, slideName: string): Promise<string | undef
 // <p:transition spd="med" advTm="5000"><p:fade/></p:transition>：效果名 + 自动换页毫秒数。
 // v0.140 加 advClick：显式 "0" = 点击不换页（这类页若无 advTm 就只剩自动翻一条路）——
 // 「没说话」（缺省）与「点击翻页」（"1"）在文件里同义，模型只记说了话的那一半
-function parseTransition(root: Element): {
+function parseTransition(root: PEl): {
   transition?: SlideTransition
   autoAdvance?: number
   advClick?: boolean
 } {
-  const tr = descendantsByName(root, 'transition')[0]
+  const tr = firstDesc(root, 'transition')
   if (!tr) return {}
   const out: { transition?: SlideTransition; autoAdvance?: number; advClick?: boolean } = {}
   const advTm = Number(ga(tr, 'advTm') ?? 0)
   if (Number.isFinite(advTm) && advTm >= 1000 && advTm <= 3_600_000)
     out.autoAdvance = Math.round(advTm / 1000)
   if (ga(tr, 'advClick') === '0') out.advClick = false
-  for (const c of kids(tr)) {
+  for (const c of tr.kids) {
     if (c.localName === 'fade' || c.localName === 'push' || c.localName === 'wipe' || c.localName === 'split') {
       out.transition = c.localName as SlideTransition
       break
@@ -439,9 +499,9 @@ const WIPE_FILTER_DIR: Record<string, AnimDir> = {
   'wipe(left)': 'right',
 }
 
-function flyStartDir(effect: Element): AnimDir | undefined {
+function flyStartDir(effect: PEl): AnimDir | undefined {
   for (const sv of descendantsByName(effect, 'strVal')) {
-    const v = (sv.textContent ?? '').replace(/\s+/g, '')
+    const v = textOf(sv).replace(/\s+/g, '')
     if (v.startsWith('#+y')) return 'bottom'
     if (v.startsWith('#-y')) return 'top'
     if (v.startsWith('#-x')) return 'left'
@@ -451,16 +511,16 @@ function flyStartDir(effect: Element): AnimDir | undefined {
 }
 
 /// 形状的 spid：`<p:cNvPr id="N">`（sp/pic 都是这一枚，且都在自己那一层里）
-function spidOf(el: Element): string | undefined {
-  return ga(descendantsByName(el, 'cNvPr')[0], 'id') ?? undefined
+function spidOf(el: PEl): string | undefined {
+  return ga(firstDesc(el, 'cNvPr'), 'id') ?? undefined
 }
 
 /// 一枚 clickEffect 的效果：filter 判定 wipe/fade，`ppt_x`/`ppt_y` 位移判定 fly，
 /// 方向按 presetSubtype → 滤镜名 → 起始位移三路认。
 /// v0.140 加 dur：效果行为自己的 cTn 上的毫秒数（50ms~10min 外不收）——
 /// 没有 animEffect 的淡入（set/visibility 那一支）dur="1" 是瞬时显隐，不是时长，不读
-function animEffectOf(c: Element): { anim: BulletAnim; dir?: AnimDir; dur?: number } {
-  const effect = descendantsByName(c, 'animEffect')[0]
+function animEffectOf(c: PEl): { anim: BulletAnim; dir?: AnimDir; dur?: number } {
+  const effect = firstDesc(c, 'animEffect')
   const filter = (ga(effect, 'filter') ?? '').toLowerCase()
   let anim: BulletAnim
   if (filter.startsWith('wipe')) anim = 'wipe'
@@ -468,13 +528,13 @@ function animEffectOf(c: Element): { anim: BulletAnim; dir?: AnimDir; dur?: numb
   else if (
     descendantsByName(c, 'anim').some((a) =>
       descendantsByName(a, 'attrName').some(
-        (x) => (x.textContent ?? '') === 'ppt_x' || (x.textContent ?? '') === 'ppt_y',
+        (x) => textOf(x) === 'ppt_x' || textOf(x) === 'ppt_y',
       ),
     )
   )
     anim = 'fly'
   else anim = 'fade'
-  const dur = Number(ga(effect ? descendantsByName(effect, 'cTn')[0] : undefined, 'dur') ?? NaN)
+  const dur = Number(ga(effect ? firstDesc(effect, 'cTn') : undefined, 'dur') ?? NaN)
   const durOk = Number.isFinite(dur) && dur >= 50 && dur <= 600_000 ? Math.round(dur) : undefined
   if (anim === 'fade') return { anim, ...(durOk ? { dur: durOk } : {}) }
   const dir =
@@ -495,7 +555,7 @@ function animEffectOf(c: Element): { anim: BulletAnim; dir?: AnimDir; dur?: numb
  * 只有真被排过才落 animOrder——「没说话」与「说了一遍默认序」在文件里是同一件事
  */
 function parseAnim(
-  root: Element,
+  root: PEl,
   shapeSpids: string[],
 ): {
   anim?: BulletAnim
@@ -511,7 +571,7 @@ function parseAnim(
   }
   const timing = childrenByName(root, 'timing')[0]
   if (!timing) return empty
-  const bodySpid = ga(descendantsByName(timing, 'bldP')[0], 'spid') ?? undefined
+  const bodySpid = ga(firstDesc(timing, 'bldP'), 'spid') ?? undefined
   const clicks = descendantsByName(timing, 'cTn').filter(
     (c) => ga(c, 'nodeType') === 'clickEffect',
   )
@@ -529,7 +589,7 @@ function parseAnim(
   }
   let bodySeen = 0
   for (const c of clicks) {
-    const spid = ga(descendantsByName(c, 'spTgt')[0], 'spid')
+    const spid = ga(firstDesc(c, 'spTgt'), 'spid')
     if (!spid) continue
     if (ga(c, 'presetClass') === 'exit') {
       if (!descendantsByName(c, 'animEffect').some((a) => ga(a, 'transition') === 'out'))
@@ -572,8 +632,7 @@ async function slideToDeckSlide(
   env: { colors: Record<string, string>; clrMap: Record<string, string> },
 ): Promise<Slide> {
   const text = await slideXml.async('string')
-  const doc = new DOMParser().parseFromString(text, 'application/xml')
-  const root = doc.documentElement
+  const root = parseXml(text)
 
   // 占位符走版式槽；无占位符身份的自由文本框进形状层（v0.107）——不再摊进正文，
   // 位置/字号/颜色原样保住，这正是外部设计版版面此前整页丢失的地方。
@@ -588,9 +647,9 @@ async function slideToDeckSlide(
     const relsPath = slideXml.name.replace(/slides\/(slide\d+\.xml)$/, 'slides/_rels/$1.rels')
     const relsFile = zip.file(relsPath)
     const rels = relsFile ? parseRels(await relsFile.async('string')) : undefined
-    const ordered: Element[] = []
-    const walk = (n: Element) => {
-      for (const c of kids(n)) {
+    const ordered: PEl[] = []
+    const walk = (n: PEl) => {
+      for (const c of n.kids) {
         if (c.localName === 'sp' || c.localName === 'pic' || c.localName === 'graphicFrame')
           ordered.push(c)
         walk(c)
@@ -628,20 +687,20 @@ async function slideToDeckSlide(
         // 首行是不是表头由 <a:tblPr firstRow="1"> 说了算。
         // 图表（<c:chart>）这一片**不接**：它的数据住在另一份 chartN.xml 里，硬读进来
         // 也只能落一张改不了的死图，宁可这一枚形状不认，其余照常导入。
-        const tbl = descendantsByName(el, 'tbl')[0]
+        const tbl = firstDesc(el, 'tbl')
         if (!tbl) continue
         const pos = shapeExt(el)
         if (!pos) continue
         const rows = childrenByName(tbl, 'tr').map((tr) =>
           childrenByName(tr, 'tc').map((tc) =>
             descendantsByName(tc, 't')
-              .map((t) => t.textContent ?? '')
+              .map((t) => textOf(t))
               .join('')
               .trim(),
           ),
         )
         if (!rows.length || !rows.some((r) => r.some((c) => c))) continue
-        const tblPr = descendantsByName(tbl, 'tblPr')[0]
+        const tblPr = firstDesc(tbl, 'tblPr')
         // v0.140：列宽/行高按 EMU 读进来折成比例（和归一），隔行底纹读 bandRow
         const grid = childrenByName(tbl, 'tblGrid')[0]
         const colW = grid ? fractions(childrenByName(grid, 'gridCol').map((c) => Number(ga(c, 'w') ?? 0))) : undefined
@@ -667,7 +726,7 @@ async function slideToDeckSlide(
       } else {
         // 图片：一律进形状层（v0.107）——位置原样保住，不再有「第一张塞版式槽、其余丢弃」的
         // 有损近似；版式槽的 image 只留给用户在图片页手工插入与单页背景图回退
-        const blip = descendantsByName(el, 'blip')[0]
+        const blip = firstDesc(el, 'blip')
         const embed = ga(blip, 'r:embed')
         if (!embed || !rels) continue
         const target = rels.get(embed)
