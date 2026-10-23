@@ -106,8 +106,51 @@ export function bdAttr(edge: CellEdge): 'bdTop' | 'bdRight' | 'bdBottom' | 'bdLe
 const PAD_SIDES = ['top', 'right', 'bottom', 'left'] as const
 type PadSide = (typeof PAD_SIDES)[number]
 
-function padAttrName(side: PadSide): 'padTop' | 'padRight' | 'padBottom' | 'padLeft' {
+export function padAttrName(side: PadSide): 'padTop' | 'padRight' | 'padBottom' | 'padLeft' {
   return `pad${side[0].toUpperCase()}${side.slice(1)}` as 'padTop' | 'padRight' | 'padBottom' | 'padLeft'
+}
+
+// ---- 边框间距（v0.143）------------------------------------------------------
+//
+// OOXML 每条边框带 `w:space`（**磅**）：边框线与框内内容的距离。段落侧（w:pBdr）与逐格侧
+// （w:tcPr/w:tcBorders）都读；CSS 的 padding 正好是「border 盒与内容盒的距离」，语义同形。
+//
+// 段落与单元格的落点不同，因为单元格已有 tcMar 竞争同一条 padding：
+// - **段落**（ParagraphStyle 的 pad* 四属性）：段落没有「内边距」这一层，pBdr@space 是唯一
+//   来源，直接落 padding-{side}，读回也从这个属性解析，无歧义；
+// - **单元格**（CellStyle 的 bdSpace* 四属性，data-bdspace-{side} 载荷）：tcMar 与
+//   tcBorders@space 在 Word 里**叠加**，CSS 只有一条 padding-{side} 表达不了叠加——所以
+//   space 走独立 data-* 属性，renderHTML 时与 pad* 相加输出一条 padding，写回时 space 归
+//   w:tcBorders/@w:space、pad* 归 w:tcMar，两边各得各的，往返无损。
+
+/** 磅 → CSS px（1pt = 4/3px） */
+export function ptToPx(pt: number): number {
+  return round2(pt * (4 / 3))
+}
+
+/** CSS px → 磅 */
+export function pxToPt(px: number): number {
+  return round2((px * 3) / 4)
+}
+
+/** 边框间距载荷属性名（data-bdspace-top 等），存 CSS px 字面；0 不挂（与「没声明」同路） */
+export function bdSpaceAttr(edge: CellEdge): string {
+  return `data-bdspace-${edge}`
+}
+
+/** PM 属性名（bdSpaceTop/bdSpaceRight/bdSpaceBottom/bdSpaceLeft），存 CSS px 数值 */
+function bdSpaceName(side: PadSide): 'bdSpaceTop' | 'bdSpaceRight' | 'bdSpaceBottom' | 'bdSpaceLeft' {
+  return `bdSpace${side[0].toUpperCase()}${side.slice(1)}` as 'bdSpaceTop' | 'bdSpaceRight' | 'bdSpaceBottom' | 'bdSpaceLeft'
+}
+
+/** 几条边的间距补丁：只给 >0 的边，属性值 CSS px 字面 */
+export function bdSpaceAttrs(edges: Partial<Record<CellEdge, number>>): Record<string, string> {
+  const out: Record<string, string> = {}
+  for (const e of CELL_EDGES) {
+    const v = edges[e]
+    if (typeof v === 'number' && v > 0) out[bdSpaceAttr(e)] = String(v)
+  }
+  return out
 }
 
 /** 四条边的属性补丁：段落的 bd* 与单元格的 bd* 同名，两家的命令共用这一处 */
@@ -368,7 +411,34 @@ export const CellStyle = Extension.create({
                 },
                 renderHTML: (attrs: Record<string, unknown>) => {
                   const v = attrs[padAttrName(side)]
-                  return typeof v === 'number' && v >= 0 ? { style: `padding-${side}: ${v}px` } : {}
+                  // v0.143：与边框间距（bdSpace*）相加——Word 里 tcMar 与 tcBorders@space
+                  // 是叠加关系，CSS 一条 padding-{side} 就是两者的和；两条属性各输出同一个
+                  // 合并值，mergeAttributes 串起来后谁盖谁都是这个数
+                  const sp = attrs[bdSpaceName(side)]
+                  const sum = (typeof v === 'number' ? v : 0) + (typeof sp === 'number' ? sp : 0)
+                  return sum > 0 ? { style: `padding-${side}: ${round2(sum)}px` } : {}
+                },
+              },
+            ]),
+          ),
+          // 边框间距（v0.143）：docx 的 w:tcBorders/@w:space（磅→px）走 data-bdspace-{side}
+          // 独立载荷——与 pad* 相加才是 Word 的叠加语义，但回写时 space 归 tcBorders、
+          // pad 归 tcMar，两边各得各的（详见 cell-style.ts 头注的 v0.143 段）
+          ...Object.fromEntries(
+            PAD_SIDES.map((side) => [
+              bdSpaceName(side),
+              {
+                default: null as number | null,
+                parseHTML: (el: HTMLElement) => {
+                  const v = Number.parseFloat(el.getAttribute(bdSpaceAttr(side)) ?? '')
+                  return Number.isFinite(v) && v > 0 ? round2(v) : null
+                },
+                renderHTML: (attrs: Record<string, unknown>) => {
+                  const own = attrs[bdSpaceName(side)]
+                  if (typeof own !== 'number' || own <= 0) return {}
+                  const pad = attrs[padAttrName(side)]
+                  const sum = own + (typeof pad === 'number' ? pad : 0)
+                  return { style: `padding-${side}: ${round2(sum)}px` }
                 },
               },
             ]),

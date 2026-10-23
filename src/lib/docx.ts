@@ -40,7 +40,7 @@ import {
   WidthType,
 } from 'docx'
 import { xml2js } from 'xml-js'
-import { borderParts, pxToEighths, parseShadePayload, CELL_EDGES, type CellEdge } from './cell-style'
+import { borderParts, pxToEighths, pxToPt, parseShadePayload, CELL_EDGES, type CellEdge } from './cell-style'
 import { lineToOoxml, type LineRule } from './paragraph-style'
 import { decodeEnt } from './ooxml'
 import { condLookBits } from './table-cond'
@@ -1090,13 +1090,31 @@ function cellBorder(v: unknown): IBorderOptions | undefined {
   return { style: OOXML_BORDER[p.style] ?? BorderStyle.SINGLE, size: pxToEighths(p.px), color: p.hex.slice(1) }
 }
 
+/**
+ * 边框间距（v0.143）：`w:space`（磅）。段落侧住 pad*（pBdr 是段落的唯一来源），
+ * 单元格侧住 bdSpace*（tcMar 与 tcBorders@space 在 Word 里叠加，回写要各走各的）——
+ * 两种来源不会同节点并存（段落没有 tcMar、单元格的 pad 归 tcMar），取到即用。
+ */
+function borderSpacePt(attrs: Record<string, unknown> | undefined, edge: 'top' | 'right' | 'bottom' | 'left'): number | undefined {
+  const pad = attrs?.[`pad${edge[0].toUpperCase()}${edge.slice(1)}`]
+  const bd = attrs?.[`bdSpace${edge[0].toUpperCase()}${edge.slice(1)}`]
+  const px = typeof bd === 'number' ? bd : typeof pad === 'number' ? pad : undefined
+  if (typeof px !== 'number' || !Number.isFinite(px) || px <= 0) return undefined
+  return pxToPt(px)
+}
+
 /** 四边 → w:tcBorders（表格）或 w:pBdr（段落）；两者同形，一条都没有就不写这个元素 */
 function bordersOf(attrs: Record<string, unknown> | undefined) {
+  const withSpace = (edge: 'top' | 'right' | 'bottom' | 'left', v: IBorderOptions | undefined) => {
+    const sp = borderSpacePt(attrs, edge)
+    // 只有真画出了边才带 space——边都没有，间距无处附着
+    return v && sp !== undefined ? { ...v, space: sp } : v
+  }
   const b = {
-    top: cellBorder(attrs?.bdTop),
-    bottom: cellBorder(attrs?.bdBottom),
-    left: cellBorder(attrs?.bdLeft),
-    right: cellBorder(attrs?.bdRight),
+    top: withSpace('top', cellBorder(attrs?.bdTop)),
+    bottom: withSpace('bottom', cellBorder(attrs?.bdBottom)),
+    left: withSpace('left', cellBorder(attrs?.bdLeft)),
+    right: withSpace('right', cellBorder(attrs?.bdRight)),
   }
   return Object.values(b).some(Boolean) ? b : undefined
 }

@@ -30,6 +30,12 @@ export interface ParaStyleAttrs {
   bdRight: string | null
   bdBottom: string | null
   bdLeft: string | null
+  // 边框与文字的距离（v0.143）：docx 的 w:pBdr/@w:space（磅→CSS px）落这里。
+  // 段落没有「内边距」这一层，pBdr@space 是唯一来源，直接与 padding-{side} 一一对应
+  padTop: number | null
+  padRight: number | null
+  padBottom: number | null
+  padLeft: number | null
 }
 
 /** 行距上下限只是防手滑：负数与三位数倍数都不是用户想要的 */
@@ -90,6 +96,11 @@ function styleOf(a: Record<string, unknown>): { style?: string } {
   if (has(a.spaceBefore)) bits.push(`margin-top: ${a.spaceBefore}px`)
   if (has(a.spaceAfter)) bits.push(`margin-bottom: ${a.spaceAfter}px`)
   if (a.background) bits.push(`background-color: ${a.background}`)
+  // 边框与文字的距离（v0.143）：w:pBdr/@w:space 的 CSS 落点。0 不写（与「没声明」同路）
+  for (const side of ['top', 'right', 'bottom', 'left'] as const) {
+    const v = a[`pad${side[0].toUpperCase()}${side.slice(1)}`]
+    if (typeof v === 'number' && v > 0) bits.push(`padding-${side}: ${v}px`)
+  }
   for (const edge of CELL_EDGES) {
     const v = a[bdAttr(edge)]
     // 'none' 是原文件显式去掉了这条边，必须真写进 CSS，否则落回默认无边看不出来
@@ -191,6 +202,21 @@ export const ParagraphStyle = Extension.create({
             renderHTML: (attrs: Record<string, unknown>) => shadeAttrs(attrs.shade),
           },
           ...Object.fromEntries(CELL_EDGES.map((edge) => [bdAttr(edge), borderAttr(edge)])),
+          // 边框与文字的距离（v0.143）：w:pBdr/@w:space（磅→px）。段落侧没有 tcMar 竞争，
+          // padding-{side} 就是它自己，读回从同一条 CSS 解析；0 与未声明同路（不写）
+          ...Object.fromEntries(
+            (['top', 'right', 'bottom', 'left'] as const).map((side) => [
+              `pad${side[0].toUpperCase()}${side.slice(1)}`,
+              {
+                default: null as number | null,
+                parseHTML: (el: HTMLElement) => {
+                  const px = Number.parseFloat(el.style.getPropertyValue(`padding-${side}`))
+                  return Number.isFinite(px) && px > 0 ? px : null
+                },
+                renderHTML: (attrs: Record<string, unknown>) => styleOf(attrs),
+              },
+            ]),
+          ),
         },
       },
     ]

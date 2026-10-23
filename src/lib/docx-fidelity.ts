@@ -50,7 +50,7 @@ import { all, allDesc, attr, attrL, attrNum, els, find, findDesc, findL, local, 
 import { FieldEngine, fieldLabel, parseInstr, recomputable } from './docx-fields'
 import { embedHtml, inlineFlatten, unwrapEmbed, type EmbedHtml } from './ole'
 import { chartToHtml, smartArtToHtml } from './ooxml-graphics'
-import { CELL_EDGES, CSS_BORDER_STYLE, eighthsToPx, rgb2hex, shadeCss, type CellEdge } from './cell-style'
+import { CELL_EDGES, CSS_BORDER_STYLE, bdSpaceAttrs, eighthsToPx, ptToPx, rgb2hex, shadeCss, type CellEdge } from './cell-style'
 import { ooxmlLine } from './paragraph-style'
 import {
   asTableCondType,
@@ -1351,11 +1351,16 @@ class Fidelity {
       const leftChars = attrNum(ind, 'w:leftChars')
       const hang = attrNum(ind, 'w:hanging')
       const right = attrNum(ind, 'w:right') ?? attrNum(ind, 'w:end')
+      const rightChars = attrNum(ind, 'w:rightChars')
       if (left) bits.push(`margin-left: ${Math.round(left * TWIP_PX)}px`)
       else if (left === undefined && leftChars && leftChars > 0) bits.push(`margin-left: ${Math.round((leftChars / 100) * charPx)}px`)
       if (right) bits.push(`margin-right: ${Math.round(right * TWIP_PX)}px`)
+      // v0.143：右缩进的字符档（真件 0 枚、合成语料 34 枚——Word 的 ind 对话框「按字符」那一列
+      // 写的就是它）。与左缩进同一纪律：缇值整枚没写才让字符档说话
+      else if (right === undefined && rightChars && rightChars > 0) bits.push(`margin-right: ${Math.round((rightChars / 100) * charPx)}px`)
       const first = attrNum(ind, 'w:firstLine')
       const firstChars = attrNum(ind, 'w:firstLineChars')
+      const hangChars = attrNum(ind, 'w:hangingChars')
       const firstPx = first
         ? Math.round(first * TWIP_PX)
         : first === undefined && firstChars && firstChars > 0
@@ -1363,6 +1368,12 @@ class Fidelity {
           : 0
       if (firstPx) bits.push(`text-indent: ${firstPx}px`)
       else if (hang) bits.push(`text-indent: ${-Math.round(hang * TWIP_PX)}px`)
+      // v0.143：悬挂缩进的字符档——负 text-indent 与 hang（缇值）平级，缇值没写才说话
+      // （「缇值先」的纪律同左缩进那一臂；firstLineChars 与 hangingChars 在样式链合并时
+      // 同槽二选一，见 PPR_ATTR_SLOTS）
+      else if (first === undefined && firstChars === undefined && hangChars && hangChars > 0) {
+        bits.push(`text-indent: ${-Math.round((hangChars / 100) * charPx)}px`)
+      }
     }
     const sp = pPr ? find(pPr, 'w:spacing') : undefined
     if (sp) {
@@ -1394,8 +1405,16 @@ class Fidelity {
       // w:between（第五边）：与下一段是同一串时落成本段下边框；显式声明了 w:bottom 时
       // between 是冗余的，让位——两条都画会在同一条缝上叠出两根线
       if (betweenCss && edges.bottom === undefined) bits.push(`border-bottom: ${betweenCss}`)
-      // 段落的边框离字有 w:space（磅）距离，schema 里没有 padding 这一层，丢了不假装在
-      if (all(pbdr, 'w:top').some((e) => (attrNum(e, 'w:space') ?? 0) > 1)) this.warn('段落边框与文字的间距未保留')
+      // 边框与文字的距离（w:space，磅→px，v0.143）：CSS 的 padding 正是 border 盒与内容盒
+      // 的距离，语义同形，四边各落一条。between 是「串与串之间」的缝，没有内容盒可依，
+      // 它的 space 只在同串让位时作废，忽略
+      for (const edge of CELL_EDGES) {
+        const sp = edgeSpacePx(find(pbdr, `w:${edge}`))
+        if (sp > 0) bits.push(`padding-${edge}: ${sp}px`)
+      }
+      if (all(pbdr, 'w:between').some((e) => (attrNum(e, 'w:space') ?? 0) > 0)) {
+        this.warn('段落边框 between 边的间距未保留（同串段落之间的缝没有内容盒可依）')
+      }
     }
     return bits.join('; ')
   }
@@ -2374,6 +2393,14 @@ class Fidelity {
         const pat = patternVal(shd)
         if (pat) this.warn(`图案底纹（w:shd @w:val=${pat}）按 CSS 近似渲染：条纹族精确，pct 族密度近似`)
         const shadeAttr = shadePayload(shd, this.themeColors)
+        // 逐格边框间距（v0.143）：只从 direct 层 w:tcPr/w:tcBorders 读——条件层与表级的
+        // space 不叠加（单元格共用边框，padding 会重复计数），忽略
+        const tcBordersEl = tcPr ? find(tcPr, 'w:tcBorders') : undefined
+        const bdSpace: Partial<Record<CellEdge, number>> = {}
+        for (const edge of CELL_EDGES) {
+          const sp = edgeSpacePx(find(tcBordersEl, `w:${edge}`))
+          if (sp > 0) bdSpace[edge] = sp
+        }
         const style = [cellStyleCss(tcPr, {
           top: cb.top ?? cb2.top ?? (ri === 0 ? tb.top : tb.insideH),
           bottom: cb.bottom ?? cb2.bottom ?? (ri === last ? tb.bottom : tb.insideH),
@@ -2382,6 +2409,7 @@ class Fidelity {
         }, shadingCss(shd, this.themeColors)), mar].filter(Boolean).join('; ')
         if (style) attrs.push(`style="${style}"`)
         if (shadeAttr) attrs.push(`data-shade="${shadeAttr}"`)
+        for (const [k, v] of Object.entries(bdSpaceAttrs(bdSpace))) attrs.push(`${k}="${v}"`)
         s += `<${tag}${attrs.length ? ' ' + attrs.join(' ') : ''}>${await this.cellBlocks(c.el)}</${tag}>`
       }
       s += '</tr>'
@@ -2485,6 +2513,17 @@ function edgeCss(b: XEl, tc?: ThemeColors): string {
   // 主题色优先（accent1 一族在边框上真件 34 枚），字面 w:color 是兜底
   const hex = themeRefCss(tc, b) ?? rgb2hex(`#${(attr(b, 'w:color') ?? '').replace(/^#/, '').toLowerCase()}`) ?? '#000000'
   return `${px}px ${style} ${hex}`
+}
+
+/**
+ * 单边元素的 `w:space`（磅）→ CSS px；0/没写/读不懂都给 0（「没声明」与「0 距离」同路——
+ * Word 自己默认就是 0，写不写这一枚屏上一个样）。
+ * v0.143：段落侧（w:pBdr）与逐格侧（w:tcPr/w:tcBorders）的边都走这里；表级
+ * w:tblBorders 与 insideH/insideV 的 space 不读（单元格共用边框，padding 会重复计数）。
+ */
+function edgeSpacePx(b: XEl | undefined): number {
+  const pt = attrNum(b, 'w:space')
+  return pt !== undefined && pt > 0 ? ptToPx(pt) : 0
 }
 
 /**

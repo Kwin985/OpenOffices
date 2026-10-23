@@ -112,7 +112,9 @@ const FIXTURE_DOC =
   `<w:ind w:left="420" w:right="210" w:firstLineChars="200" w:hangingChars="0"/>` +
   `<w:jc w:val="both"/>` +
   `<w:pBdr><w:top w:val="single" w:sz="8" w:space="1" w:color="FF0000"/>` +
-  `<w:left w:val="dotted" w:sz="4" w:space="2" w:color="00FF00"/></w:pBdr></w:pPr>` +
+  `<w:left w:val="dotted" w:sz="4" w:space="2" w:color="00FF00"/>` +
+  `<w:bottom w:val="dashed" w:sz="6" w:space="4" w:color="0000FF"/>` +
+  `<w:right w:val="double" w:sz="6" w:space="3" w:color="FFFF00"/></w:pBdr></w:pPr>` +
   `<w:r><w:rPr><w:rFonts w:ascii="Times New Roman" w:eastAsia="宋体" w:hint="eastAsia" w:cs="Arial"/>` +
   `<w:sz w:val="24"/><w:szCs w:val="28"/><w:b w:val="0"/>` +
   `<w:lang w:val="en-US" w:eastAsia="zh-CN"/><w:kern w:val="2"/><w:pos w:val="12"/></w:rPr>` +
@@ -162,7 +164,6 @@ const MUST_SEE = [
   // （lvlOverride/startOverride）。下面每一枚都能在夹具里指出唯一一处 XML。
   'srgbClr|val',
   'sysClr|lastClr',
-  'sysClr|lastClr',
   'color|themeColor',
   'color|themeTint',
   'color|themeShade',
@@ -173,16 +174,25 @@ const MUST_SEE = [
   'lvlJc|val',
   'startOverride|val',
   'lvlOverride|ilvl',
-]
-// 我放进夹具而读手一寸不查的：hangingChars 在合并里被搬而没人读（段落读侧第一笔账记过同一件事）；
-// beforeAutospacing / 非顶边的 space 在源码里没有查问处；t 的 xml:space 是**裁定不查**——escText
-// 无条件保留空白（连续空格第二个起换 nbsp），强于 preserve 所需，查了也没有第二行代码可写；
-// pgSz|orient 与 pgMar|gutter 走 docxToDocMeta 另一条路，不在本读手的账上
-const MUST_NOT_SEE = [
+  // v0.143：ind 的字符档（hangingChars/rightChars）与 pBdr 四边的 space。
+  // hangingChars 在夹具里值是 0（查问发生、不产生 CSS——「0 距离」与「没声明」同路），
+  // 非零分支由合成语料 02-tables/01-body 的实例在普查腿踩
   'ind|hangingChars',
+  'ind|rightChars',
+  'top|space',
+  'right|space',
+  'bottom|space',
+  'left|space',
+]
+// 我放进夹具而读手一寸不查的：beforeAutospacing / afterAutospacing 在源码里没有查问处；
+// t 的 xml:space 是**裁定不查**——escText 无条件保留空白（连续空格第二个起换 nbsp），
+// 强于 preserve 所需，查了也没有第二行代码可写；
+// pgSz|orient 与 pgMar|gutter 走 docxToDocMeta 另一条路，不在本读手的账上。
+// （v0.143 注：ind|hangingChars 与 left|space 曾在此列——那一轮起 hangingChars 进了
+// paraCss 的负 text-indent 分支、pBdr 四边 space 进了 padding，两枚移入 MUST_SEE）
+const MUST_NOT_SEE = [
   'spacing|beforeAutospacing',
   'spacing|afterAutospacing',
-  'left|space',
   't|space',
   'pgSz|orient',
   'pgMar|gutter',
