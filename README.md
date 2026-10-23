@@ -8738,6 +8738,40 @@ Word「缩进」对话框「按字符」那一列写的就是这族（0.01 字�
 - **push 仍没成功**：代理对 github.com:443 返 CONNECT 502，本地领先 origin/main 的提交继续攒着（本轮后 25 个）；网络一恢复 `git push origin main` 一条命令的事。
 
 
+## 发行说明：v0.144 —— docx 长尾第三轮 D3：w:tab 制表位族（4 对上账）
+
+一句立项：D2 顺延清单的头名——制表位族 88 字面（tab|pos 42 / tab|val 42 / tab|leader 4），外加 tblInd|type 读账。做完覆盖率按对 25.2% → **25.8%**、按字面 75.8% → **76.2%**（分母 701 对不变，consulted 172 → 176）。裁决与顺延清单见 `docs/docx-fidelity-audit.md` 的 v0.144 追加节。
+
+### 1. w:tab 三枚：档位 / 缇 / 前导符
+
+读手 `readTabsPayload` 遍历 `w:tabs/w:tab`：val 走 attr、pos 走 attrNum、leader 走 attr，三枚漏斗各记各的账。屏上不兑现的裁决同 v0.143 分页四件套——Word 制表位由 tab 字符驱动、按段落的档位表跳对齐，Web 流式排版没有这套机制。落点选 ParagraphStyle 一枚 `data-tabs` 字符串属性（载荷 `档位|缇|leader`，多条分号分隔）而不是新建 Tiptap 扩展：载荷是纯数据、没有 CSS 要画，扩展的 parse/render 链纯属绕路。写手 paraFormatOf 折回 docx 包原生 `tabStops`——`createTabStopItem` 不做单位换算，position 即缇，原样透传；leader 的 heavy 档不在包的 LeaderType 值域里，与库外槽同款断言绕过。
+
+### 2. tblInd|type：读 + 记账
+
+表缩进档位 dxa（默认，现状读的就是缇值）之外的 pct/nil/chars 三档没有 px 化出路（pct 的分母是版心、随栏宽变），warn 记账不假装。
+
+### 3. 账上的数
+
+| 腿 | 数 |
+|---|---|
+| tsc / vite build | 退出码 0 / ✓（11.15s） |
+| selftest | 夹具 94 对全上账；54 见全命中 / 5 不见全落空（双向） |
+| docx 主腿（合成语料 5 件） | 分母 701 对 / 31,472 字面；按对 **25.8%**（v0.143：25.2%，+0.6pp）/ 按字面 **76.2%**（75.8%，+0.4pp）；consulted 172 → **176** 对 |
+| 等价腿 | 相同 5 / 不同 0 / 两边同错 0 / 只一边错 0 |
+| 变异腿 | `--mut no-attrL` 23.9% / 68.5%（attrL 漏斗独有 17 对）；`--mut no-attr` 7.8% / 30.7%（attr 漏斗独有 132 对） |
+| pptx selftest 干净腿 | 70.1% / 74.3%（本轮未动 pptx，逐字相同） |
+| 复位 | 变异腿后干净腿复跑，账本 md5 与主腿一致 |
+| 往返（tmp 脚本） | 制表位四档（left+dot / center / right+hyphen / decimal+middleDot / clear）逐字段一致 |
+
+### 明确不做的（这一节）
+
+- **表级/条件层边框 space（76 字面）继续顺延**：单元格共用边框，CSS 无对应物，已 warn 记账（连续三轮的账）。
+- **docPr|descr（7 字面）继续顺延**：需改 PM Image 模型 + 写手库外槽（docx 包 ImageRun 没有 descr）。
+- **framePr/tblpPr 浮动定位族（23 字面）继续顺延**：需新模型槽。
+- **multiLevelType / lvlPicBulletId / lvlRestart（合计 11 字面）顺延**：编号定义的深层属性，编号定义整体不进 PM，需另设通道。
+- **push 仍没成功**：非交互环境取不到 Windows 凭据（`terminal prompts disabled`），本地领先 origin/main 的提交继续攒着（本轮后 27 个）；凭据恢复后 `git push origin main` 一条命令的事。
+
+
 ## 性能（v0.3）
 
 

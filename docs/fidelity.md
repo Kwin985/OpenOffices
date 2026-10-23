@@ -23,10 +23,10 @@ probe injected at 3 points: attr, attrL, reader.__PROBE(再导出)).
 | In scope (7 parts, 5 readable files) | 701 | 31,472 |
 | Word save-session noise | 19 | 7,711 |
 | Meaningful universe | 682 | 23,761 |
-| Consulted | 172 | 18,010 |
-| Never consulted | 510 | 5,751 |
+| Consulted | 176 | 18,107 |
+| Never consulted | 506 | 5,654 |
 
-**Coverage: 25.2% of distinct pairs, 75.8% of meaningful literals.**
+**Coverage: 25.8% of distinct pairs, 76.2% of meaningful literals.**
 
 The corpus held 5 synthetic .docx files (21 KiB); 0 were
 unreadable as archives and are reported by failure class only, never by name.
@@ -68,8 +68,6 @@ run into `docs/fidelity-universe.json` and rebuilt at 1/100 scale by `scripts/ge
 | `proofErr|type` | 64 |
 | `lsdException|qFormat` | 63 |
 | `adjustRightInd|val` | 48 |
-| `tab|pos` | 42 |
-| `tab|val` | 42 |
 | `uiPriority|val` | 40 |
 | `w|val` | 40 |
 | `insideH|space` | 38 |
@@ -81,6 +79,8 @@ run into `docs/fidelity-universe.json` and rebuilt at 1/100 scale by `scripts/ge
 | `bookmarkStart|name` | 33 |
 | `docPr|id` | 32 |
 | `lvl|tplc` | 29 |
+| `ext|cx` | 28 |
+| `ext|cy` | 28 |
 
 ## Which elements the missing literals sit on
 
@@ -91,7 +91,6 @@ run into `docs/fidelity-universe.json` and rebuilt at 1/100 scale by `scripts/ge
 | `t` | 348 |
 | `gd` | 262 |
 | `pos` | 128 |
-| `tab` | 88 |
 | `shape` | 85 |
 | `effectExtent` | 84 |
 | `schemeClr` | 82 |
@@ -106,6 +105,7 @@ run into `docs/fidelity-universe.json` and rebuilt at 1/100 scale by `scripts/ge
 | `cNvPr` | 58 |
 | `off` | 56 |
 | `adjustRightInd` | 48 |
+| `bodyPr` | 44 |
 
 ## Consulted — the work already paid for
 

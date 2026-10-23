@@ -36,12 +36,12 @@
     "meaningfulOccurrences": 23761
   },
   "coverage": {
-    "byPair": 0.25219941348973607,
-    "byOccurrence": 0.7579647321240689,
-    "consultedPairs": 172,
-    "consultedOccurrences": 18010,
-    "neverConsultedPairs": 510,
-    "neverConsultedOccurrences": 5751
+    "byPair": 0.25806451612903225,
+    "byOccurrence": 0.7620470518917554,
+    "consultedPairs": 176,
+    "consultedOccurrences": 18107,
+    "neverConsultedPairs": 506,
+    "neverConsultedOccurrences": 5654
   },
   "consulted": [
     [
@@ -345,6 +345,14 @@
       42
     ],
     [
+      "tab|pos",
+      42
+    ],
+    [
+      "tab|val",
+      42
+    ],
+    [
       "ilvl|val",
       40
     ],
@@ -501,6 +509,10 @@
       9
     ],
     [
+      "tblInd|type",
+      9
+    ],
+    [
       "tblInd|w",
       9
     ],
@@ -570,6 +582,10 @@
     ],
     [
       "imagedata|id",
+      4
+    ],
+    [
+      "tab|leader",
       4
     ],
     [
@@ -803,14 +819,6 @@
       48
     ],
     [
-      "tab|pos",
-      42
-    ],
-    [
-      "tab|val",
-      42
-    ],
-    [
       "uiPriority|val",
       40
     ],
@@ -1012,10 +1020,6 @@
     ],
     [
       "shape|stroked",
-      9
-    ],
-    [
-      "tblInd|type",
       9
     ],
     [
@@ -1268,10 +1272,6 @@
     ],
     [
       "suff|val",
-      4
-    ],
-    [
-      "tab|leader",
       4
     ],
     [
@@ -2875,10 +2875,6 @@
       128
     ],
     [
-      "tab",
-      88
-    ],
-    [
       "shape",
       85
     ],
@@ -3116,10 +3112,6 @@
     ],
     [
       "nsid",
-      9
-    ],
-    [
-      "tblInd",
       9
     ],
     [

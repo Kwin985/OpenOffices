@@ -104,3 +104,35 @@
 | `framePr` / `tblpPr` 浮动定位族 | 12 / 11 | 需新模型槽 |
 | `multiLevelType` / `tblInd\|type` / `lvlPicBulletId` / `lvlRestart` | 9 / 9 / 1 / 1 | 多级类型、表缩进档位、图片子弹、层级重启 |
 | `startOverride\|val` 普查实例 | 1 | 宇宙里 1 对实例所在路径读手不走；造语料时补一枚 num/lvlOverride 组合实例可进普查分子 |
+
+---
+
+# v0.144 追加节：D3 轮（w:tab 制表位族）
+
+代码：`02fdb04`。新上账 **4 对**（consulted 172 → 176）：
+按对 25.2% → **25.8%**、按字面 75.8% → **76.2%**（分母 701 对不变）。
+
+| 对 | 次数 | 实现要点 |
+|---|---|---|
+| `tab\|val` | 42 | `data-tabs` 载荷 `档位\|缇\|leader`（多条 `;` 分隔）；读手 `readTabsPayload` 遍历 `w:tabs/w:tab`——val 走 attr、pos 走 attrNum、leader 走 attr，三枚漏斗各记各的账 |
+| `tab\|pos` | 42 | 缇值原样透传：docx 包 `createTabStopItem` 不做单位换算（`value: position` 直落 `w:pos`），写手不用折 |
+| `tab\|leader` | 4 | 前导符；`clear` 档无 pos/leader（「到此清除继承制表位」），载荷同规 |
+| `tblInd\|type` | 9 | 读+记账：dxa（默认）现状读的就是缇值；pct/nil/chars 三档没有 px 化出路（pct 的分母是版心，随栏宽变），warn 记账不假装 |
+
+**屏上不兑现的裁决**：Word 制表位由 tab 字符驱动、按段落的档位表跳对齐，Web 流式排版没有这套机制——`data-tabs` 只随载荷往返（参照 v0.143 分页四件套的纪律）。落点选 ParagraphStyle 一枚字符串属性而非新建 Tiptap 扩展：载荷是纯数据（无 CSS 要画），扩展的 parse/render 链纯属绕路。
+
+## 过程中的坑（两枚，都与「唯一驼峰值」有关）
+
+1. **`middleDot` 被 `toLowerCase()` 拆掉**：leader 读侧 `attr(t,'w:leader').toLowerCase()` 与载荷侧 `parts[2].trim().toLowerCase()` 两处都把 ST_TabTlc 里唯一驼峰的值归成 `middledot`，查表落空、leader 静默变 null。修法：`TAB_LEADERS` 改「小写归一形 → 规范名」的 Record（键 `middledot` → 值 `middleDot`）。dot/hyphen/underscore 全小写所以此前无恙——**值域里只要有一个驼峰值，归一化就必须走映射表而不是裸 toLowerCase**。
+2. **tmp 探针 import 的 mod 副本是 HEAD 旧码**：`tmp/fidelity-mod/` 是量具 materialize 的快照，读手新改动不在里面——探针先报「读手完全不输出 data-tabs」，改成 `../src/lib/` 直读才定位到真问题（middleDot）。**功能验证探针用 src，量具腿才用副本**。
+
+## v0.144 顺延清单（D4）
+
+| 对（族） | 次数 | 备注 |
+|---|---|---|
+| 表级/条件层边框 space（tblBorders/insideH/insideV） | 76 | 单元格共用边框，CSS 无对应物，已 warn 记账 |
+| `framePr` / `tblpPr` 浮动定位族 | 12 / 11 | 需新模型槽（表格/段落浮动） |
+| `multiLevelType` | 9 | 抽象编号的多级类型字符串；编号定义整体不进 PM，需另设通道 |
+| `docPr\|descr` | 7 | 图形替代文本；需改 PM Image 模型 + 写手库外槽（docx 包 ImageRun 无 descr） |
+| `lvlPicBulletId` / `lvlRestart` | 1 / 1 | 图片子弹、层级重启 |
+| `startOverride\|val` 普查实例 | 1 | 宇宙里 1 对实例所在路径读手不走；造语料时补一枚 num/lvlOverride 组合实例可进普查分子 |
