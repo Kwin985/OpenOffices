@@ -20,13 +20,13 @@ probe injected at 3 points: attr, attrL, reader.__PROBE(再导出)).
 
 | | pairs | attribute literals |
 |---|---:|---:|
-| In scope (7 parts, 5 readable files) | 701 | 31,455 |
+| In scope (7 parts, 5 readable files) | 701 | 31,472 |
 | Word save-session noise | 19 | 7,711 |
-| Meaningful universe | 682 | 23,744 |
-| Consulted | 136 | 16,869 |
-| Never consulted | 546 | 6,875 |
+| Meaningful universe | 682 | 23,761 |
+| Consulted | 159 | 17,364 |
+| Never consulted | 523 | 6,397 |
 
-**Coverage: 19.9% of distinct pairs, 71.0% of meaningful literals.**
+**Coverage: 23.3% of distinct pairs, 73.1% of meaningful literals.**
 
 The corpus held 5 synthetic .docx files (21 KiB); 0 were
 unreadable as archives and are reported by failure class only, never by name.
@@ -43,7 +43,7 @@ run into `docs/fidelity-universe.json` and rebuilt at 1/100 scale by `scripts/ge
 | universe pairs present in the corpus | 701 / 701 |
 | pairs missing / extra | 0 / 0 |
 | literals: scaling step itself (raw ÷ 100 → rounded, min 1) | 31,085 → 31,321 (+0.76%) |
-| literals: scaled expectation vs actual rebuild | 31,321 vs 31,455 (+0.43%) |
+| literals: scaled expectation vs actual rebuild | 31,321 vs 31,472 (+0.48%) |
 
 **By-pair coverage is comparable with the original run; by-literal coverage is not.** 按对覆盖率与旧账（313 件真件语料）可比；按字面不可比——重建按 count/100 缩放，取整与 max(1,·) 会把稀有对抬起来（见「scaling step itself」那一行），另有少量承重包裹属性（bitmap 链的 r:embed/extent/docPr、numbering 关联的 abstractNumId 等）在包裹处顺带出现；末行是「实测 vs 缩放期望」，与缩放那行基准不同，别混读
 
@@ -60,14 +60,10 @@ run into `docs/fidelity-universe.json` and rebuilt at 1/100 scale by `scripts/ge
 | `pt|y` | 290 |
 | `bottom|space` | 183 |
 | `right|space` | 180 |
-| `shd|color` | 168 |
 | `left|space` | 165 |
 | `gd|fmla` | 131 |
 | `gd|name` | 131 |
-| `color|themeColor` | 92 |
 | `schemeClr|val` | 82 |
-| `lvlJc|val` | 69 |
-| `lvlText|val` | 69 |
 | `lang|bidi` | 67 |
 | `cxn|ang` | 64 |
 | `pos|x` | 64 |
@@ -81,6 +77,10 @@ run into `docs/fidelity-universe.json` and rebuilt at 1/100 scale by `scripts/ge
 | `w|val` | 40 |
 | `insideH|space` | 38 |
 | `insideV|space` | 38 |
+| `lvl|tentative` | 37 |
+| `snapToGrid|val` | 36 |
+| `ind|rightChars` | 34 |
+| `bookmarkEnd|id` | 33 |
 
 ## Which elements the missing literals sit on
 
@@ -90,22 +90,22 @@ run into `docs/fidelity-universe.json` and rebuilt at 1/100 scale by `scripts/ge
 | `pt` | 580 |
 | `t` | 348 |
 | `gd` | 262 |
-| `shd` | 199 |
-| `bottom` | 194 |
-| `right` | 188 |
-| `left` | 173 |
+| `bottom` | 183 |
+| `right` | 180 |
+| `left` | 165 |
 | `pos` | 128 |
-| `color` | 98 |
 | `tab` | 88 |
 | `shape` | 85 |
 | `effectExtent` | 84 |
 | `schemeClr` | 82 |
-| `lvlJc` | 69 |
-| `lvlText` | 69 |
 | `lang` | 67 |
 | `bookmarkStart` | 66 |
 | `inline` | 66 |
 | `lvl` | 66 |
+| `cxn` | 64 |
+| `proofErr` | 64 |
+| `anchor` | 62 |
+| `ext` | 60 |
 
 ## Consulted — the work already paid for
 
@@ -118,9 +118,9 @@ run into `docs/fidelity-universe.json` and rebuilt at 1/100 scale by `scripts/ge
 | `rFonts|hAnsi` | 927 |
 | `rFonts|cs` | 600 |
 | `rFonts|eastAsia` | 573 |
+| `tcW|type` | 417 |
+| `tcW|w` | 417 |
 | `lang|val` | 416 |
-| `tcW|type` | 416 |
-| `tcW|w` | 416 |
 | `color|val` | 409 |
 | `highlight|val` | 407 |
 | `jc|val` | 346 |
@@ -139,8 +139,8 @@ run into `docs/fidelity-universe.json` and rebuilt at 1/100 scale by `scripts/ge
 | `ind|left` | 189 |
 | `right|val` | 189 |
 | `top|val` | 186 |
+| `shd|val` | 185 |
 | `bottom|color` | 183 |
-| `bottom|sz` | 183 |
 
 ## Caveats, stated before anyone reads them off
 

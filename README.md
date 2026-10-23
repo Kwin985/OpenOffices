@@ -8643,6 +8643,56 @@ pptx 那本账 v0.138 只说了「哪 35 对没被问过」，没说该不该问
 - **push 仍没成功**：代理对 github.com:443 返 CONNECT 502（api.github.com 通、codeload 301、直连 443 超时），本地领先 origin/main 的提交继续攒着；网络一恢复 `git push origin main` 一条命令的事。
 
 
+## 发行说明：v0.142 —— docx 读手长尾补齐：主题色 / 图案底纹 / 编号三族 23 对上账
+
+一句立项：LO 对标评估的结论是「下一步顺着 fidelity-report 榜单从上往下补长尾属性」——这一节就是榜单头部裁下来的一轮：主题色 clrScheme 十一槽、shd 图案三件套、编号 lvlText/lvlJc/startOverride 三族，全部打通「读 → PM 模型 → 写」三层往返，覆盖率按对 19.9% → **23.3%**、按字面 71.0% → **73.1%**（合成语料 701 对分母不变，consulted 136 → 159 对）。裁决表（含有意不读与顺延清单）在 `docs/docx-fidelity-audit.md`。
+
+### 1. 主题色族：clrScheme 十一槽 + tint/shade 算式
+
+Word 的默认样式几乎从不写具名颜色，只写 `themeColor="accent1"` 一类引用——不解析 theme1.xml，整篇文档的色都掉回浏览器默认。这一轮补上：
+
+- `readThemeColors` 解析 clrScheme 十一槽（dk1/lt1/dk2/lt2/accent1-6/hlink/folHlink），`srgbClr@val` 与 `sysClr@lastClr` 双分支都走 attrL 漏斗（宇宙里只有前者，后者由夹具覆盖）。
+- `applyTintShade`：**先 shade 染深、后 tint 染淡**（Word 的顺序，反了整族色值都偏），两位十六进制当 0..1 系数；`themeRefCss` 按元素查槽，`w:color` / 边框四边 / `w:shd@w:themeFill`（槽名不同，传错整族静默丢失）共用一套。
+- 算值实测：accent1 + shadeBF → `#335593`、+ tint80 → `#a2b9e2`。
+
+### 2. 图案底纹族：val/color/fill 三件套往返
+
+`w:shd` 的语义是「图案档位 + 前景 + 背景」三件套，此前只读背景一色：
+
+- 条纹族（horz/vert/diagStripe、cross 族）用 `repeating-linear-gradient` **精确**渲染；pct 族用 conic 四象限棋盘，25/50/75 精确、其余密度近似并 warn。
+- 往返载荷 `data-shade`（`图案|前景|背景`）经 cell-style / paragraph-style 扩展进 PM 模型；写手 `SHADING_TYPES` 小写键 → docx 包驼峰规范名，段与格都回写 `<w:shd w:val="pct25" w:color="ff0000" w:fill="ffffff"/>`。
+- clear/无图案档逐字节回到 v0.142 之前的行为（只有背景一色）。
+
+### 3. 编号族：lvlText / lvlJc / startOverride
+
+- 自定义编号定义（`oof-list-N` reference）现在带 lvlText 符面与 lvlJc 对齐往返（lvlJc 屏上无对应物，center/right 落 `data-oo-marker-align` 只往返）；numFmt → ol type 查表小写归一。
+- **起始号落层修复**：`w:num/w:lvlOverride/w:startOverride` 此前双重查找（`valNum` 把元素又当容器找子属性）永远读不到；修好后嵌套罗马数字串的 start=3 正确落在段落引用的那一层（`<w:lvl w:ilvl="1">…<w:start w:val="3"/>`）。
+
+### 4. 量具自己抓到的两个缺陷（这一节的真正卖点）
+
+- **读手侧功能坏**：`startOverride` 双重查找是夹具 selftest 的 MUST_SEE 断言当场抓红的——tmp 探针只验证了写手，读手这条单边通道「看着正常」。没有双向断言，这个 bug 会带着「已实现」的状态混过去。
+- **语料侧覆盖坏**：`shd|color` 等三对夹具全过、普查腿却零上账。追因：语料按「单属性实例」设计，组合 shd 被拆散；且 push 按 open 合并，组合实例与几百个单属性实例挤进同一个 pPr，读手 `find(pPr,'w:shd')` 只取第一枚。修法（`b:ppr-shd` / `t:tcPr-shd` 专用段，前缀元素取 schema 序中位于 shd 之前的合法元素）让 shd 族 6 对全上账。教训：**「夹具绿 + 普查零」不是实现没写，先查语料形态能不能踩到那条路**。
+
+### 5. 账上的数
+
+| 腿 | 数 |
+|---|---|
+| tsc / vite build | 退出码 0 / ✓ |
+| selftest | 夹具 71 对全上账；39 见全命中 / 7 不见全落空（双向） |
+| docx 主腿（合成语料 5 件） | 分母 701 对 / 31,472 字面；按对 **23.3%**（+3.4pp）/ 按字面 **73.1%**（+2.1pp）；consulted 136 → **159** 对 |
+| 等价腿 | 相同 5 / 不同 0 / 两边同错 0 / 只一边错 0 |
+| 变异腿 | `--mut no-attrL` 21.4% / 65.3%（attrL 漏斗独有 17 对）；`--mut no-attr` 6.7% / 28.1%（attr 漏斗独有 122 对） |
+| pptx selftest 干净腿 | 70.1% / 74.3%（本轮未动 pptx，与 v0.141 逐字相同） |
+| 复位 | 变异腿后干净腿复跑，账本 md5 与主腿一致 |
+
+### 明确不做的（这一节）
+
+- **边框 space 族（~604 字面）顺延**：段/格边框与文字的间距，CSS 无对应层，按 v0.141 的 warn 先例下一轮先落 warn 再谈往返。
+- **caps/smallCaps/iCs/bCs、pageBreakBefore/keepNext/keepLines/widowControl 顺延**：PM 模型无对应属性，需先定「往返但屏上不兑现」的档位；`ind|hangingChars` 还牵着一枚 MUST_NOT_SEE 断言要同步翻面。
+- **lsdException/proofErr/rsid/VML/custGeom 一族判为有意不读**：2127 + 348 + 91 字面的冗余，与渲染无关。
+- **push 仍没成功**：网络通了但非交互环境取不到 Windows 凭据（`fatal: User cancelled dialog` / `terminal prompts disabled`），本地领先 origin/main 的提交继续攒着（本轮后 22 个）；网络与凭据一恢复 `git push origin main` 一条命令的事。
+
+
 ## 性能（v0.3）
 
 

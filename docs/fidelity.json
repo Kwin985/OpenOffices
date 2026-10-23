@@ -13,7 +13,7 @@
     "files": 5,
     "readable": 5,
     "unreadable": 0,
-    "bytes": 21486,
+    "bytes": 21992,
     "scopeParts": [
       "word/document.xml",
       "word/styles.xml",
@@ -29,19 +29,19 @@
   },
   "totals": {
     "distinctPairs": 701,
-    "occurrences": 31455,
+    "occurrences": 31472,
     "noisePairs": 19,
     "noiseOccurrences": 7711,
     "meaningfulPairs": 682,
-    "meaningfulOccurrences": 23744
+    "meaningfulOccurrences": 23761
   },
   "coverage": {
-    "byPair": 0.19941348973607037,
-    "byOccurrence": 0.710453167115903,
-    "consultedPairs": 136,
-    "consultedOccurrences": 16869,
-    "neverConsultedPairs": 546,
-    "neverConsultedOccurrences": 6875
+    "byPair": 0.23313782991202345,
+    "byOccurrence": 0.7307773241866925,
+    "consultedPairs": 159,
+    "consultedOccurrences": 17364,
+    "neverConsultedPairs": 523,
+    "neverConsultedOccurrences": 6397
   },
   "consulted": [
     [
@@ -73,15 +73,15 @@
       573
     ],
     [
-      "lang|val",
-      416
-    ],
-    [
       "tcW|type",
-      416
+      417
     ],
     [
       "tcW|w",
+      417
+    ],
+    [
+      "lang|val",
       416
     ],
     [
@@ -157,6 +157,10 @@
       186
     ],
     [
+      "shd|val",
+      185
+    ],
+    [
       "bottom|color",
       183
     ],
@@ -166,11 +170,7 @@
     ],
     [
       "shd|fill",
-      181
-    ],
-    [
-      "shd|val",
-      181
+      183
     ],
     [
       "right|color",
@@ -197,6 +197,10 @@
       173
     ],
     [
+      "shd|color",
+      170
+    ],
+    [
       "left|color",
       165
     ],
@@ -207,6 +211,10 @@
     [
       "rFonts|eastAsiaTheme",
       156
+    ],
+    [
+      "color|themeColor",
+      92
     ],
     [
       "spacing|before",
@@ -221,7 +229,19 @@
       71
     ],
     [
+      "gridCol|w",
+      69
+    ],
+    [
       "ind|leftChars",
+      69
+    ],
+    [
+      "lvlJc|val",
+      69
+    ],
+    [
+      "lvlText|val",
       69
     ],
     [
@@ -231,10 +251,6 @@
     [
       "spacing|after",
       68
-    ],
-    [
-      "gridCol|w",
-      67
     ],
     [
       "ind|right",
@@ -293,12 +309,12 @@
       50
     ],
     [
-      "trHeight|val",
+      "gridSpan|val",
       49
     ],
     [
-      "gridSpan|val",
-      48
+      "trHeight|val",
+      49
     ],
     [
       "fldChar|fldCharType",
@@ -385,6 +401,10 @@
       19
     ],
     [
+      "shd|themeFill",
+      17
+    ],
+    [
       "tblStylePr|type",
       16
     ],
@@ -406,6 +426,10 @@
     ],
     [
       "shape|style",
+      11
+    ],
+    [
+      "shd|themeFillTint",
       11
     ],
     [
@@ -433,7 +457,15 @@
       9
     ],
     [
+      "bottom|themeColor",
+      9
+    ],
+    [
       "tblInd|w",
+      9
+    ],
+    [
+      "top|themeColor",
       9
     ],
     [
@@ -443,6 +475,18 @@
     [
       "strike|val",
       7
+    ],
+    [
+      "left|themeColor",
+      6
+    ],
+    [
+      "right|themeColor",
+      6
+    ],
+    [
+      "srgbClr|val",
+      6
     ],
     [
       "tblLook|firstColumn",
@@ -477,11 +521,23 @@
       5
     ],
     [
+      "shd|themeFillShade",
+      5
+    ],
+    [
       "imagedata|id",
       4
     ],
     [
       "br|type",
+      3
+    ],
+    [
+      "color|themeShade",
+      3
+    ],
+    [
+      "color|themeTint",
       3
     ],
     [
@@ -533,6 +589,14 @@
       1
     ],
     [
+      "bottom|themeShade",
+      1
+    ],
+    [
+      "bottom|themeTint",
+      1
+    ],
+    [
       "commentRangeEnd|id",
       1
     ],
@@ -569,6 +633,18 @@
       1
     ],
     [
+      "left|themeShade",
+      1
+    ],
+    [
+      "left|themeTint",
+      1
+    ],
+    [
+      "lvlOverride|ilvl",
+      1
+    ],
+    [
       "OLEObject|id",
       1
     ],
@@ -581,7 +657,23 @@
       1
     ],
     [
+      "right|themeShade",
+      1
+    ],
+    [
+      "right|themeTint",
+      1
+    ],
+    [
       "tl2br|val",
+      1
+    ],
+    [
+      "top|themeShade",
+      1
+    ],
+    [
+      "top|themeTint",
       1
     ],
     [
@@ -627,10 +719,6 @@
       180
     ],
     [
-      "shd|color",
-      168
-    ],
-    [
       "left|space",
       165
     ],
@@ -643,20 +731,8 @@
       131
     ],
     [
-      "color|themeColor",
-      92
-    ],
-    [
       "schemeClr|val",
       82
-    ],
-    [
-      "lvlJc|val",
-      69
-    ],
-    [
-      "lvlText|val",
-      69
     ],
     [
       "lang|bidi",
@@ -808,11 +884,7 @@
     ],
     [
       "widowControl|val",
-      17
-    ],
-    [
-      "shd|themeFill",
-      16
+      18
     ],
     [
       "inline|distB",
@@ -875,15 +947,15 @@
       12
     ],
     [
+      "keepNext|val",
+      12
+    ],
+    [
       "lock|aspectratio",
       12
     ],
     [
       "lock|ext",
-      12
-    ],
-    [
-      "shd|themeFillTint",
       12
     ],
     [
@@ -903,10 +975,6 @@
       11
     ],
     [
-      "keepNext|val",
-      11
-    ],
-    [
       "shape|id",
       11
     ],
@@ -917,10 +985,6 @@
     [
       "keepLines|val",
       10
-    ],
-    [
-      "bottom|themeColor",
-      9
     ],
     [
       "multiLevelType|val",
@@ -948,10 +1012,6 @@
     ],
     [
       "tmpl|val",
-      9
-    ],
-    [
-      "top|themeColor",
       9
     ],
     [
@@ -1055,23 +1115,11 @@
       6
     ],
     [
-      "left|themeColor",
-      6
-    ],
-    [
       "picLocks|noChangeArrowheads",
       6
     ],
     [
-      "right|themeColor",
-      6
-    ],
-    [
       "shape|type",
-      6
-    ],
-    [
-      "srgbClr|val",
       6
     ],
     [
@@ -1259,14 +1307,6 @@
       3
     ],
     [
-      "color|themeShade",
-      3
-    ],
-    [
-      "color|themeTint",
-      3
-    ],
-    [
       "docGrid|type",
       3
     ],
@@ -1336,10 +1376,6 @@
     ],
     [
       "rect|t",
-      3
-    ],
-    [
-      "shd|themeFillShade",
       3
     ],
     [
@@ -1544,14 +1580,6 @@
     ],
     [
       "bodyPr|vertOverflow",
-      1
-    ],
-    [
-      "bottom|themeShade",
-      1
-    ],
-    [
-      "bottom|themeTint",
       1
     ],
     [
@@ -1967,14 +1995,6 @@
       1
     ],
     [
-      "left|themeShade",
-      1
-    ],
-    [
-      "left|themeTint",
-      1
-    ],
-    [
       "legacy|legacy",
       1
     ],
@@ -2076,10 +2096,6 @@
     ],
     [
       "lum|contrast",
-      1
-    ],
-    [
-      "lvlOverride|ilvl",
       1
     ],
     [
@@ -2332,14 +2348,6 @@
     ],
     [
       "reflection|sy",
-      1
-    ],
-    [
-      "right|themeShade",
-      1
-    ],
-    [
-      "right|themeTint",
       1
     ],
     [
@@ -2719,14 +2727,6 @@
       1
     ],
     [
-      "top|themeShade",
-      1
-    ],
-    [
-      "top|themeTint",
-      1
-    ],
-    [
       "type|val",
       1
     ],
@@ -2871,28 +2871,20 @@
       262
     ],
     [
-      "shd",
-      199
-    ],
-    [
       "bottom",
-      194
+      183
     ],
     [
       "right",
-      188
+      180
     ],
     [
       "left",
-      173
+      165
     ],
     [
       "pos",
       128
-    ],
-    [
-      "color",
-      98
     ],
     [
       "tab",
@@ -2909,14 +2901,6 @@
     [
       "schemeClr",
       82
-    ],
-    [
-      "lvlJc",
-      69
-    ],
-    [
-      "lvlText",
-      69
     ],
     [
       "lang",
@@ -3064,7 +3048,7 @@
     ],
     [
       "widowControl",
-      17
+      18
     ],
     [
       "imagedata",
@@ -3131,6 +3115,10 @@
       12
     ],
     [
+      "keepNext",
+      12
+    ],
+    [
       "ln",
       12
     ],
@@ -3140,14 +3128,6 @@
     ],
     [
       "caps",
-      11
-    ],
-    [
-      "keepNext",
-      11
-    ],
-    [
-      "top",
       11
     ],
     [
@@ -3220,10 +3200,6 @@
     ],
     [
       "latentStyles",
-      6
-    ],
-    [
-      "srgbClr",
       6
     ],
     [
@@ -3587,10 +3563,6 @@
       1
     ],
     [
-      "lvlOverride",
-      1
-    ],
-    [
       "lvlPicBulletId",
       1
     ],
@@ -3700,7 +3672,7 @@
     ]
   ],
   "partTotals": {
-    "word/document.xml": 24918,
+    "word/document.xml": 24935,
     "word/styles.xml": 4249,
     "word/numbering.xml": 2265,
     "word/footnotes.xml": 7,
@@ -3728,8 +3700,8 @@
     "scaledLiteralSum": 31321,
     "rawScaledSum": 31085.229999999945,
     "scaleInflationPct": 0.7584631028950239,
-    "actualLiteralSum": 31455,
-    "literalDriftPct": 0.4278279748411551,
+    "actualLiteralSum": 31472,
+    "literalDriftPct": 0.48210465821654225,
     "comparableByPair": true,
     "comparableByOccurrence": false,
     "note": "按对覆盖率与旧账（313 件真件语料）可比；按字面不可比——重建按 count/100 缩放，取整与 max(1,·) 会把稀有对抬起来（见「scaling step itself」那一行），另有少量承重包裹属性（bitmap 链的 r:embed/extent/docPr、numbering 关联的 abstractNumId 等）在包裹处顺带出现；末行是「实测 vs 缩放期望」，与缩放那行基准不同，别混读"
