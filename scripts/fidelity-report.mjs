@@ -132,6 +132,13 @@ const FIXTURE_DOC =
   `<w:p><w:pPr><w:pageBreakBefore/><w:keepNext/><w:keepLines/><w:widowControl w:val="1"/></w:pPr>` +
   `<w:r><w:t>分页四件套</w:t></w:r></w:p>` +
   `<w:p><w:pPr><w:widowControl w:val="0"/></w:pPr><w:r><w:t>显式关孤行</w:t></w:r></w:p>` +
+  // v0.144：制表位三档（档位/缇/前导符）+ 一个 clear 清除档（不带 pos/leader）
+  `<w:p><w:pPr><w:tabs>` +
+  `<w:tab w:val="left" w:pos="720" w:leader="dot"/>` +
+  `<w:tab w:val="center" w:pos="2880"/>` +
+  `<w:tab w:val="right" w:pos="5760" w:leader="middleDot"/>` +
+  `<w:tab w:val="clear" w:pos="720"/></w:tabs></w:pPr>` +
+  `<w:r><w:t>制表位</w:t></w:r></w:p>` +
   `<w:sectPr><w:pgSz w:w="11906" w:h="16838" w:orient="portrait"/>` +
   `<w:pgMar w:top="1440" w:right="1800" w:bottom="1440" w:left="1800" w:header="851" w:footer="992" w:gutter="0"/></w:sectPr>` +
   `</w:body></w:document>`
@@ -199,6 +206,11 @@ const MUST_SEE = [
   'keepNext|val',
   'keepLines|val',
   'widowControl|val',
+  // v0.144：制表位三枚（档位/缇/前导符）。leader 的 middleDot 是 ST_TabTlc 唯一驼峰值
+  // （小写归一查表映射回规范名）；clear 档无 pos/leader，是「到此清除继承制表位」
+  'tab|val',
+  'tab|pos',
+  'tab|leader',
 ]
 // 我放进夹具而读手一寸不查的：beforeAutospacing / afterAutospacing 在源码里没有查问处；
 // t 的 xml:space 是**裁定不查**——escText 无条件保留空白（连续空格第二个起换 nbsp），

@@ -38,9 +38,10 @@ import {
   TextRun,
   VerticalAlignTable,
   WidthType,
+  type TabStopDefinition,
 } from 'docx'
 import { xml2js } from 'xml-js'
-import { borderParts, pxToEighths, pxToPt, parseShadePayload, CELL_EDGES, type CellEdge } from './cell-style'
+import { borderParts, pxToEighths, pxToPt, parseShadePayload, parseTabsPayload, CELL_EDGES, type CellEdge } from './cell-style'
 import { lineToOoxml, type LineRule } from './paragraph-style'
 import { decodeEnt } from './ooxml'
 import { condLookBits } from './table-cond'
@@ -1066,16 +1067,34 @@ function paraFormatOf(node: PMNode, pstyle?: string | null) {
   const keepLines = flag('keepLines')
   const pageBreakBefore = flag('pageBreakBefore')
   const widowControl = flag('widowControl')
+  // 制表位表（v0.144）：data-tabs 载荷 → tabStops。type/position/leader 直接透传
+  // （包的 createTabStopItem 不做单位换算，position 即缇）；leader 的 heavy 档在包的
+  // LeaderType 里没有——库外槽照样落成 w:leader="heavy"，TS 那侧断言绕过
+  const tabs = tabsOf(node.attrs?.tabs)
   return {
     ...(pstyle ? { style: pstyle } : {}),
     ...(sp ? { spacing: sp } : {}),
     ...(sh ? { shading: sh } : {}),
     ...(bd ? { border: bd } : {}),
+    ...(tabs ? { tabStops: tabs } : {}),
     ...(keepNext !== undefined ? { keepNext } : {}),
     ...(keepLines !== undefined ? { keepLines } : {}),
     ...(pageBreakBefore !== undefined ? { pageBreakBefore } : {}),
     ...(widowControl !== undefined ? { widowControl } : {}),
   }
+}
+
+/** data-tabs 载荷 → docx 包 TabStopDefinition[]（空数组当没有，不写 w:tabs 元素） */
+function tabsOf(raw: unknown): TabStopDefinition[] | undefined {
+  const specs = parseTabsPayload(typeof raw === 'string' ? raw : null)
+  if (!specs.length) return undefined
+  // type/position 直接透传（包的 createTabStopItem 不做单位换算，position 即缇）；
+  // leader 的 heavy 档不在包的 LeaderType 里——与 withCharExtra 的库外槽同款断言
+  return specs.map((t) => ({
+    type: t.val,
+    position: t.pos ?? 0,
+    ...(t.leader ? { leader: t.leader } : {}),
+  })) as unknown as TabStopDefinition[]
 }
 
 /** CSS 线型词 → OOXML 线型（导入时已归一到这几个词） */

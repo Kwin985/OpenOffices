@@ -216,6 +216,69 @@ export function pxToEighths(px: number): number {
 /** 往返载荷属性名：`图案|前景|背景`（hex 不带 #）。clear 不挂——纯色走 background 那一链 */
 export const SHADE_ATTR = 'data-shade'
 
+/* ── 制表位（v0.144）─────────────────────────────────────────────
+ * w:pPr/w:tabs/w:tab 三枚属性（@w:val 档位 / @w:pos 缇 / @w:leader 前导符）。
+ * 屏上无对应物（Word 制表位由字符 tab 键驱动、按段落的档位表跳对齐），只往返。
+ * 载荷：`档位|缇|leader` 多条用 `;` 分隔；leader 缺省 none 不写，clear 档无 pos/leader。
+ * 档位值域与 docx 包 TabStopType 字面一致（left/center/right/decimal/bar/clear/end/num/start），
+ * leader 包缺 heavy——库外槽透传（见 docx.ts 的 tabsOf）。 */
+export const TABS_ATTR = 'data-tabs'
+
+/** 单条制表位；val 原样存（大小写归一小写） */
+export interface TabSpec {
+  val: string
+  /** 缇；clear 档为 null */
+  pos: number | null
+  /** 前导符；none/未声明为 null */
+  leader: string | null
+}
+
+/** OOXML w:val 值域（与 docx 包 TabStopType 同款字面） */
+const TAB_VALS = new Set(['left', 'start', 'center', 'right', 'end', 'decimal', 'bar', 'clear', 'num'])
+/** OOXML w:leader 值域（docx 包 LeaderType 无 heavy，透传要靠库外槽）。
+ * 键为小写归一形，值为规范名——ST_TabTlc 里 middleDot 是唯一驼峰值 */
+export const TAB_LEADERS: Record<string, string> = {
+  none: 'none',
+  dot: 'dot',
+  hyphen: 'hyphen',
+  underscore: 'underscore',
+  heavy: 'heavy',
+  middledot: 'middleDot',
+}
+
+/** data-tabs 载荷 → TabSpec[]；非法条目整条丢（宁缺勿错） */
+export function parseTabsPayload(raw: string | null | undefined): TabSpec[] {
+  if (!raw) return []
+  const out: TabSpec[] = []
+  for (const item of raw.split(';')) {
+    const parts = item.split('|')
+    if (parts.length < 2 || parts.length > 3) continue
+    const val = parts[0].trim().toLowerCase()
+    if (!TAB_VALS.has(val)) continue
+    const posRaw = parts[1].trim()
+    const pos = val === 'clear' ? null : /^\d+$/.test(posRaw) ? Number(posRaw) : null
+    if (val !== 'clear' && pos === null) continue
+    let leader: string | null = null
+    if (parts.length === 3) {
+      const l = TAB_LEADERS[parts[2].trim().toLowerCase()]
+      if (l && l !== 'none') leader = l
+    }
+    out.push({ val, pos, leader })
+  }
+  return out
+}
+
+/** TabSpec[] → data-tabs 载荷（与 parseTabsPayload 互逆） */
+export function tabsPayload(tabs: readonly TabSpec[]): string {
+  return tabs
+    .filter((t) => TAB_VALS.has(t.val))
+    .map((t) => {
+      const pos = t.val === 'clear' ? '' : String(Math.max(0, Math.round(t.pos ?? 0)))
+      return t.leader ? `${t.val}|${pos}|${t.leader}` : `${t.val}|${pos}`
+    })
+    .join(';')
+}
+
 /** 点阵：cell 见方的格子里一枚半径 1px 的点（密集档反过来把背景当时点） */
 function dots(fg: string, bg: string, cell: number): string {
   return `radial-gradient(${fg} 1px, ${bg} 1.5px) 0 0/${cell}px ${cell}px`

@@ -50,7 +50,7 @@ import { all, allDesc, attr, attrL, attrNum, els, find, findDesc, findL, local, 
 import { FieldEngine, fieldLabel, parseInstr, recomputable } from './docx-fields'
 import { embedHtml, inlineFlatten, unwrapEmbed, type EmbedHtml } from './ole'
 import { chartToHtml, smartArtToHtml } from './ooxml-graphics'
-import { CELL_EDGES, CSS_BORDER_STYLE, bdSpaceAttrs, eighthsToPx, ptToPx, rgb2hex, shadeCss, type CellEdge } from './cell-style'
+import { CELL_EDGES, CSS_BORDER_STYLE, TAB_LEADERS, bdSpaceAttrs, eighthsToPx, ptToPx, rgb2hex, shadeCss, tabsPayload, type CellEdge, type TabSpec } from './cell-style'
 import { ooxmlLine } from './paragraph-style'
 import {
   asTableCondType,
@@ -307,6 +307,27 @@ const FLAG_ATTR: Record<(typeof PAGE_FLAGS)[number], string> = {
   keepNext: 'keepnext',
   keepLines: 'keeplines',
   widowControl: 'widowcontrol',
+}
+
+/**
+ * 制表位表（v0.144）：pPr/w:tabs 下的 w:tab 逐条读成 `档位|缇|leader` 载荷。
+ * 档位走 attr、缇走 attrNum（两枚漏斗各自记自己的账）、leader 走 attr；
+ * clear 档是「到此清除继承制表位」，Word 里不带 pos/leader——载荷同规。
+ * 非法条目（档位不在值域、非 clear 缺 pos）整条丢：宁缺勿错。
+ */
+function readTabsPayload(pPr: XEl | undefined): string {
+  const tabs = pPr ? find(pPr, 'w:tabs') : undefined
+  if (!tabs) return ''
+  const specs: TabSpec[] = []
+  for (const t of all(tabs, 'w:tab')) {
+    const val = (attr(t, 'w:val') ?? '').toLowerCase()
+    const pos = attrNum(t, 'w:pos')
+    const leader = TAB_LEADERS[(attr(t, 'w:leader') ?? '').trim().toLowerCase()]
+    if (!val) continue
+    if (val !== 'clear' && (pos === undefined || pos < 0)) continue
+    specs.push({ val, pos: pos ?? null, leader: leader && leader !== 'none' ? leader : null })
+  }
+  return tabsPayload(specs)
 }
 
 /** 属性级合并：同名后者压前者，后写层没写的属性留前写层那一枚；槽见 PPR_ATTR_SLOTS */
@@ -1355,7 +1376,15 @@ class Fidelity {
       const v = on(find(effPPr, `w:${f}`))
       if (v !== undefined) flags.push(` data-${FLAG_ATTR[f]}="${v ? '1' : '0'}"`)
     }
-    const body = this.layout(`${tag}${shadeAttr ? ` data-shade="${shadeAttr}"` : ''}${flags.join('')}`, style, pieces)
+    // 制表位表（v0.144）：w:tabs/w:tab 的 val|pos|leader。屏上无对应物（tab 字符驱动
+    // 跳对齐，Word 之外没有这套档位表），只随 data-tabs 载荷往返。样式链合并后的
+    // effPPr 上读——样式层声明的制表位与段内直接声明同权（后者追加在后）
+    const tabsAttr = readTabsPayload(effPPr)
+    const body = this.layout(
+      `${tag}${shadeAttr ? ` data-shade="${shadeAttr}"` : ''}${tabsAttr ? ` data-tabs="${tabsAttr}"` : ''}${flags.join('')}`,
+      style,
+      pieces,
+    )
     return view.quote ? prefix + `<blockquote>${body}</blockquote>` : prefix + body
   }
 
@@ -2238,6 +2267,13 @@ class Fidelity {
     const rows = all(el, 'w:tr')
     const tb = borderEdges(tblPr ? find(tblPr, 'w:tblBorders') : undefined, this.themeColors)
     const tblInd = tblPr ? attrNum(find(tblPr, 'w:tblInd'), 'w') : undefined
+    // w:tblInd/@w:type（v0.144）：dxa（默认）时 w:w 是缇，现状读的就是它；pct 档 w:w 是
+    // 百分之五十步长（ST_MeasurementOrPercent），nil 是不缩进、chars 是字符。非 dxa 档
+    // 没有 px 化出路（pct 的分母是版心，随栏宽变），如实记账不假装
+    {
+      const t = tblPr ? (attr(find(tblPr, 'w:tblInd'), 'w:type') ?? '').toLowerCase() : ''
+      if (t && t !== 'dxa') this.warn(`表缩进档位 w:tblInd/@w:type=${t} 未保留（dxa 之外的档位没有 px 化出路）`)
+    }
     // 表级默认格边距（w:tblCellMar）：v0.97 之前整条丢弃，声明了的左右 108 缇（=7.2px）也读不出来。
     // 逐格 w:tcMar 只在它说到的那几边上优先。
     // 再往下一层（样式层）：表引用的样式（w:tblStyle）及其 basedOn 祖先说的格边距是这一层的基座，

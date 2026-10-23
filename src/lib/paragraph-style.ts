@@ -1,5 +1,5 @@
 import { Extension, Mark, type CommandProps, type Editor } from '@tiptap/core'
-import { CELL_EDGES, SHADE_ATTR, bdAttr, edgeAttrs, inlineBorder, rgb2hex, shadeAttrs, type CellEdge } from './cell-style'
+import { CELL_EDGES, SHADE_ATTR, TABS_ATTR, bdAttr, edgeAttrs, inlineBorder, parseTabsPayload, rgb2hex, shadeAttrs, type CellEdge } from './cell-style'
 
 /**
  * 段落的排版属性：行距、段前段后、底纹与四边边框。
@@ -200,6 +200,16 @@ export const ParagraphStyle = Extension.create({
             default: null as string | null,
             parseHTML: (el: HTMLElement) => el.getAttribute(SHADE_ATTR) || null,
             renderHTML: (attrs: Record<string, unknown>) => shadeAttrs(attrs.shade),
+          },
+          // 制表位表（v0.144）：w:pPr/w:tabs/w:tab 的档位|缇|前导符。屏上无对应物
+          // （Word 制表位由 tab 字符驱动跳对齐），只随 data-tabs 载荷往返
+          tabs: {
+            default: null as string | null,
+            parseHTML: (el: HTMLElement) => el.getAttribute(TABS_ATTR) || null,
+            renderHTML: (attrs: Record<string, unknown>) => {
+              const raw = typeof attrs.tabs === 'string' ? attrs.tabs : ''
+              return parseTabsPayload(raw).length ? { [TABS_ATTR]: raw } : {}
+            },
           },
           ...Object.fromEntries(CELL_EDGES.map((edge) => [bdAttr(edge), borderAttr(edge)])),
           // 边框与文字的距离（v0.143）：w:pBdr/@w:space（磅→px）。段落侧没有 tcMar 竞争，
