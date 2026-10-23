@@ -58,10 +58,19 @@ const NOISE = /^(rsid[A-Za-z]*|paraId|textId)$/
 // 应当看不到哪些」可以事先写死。MUST_SEE 是读手真会按名查问的，MUST_NOT_SEE 是我故意放进去、
 // 而读手（按源码现状）确实一寸都不查的——两边都断言才叫量具，只断一边等于自说自话。
 const W = 'http://schemas.openxmlformats.org/wordprocessingml/2006/main'
+// v0.142：clrScheme 与 fontScheme 并列。dk1/lt1 写成 sysClr（真件里 windowText/window
+// 的常驻形态，lastClr 兜底）——合成语料那侧全用 srgbClr（宇宙里没有 sysClr|val），
+// 这一分支只有夹具走，两边合起来才把 readThemeColors 的两条路都盖到。
 const FIXTURE_THEME =
   `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>` +
   `<a:theme xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main">` +
-  `<a:themeElements><a:fontScheme>` +
+  `<a:themeElements><a:clrScheme name="Office">` +
+  `<a:dk1><a:sysClr val="windowText" lastClr="000000"/></a:dk1>` +
+  `<a:lt1><a:sysClr val="window" lastClr="FFFFFF"/></a:lt1>` +
+  `<a:dk2><a:srgbClr val="44546A"/></a:dk2><a:lt2><a:srgbClr val="E7E6E6"/></a:lt2>` +
+  `<a:accent1><a:srgbClr val="4472C4"/></a:accent1><a:accent2><a:srgbClr val="ED7D31"/></a:accent2>` +
+  `<a:hlink><a:srgbClr val="0563C1"/></a:hlink><a:folHlink><a:srgbClr val="954F72"/></a:folHlink>` +
+  `</a:clrScheme><a:fontScheme>` +
   `<a:majorFont><a:latin typeface="Calibri Light"/><a:ea typeface="等线 Light"/></a:majorFont>` +
   `<a:minorFont><a:latin typeface="Calibri"/><a:ea typeface="等线"/></a:minorFont>` +
   `</a:fontScheme></a:themeElements></a:theme>`
@@ -80,6 +89,20 @@ const FIXTURE_STYLES =
   `</w:style>` +
   `</w:styles>`
 
+// v0.142：编号部件。numId=1 指 abstractNumId=0：0 层是子弹（·/左对齐），1 层是小写
+// 字母（模板 "%2."/居中对齐）；num 上再挂一枚 startOverride=3——读手要把「这一串从
+// 第 3 号起」读出来（<ol start="3">），lvlOverride|ilvl 与 startOverride|val 两对由此上账。
+const FIXTURE_NUMBERING =
+  `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>` +
+  `<w:numbering xmlns:w="${W}">` +
+  `<w:abstractNum w:abstractNumId="0">` +
+  `<w:lvl w:ilvl="0"><w:start w:val="1"/><w:numFmt w:val="bullet"/><w:lvlText w:val="·"/><w:lvlJc w:val="left"/></w:lvl>` +
+  `<w:lvl w:ilvl="1"><w:start w:val="1"/><w:numFmt w:val="lowerLetter"/><w:lvlText w:val="%2."/><w:lvlJc w:val="center"/></w:lvl>` +
+  `</w:abstractNum>` +
+  `<w:num w:numId="1"><w:abstractNumId w:val="0"/>` +
+  `<w:lvlOverride w:ilvl="0"><w:startOverride w:val="3"/></w:lvlOverride></w:num>` +
+  `</w:numbering>`
+
 const FIXTURE_DOC =
   `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>` +
   `<w:document xmlns:w="${W}"><w:body>` +
@@ -94,6 +117,13 @@ const FIXTURE_DOC =
   `<w:sz w:val="24"/><w:szCs w:val="28"/><w:b w:val="0"/>` +
   `<w:lang w:val="en-US" w:eastAsia="zh-CN"/><w:kern w:val="2"/><w:pos w:val="12"/></w:rPr>` +
   `<w:t xml:space="preserve"> 带空白的正文 </w:t></w:r></w:p>` +
+  // v0.142：主题色 run（accent1 + tint/shade 双戴）与图案底纹段（pct25 前景 FF0000/背景 FFFFFF）
+  `<w:p><w:pPr><w:shd w:val="pct25" w:color="FF0000" w:fill="FFFFFF"/></w:pPr>` +
+  `<w:r><w:rPr><w:color w:val="FF0000" w:themeColor="accent1" w:themeTint="99" w:themeShade="BF"/></w:rPr>` +
+  `<w:t>主题色与图案底纹</w:t></w:r></w:p>` +
+  // v0.142：编号段——0 层子弹（符面 ·），与 numId=1 的 startOverride=3 无关（子弹不看起始号）
+  `<w:p><w:pPr><w:numPr><w:ilvl w:val="0"/><w:numId w:val="1"/></w:numPr></w:pPr>` +
+  `<w:r><w:t>列表项</w:t></w:r></w:p>` +
   `<w:sectPr><w:pgSz w:w="11906" w:h="16838" w:orient="portrait"/>` +
   `<w:pgMar w:top="1440" w:right="1800" w:bottom="1440" w:left="1800" w:header="851" w:footer="992" w:gutter="0"/></w:sectPr>` +
   `</w:body></w:document>`
@@ -127,6 +157,22 @@ const MUST_SEE = [
   'lang|eastAsia',
   'kern|val',
   'pos|val',
+  // v0.142：主题色（clrScheme 的 srgbClr/sysClr 两分支 + w:color 的 themeColor/Tint/Shade）、
+  // 图案底纹三件套（val/color/fill）、编号的符面与对齐（lvlText/lvlJc）与起始号改写
+  // （lvlOverride/startOverride）。下面每一枚都能在夹具里指出唯一一处 XML。
+  'srgbClr|val',
+  'sysClr|lastClr',
+  'sysClr|lastClr',
+  'color|themeColor',
+  'color|themeTint',
+  'color|themeShade',
+  'shd|val',
+  'shd|color',
+  'shd|fill',
+  'lvlText|val',
+  'lvlJc|val',
+  'startOverride|val',
+  'lvlOverride|ilvl',
 ]
 // 我放进夹具而读手一寸不查的：hangingChars 在合并里被搬而没人读（段落读侧第一笔账记过同一件事）；
 // beforeAutospacing / 非顶边的 space 在源码里没有查问处；t 的 xml:space 是**裁定不查**——escText
@@ -309,6 +355,7 @@ async function runSelftest(reader) {
   zip.file('word/document.xml', FIXTURE_DOC)
   zip.file('word/styles.xml', FIXTURE_STYLES)
   zip.file('word/theme/theme1.xml', FIXTURE_THEME)
+  zip.file('word/numbering.xml', FIXTURE_NUMBERING)
   const bytes = new Uint8Array(await zip.generateAsync({ type: 'arraybuffer', compression: 'STORE' }))
   seen.clear()
   const out = await reader.docxToHtmlFidelity(bytes)

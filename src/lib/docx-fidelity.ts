@@ -50,7 +50,7 @@ import { all, allDesc, attr, attrL, attrNum, els, find, findDesc, findL, local, 
 import { FieldEngine, fieldLabel, parseInstr, recomputable } from './docx-fields'
 import { embedHtml, inlineFlatten, unwrapEmbed, type EmbedHtml } from './ole'
 import { chartToHtml, smartArtToHtml } from './ooxml-graphics'
-import { CELL_EDGES, CSS_BORDER_STYLE, eighthsToPx, rgb2hex, type CellEdge } from './cell-style'
+import { CELL_EDGES, CSS_BORDER_STYLE, eighthsToPx, rgb2hex, shadeCss, type CellEdge } from './cell-style'
 import { ooxmlLine } from './paragraph-style'
 import {
   asTableCondType,
@@ -181,7 +181,11 @@ function normTarget(target: string): string {
 }
 
 function wrap(tag: string, style: string, inner: string): string {
-  return `<${tag}${style ? ` style="${style}"` : ''}>${inner}</${tag}>`
+  // tag 可能是「p data-pstyle=… data-shade=…」这种带附加属性的形状：开标签用全串，
+  // 闭标签只取元素名——闭标签上的属性 HTML 规范一律忽略（浏览器与 DOMParser 都忍早先的
+  // data-pstyle 忍到现在），但写出来既是无效 markup，也让结构测试没法逐字节比对
+  const name = tag.split(' ')[0]
+  return `<${tag}${style ? ` style="${style}"` : ''}>${inner}</${name}>`
 }
 
 // ---- 样式表 ---------------------------------------------------------------
@@ -351,8 +355,18 @@ function styleView(book: StyleBook, id: string | undefined) {
 
 // ---- 编号定义 -------------------------------------------------------------
 
+/** 编号层级的定义：档位、起始值，加 v0.142 起上账的符面文字与符面对齐 */
+interface LvlDef {
+  numFmt: string
+  start: number
+  /** `w:lvlText/@w:val`：子弹档是符面字符（·/○/■），有序档是编号模板（"%1."/"第%1章"） */
+  lvlText?: string
+  /** `w:lvlJc/@w:val`：符面在编号空间里的左/中/右定位（CSS 无对应物，只往返） */
+  lvlJc?: string
+}
+
 interface Numbering {
-  byId: Map<string, Map<number, { numFmt: string; start: number }>>
+  byId: Map<string, Map<number, LvlDef>>
 }
 
 function readNumbering(xml: string, theme?: ThemeFonts): Numbering {
@@ -362,15 +376,17 @@ function readNumbering(xml: string, theme?: ThemeFonts): Numbering {
   if (!num) return out
   // 编号层级的 rPr 同样可能只写主题引用（v0.138），与 styles 同一趟落地
   applyThemeFonts(num, theme)
-  const abstract = new Map<string, Map<number, { numFmt: string; start: number }>>()
+  const abstract = new Map<string, Map<number, LvlDef>>()
   for (const a of all(num, 'w:abstractNum')) {
     const id = attr(a, 'w:abstractNumId')
     if (!id) continue
-    const levels = new Map<number, { numFmt: string; start: number }>()
+    const levels = new Map<number, LvlDef>()
     for (const l of all(a, 'w:lvl')) {
       levels.set(Number(attr(l, 'w:ilvl') ?? '0'), {
         numFmt: val(l, 'w:numFmt') ?? 'bullet',
         start: valNum(l, 'w:start') ?? 1,
+        lvlText: val(l, 'w:lvlText'),
+        lvlJc: (val(l, 'w:lvlJc') ?? '').toLowerCase() || undefined,
       })
     }
     abstract.set(id, levels)
@@ -378,7 +394,17 @@ function readNumbering(xml: string, theme?: ThemeFonts): Numbering {
   for (const n of all(num, 'w:num')) {
     const id = attr(n, 'w:numId')
     const aid = val(n, 'w:abstractNumId')
-    if (id && aid) out.byId.set(id, abstract.get(aid) ?? new Map())
+    if (!id || !aid) continue
+    const levels = new Map(abstract.get(aid) ?? new Map<number, LvlDef>())
+    // `w:num/w:lvlOverride/w:startOverride`（v0.142）：Word 靠它给同一份编号定义做
+    // 「这一串从第 N 号起」——不读它，读来的一串列表起始值全是抽象的 1
+    for (const lo of all(n, 'w:lvlOverride')) {
+      const ilvl = attrNum(lo, 'w:ilvl') ?? 0
+      const so = attrNum(find(lo, 'w:startOverride'), 'w:val')
+      const cur = levels.get(ilvl)
+      if (so !== undefined) levels.set(ilvl, { numFmt: cur?.numFmt ?? 'bullet', start: so, lvlText: cur?.lvlText, lvlJc: cur?.lvlJc })
+    }
+    out.byId.set(id, levels)
   }
   return out
 }
@@ -450,6 +476,140 @@ function readTheme(xml: string): ThemeFonts | undefined {
     minorCs: slot('minorFont', 'cs'),
   }
   return Object.values(out).some((v) => v !== undefined) ? out : undefined
+}
+
+// ---- 主题色（v0.142）--------------------------------------------------------
+
+/**
+ * theme1.xml 的十一个色槽。`w:color/@w:themeColor`、`w:shd/@w:themeFill` 与边框上的
+ * 同名属性引用的就是这些槽——真件里 accent1 一族出现 92（字色）+ 31（底纹）+ 34（边框）
+ * 次而读手一个都不认，带主题色的字/底纹/边框全掉回黑（Word 那头是主题蓝）。
+ * dk1/lt1 在真件里常写 sysClr（windowText/window，lastClr 兜底），其余九枚一律 srgbClr。
+ */
+interface ThemeColors {
+  dk1?: string
+  lt1?: string
+  dk2?: string
+  lt2?: string
+  accent1?: string
+  accent2?: string
+  accent3?: string
+  accent4?: string
+  accent5?: string
+  accent6?: string
+  hlink?: string
+  folHlink?: string
+}
+
+/** 十一个槽名的运行时清单（ThemeColors 是文档用的接口，这里给查表与判重各一份真值） */
+const SLOT_KEYS = [
+  'dk1',
+  'lt1',
+  'dk2',
+  'lt2',
+  'accent1',
+  'accent2',
+  'accent3',
+  'accent4',
+  'accent5',
+  'accent6',
+  'hlink',
+  'folHlink',
+] as const
+type ThemeSlot = (typeof SLOT_KEYS)[number]
+
+/**
+ * ST_ThemeColor 的规范值 → 色槽。text1/background1 一族是 2010 后的别名，与
+ * dark1/light1 同槽（Word 自己两套都写，混用件常见）。
+ */
+const THEME_COLOR_SLOT: Record<string, ThemeSlot> = {
+  dark1: 'dk1',
+  light1: 'lt1',
+  dark2: 'dk2',
+  light2: 'lt2',
+  text1: 'dk1',
+  background1: 'lt1',
+  text2: 'dk2',
+  background2: 'lt2',
+  accent1: 'accent1',
+  accent2: 'accent2',
+  accent3: 'accent3',
+  accent4: 'accent4',
+  accent5: 'accent5',
+  accent6: 'accent6',
+  hyperlink: 'hlink',
+  followedhyperlink: 'folHlink',
+}
+
+/** 读 theme1.xml 的 clrScheme。缺件、缺 scheme 或一槽都没解析出来都返回 undefined（颜色落回字面值，不炸） */
+function readThemeColors(xml: string): ThemeColors | undefined {
+  if (!xml.trim()) return undefined
+  // clrScheme 与 fontScheme 并列住在 themeElements 之下，同为孙级
+  const scheme = findDesc(parseXml(xml), 'clrScheme')
+  if (!scheme) return undefined
+  const out: ThemeColors = {}
+  for (const slot of els(scheme)) {
+    const name = local(slot.name)
+    // 子元素名就是槽名（dk1/accent1/hlink…）；兼容件若写 dark1 一族别名也认
+    const key: ThemeSlot | undefined =
+      THEME_COLOR_SLOT[name] ?? (SLOT_KEYS.includes(name as ThemeSlot) ? (name as ThemeSlot) : undefined)
+    // 一槽只记第一枚：真件里同槽不重名，重名件后来者不覆盖（与「先声明先说话」同向）
+    if (!key || out[key]) continue
+    const srgb = findL(slot, 'srgbClr')
+    const sys = findL(slot, 'sysClr')
+    // 两枚都走 attrL：主题色也是按名查问，探针在漏斗上记的是这一笔
+    const hex = (srgb ? attrL(srgb, 'val') : undefined) ?? (sys ? attrL(sys, 'lastClr') : undefined)
+    const norm = hex ? rgb2hex(`#${hex.replace(/^#/, '')}`) : null
+    if (norm) out[key] = norm
+  }
+  return Object.keys(out).length ? out : undefined
+}
+
+/** OOXML 的 themeTint / themeShade：两位十六进制字节当 0..1 系数用；读不懂算没写 */
+function tintShadeOf(v: string | undefined): number | undefined {
+  if (!v || !/^[0-9a-f]{1,2}$/i.test(v.trim())) return undefined
+  return Math.max(0, Math.min(1, Number.parseInt(v, 16) / 255))
+}
+
+/** shade 先染深、tint 后染淡（ECMA-376 没给两枚并存的次序，主流实现都走这个；注释在此备查） */
+function applyTintShade(hex: string, shade?: number, tint?: number): string {
+  const ch = (i: number) => Number.parseInt(hex.slice(i, i + 2), 16)
+  let [r, g, b] = [ch(1), ch(3), ch(5)]
+  if (shade !== undefined) {
+    r *= shade
+    g *= shade
+    b *= shade
+  }
+  if (tint !== undefined) {
+    r += (255 - r) * tint
+    g += (255 - g) * tint
+    b += (255 - b) * tint
+  }
+  const h = (n: number) => Math.max(0, Math.min(255, Math.round(n))).toString(16).padStart(2, '0')
+  return `#${h(r)}${h(g)}${h(b)}`
+}
+
+/**
+ * 元素上的主题色引用（+tint/shade）→ '#hex'。解析不了（没主题、槽空、引用名不认识）
+ * 返回 undefined，调用方落回字面值——Word 也是这个分工：主题引用是主，
+ * 字面值是给不认主题的读者兜的底（所以两枚常一起写）。
+ * 三个属性名做成参数：w:color 用 themeColor/themeTint/themeShade，
+ * w:shd 用 themeFill/themeFillTint/themeFillShade，边框同 w:color 一族。
+ */
+function themeRefCss(
+  theme: ThemeColors | undefined,
+  el: XEl,
+  refAttr = 'w:themeColor',
+  tintAttr = 'w:themeTint',
+  shadeAttr = 'w:themeShade',
+): string | undefined {
+  if (!theme) return undefined
+  const ref = (attr(el, refAttr) ?? '').trim()
+  if (!ref) return undefined
+  const slot = THEME_COLOR_SLOT[ref.toLowerCase()]
+  const base = slot ? theme[slot] : undefined
+  if (!base) return undefined
+  return applyTintShade(base, tintShadeOf(attr(el, shadeAttr)), tintShadeOf(attr(el, tintAttr)))
 }
 
 /**
@@ -528,7 +688,7 @@ interface RunProps {
 
 const NONE: RunProps = {}
 
-function readRPr(el: XEl | undefined, p: RunProps): RunProps {
+function readRPr(el: XEl | undefined, p: RunProps, tc?: ThemeColors): RunProps {
   if (!el) return p
   const o: RunProps = { ...p }
   const b = on(find(el, 'w:b'))
@@ -540,8 +700,14 @@ function readRPr(el: XEl | undefined, p: RunProps): RunProps {
   if (on(find(el, 'w:dstrike'))) o.strike = true
   const u = find(el, 'w:u')
   if (u) o.u = attr(u, 'w:val') !== 'none'
-  const color = val(el, 'w:color')
-  if (color && color.toLowerCase() !== 'auto') o.color = '#' + color.toLowerCase().replace(/^#/, '')
+  const colorEl = find(el, 'w:color')
+  if (colorEl) {
+    // 主题引用是主、字面值是兜底（Word 两枚常一起写）；主题解析不了才落字面
+    const themed = themeRefCss(tc, colorEl)
+    const v = (attr(colorEl, 'w:val') ?? '').toLowerCase()
+    if (themed) o.color = themed
+    else if (v && v !== 'auto') o.color = '#' + v.replace(/^#/, '')
+  }
   const hlv = val(el, 'w:highlight')
   if (hlv) o.hl = HL[hlv.toLowerCase()] ?? '#ffff00'
   const sz = valNum(el, 'w:sz')
@@ -587,16 +753,16 @@ function readRPr(el: XEl | undefined, p: RunProps): RunProps {
 }
 
 /** 段落样式链 → 段落标记 run（pPr/rPr）：本段文字的基准运行属性（docDefaults 故意不参与，见 readStyles） */
-function baseRunProps(chain: StyleInfo[], pPr: XEl | undefined): RunProps {
+function baseRunProps(chain: StyleInfo[], pPr: XEl | undefined, tc?: ThemeColors): RunProps {
   let p = NONE
-  for (const s of chain) if (s.rPr) p = readRPr(s.rPr, p)
+  for (const s of chain) if (s.rPr) p = readRPr(s.rPr, p, tc)
   const paraMark = pPr ? find(pPr, 'w:rPr') : undefined
   if (paraMark) {
     // 段落标记那层的字符间距只描在标记自己身上，不传给段内正文：Word 门面 A8（标记 +80 缇）
     // 量到正文 Font.Spacing=0、标记 Font.Spacing=4，而 A9（标记 4 磅 + run 5 磅）里 run 照旧赢。
     // 其余字段维持原样（这一层的粗体/字号本来就当基准用），只把 sp 按回样式链那一枚。
     const sp = p.sp
-    p = readRPr(paraMark, p)
+    p = readRPr(paraMark, p, tc)
     if (valNum(paraMark, 'w:spacing') !== undefined) p.sp = sp
   }
   return p
@@ -738,12 +904,39 @@ function marked(inner: string, p: RunProps): string {
  * 只管"开到哪一层、上一项是否还开着"，返回要追加的 HTML 片段。
  * 进深层时父 <li> 保持打开——嵌套列表必须落在父项里面，bulletList 的内容只收 listItem。
  */
+/** 列表元素的标记信息（v0.142）：ul 走行内 CSS、ol 走 HTML 属性、对齐只往返不屏现 */
+interface ListMarker {
+  /** ul 的行内 CSS（list-style-type 符面字符） */
+  css?: string
+  /** ol 的 HTML type 属性（有序型别：1/a/A/i/I） */
+  type?: string
+  /** ol 的起始号（w:lvl/w:start 或 w:num/w:lvlOverride/w:startOverride） */
+  start?: number
+  /** lvlJc 的符面对齐（center/right；left 是默认，不挂属性） */
+  align?: string
+}
+
+/** `w:numFmt` → HTML `<ol type>`（StarterKit 的 OrderedList 认 HTML type 属性） */
+const OL_TYPE: Record<string, string> = {
+  decimal: '1',
+  lowerletter: 'a',
+  upperletter: 'A',
+  lowerroman: 'i',
+  upperroman: 'I',
+}
+
 class ListState {
   private stack: { id: string; level: number; ordered: boolean }[] = []
   /** numId → 这一串列表的基准层：文档写 ilvl=2 而上游没有可挂靠的父项时，那层"2"我们当 0 用 */
   private base = new Map<string, number>()
 
-  before(level: number, ordered: boolean, id: string): string {
+  /**
+   * 开串/续串时给出的标记信息（v0.142）：css 是 ul 的 list-style-type（子弹符面），
+   * type/start 是 ol 的 HTML 属性（有序型别与起始号），align 是 lvlJc 的符面对齐
+   * （CSS 画不了，只随 data-oo-marker-align 往返）。没有标记信息时一个属性都不加，
+   * 与旧字节一致。
+   */
+  before(level: number, ordered: boolean, id: string, marker?: ListMarker): string {
     let s = ''
     // 跳档不造中间层：Word 常写「ilvl 直接从 0 跳到 2」（父项在上一页、或列表被手改过），
     // 凭空补出来的每一层都是一个空条目，屏幕上就是一排没有字的子弹。
@@ -757,8 +950,15 @@ class ListState {
       if (top.id !== id) s += this.pop()
       else return s + '</li><li>'
     }
+    const attrs: string[] = []
+    if (marker?.css) attrs.push(`style="${marker.css}"`)
+    if (marker?.type) attrs.push(`type="${marker.type}"`)
+    // 起始号只对有序档有意义（Word 的子弹层也写 w:start，但符面不看它）
+    if (ordered && marker?.start !== undefined && marker.start !== 1) attrs.push(`start="${marker.start}"`)
+    if (marker?.align) attrs.push(`data-oo-marker-align="${marker.align}"`)
+    const tag = ordered ? 'ol' : 'ul'
     while (!this.stack.length || this.stack[this.stack.length - 1].level < eff) {
-      s += `<${ordered ? 'ol' : 'ul'}><li>`
+      s += `<${tag}${attrs.length ? ' ' + attrs.join(' ') : ''}><li>`
       this.stack.push({ id, level: (this.stack[this.stack.length - 1]?.level ?? -1) + 1, ordered })
     }
     return s
@@ -875,6 +1075,8 @@ class Fidelity {
     private depth = 0,
     /** 主题字体槽（v0.138）：document 树在 run() 里落地，styles/numbering 在读入时已落地 */
     private theme?: ThemeFonts,
+    /** 主题色槽（v0.142）：w:color/@w:themeColor、w:shd/@w:themeFill 与边框上的同名属性引用的就是这些槽 */
+    private themeColors?: ThemeColors,
   ) {}
 
   private warn(msg: string) {
@@ -991,6 +1193,31 @@ class Fidelity {
   }
 
   /** numPr：段落直接给的优先，否则取样式链上声明的 */
+  /**
+   * 编号层级 → 列表元素的标记（v0.142）。子弹档的符面字符走 ul 的 list-style-type
+   * （bullet-char 扩展在模型里收它，写侧按它生成编号定义）；有序档的型别走 ol 的
+   * type 属性（StarterKit 的 OrderedList 收它）。lvlJc 只有左/中/右三值，
+   * CSS 放不了符面在编号空间里的位置，只随 data-oo-marker-align 往返。
+   */
+  private markerOf(def: LvlDef | undefined): ListMarker | undefined {
+    if (!def) return undefined
+    const out: ListMarker = {}
+    if (def.numFmt === 'bullet') {
+      // 符面字符原样进 CSS 串：引号与反斜杠要转义，否则 style 属性当场被截断
+      if (def.lvlText) out.css = `list-style-type:'${def.lvlText.replace(/['\\]/g, '\\$&')}'`
+    } else {
+      // numFmt 是 camelCase 字面（lowerRoman/upperLetter），查表先归小写
+      const t = OL_TYPE[def.numFmt.toLowerCase()]
+      if (t) out.type = t
+      else this.warn(`编号档位 w:numFmt=${def.numFmt} 屏上按十进制渲染`)
+      // 有序编号的文字模板不是「%N.」的简单形时（「第%1章」这类），屏上画不出它
+      if (def.lvlText && !/^%\d+[.、)）]?$/.test(def.lvlText)) this.warn(`编号文字模板 w:lvlText=${def.lvlText} 未保留`)
+    }
+    if (def.start !== 1) out.start = def.start
+    if (def.lvlJc === 'center' || def.lvlJc === 'right') out.align = def.lvlJc
+    return out
+  }
+
   private numOf(el: XEl): { id?: string; level: number } {
     const pPr = find(el, 'w:pPr')
     const direct = pPr ? val(find(pPr, 'w:numPr'), 'w:numId') : undefined
@@ -1021,7 +1248,7 @@ class Fidelity {
     const { effPPr } = this.effPPrOf(p)
     const pbdr = effPPr ? find(effPPr, 'w:pBdr') : undefined
     if (!pbdr) return null
-    const edges = borderEdges(pbdr)
+    const edges = borderEdges(pbdr, this.themeColors)
     return {
       sig: JSON.stringify([
         edges.top ?? null,
@@ -1029,7 +1256,7 @@ class Fidelity {
         edges.bottom ?? null,
         edges.left ?? null,
         edges.between ?? null,
-        shadingHex(find(effPPr, 'w:shd')),
+        shadingHex(find(effPPr, 'w:shd'), this.themeColors),
       ]),
       between: edges.between,
     }
@@ -1057,7 +1284,7 @@ class Fidelity {
   private async paragraph(el: XEl, list: ListState, inCell: boolean, betweenCss = ''): Promise<string> {
     const { pPr, effPPr } = this.effPPrOf(el)
     const view = styleView(this.book, pPr ? val(pPr, 'w:pStyle') : undefined)
-    const base = baseRunProps(view.chain, effPPr)
+    const base = baseRunProps(view.chain, effPPr, this.themeColors)
     // 段落标记自身的修订（v0.100）：pPr/w:ins = 这是新插入的段落（接受后留下来）；文字若没被
     // w:ins 单独包住，段落级插入就是它唯一的变化，按普通段落读不丢内容。pPr/rPr/w:del =
     // 段落标记被删（接受后本段并入下一段），这一层意思模型里没有承载，如实记账
@@ -1069,7 +1296,7 @@ class Fidelity {
     const num = inCell ? { level: 0 } : this.numOf(el)
     if (num.id !== undefined) {
       const def = this.numbering.byId.get(num.id)?.get(num.level)
-      prefix = list.before(num.level, !!def && def.numFmt !== 'bullet', num.id)
+      prefix = list.before(num.level, !!def && def.numFmt !== 'bullet', num.id, this.markerOf(def))
     }
 
     const pieces = await this.inline(el, base, inCell)
@@ -1086,7 +1313,10 @@ class Fidelity {
         : pstyleId
           ? `p data-pstyle="${attrEsc(pstyleId)}"`
           : 'p'
-    const body = this.layout(tag, style, pieces)
+    // 图案底纹的往返载荷（v0.142）：CSS 的 background-image 画得出图案，回写时还要知道
+    // 是哪一档图案、前景背景各是什么色——data-shade 三件套随标签进出（clear 不挂）
+    const shadeAttr = shadePayload(find(effPPr, 'w:shd'), this.themeColors)
+    const body = this.layout(shadeAttr ? `${tag} data-shade="${shadeAttr}"` : tag, style, pieces)
     return view.quote ? prefix + `<blockquote>${body}</blockquote>` : prefix + body
   }
 
@@ -1150,11 +1380,13 @@ class Fidelity {
       if (before !== undefined) bits.push(`margin-top: ${before}px`)
       if (after !== undefined) bits.push(`margin-bottom: ${after}px`)
     }
-    const fill = shadingHex(find(pPr, 'w:shd'))
-    if (fill) bits.push(`background-color: ${fill}`)
+    const bgCss = shadingCss(find(pPr, 'w:shd'), this.themeColors)
+    if (bgCss) bits.push(bgCss)
+    const pat = patternVal(pPr ? find(pPr, 'w:shd') : undefined)
+    if (pat) this.warn(`图案底纹（w:shd @w:val=${pat}）按 CSS 近似渲染：条纹族精确，pct 族密度近似`)
     const pbdr = pPr ? find(pPr, 'w:pBdr') : undefined
     if (pbdr) {
-      const edges = borderEdges(pbdr)
+      const edges = borderEdges(pbdr, this.themeColors)
       for (const edge of CELL_EDGES) {
         const v = edges[edge]
         if (v) bits.push(`border-${edge}: ${v}`)
@@ -1226,7 +1458,7 @@ class Fidelity {
       if (SUBSTITUTED_TABLE_STYLES.has(info.id)) continue
       const view = styleView(this.book, info.id)
       let rp: RunProps = NONE
-      for (const s of view.chain) if (s.rPr) rp = readRPr(s.rPr, rp)
+      for (const s of view.chain) if (s.rPr) rp = readRPr(s.rPr, rp, this.themeColors)
       const run = runSnapshot(rp)
       /**
        * 表样式（v0.114）：只摊"表级那一层"说了什么——外框四边与内部横竖线、默认格边距、
@@ -1246,7 +1478,7 @@ class Fidelity {
         const cond: Partial<Record<TableCondType, TableCond>> = {}
         for (const anc of styleChain(this.book, info.id)) {
           if (SUBSTITUTED_TABLE_STYLES.has(anc.id)) continue
-          const raw = borderEdges(find(anc.tblPr, 'w:tblBorders'))
+          const raw = borderEdges(find(anc.tblPr, 'w:tblBorders'), this.themeColors)
           // start/end 与 left/right 是同一条边的两种写法，先归一再合并，否则叶层的 start 盖不住祖先的 left
           const put = (canon: string, names: string[]) => {
             for (const n of names) if (raw[n] !== undefined) bd[canon] = raw[n]
@@ -1275,7 +1507,7 @@ class Fidelity {
             const bgEl = find(tcPr, 'w:shd')
             const bEl = find(find(pr, 'w:rPr'), 'w:b')
             // 条件格边框（v0.117）：`w:tcBorders` 也住 `w:tcPr` 内
-            const bcRaw = borderEdges(find(tcPr, 'w:tcBorders'))
+            const bcRaw = borderEdges(find(tcPr, 'w:tcBorders'), this.themeColors)
             const bc: Partial<Record<CellEdge, string>> = {}
             for (const e of CELL_EDGES) {
               const v = bcRaw[e]
@@ -1316,7 +1548,7 @@ class Fidelity {
               delete cur.rowHeightPx
               delete cur.rowHeightExact
             }
-            const bg = bgEl ? shadingHex(bgEl) : null
+            const bg = bgEl ? shadingHex(bgEl, this.themeColors) : null
             if (bg) cur.background = bg
             if (bEl) cur.bold = !['0', 'false', 'off'].includes((attr(bEl, 'w:val') ?? 'true').toLowerCase())
             cond[key] = cur
@@ -1337,7 +1569,7 @@ class Fidelity {
         if (mar.bottom !== undefined) tbl.padBottomPx = mar.bottom
         if (mar.left !== undefined) tbl.padLeftPx = mar.left
         if (jc === 'left' || jc === 'center' || jc === 'right') tbl.align = jc
-        const bg = shadingHex(shdEl)
+        const bg = shadingHex(shdEl, this.themeColors)
         if (bg) tbl.background = bg
         // 一块载荷都没有的那几个型不进快照（点了又清空的部位不该在文件里留下痕迹）
         if (Object.keys(cond).length) tbl.cond = cond
@@ -1692,8 +1924,8 @@ class Fidelity {
         let rp: RunProps = { ...props, rstyle: undefined }
         if (rPr) {
           const cs = val(rPr, 'w:rStyle')
-          for (const s of styleChain(this.book, cs)) if (s.rPr) rp = readRPr(s.rPr, rp)
-          rp = readRPr(rPr, rp)
+          for (const s of styleChain(this.book, cs)) if (s.rPr) rp = readRPr(s.rPr, rp, this.themeColors)
+          rp = readRPr(rPr, rp, this.themeColors)
           if (cs) rp.rstyle = cs
         }
         // 一个 run 里文字与图片/域标记可以穿插，所以先攒文字、遇到非文字构件就落盘
@@ -1946,7 +2178,7 @@ class Fidelity {
     const tblPr = find(el, 'w:tblPr')
     const gridRaw = all(find(el, 'w:tblGrid'), 'w:gridCol').map((g) => Math.round((attrNum(g, 'w') ?? 0) * TWIP_PX))
     const rows = all(el, 'w:tr')
-    const tb = borderEdges(tblPr ? find(tblPr, 'w:tblBorders') : undefined)
+    const tb = borderEdges(tblPr ? find(tblPr, 'w:tblBorders') : undefined, this.themeColors)
     const tblInd = tblPr ? attrNum(find(tblPr, 'w:tblInd'), 'w') : undefined
     // 表级默认格边距（w:tblCellMar）：v0.97 之前整条丢弃，声明了的左右 108 缇（=7.2px）也读不出来。
     // 逐格 w:tcMar 只在它说到的那几边上优先。
@@ -1963,7 +2195,7 @@ class Fidelity {
     // sa_slot_top_vs_tbl 与 sc_slot_top_vs_stylebase 两臂用竖直位置尺量出来的），
     // 两族的落点作用域共用一份账：行型按行、列型按全表、角型按其所在那一行且要两枚位都开。
     // 底纹按位置取一型（含四角型，落点就是那一角那一格），落在样式基座之上、逐格 w:shd 之下
-    const conds = styleCondCells(this.book, styleId)
+    const conds = styleCondCells(this.book, styleId, this.themeColors)
     const look = tblLookOn(el)
     const styleShd = styleCellShading(this.book, styleId)
     // 横向 gridSpan / 纵向 vMerge 都按网格列记账：Word 保证同一次纵向合并里各行的 gridSpan 一致，
@@ -2099,7 +2331,7 @@ class Fidelity {
       for (const c of plan[ri]) {
         if (c.cont) continue
         const tcPr = find(c.el, 'w:tcPr')
-        const cb = borderEdges(tcPr ? find(tcPr, 'w:tcBorders') : undefined)
+        const cb = borderEdges(tcPr ? find(tcPr, 'w:tcBorders') : undefined, this.themeColors)
         // 条件层边框（v0.117）：direct（上面 cb）> 条件层 > 表级（下面那枚 inside/outside 落点）
         const cb2 = condBordersFor(look, conds, ri, ri === last, c.gc, c.colspan, acct.length)
         const attrs: string[] = []
@@ -2140,14 +2372,16 @@ class Fidelity {
           styleShd,
         )
         const pat = patternVal(shd)
-        if (pat) this.warn(`图案底纹（w:shd @w:val=${pat}）按纯色读入，图案那一半没铺`)
+        if (pat) this.warn(`图案底纹（w:shd @w:val=${pat}）按 CSS 近似渲染：条纹族精确，pct 族密度近似`)
+        const shadeAttr = shadePayload(shd, this.themeColors)
         const style = [cellStyleCss(tcPr, {
           top: cb.top ?? cb2.top ?? (ri === 0 ? tb.top : tb.insideH),
           bottom: cb.bottom ?? cb2.bottom ?? (ri === last ? tb.bottom : tb.insideH),
           left: cb.left ?? cb2.left ?? (c.gc === 0 ? tb.left : tb.insideV),
           right: cb.right ?? cb2.right ?? (c.gc + c.colspan >= rowEnd ? tb.right : tb.insideV),
-        }, shadingHex(shd)), mar].filter(Boolean).join('; ')
+        }, shadingCss(shd, this.themeColors)), mar].filter(Boolean).join('; ')
         if (style) attrs.push(`style="${style}"`)
+        if (shadeAttr) attrs.push(`data-shade="${shadeAttr}"`)
         s += `<${tag}${attrs.length ? ' ' + attrs.join(' ') : ''}>${await this.cellBlocks(c.el)}</${tag}>`
       }
       s += '</tr>'
@@ -2242,13 +2476,14 @@ export function ommlLinear(el: XEl): string {
 }
 
 /** 单边元素（w:top/w:bottom/…）→ 规范串；`w:val="none"/"nil"/"hidden"` 是「这条边明确不要」 */
-function edgeCss(b: XEl): string {
+function edgeCss(b: XEl, tc?: ThemeColors): string {
   const style = CSS_BORDER_STYLE[(attr(b, 'w:val') ?? 'single').toLowerCase()] ?? 'solid'
   if (style === 'none') return 'none'
   // Word 门面把 w:sz="0" 的实线报成 LineWidth=2（0.25 磅，它那刻度的最小发墨档），而 0px 的 CSS 边框一滴墨都不落；
   // 4/6/8 原样通过（真件表级与改造件段落两臂同测），所以这是地板不是一律取最小
   const px = eighthsToPx(Math.max(2, attrNum(b, 'w:sz') ?? 8))
-  const hex = rgb2hex(`#${(attr(b, 'w:color') ?? '').replace(/^#/, '').toLowerCase()}`) ?? '#000000'
+  // 主题色优先（accent1 一族在边框上真件 34 枚），字面 w:color 是兜底
+  const hex = themeRefCss(tc, b) ?? rgb2hex(`#${(attr(b, 'w:color') ?? '').replace(/^#/, '').toLowerCase()}`) ?? '#000000'
   return `${px}px ${style} ${hex}`
 }
 
@@ -2256,43 +2491,80 @@ function edgeCss(b: XEl): string {
  * `w:tblBorders` / `w:tcBorders` → 各边规范串。
  * 没写的边留 undefined（区别于显式的 'none'）：undefined 才允许落回表级或应用网格线。
  */
-function borderEdges(el: XEl | undefined): Record<string, string | undefined> {
+function borderEdges(el: XEl | undefined, tc?: ThemeColors): Record<string, string | undefined> {
   const out: Record<string, string | undefined> = {}
   if (!el) return out
-  for (const child of els(el)) out[local(child.name)] = edgeCss(child)
+  for (const child of els(el)) out[local(child.name)] = edgeCss(child, tc)
   return out
 }
 
 /** `w:shd` 的 `w:fill` → 规范 hex；auto/无填充/纯白都给 null（白底等于没底纹） */
-function shadingHex(shd: XEl | undefined): string | null {
-  const fill = attr(shd, 'w:fill') ?? ''
+function shadingHex(shd: XEl | undefined, tc?: ThemeColors): string | null {
+  if (!shd) return null
+  // 主题填充优先（真件 31 枚带 themeFill），字面 fill 是兜底；两枚都没有才按无底纹
+  const themed = themeRefCss(tc, shd, 'w:themeFill', 'w:themeFillTint', 'w:themeFillShade')
+  const fill = themed ?? attr(shd, 'w:fill') ?? ''
   if (!fill || fill.toLowerCase() === 'auto') return null
-  const hex = rgb2hex(`#${fill.replace(/^#/, '').toLowerCase()}`)
+  const hex = rgb2hex(`#${fill.replace(/^#/, '')}`)
   return hex && hex !== '#ffffff' ? hex : null
 }
 
 /**
- * `w:shd` 的 @w:val 说的是图案而不是纯色时交回那一档的名字（clear/none/缺省给空串）。
- * Word 读这类件时把 fill 当颜色、把图案另住在 Texture（p19 的 pct50 在 Word 那头是 FF0000/500），
- * 而 CSS 里没有对应的底纹档位，所以这一半本轮不铺，只如实记一条。
+ * `w:shd` 的图案档位名（clear/none/nil/缺省给 null）+ 前景色。
+ * Word 的语义：@w:color 是图案的前景、@w:fill 是背景；clear 时只有 fill 说话。
+ * 前景色解析不了（auto/缺省/主题槽空）时给 null——图案没有前景就无从画起。
  */
-function patternVal(shd: XEl | undefined): string {
+function shadeSpec(shd: XEl | undefined, tc?: ThemeColors): { pattern: string; fg: string | null; bg: string | null } | null {
+  if (!shd) return null
   const v = (attr(shd, 'w:val') ?? 'clear').toLowerCase()
-  return v === 'clear' || v === 'none' ? '' : v
+  if (v === 'clear' || v === 'none' || v === 'nil') return null
+  // 前景色与字色/边框同一套优先级：主题引用优先，字面 w:color 兜底
+  const fg = themeRefCss(tc, shd) ?? rgb2hex(`#${(attr(shd, 'w:color') ?? '').replace(/^#/, '')}`)
+  return { pattern: v, fg: fg && fg !== '#ffffff' ? fg : null, bg: shadingHex(shd, tc) }
+}
+
+/**
+ * 底纹 → 一段内联 CSS（background-color 背景色；图案族再补 background-image）。
+ * clear/无图案时只有背景一色，与 v0.142 之前逐字节一致；图案族才长出第二句。
+ * 渐变公式不在本文件：cell-style 那份表是单一真源（扩展的 parse/render 与写侧都走它）。
+ */
+function shadingCss(shd: XEl | undefined, tc?: ThemeColors): string | null {
+  const spec = shadeSpec(shd, tc)
+  const bg = shadingHex(shd, tc)
+  if (!spec || !spec.fg) return bg ? `background-color: ${bg}` : null
+  return shadeCss({ pattern: spec.pattern, fg: spec.fg, bg: spec.bg ?? bg ?? '#ffffff' })
+}
+
+/**
+ * 图案底纹的往返载荷：`图案|前景|背景`（hex 不带 #）。clear/无图案给 null——
+ * 纯色底纹走 background 属性那一链，不需要第二份表示。
+ */
+function shadePayload(shd: XEl | undefined, tc?: ThemeColors): string | null {
+  const spec = shadeSpec(shd, tc)
+  if (!spec?.fg) return null
+  const bg = spec.bg ?? shadingHex(shd, tc) ?? '#ffffff'
+  return `${spec.pattern}|${spec.fg.replace('#', '')}|${bg.replace('#', '')}`
+}
+
+/** 图案档位名（给 warn 用）：clear/none/nil/缺省给空串 */
+function patternVal(shd: XEl | undefined): string {
+  const spec = shadeSpec(shd)
+  return spec?.pattern ?? ''
 }
 
 /** 单元格边框四边 + 底纹 + 竖排对齐 → 一段内联 style（顺序固定，供结构测试直接比对） */
 function cellStyleCss(
   tcPr: XEl | undefined,
   edges: { top?: string; bottom?: string; left?: string; right?: string },
-  hex: string | null,
+  shadeCss: string | null,
 ): string {
   const bits: string[] = []
   for (const edge of CELL_EDGES) {
     const v = edges[edge]
     if (v) bits.push(`border-${edge}: ${v}`)
   }
-  if (hex) bits.push(`background-color: ${hex}`)
+  // 底纹可能是「背景一色」也可能是「背景 + background-image 图案」整段，原样接上（顺序固定）
+  if (shadeCss) bits.push(shadeCss)
   const va = (val(tcPr, 'w:vAlign') ?? '').toLowerCase()
   const align = va === 'center' ? 'middle' : va === 'top' || va === 'bottom' ? va : ''
   if (align) bits.push(`vertical-align: ${align}`)
@@ -2491,7 +2763,7 @@ type CondCell = {
  * 缇而 tcPr 说 top 300 缇，位置尺读回 300 那一档，比只说 600 的那臂低 15.05 磅）；
  * `wholeTable` 那一型换哪一格写都不落（sa_slot_wholeTable 的左右仍是 Word 自带的 108 缇、sc_slot_top_whole 位移 0.00）。
  */
-function styleCondCells(book: StyleBook, id: string | undefined): Record<string, CondCell> {
+function styleCondCells(book: StyleBook, id: string | undefined, tc?: ThemeColors): Record<string, CondCell> {
   const out: Record<string, CondCell> = {}
   for (const s of styleChain(book, id)) {
     if (SUBSTITUTED_TABLE_STYLES.has(s.id)) continue
@@ -2504,7 +2776,7 @@ function styleCondCells(book: StyleBook, id: string | undefined): Record<string,
       const tblMar = marginsOf(prTbl ? find(prTbl, 'w:tblCellMar') : undefined)
       const shd = find(tcPr, 'w:shd')
       // 条件格边框（v0.117）：`w:tcBorders` 也住 `w:tcPr` 内
-      const bcRaw = borderEdges(find(tcPr, 'w:tcBorders'))
+      const bcRaw = borderEdges(find(tcPr, 'w:tcBorders'), tc)
       const borders: Partial<Record<CellEdge, string>> = {}
       for (const e of CELL_EDGES) {
         const v = bcRaw[e]
@@ -2761,12 +3033,16 @@ export async function docxToHtmlFidelity(bytes: Uint8Array, depth = 0): Promise<
   const documentXml = await read('word/document.xml')
   if (!documentXml) throw new Error('缺 word/document.xml')
   // 主题字体（v0.138）：Normal 与各级标题只写 asciiTheme 一类引用，解析不了整篇掉回默认字体
-  const theme = readTheme(await read('word/theme/theme1.xml'))
+  const themeXml = await read('word/theme/theme1.xml')
+  const theme = readTheme(themeXml)
+  // 主题色（v0.142）：与字体同读一份 theme1.xml，clrScheme 住 fontScheme 旁边
+  const themeColors = readThemeColors(themeXml)
   const f = new Fidelity(
     readStyles(await read('word/styles.xml'), theme),
     readNumbering(await read('word/numbering.xml'), theme),
     depth,
     theme,
+    themeColors,
   )
   f.load(zip)
   f.setRels(await read('word/_rels/document.xml.rels'))

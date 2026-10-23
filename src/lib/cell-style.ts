@@ -159,6 +159,110 @@ export function pxToEighths(px: number): number {
   return Math.max(1, Math.round(px * 6))
 }
 
+// ---- 图案底纹（v0.142）------------------------------------------------------
+//
+// OOXML 的 `w:shd` 是三件套：@w:val 图案档位、@w:color 前景、@w:fill 背景。
+// CSS 只有背景一色，图案得用 background-image 画——这一份表是**单一真源**：
+// docx-fidelity 的读侧、paragraph-style / cell-style 两个扩展的 parse/render、
+// 以及 docx.ts 写侧的回写都走它，避免三处各写一份渐变公式对不上。
+//
+// 精度分两档，导入 warn 里如实说：条纹族（stripe/cross 及其 thin* 变体）是精确的，
+// repeating-linear-gradient 就是等距条纹；pct 族是**密度近似**——Word 按像素点屏撒点，
+// CSS 只能用定尺点阵逼近，25/50/75 三档用 conic 四象限棋盘精确命中。
+
+/** 往返载荷属性名：`图案|前景|背景`（hex 不带 #）。clear 不挂——纯色走 background 那一链 */
+export const SHADE_ATTR = 'data-shade'
+
+/** 点阵：cell 见方的格子里一枚半径 1px 的点（密集档反过来把背景当时点） */
+function dots(fg: string, bg: string, cell: number): string {
+  return `radial-gradient(${fg} 1px, ${bg} 1.5px) 0 0/${cell}px ${cell}px`
+}
+
+/** 等距条纹：deg 走向、period 周期（px） */
+function stripes(fg: string, bg: string, deg: number, period: number): string {
+  return `repeating-linear-gradient(${deg}deg, ${fg} 0 ${period}px, ${bg} ${period}px ${period * 2}px)`
+}
+
+const PATTERN_GRAD: Record<string, (fg: string, bg: string) => string> = {
+  solid: (fg) => `linear-gradient(${fg}, ${fg})`,
+  pct5: (fg, bg) => dots(fg, bg, 16),
+  pct10: (fg, bg) => dots(fg, bg, 11),
+  pct12: (fg, bg) => dots(fg, bg, 10),
+  pct15: (fg, bg) => dots(fg, bg, 9),
+  pct20: (fg, bg) => dots(fg, bg, 8),
+  pct25: (fg, bg) => `conic-gradient(${fg} 0 25%, ${bg} 0 100%) 0 0/4px 4px`,
+  pct50: (fg, bg) => `conic-gradient(${fg} 0 25%, ${bg} 0 50%, ${fg} 0 75%, ${bg} 0) 0 0/4px 4px`,
+  pct75: (fg, bg) => `conic-gradient(${bg} 0 25%, ${fg} 0 100%) 0 0/4px 4px`,
+  pct30: (fg, bg) => dots(fg, bg, 7),
+  pct35: (fg, bg) => dots(fg, bg, 6),
+  pct37: (fg, bg) => dots(fg, bg, 6),
+  pct40: (fg, bg) => dots(fg, bg, 6),
+  pct45: (fg, bg) => dots(fg, bg, 5),
+  pct55: (fg, bg) => dots(bg, fg, 5),
+  pct60: (fg, bg) => dots(bg, fg, 4),
+  pct62: (fg, bg) => dots(bg, fg, 4),
+  pct65: (fg, bg) => dots(bg, fg, 4),
+  pct70: (fg, bg) => dots(bg, fg, 4),
+  pct80: (fg, bg) => dots(bg, fg, 3),
+  pct85: (fg, bg) => dots(bg, fg, 3),
+  pct87: (fg, bg) => dots(bg, fg, 3),
+  pct90: (fg, bg) => dots(bg, fg, 3),
+  pct95: (fg, bg) => dots(bg, fg, 2),
+  horzstripe: (fg, bg) => stripes(fg, bg, 0, 2),
+  thinhorzstripe: (fg, bg) => stripes(fg, bg, 0, 1),
+  vertstripe: (fg, bg) => stripes(fg, bg, 90, 2),
+  thinvertstripe: (fg, bg) => stripes(fg, bg, 90, 1),
+  diagstripe: (fg, bg) => stripes(fg, bg, 45, 2),
+  thindiagstripe: (fg, bg) => stripes(fg, bg, 45, 1),
+  reversediagstripe: (fg, bg) => stripes(fg, bg, -45, 2),
+  thinreversediagstripe: (fg, bg) => stripes(fg, bg, -45, 1),
+  horzcross: (fg, bg) =>
+    `repeating-linear-gradient(0deg, ${fg} 0 2px, ${bg} 2px 4px), repeating-linear-gradient(90deg, ${fg} 0 2px, ${bg} 2px 4px)`,
+  thinhorzcross: (fg, bg) =>
+    `repeating-linear-gradient(0deg, ${fg} 0 1px, ${bg} 1px 2px), repeating-linear-gradient(90deg, ${fg} 0 1px, ${bg} 1px 2px)`,
+  diagcross: (fg, bg) =>
+    `repeating-linear-gradient(45deg, ${fg} 0 2px, ${bg} 2px 4px), repeating-linear-gradient(-45deg, ${fg} 0 2px, ${bg} 2px 4px)`,
+  thindiagcross: (fg, bg) =>
+    `repeating-linear-gradient(45deg, ${fg} 0 1px, ${bg} 1px 2px), repeating-linear-gradient(-45deg, ${fg} 0 1px, ${bg} 1px 2px)`,
+}
+
+/** 图案三件套（pattern 小写档位名、fg/bg 为 '#rrggbb'） */
+export interface ShadeSpec {
+  pattern: string
+  fg: string
+  bg: string
+}
+
+/** `图案|前景|背景` → 三件套；形状不对（缺段、hex 不合法）算未声明，与 null 同路 */
+export function parseShadePayload(raw: string | null | undefined): ShadeSpec | null {
+  if (!raw) return null
+  const parts = raw.split('|')
+  if (parts.length !== 3) return null
+  const [pattern, fg, bg] = parts.map((p) => p.trim())
+  const ok = (h: string) => /^#?[0-9a-f]{3}([0-9a-f]{3})?$/i.test(h)
+  if (!pattern || !ok(fg) || !ok(bg)) return null
+  return { pattern: pattern.toLowerCase(), fg: `#${fg.replace('#', '').toLowerCase()}`, bg: `#${bg.replace('#', '').toLowerCase()}` }
+}
+
+/** 三件套 → 一段内联 CSS（背景色 + 图案渐变）；认不出的图案名只留背景一色 */
+export function shadeCss(spec: ShadeSpec): string | null {
+  const grad = PATTERN_GRAD[spec.pattern]
+  const bg = spec.bg ?? '#ffffff'
+  return grad ? `background-color: ${bg}; background-image: ${grad(spec.fg, bg)}` : `background-color: ${bg}`
+}
+
+/**
+ * data-shade 载荷 → 扩展属性要渲染的东西（属性本身 + 内联样式两段）。
+ * 载荷非法时两样都不给——那一栏当未声明，落回 background 那一链。
+ */
+export function shadeAttrs(raw: unknown): Record<string, string> {
+  const payload = typeof raw === 'string' ? raw : ''
+  const spec = parseShadePayload(payload)
+  if (!spec) return {}
+  const css = shadeCss(spec)
+  return css ? { [SHADE_ATTR]: payload, style: css } : { [SHADE_ATTR]: payload }
+}
+
 function vAlignOf(raw: string | null | undefined): string | null {
   const v = (raw ?? '').trim().toLowerCase()
   if (v.startsWith('top')) return 'top'
@@ -236,6 +340,13 @@ export const CellStyle = Extension.create({
             parseHTML: (el: HTMLElement) => rgb2hex(el.style.getPropertyValue('background-color')),
             renderHTML: (attrs: Record<string, unknown>) =>
               attrs.background ? { style: `background-color: ${attrs.background}` } : {},
+          },
+          // 图案底纹的往返载荷（v0.142）：与段落那一枚同源（SHADE_ATTR/shadeAttrs），
+          // 纯色 background 之外的第二份表示——w:shd 的图案档位与前景色只有它带得回来
+          shade: {
+            default: null as string | null,
+            parseHTML: (el: HTMLElement) => el.getAttribute(SHADE_ATTR) || null,
+            renderHTML: (attrs: Record<string, unknown>) => shadeAttrs(attrs.shade),
           },
           vAlign: {
             default: null as string | null,

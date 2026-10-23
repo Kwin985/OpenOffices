@@ -92,6 +92,10 @@ const CTX = {
   'b0': { f: '01-body', part: 'document', open: '', close: '' },
   'b:rpr': { f: '01-body', part: 'document', open: '<w:p><w:r><w:rPr>', close: '</w:rPr><w:t>文</w:t></w:r></w:p>' },
   'b:ppr': { f: '01-body', part: 'document', open: '<w:p><w:pPr>', close: '</w:pPr><w:r><w:t>文</w:t></w:r></w:p>' },
+  // v0.142：组合 shd 专用段——b:ppr 那条 open 会被几百个单属性实例合并进同一个 pPr，
+  // 而读手 find(pPr,'w:shd') 只取第一枚，组合实例排在末尾就永远踩不到。换个 open
+  // （keepNext 在 schema 序里位于 shd 之前，合法且读手不查问它）让组合实例独占一个段落。
+  'b:ppr-shd': { f: '01-body', part: 'document', open: '<w:p><w:pPr><w:keepNext w:val="1"/>', close: '</w:pPr><w:r><w:t>纹</w:t></w:r></w:p>' },
   'b:run': { f: '01-body', part: 'document', open: '<w:p><w:r>', close: '</w:r></w:p>' },
   'b:numpr': { f: '01-body', part: 'document', open: '<w:p><w:pPr><w:numPr>', close: '</w:numPr></w:pPr><w:r><w:t>文</w:t></w:r></w:p>' },
   'b:pbdr': { f: '01-body', part: 'document', open: '<w:p><w:pPr><w:pBdr>', close: '</w:pBdr></w:pPr><w:r><w:t>文</w:t></w:r></w:p>' },
@@ -117,6 +121,8 @@ const CTX = {
   't:tr': { f: '02-tables', part: 'document', open: `${TBL_HEAD}<w:tr>`, close: `</w:tr>${TBL_CLOSE}` },
   't:trPr': { f: '02-tables', part: 'document', open: `${TBL_HEAD}<w:tr><w:trPr>`, close: `</w:trPr></w:tr>${TBL_CLOSE}` },
   't:tcPr': { f: '02-tables', part: 'document', open: `${TBL_HEAD}<w:tr><w:tc><w:tcPr>`, close: `</w:tcPr>${CELL_BODY}${ROW_CLOSE}${TBL_CLOSE}` },
+  // v0.142：tcPr 侧的组合 shd 专用段，同 b:ppr-shd 的道理（tcW 在 schema 序里位于 shd 之前）
+  't:tcPr-shd': { f: '02-tables', part: 'document', open: `${TBL_HEAD}<w:tr><w:tc><w:tcPr><w:tcW w:w="0" w:type="auto"/>`, close: `</w:tcPr>${CELL_BODY}${ROW_CLOSE}${TBL_CLOSE}` },
   't:tcborders': { f: '02-tables', part: 'document', open: `${TBL_HEAD}<w:tr><w:tc><w:tcPr><w:tcBorders>`, close: `</w:tcBorders></w:tcPr>${CELL_BODY}${ROW_CLOSE}${TBL_CLOSE}` },
   't:tcmar': { f: '02-tables', part: 'document', open: `${TBL_HEAD}<w:tr><w:tc><w:tcPr><w:tcMar>`, close: `</w:tcMar></w:tcPr>${CELL_BODY}${ROW_CLOSE}${TBL_CLOSE}` },
   't:b0': { f: '02-tables', part: 'document', open: '', close: '' },
@@ -337,9 +343,12 @@ const PLACE = {
   numSpacing: [{ c: 'b:rpr', av: { val: '20' } }],
   cntxtalts: [{ c: 'b:rpr', av: { val: '1' } }],
   rStyle: [{ c: 'b:rpr', av: { val: 'a3' } }],
-  // shd 四上下文（paraBorderSig / cellStyleCss / shadingHex 几条路都铺）
+  // shd 五上下文（paraBorderSig / cellStyleCss / shadingHex 几条路都铺）
   shd: [
-    { c: 'b:ppr', av: { val: 'clear', color: 'auto', fill: 'FFE699', themeFill: 'accent1', themeFillShade: 'BF', themeFillTint: '99' } },
+    // v0.142：pPr 上下文改成非 clear 档的字面图案（前景 FF0000/背景 FFFFFF，无 themeFill）——
+    // clear+themeFill 那支只走 themeRefCss 的主引用，`??` 右侧的字面 color 不求值，
+    // 普查腿就永远踩不到 shd|color；这里补上图案档让两支都在合成语料里真实发生。
+    { c: 'b:ppr', av: { val: 'pct25', color: 'FF0000', fill: 'FFFFFF' } },
     { c: 'b:rpr', av: { val: 'clear', color: 'auto', fill: 'FFE699', themeFill: 'accent1', themeFillShade: 'BF', themeFillTint: '99' } },
     { c: 't:tcPr', av: { val: 'clear', color: 'auto', fill: 'FFE699', themeFill: 'accent1', themeFillShade: 'BF', themeFillTint: '99' } },
     { c: 't:tblPr', av: { val: 'clear', color: 'auto', fill: 'FFE699', themeFill: 'accent1', themeFillShade: 'BF', themeFillTint: '99' } },
@@ -783,6 +792,45 @@ push(
 )
 push('00-base', 'document', CTX['d0:tbl'].open, CTX['d0:tbl'].close, '<w:p><w:r><w:t>表</w:t></w:r></w:p>')
 
+// 组合 shd 两枚（v0.142）：上面的单属性实例铺不满「多属性同元素」的查问路径——
+// shadeSpec 里 `themeRefCss(...) ?? attr(shd,'w:color')` 的右支要无 themeFill 的图案档才求值，
+// themeFillTint/Shade 要主引用在场才算，而单属性 `<w:shd w:color="auto"/>` 无 val 即 clear 档、
+// 读手按 Word 语义正确地整个跳过。这两枚让 shd|color、shd|themeFillTint/Shade 在普查腿
+// 真实发生（selftest 夹具早已覆盖，普查腿此前是盲区）。两枚 shd 分居两个专用段：
+// 读手每个 pPr/tcPr 只 find 第一枚 shd，同段放两枚第二枚必被压掉。
+push(
+  '01-body',
+  'document',
+  CTX['b:ppr-shd'].open,
+  CTX['b:ppr-shd'].close,
+  '<w:shd w:val="pct25" w:color="FF0000" w:fill="FFFFFF"/>',
+)
+// 第二枚必须换个 open（push 按 open 合并，同 open 会同段、被 find 压掉）；
+// widowControl 在 schema 序里同样位于 shd 之前，读手不查问它
+push(
+  '01-body',
+  'document',
+  '<w:p><w:pPr><w:widowControl w:val="1"/>',
+  '</w:pPr><w:r><w:t>纹</w:t></w:r></w:p>',
+  '<w:shd w:val="clear" w:themeFill="accent1" w:themeFillTint="99" w:themeFillShade="BF"/>',
+)
+// 表格侧同来一组：tcPr 走 cellStyleCss 那条路（shadingHex → themeRefCss），与段落侧互证
+push(
+  '02-tables',
+  'document',
+  CTX['t:tcPr-shd'].open,
+  CTX['t:tcPr-shd'].close,
+  '<w:shd w:val="pct25" w:color="FF0000" w:fill="FFFFFF"/>',
+)
+// 第二枚同理换 open（gridSpan 在 tcPr 的 schema 序里位于 shd 之前）
+push(
+  '02-tables',
+  'document',
+  `${TBL_HEAD}<w:tr><w:tc><w:tcPr><w:gridSpan w:val="1"/>`,
+  `</w:tcPr>${CELL_BODY}${ROW_CLOSE}${TBL_CLOSE}`,
+  '<w:shd w:val="clear" w:themeFill="accent1" w:themeFillTint="99" w:themeFillShade="BF"/>',
+)
+
 // ── 组装文件 ───────────────────────────────────────────────────────────────
 // docHeader = 声明 + 根开串（不含 <w:body>）：w:background 要插在根与 body 之间
 const docHeader =
@@ -793,9 +841,25 @@ const docHeader =
   `mc:Ignorable="w14 w15">`
 const BODY_OPEN = '<w:body>'
 const XML_DECL = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n'
+// clrScheme（v0.142 补）：读手自此解析 w:color/@w:themeColor 一族，语料里必须有色槽可解，
+// 否则主题色全掉字面值、那一族对翻不了身。十一槽一律写 srgbClr——宇宙里有 srgbClr|val
+// （563 次）而没有 sysClr|val，全用 srgbClr 保证「读到的每一对都在分母里」；
+// sysClr（dk1/lt1 在真件里的常驻形态）那条分支由 selftest 夹具的 FIXTURE_THEME 覆盖。
+// 色值取 Office 2007-2016 那套主题色（与 Word 默认件一致）。
+const CLR_SCHEME =
+  `<a:clrScheme name="Office">` +
+  `<a:dk1><a:srgbClr val="000000"/></a:dk1><a:lt1><a:srgbClr val="FFFFFF"/></a:lt1>` +
+  `<a:dk2><a:srgbClr val="44546A"/></a:dk2><a:lt2><a:srgbClr val="E7E6E6"/></a:lt2>` +
+  `<a:accent1><a:srgbClr val="4472C4"/></a:accent1><a:accent2><a:srgbClr val="ED7D31"/></a:accent2>` +
+  `<a:accent3><a:srgbClr val="A5A5A5"/></a:accent3><a:accent4><a:srgbClr val="FFC000"/></a:accent4>` +
+  `<a:accent5><a:srgbClr val="5B9BD5"/></a:accent5><a:accent6><a:srgbClr val="70AD47"/></a:accent6>` +
+  `<a:hlink><a:srgbClr val="0563C1"/></a:hlink><a:folHlink><a:srgbClr val="954F72"/></a:folHlink>` +
+  `</a:clrScheme>`
 const THEME =
   `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n` +
-  `<a:theme xmlns:a="${NS.a}" name="Office Theme"><a:themeElements><a:fontScheme name="Office">` +
+  `<a:theme xmlns:a="${NS.a}" name="Office Theme"><a:themeElements>` +
+  CLR_SCHEME +
+  `<a:fontScheme name="Office">` +
   `<a:majorFont><a:latin typeface="Cambria"/><a:ea typeface="等线"/><a:cs typeface="Times New Roman"/></a:majorFont>` +
   `<a:minorFont><a:latin typeface="Calibri"/><a:ea typeface="等线"/><a:cs typeface="Times New Roman"/></a:minorFont>` +
   `</a:fontScheme></a:themeElements></a:theme>`

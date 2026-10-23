@@ -1,5 +1,5 @@
 import { Extension, Mark, type CommandProps, type Editor } from '@tiptap/core'
-import { CELL_EDGES, bdAttr, edgeAttrs, inlineBorder, rgb2hex, type CellEdge } from './cell-style'
+import { CELL_EDGES, SHADE_ATTR, bdAttr, edgeAttrs, inlineBorder, rgb2hex, shadeAttrs, type CellEdge } from './cell-style'
 
 /**
  * 段落的排版属性：行距、段前段后、底纹与四边边框。
@@ -181,6 +181,14 @@ export const ParagraphStyle = Extension.create({
             default: null as string | null,
             parseHTML: (el: HTMLElement) => rgb2hex(el.style.getPropertyValue('background-color')),
             renderHTML: (attrs: Record<string, unknown>) => styleOf(attrs),
+          },
+          // 图案底纹的往返载荷（v0.142）：data-shade 三件套（图案|前景|背景）。
+          // 纯色走 background 那一链；只有图案族才需要这第二份表示——CSS 的
+          // background-image 画得出图案，回写时还要知道是哪一档、两色各是什么
+          shade: {
+            default: null as string | null,
+            parseHTML: (el: HTMLElement) => el.getAttribute(SHADE_ATTR) || null,
+            renderHTML: (attrs: Record<string, unknown>) => shadeAttrs(attrs.shade),
           },
           ...Object.fromEntries(CELL_EDGES.map((edge) => [bdAttr(edge), borderAttr(edge)])),
         },

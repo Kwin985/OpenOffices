@@ -40,7 +40,7 @@ import {
   WidthType,
 } from 'docx'
 import { xml2js } from 'xml-js'
-import { borderParts, pxToEighths, CELL_EDGES, type CellEdge } from './cell-style'
+import { borderParts, pxToEighths, parseShadePayload, CELL_EDGES, type CellEdge } from './cell-style'
 import { lineToOoxml, type LineRule } from './paragraph-style'
 import { decodeEnt } from './ooxml'
 import { condLookBits } from './table-cond'
@@ -1054,7 +1054,7 @@ function spacingOf(node: PMNode): ISpacingProperties | undefined {
  *  各写一枚 w:pStyle，并存会出两枚）；bullet 项库无条件补 ListParagraph 标签，同样不能并存 */
 function paraFormatOf(node: PMNode, pstyle?: string | null) {
   const sp = spacingOf(node)
-  const sh = shadingOf(node.attrs?.background)
+  const sh = shadingOf(node.attrs)
   const bd = bordersOf(node.attrs)
   return {
     ...(pstyle ? { style: pstyle } : {}),
@@ -1101,11 +1101,27 @@ function bordersOf(attrs: Record<string, unknown> | undefined) {
   return Object.values(b).some(Boolean) ? b : undefined
 }
 
-/** 底纹 → w:shd；Word 的 fill 是不带 # 的十六进制 */
-function shadingOf(v: unknown) {
-  const hex = typeof v === 'string' ? v : ''
+/**
+ * 底纹 → w:shd。图案族（data-shade 三件套，v0.142）优先：type 是图案档位、
+ * fill 是背景、color 是前景——Word 的图案底纹三件套就是这么分工的；
+ * 纯色只有 fill。Word 的 fill/color 都不带 #。
+ * 图案名不在规范档位表里（第三方怪件）按纯色写：色不丢、档位丢（读侧 warn 已记）。
+ */
+function shadingOf(attrs: Record<string, unknown> | undefined) {
+  const spec = parseShadePayload(typeof attrs?.shade === 'string' ? attrs.shade : null)
+  // 载荷里的档位名是全小写（读侧归一过），docx 包的规范名是驼峰（horzStripe）——过一遍映射
+  const canonical = spec ? SHADING_TYPES[spec.pattern] : undefined
+  if (spec && canonical) {
+    return { type: canonical, fill: spec.bg.replace('#', ''), color: spec.fg.replace('#', '') }
+  }
+  const hex = typeof attrs?.background === 'string' ? attrs.background : ''
   return hex ? { type: ShadingType.CLEAR, fill: hex.replace('#', '').toLowerCase() } : undefined
 }
+
+/** OOXML 图案档位表：小写（读侧载荷的口径）→ docx 包的规范名（horzStripe 这一族是驼峰） */
+const SHADING_TYPES: Record<string, (typeof ShadingType)[keyof typeof ShadingType]> = Object.fromEntries(
+  (Object.values(ShadingType) as string[]).map((v) => [v.toLowerCase(), v as (typeof ShadingType)[keyof typeof ShadingType]]),
+)
 
 /** 上下标：Word 把 vertAlign 记在 rPr，与粗斜体同级，所以是两个互斥的 run 属性 */
 function vertAlignOf(node: PMNode): { superScript?: boolean; subScript?: boolean } {
@@ -1228,6 +1244,78 @@ const ORDERED_LEVELS = [0, 1, 2].map((level) => ({
   style: { paragraph: { indent: { left: 720 * (level + 1), hanging: 360 } } },
 }))
 
+/**
+ * 一条列表串的编号档位（v0.142）：子弹档 marker 是符面字符，有序档是 LevelFormat；
+ * align 是 w:lvlJc 的符面对齐，start 是起始号（w:start / w:startOverride）。
+ */
+interface ListKind {
+  ordered: boolean
+  marker: string
+  align: 'left' | 'center' | 'right'
+  start: number
+}
+
+/** HTML `<ol type>` → LevelFormat（读侧 OL_TYPE 的反向表；StarterKit 只认 1/a/A/i/I） */
+const OL_FMT: Record<string, (typeof LevelFormat)[keyof typeof LevelFormat]> = {
+  '1': LevelFormat.DECIMAL,
+  a: LevelFormat.LOWER_LETTER,
+  A: LevelFormat.UPPER_LETTER,
+  i: LevelFormat.LOWER_ROMAN,
+  I: LevelFormat.UPPER_ROMAN,
+}
+
+/** 模型上的 markerAlign 属性 → 三档；null/不认识按 left（Word 的默认） */
+function markerAlignOf(v: unknown): 'left' | 'center' | 'right' {
+  return v === 'center' || v === 'right' ? v : 'left'
+}
+
+/**
+ * 一条编号定义的三层（v0.142）：符面/格式照 kind 走，缩进沿用 ORDERED_LEVELS 那把尺子
+ * （720×(层+1) 左缩进 + 360 悬挂——Word 默认编号层的形状）。
+ * 起始号落在**使用层**（startLevel）：段落的 w:numPr 指哪一层，Word 就从那一层的
+ * w:start 起算——落在第 0 层而段落引用第 1 层的话，Word 整条读不到起始值。
+ */
+function listLevels(kind: ListKind, startLevel = 0) {
+  return [0, 1, 2].map((level) => ({
+    level,
+    ...(kind.ordered
+      ? { format: kind.marker as (typeof LevelFormat)[keyof typeof LevelFormat], text: `%${level + 1}.` }
+      : { format: LevelFormat.BULLET, text: kind.marker }),
+    alignment:
+      kind.align === 'center' ? AlignmentType.CENTER : kind.align === 'right' ? AlignmentType.END : AlignmentType.START,
+    ...(kind.ordered && kind.start !== 1 && level === startLevel ? { start: kind.start } : {}),
+    style: { paragraph: { indent: { left: 720 * (level + 1), hanging: 360 } } },
+  }))
+}
+
+/**
+ * 导出用的编号注册表：把文档里每串列表的档位收成一条 numbering config。
+ * 默认档不进表——子弹（•、左对齐）走包自带的 `bullet`，无型别有序（左对齐、起始 1）
+ * 走既有的 ORDERED_REF，这两种情形导出的字节与 v0.142 之前一致；
+ * 只有「档位与默认不同」的列表才生成独立 reference（符面字符、罗马数字、居中对齐…）。
+ */
+class ListRegistry {
+  private refs = new Map<string, { ref: string; kind: ListKind; level: number }>()
+
+  /**
+   * 取这一串列表的 reference。level 是段落将引用的层（= 嵌套深度，已截到 2）：
+   * 有序档的起始号要落在这一层上，所以层号进键——同一个罗马数字串出现在两层时
+   * 各有一条定义，互不抢对方的 start。子弹档没有起始号，层号不进键，全篇复用。
+   */
+  refOf(kind: ListKind, level: number): string {
+    const key = JSON.stringify([kind.ordered, kind.marker, kind.align, kind.ordered ? [kind.start, level] : 0])
+    const hit = this.refs.get(key)
+    if (hit) return hit.ref
+    const ref = `oof-list-${this.refs.size}`
+    this.refs.set(key, { ref, kind, level })
+    return ref
+  }
+
+  config(): { reference: string; levels: ReturnType<typeof listLevels> }[] {
+    return [...this.refs.values()].map(({ ref, kind, level }) => ({ reference: ref, levels: listLevels(kind, level) }))
+  }
+}
+
 /** 行内的单元格（TipTap 用 tableHeader 表示表头行那一格的类型） */
 function cellsOf(row: PMNode): PMNode[] {
   return (row.content ?? []).filter((c) => c.type === 'tableCell' || c.type === 'tableHeader')
@@ -1340,11 +1428,33 @@ function blocksOf(
   depth = 0,
   dt: DocTrack = newDocTrack(),
   contentTwips = CONTENT_TWIPS_FALLBACK,
+  /** 编号注册表（v0.142）：整篇文档共用一份，递归与格内都传同一枚 */
+  lists: ListRegistry = new ListRegistry(),
 ): (Paragraph | Table | TableOfContents)[] {
   const out: (Paragraph | Table | TableOfContents)[] = []
   for (const node of nodes) {
     if (node.type === 'bulletList' || node.type === 'orderedList') {
       const ordered = node.type === 'orderedList'
+      const attrs = (node.attrs ?? {}) as Record<string, unknown>
+      const align = markerAlignOf(attrs.markerAlign)
+      // 默认档不进注册表（字节与 v0.142 之前一致）：子弹（•/左对齐）走包自带 bullet，
+      // 无型别有序（左对齐、起始 1）走 ORDERED_REF；其余档位各生成一条编号定义
+      let numbering: { numbering: { reference: string; level: number } } | { bullet: { level: number } }
+      if (ordered) {
+        const type = typeof attrs.type === 'string' ? attrs.type : null
+        const startRaw = Number(attrs.start)
+        const start = Number.isFinite(startRaw) && startRaw > 0 ? Math.round(startRaw) : 1
+        const lvl = Math.min(2, depth)
+        const ref =
+          !type && align === 'left' && start === 1
+            ? ORDERED_REF
+            : lists.refOf({ ordered: true, marker: OL_FMT[type ?? '1'] ?? LevelFormat.DECIMAL, align, start }, lvl)
+        numbering = { numbering: { reference: ref, level: lvl } }
+      } else {
+        const ch = typeof attrs.bulletChar === 'string' && attrs.bulletChar ? attrs.bulletChar : '•'
+        const ref = ch === '•' && align === 'left' ? null : lists.refOf({ ordered: false, marker: ch, align, start: 1 }, Math.min(2, depth))
+        numbering = ref ? { numbering: { reference: ref, level: Math.min(2, depth) } } : { bullet: { level: depth } }
+      }
       for (const item of node.content ?? []) {
         const blocks = (item.content ?? []).filter((b) => b.type !== 'bulletList' && b.type !== 'orderedList')
         const nested = (item.content ?? []).filter((b) => b.type === 'bulletList' || b.type === 'orderedList')
@@ -1354,15 +1464,15 @@ function blocksOf(
             children: inlineBlockChildren(main, dt),
             // 有序项必须走真编号：写成「1. 」字面文本时 Word 里既不续号也不重排，
             // 读回来更会把它当成普通段落（编号从此消失）。
-            ...(ordered ? { numbering: { reference: ORDERED_REF, level: Math.min(2, depth) } } : { bullet: { level: depth } }),
+            ...numbering,
             indent: indentOf(main),
             // 有序项库见 style 会跳过 ListParagraph 标签，命名样式可并存；子弹项库无条件
             // 补 ListParagraph（两枚 pStyle 撞车），样式标签只好丢（挂账）
             ...paraFormatOf(main, ordered ? pstyleOf(main) : undefined),
           }),
         )
-        out.push(...blocksOf(blocks.slice(1), depth, dt, contentTwips))
-        out.push(...blocksOf(nested, depth + 1, dt, contentTwips))
+        out.push(...blocksOf(blocks.slice(1), depth, dt, contentTwips, lists))
+        out.push(...blocksOf(nested, depth + 1, dt, contentTwips, lists))
       }
       continue
     }
@@ -1477,7 +1587,7 @@ function blocksOf(
                   const cellTw = isCell ? gridTw.slice(start, start + cs).reduce((s, w) => s + w, 0) : 0
                   if (isCell) gc = start + cs
                   const borders = bordersOf(cell.attrs)
-                  const bg = shadingOf(cell.attrs?.background)
+                  const bg = shadingOf(cell.attrs)
                   const va = cell.attrs?.vAlign
                   // 格边距（v0.97 起）：pad* 属性（px，0 是真值）→ 逐边 w:tcMar（缇）；
                   // 只在有声明时给 margins，不给默认值——Word 读侧对缺省边自己有表级账
@@ -1495,7 +1605,7 @@ function blocksOf(
                   }
                   // 一格多段要一段一个 w:p：早先图省事把所有子节点并成一个段落，
                   // 于是格内的第二行起既没有换行也没有自己的缩进/对齐（读回来整格糊成一行）
-                  const cellBlocks = blocksOf(cell.content ?? [], 0, dt, contentTwips)
+                  const cellBlocks = blocksOf(cell.content ?? [], 0, dt, contentTwips, lists)
                   return new TableCell({
                     ...(gridPx && isCell && cellTw > 0 ? { width: { size: cellTw, type: WidthType.DXA } } : {}),
                     ...(cs > 1 ? { columnSpan: cs } : {}),
@@ -1531,6 +1641,8 @@ function blocksOf(
 
 export async function prosemirrorToDocxBytes(json: PMNode, meta?: DocMeta): Promise<Uint8Array> {
   const dt = newDocTrack()
+  // 编号注册表（v0.142）：blocksOf 一路往里传，收齐全篇的自定义档位后进 Document.numbering
+  const lists = new ListRegistry()
   const pg = resolvePage(meta?.page)
   const twips = (mm: number) => Math.round(mm * MM_TWIPS)
   // 版心宽度：与界面上的精确列宽同一个算法（contentTwipsOf），没有宽度账的表按它等分写真网格
@@ -1543,7 +1655,7 @@ export async function prosemirrorToDocxBytes(json: PMNode, meta?: DocMeta): Prom
     }
     headers?: { default: Header }
     footers?: { default: Footer }
-  } = { children: blocksOf(json.content ?? [], 0, dt, contentTw) }
+  } = { children: blocksOf(json.content ?? [], 0, dt, contentTw, lists) }
   {
     // docx 库按"竖版宽高 + orientation"理解 size（landscape 时自行交换写盘），故传排序后的尺寸
     section.properties = {
@@ -1660,7 +1772,7 @@ export async function prosemirrorToDocxBytes(json: PMNode, meta?: DocMeta): Prom
           },
         }
       : {}),
-    numbering: { config: [{ reference: ORDERED_REF, levels: ORDERED_LEVELS }] },
+    numbering: { config: [{ reference: ORDERED_REF, levels: ORDERED_LEVELS }, ...lists.config()] },
     // 文档带进来的样式表（v0.102）：快照重建，Normal/内置 id 之外的定义都落回去，
     // 段落上的 w:pStyle 才有处可指——样式表不再在导出这一步被洗掉
     styles: { ...paragraphStylesOf(meta), ...characterStylesOf(meta), ...tableStylesOf(meta) },
