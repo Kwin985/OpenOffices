@@ -282,6 +282,28 @@ export function tableDims(t: SlideTableData): { rows: number; cols: number } {
   }
 }
 
+/**
+ * v0.141：改一列（或一行）占的比例，其余按原比例让位——和恒为 1。
+ * 为什么必须归一：colW/rowH 存的是「相对表总宽/总高的分数」，导出按这个和折回英寸；
+ * 让用户把一列改成 0.5 而其余仍是 0.5+0.5，落盘时整张表就被拉宽出框了。
+ */
+export function setTableSpan(
+  t: SlideTableData,
+  axis: 'col' | 'row',
+  i: number,
+  frac: number,
+): SlideTableData {
+  const n = axis === 'col' ? tableDims(t).cols : tableDims(t).rows
+  if (n <= 0 || i < 0 || i >= n) return t
+  const v = Math.min(0.9, Math.max(0.05, Number.isFinite(frac) ? frac : 1 / n))
+  const cur = axis === 'col' ? t.colW : t.rowH
+  const base = Array.from({ length: n }, (_, k) => cur?.[k] ?? 1 / n)
+  const rest = 1 - v
+  const sumRest = base.reduce((a, x, k) => (k === i ? a : a + x), 0)
+  const next = base.map((x, k) => (k === i ? v : sumRest > 0 ? (x / sumRest) * rest : rest / Math.max(1, n - 1)))
+  return axis === 'col' ? { ...t, colW: next } : { ...t, rowH: next }
+}
+
 export function emptyDeck(): Deck {
   return {
     app: 'openoffices',

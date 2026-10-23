@@ -40,6 +40,7 @@ import {
   newTableShape,
   newChartShape,
   resizeTable,
+  setTableSpan,
   tableDims,
   SLIDE_CHART_NAMES,
 } from '../lib/ppt'
@@ -893,6 +894,41 @@ function PptEditor({ tab }: Props) {
             ))}
           </select>
         )}
+        {/* v0.141：入场时长。此前模型有槽而界面没有入口——导入进来的时长原样带回，
+            但用户手改不了；未设 = 导出 500ms（PowerPoint 的默认） */}
+        {slide.anim && (
+          <label className="tool-num" title="逐条入场时长（毫秒；未设 = 500，随 pptx cTn@dur 往返）">
+            入场
+            <input
+              className="tool-num-input"
+              type="number"
+              min={50}
+              max={600000}
+              step={50}
+              value={slide.animDur ?? ''}
+              onChange={(e) =>
+                editSlide(cur, (s) => {
+                  const v = Number(e.target.value)
+                  s.animDur = Number.isFinite(v) && v >= 50 ? Math.min(600000, Math.round(v)) : undefined
+                })
+              }
+            />
+            毫秒
+          </label>
+        )}
+        {/* v0.141：点击换页开关。文件里 advClick="0" 的页以前一改就变回「点击就翻」——
+            现在有开关，缺省（未设）与「开」在文件里同义，关掉才写 0 */}
+        <button
+          className={`tool-btn${slide.advClick === false ? '' : ' tool-btn-primary'}`}
+          onClick={() =>
+            editSlide(cur, (s) => {
+              s.advClick = s.advClick === false ? undefined : false
+            })
+          }
+          title="点击换页：关掉之后这一页只能等自动换页（导出为 advClick=0）"
+        >
+          点击换页{slide.advClick === false ? ' · 关' : ''}
+        </button>
         {/* v0.115：揭示序可调。只有 ≥2 项时才给入口——一项的次序没有可排的东西 */}
         {seqItems.length > 1 && (
           <button
@@ -1177,6 +1213,44 @@ function PptEditor({ tab }: Props) {
                             >
                               B
                             </button>
+                            {/* v0.141：斜体与下划线。读侧 v0.140 才收进来，界面这一轮补入口；
+                                下划线只表达「有线」，双线/点线导入时降级成单线 */}
+                            <button
+                              className={`tool-btn tool-btn-mini ppt-btn-italic${sh.italic ? ' tool-btn-primary' : ''}`}
+                              onClick={() => patchShape(sh.id, { italic: !sh.italic })}
+                              title="斜体（随 pptx rPr@i 往返）"
+                            >
+                              I
+                            </button>
+                            <button
+                              className={`tool-btn tool-btn-mini ppt-btn-underline${sh.underline ? ' tool-btn-primary' : ''}`}
+                              onClick={() => patchShape(sh.id, { underline: !sh.underline })}
+                              title="下划线（随 pptx rPr@u 往返；只表达单线）"
+                            >
+                              U
+                            </button>
+                            <select
+                              className="tool-select"
+                              value={sh.anchor ?? ''}
+                              title="文本在框内的垂直锚点（bodyPr@anchor）"
+                              onChange={(e) =>
+                                patchShape(sh.id, {
+                                  anchor: (e.target.value || undefined) as SlideShape['anchor'],
+                                })
+                              }
+                            >
+                              <option value="">锚点</option>
+                              <option value="top">靠上</option>
+                              <option value="middle">居中</option>
+                              <option value="bottom">靠下</option>
+                            </select>
+                            <button
+                              className={`tool-btn tool-btn-mini${sh.wrap === false ? ' tool-btn-primary' : ''}`}
+                              onClick={() => patchShape(sh.id, { wrap: sh.wrap === false ? undefined : false })}
+                              title="不换行：文本溢出框外也不折行（bodyPr@wrap=none）"
+                            >
+                              不换行
+                            </button>
                             <input
                               type="color"
                               className="ppt-shape-color"
@@ -1333,6 +1407,95 @@ function PptEditor({ tab }: Props) {
                                 patchShape(sh.id, { table: { ...sh.table!, headerFill: e.target.value } })
                               }
                             />
+                            {/* v0.141：隔行底纹。pptxgenjs 那一行在它源码里是注释，
+                                所以这一枚只能靠解包注入落盘（见 pptx-export） */}
+                            <button
+                              className={`tool-btn tool-btn-mini${sh.table!.bandRow ? ' tool-btn-primary' : ''}`}
+                              title="隔行底纹（tblPr@bandRow）"
+                              onClick={() =>
+                                patchShape(sh.id, { table: { ...sh.table!, bandRow: !sh.table!.bandRow } })
+                              }
+                            >
+                              隔行
+                            </button>
+                            {/* v0.141：列宽/行高。存的是占比（和为 1），这里按百分数给入口；
+                                列（行）数多的时候不给逐枚入口——属性条会挤成两行还看不清是哪一列 */}
+                            {tableDims(sh.table).cols <= 6 && (
+                              <span className="ppt-bar-group">
+                                <span className="ppt-bar-label">列宽%</span>
+                                {Array.from({ length: tableDims(sh.table).cols }, (_, i) => (
+                                  <input
+                                    key={i}
+                                    className="tool-num-input"
+                                    type="number"
+                                    min={5}
+                                    max={90}
+                                    step={5}
+                                    title={`第 ${i + 1} 列宽度占比`}
+                                    value={Math.round((sh.table!.colW?.[i] ?? 1 / tableDims(sh.table!).cols) * 100)}
+                                    onChange={(e) =>
+                                      patchShape(sh.id, {
+                                        table: setTableSpan(
+                                          sh.table!,
+                                          'col',
+                                          i,
+                                          (Number(e.target.value) || 0) / 100,
+                                        ),
+                                      })
+                                    }
+                                  />
+                                ))}
+                                <button
+                                  className="tool-btn tool-btn-mini"
+                                  title="各列等宽（清掉列宽占比）"
+                                  onClick={() =>
+                                    patchShape(sh.id, {
+                                      table: { ...sh.table!, colW: undefined },
+                                    })
+                                  }
+                                >
+                                  等分
+                                </button>
+                              </span>
+                            )}
+                            {tableDims(sh.table).rows <= 6 && (
+                              <span className="ppt-bar-group">
+                                <span className="ppt-bar-label">行高%</span>
+                                {Array.from({ length: tableDims(sh.table).rows }, (_, i) => (
+                                  <input
+                                    key={i}
+                                    className="tool-num-input"
+                                    type="number"
+                                    min={5}
+                                    max={90}
+                                    step={5}
+                                    title={`第 ${i + 1} 行高度占比`}
+                                    value={Math.round((sh.table!.rowH?.[i] ?? 1 / tableDims(sh.table!).rows) * 100)}
+                                    onChange={(e) =>
+                                      patchShape(sh.id, {
+                                        table: setTableSpan(
+                                          sh.table!,
+                                          'row',
+                                          i,
+                                          (Number(e.target.value) || 0) / 100,
+                                        ),
+                                      })
+                                    }
+                                  />
+                                ))}
+                                <button
+                                  className="tool-btn tool-btn-mini"
+                                  title="各行等高（清掉行高占比，交给 PowerPoint 自适应）"
+                                  onClick={() =>
+                                    patchShape(sh.id, {
+                                      table: { ...sh.table!, rowH: undefined },
+                                    })
+                                  }
+                                >
+                                  等分
+                                </button>
+                              </span>
+                            )}
                             <button
                               className={`tool-btn tool-btn-mini${editingShape === sh.id ? ' tool-btn-primary' : ''}`}
                               title="逐个格子改字（也可以直接双击表格）"
@@ -1342,6 +1505,24 @@ function PptEditor({ tab }: Props) {
                             </button>
                           </>
                         )}
+                        {/* v0.141：形状名与替代文本。前者是 PowerPoint 选择窗格/动画目标认人的
+                            名字，后者是屏幕阅读器念的图说——导入都带得回来，此前却无处手改 */}
+                        <span className="ppt-bar-group">
+                          <input
+                            className="ppt-bar-text"
+                            value={sh.name ?? ''}
+                            placeholder="形状名"
+                            title="形状名（cNvPr@name）：PowerPoint 选择窗格与动画目标用它认人"
+                            onChange={(e) => patchShape(sh.id, { name: e.target.value || undefined })}
+                          />
+                          <input
+                            className="ppt-bar-text"
+                            value={sh.alt ?? ''}
+                            placeholder="替代文本"
+                            title="替代文本（cNvPr@descr）：屏幕阅读器念的图说"
+                            onChange={(e) => patchShape(sh.id, { alt: e.target.value || undefined })}
+                          />
+                        </span>
                         {sh.kind === 'chart' && sh.chart && (
                           <>
                             <select

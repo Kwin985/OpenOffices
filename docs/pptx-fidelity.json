@@ -7,7 +7,8 @@
       "ga"
     ],
     "mode": "fixture",
-    "domParser": "@xmldom/xmldom 0.8（devDependency；浏览器端用原生 DOMParser）"
+    "readerParser": "ooxml.ts parseXml（v0.141 起；此前为 @xmldom/xmldom）",
+    "domParser": "@xmldom/xmldom 0.8（分母腿专用，与读手不共用）"
   },
   "corpus": {
     "files": 1,

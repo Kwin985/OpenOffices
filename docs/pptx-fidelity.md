@@ -129,10 +129,10 @@ probe injected into 1 accessor: ga).
 
 - **Consulted ≠ rendered.** A pair counts as consulted when the reader asked for it by name;
   whether the value changed the deck is a separate question this ledger does not answer.
-- **The denominator uses the reader's own parser, in node.** The product parses with the
-  browser DOMParser; this script substitutes `@xmldom/xmldom 0.8（devDependency；浏览器端用原生 DOMParser）`
-  (the library `pptx-import.ts` names in its comments) so the same code runs headless.
-  `localName`, `getAttribute("r:embed")` and `getAttributeNS` were verified to agree.
+- **The two legs do not share a parser.** The reader parses with its own `parseXml`
+  (v0.141); this script counts the denominator with a second, independent parser
+  `@xmldom/xmldom 0.8（分母腿专用，与读手不共用）` — a namespace/entity quirk in one does not move both sides.
+  The `r:`-prefixed fallback (reader: local-name lookup; census: `getAttributeNS`) agrees.
 - **Occurrence attribution is pair-level, like the docx report.** A pair consulted on one
   element counts as consulted everywhere that pair appears.
 

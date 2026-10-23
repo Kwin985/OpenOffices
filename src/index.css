@@ -1417,14 +1417,249 @@ button {
 
 .doc-table-bar,
 .doc-img-bar,
-.doc-para-bar {
+.doc-para-bar,
+.doc-bullet-bar {
   background: rgba(44, 102, 212, 0.05);
 }
 
 :root[data-theme='dark'] .doc-table-bar,
 :root[data-theme='dark'] .doc-img-bar,
-:root[data-theme='dark'] .doc-para-bar {
+:root[data-theme='dark'] .doc-para-bar,
+:root[data-theme='dark'] .doc-bullet-bar {
   background: rgba(91, 140, 255, 0.08);
+}
+
+/* 符面那一栏：16 枚候选按 2px gap 排一行，格子压到能一眼扫完 */
+.doc-bullet-bar {
+  flex-wrap: wrap;
+  row-gap: 4px;
+}
+
+/* 拼写检查：波浪线走 SVG data-uri 的斜纹背景，不用 text-decoration——
+   后者只有 Firefox 认 wavy，且颜色改不动 */
+.oo-spell {
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='6' height='3'%3E%3Cpath d='M0 3 L1.5 1 L3 3 L4.5 1 L6 3' fill='none' stroke='%23e0483a' stroke-width='0.7'/%3E%3C/svg%3E");
+  background-repeat: repeat-x;
+  background-position: left bottom;
+  background-size: 6px 3px;
+  padding-bottom: 2px;
+}
+
+/* 疑似档（不在英文词典里）：换成橙色虚线。与确认档的红波浪线一眼分得开——
+   这一档会把人名、品牌、术语一起划上，不该跟"确凿的错"画成同一种线 */
+.oo-spell-unknown {
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='6' height='3'%3E%3Cpath d='M0 2 L3 2' fill='none' stroke='%23d98a12' stroke-width='0.8' stroke-dasharray='2 1'/%3E%3C/svg%3E");
+}
+
+.doc-spell-bar,
+.doc-macro-bar,
+.doc-collab-bar {
+  flex-wrap: wrap;
+  row-gap: 4px;
+  align-items: center;
+}
+
+.doc-collab-room {
+  width: 180px;
+  padding: 2px 6px;
+  font-size: 12px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--panel);
+  color: var(--text);
+}
+
+.doc-collab-room:disabled {
+  opacity: 0.6;
+}
+
+.doc-collab-peers {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+
+.doc-collab-me,
+.doc-collab-peer {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 1px 7px;
+  border-radius: 10px;
+  background: var(--bg);
+  font-size: 12px;
+  color: var(--text-dim);
+}
+
+.doc-collab-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  display: inline-block;
+}
+
+.doc-collab-err {
+  font-size: 12px;
+  color: #c0392b;
+}
+
+.doc-collab-note {
+  flex: 1 1 100%;
+  opacity: 0.72;
+}
+
+/* —— y-prosemirror 的远程光标与选区 ——
+   库只给元素上内联的 border-color / background-color（协作者自己的颜色），
+   几何与名牌的位置全落在样式表里。颜色一律不碰——那是用户的身份色，
+   拿项目配色去盖它，两个协作者就分不出来了。
+   注意与上游那份示例 CSS 的差别：示例写的是 border-top/bottom: 2px solid transparent，
+   但内联的 border-color 会把四条边的颜色都设上，透明那一手被内联压掉，结果光标两头
+   各多一节 2px 的色头、还会把行高顶起来。这里改成把上/右/下的**宽度**压成 0
+   （宽度不在内联样式里，压得掉），只留左边那一根线 */
+.ProseMirror-yjs-cursor {
+  position: relative;
+  margin-left: -1px;
+  margin-right: -1px;
+  border-left: 2px solid currentcolor;
+  border-right-width: 0;
+  border-top-width: 0;
+  border-bottom-width: 0;
+  word-break: break-all;
+  pointer-events: none;
+}
+
+/* 名牌：挂在光标上方，不占行高（position:absolute 才不会把行撑开） */
+.ProseMirror-yjs-cursor > div {
+  position: absolute;
+  top: -1.15em;
+  left: -2px;
+  padding: 0 4px;
+  border-radius: 3px 3px 3px 0;
+  font-size: 11px;
+  line-height: 1.3;
+  font-weight: 600;
+  color: #fff;
+  white-space: nowrap;
+  opacity: 0.95;
+}
+
+/* 远程选区：库给的是 <color>70 这种带透明的底色，这里只补一条同色描边，
+   让它在大段同色文字上也看得见 */
+.ProseMirror-yjs-selection {
+  border-radius: 2px;
+}
+
+.doc-macro-code {
+  flex: 1 1 100%;
+  min-height: 120px;
+  font-family: var(--mono, Consolas, monospace);
+  font-size: 12px;
+  line-height: 1.5;
+  padding: 6px 8px;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  background: var(--panel);
+  color: var(--text);
+  resize: vertical;
+}
+
+.doc-macro-out {
+  flex: 1 1 100%;
+  max-height: 120px;
+  overflow: auto;
+  font-family: var(--mono, Consolas, monospace);
+  font-size: 12px;
+  padding: 5px 8px;
+  border-radius: 5px;
+  background: var(--bg);
+  color: var(--text);
+}
+
+.doc-macro-out.err {
+  color: #c0392b;
+}
+
+.doc-macro-warn {
+  flex: 1 1 100%;
+  opacity: 0.75;
+}
+
+/* VBA 那一档的说明与转译预览 */
+.doc-macro-vba {
+  flex: 1 1 100%;
+  opacity: 0.8;
+  line-height: 1.5;
+}
+
+.doc-macro-pre {
+  flex: 1 1 100%;
+  max-height: 220px;
+  overflow: auto;
+  margin: 0;
+  padding: 6px 8px;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  background: var(--bg);
+  color: var(--text-dim);
+  font-family: var(--mono, Consolas, monospace);
+  font-size: 12px;
+  line-height: 1.5;
+  white-space: pre;
+}
+
+.doc-macro-pre.err {
+  color: #c0392b;
+}
+
+/* 署名：协同里"我是谁"那一格 */
+.doc-who {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 12px;
+  color: var(--text-dim);
+}
+
+.doc-who-input {
+  width: 96px;
+}
+
+.doc-spell-list {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.doc-spell-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.doc-spell-word {
+  padding: 2px 6px;
+  border-radius: 4px;
+  font-size: 13px;
+  color: #c0392b;
+  text-decoration: underline dotted #c0392b;
+}
+
+.doc-spell-word:hover {
+  background: rgba(224, 72, 58, 0.1);
+}
+
+.tb-label {
+  font-size: 12px;
+  color: var(--text-dim);
+  margin-right: 2px;
+}
+
+.tb-bullet {
+  padding: 3px 7px;
+  font-size: 14px;
+  line-height: 1.2;
+  min-width: 26px;
 }
 
 .doc-fr-panel {
@@ -1620,6 +1855,13 @@ button {
 .doc-content table td,
 .doc-content table th {
   position: relative;
+}
+
+/* 与上面同选择器的一半：单元格画框与内距。2026-10-23 追记：这条原属工作树上一版未提交的
+   表格样式，误 checkout 后从当时构建产物按声明捞回（原注释已不可考），与产物逐字一致 */
+.doc-content table td {
+  border: 1px solid var(--border);
+  padding: 6px 10px;
 }
 .doc-content .column-resize-handle {
   position: absolute;
@@ -1974,6 +2216,36 @@ button {
   white-space: nowrap;
 }
 
+/* v0.141：属性条里的（列宽%/行高%）、（形状名/替代文本）各成一组——
+   组内挨紧、组间留缝，否则一列四个数字框看起来像四个无关的控件 */
+.ppt-bar-group {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding-left: 4px;
+  border-left: 1px solid var(--border);
+}
+.ppt-bar-label {
+  font-size: 12px;
+  color: var(--text-dim);
+}
+.ppt-bar-text {
+  width: 92px;
+  font: inherit;
+  font-size: 12px;
+  padding: 3px 5px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--panel);
+  color: var(--text);
+}
+.ppt-btn-italic {
+  font-style: italic;
+}
+.ppt-btn-underline {
+  text-decoration: underline;
+}
+
 .ppt-shape-color {
   width: 26px;
   height: 22px;
@@ -1982,6 +2254,140 @@ button {
   border-radius: 4px;
   background: none;
   cursor: pointer;
+}
+
+/* 表格形状（v0.127） */
+.ppt-shape-table {
+  overflow: hidden;
+}
+
+.ppt-table-grid {
+  width: 100%;
+  height: 100%;
+  overflow: auto;
+  background: var(--panel);
+}
+
+.ppt-table-cell {
+  width: 100%;
+  box-sizing: border-box;
+  border: 0;
+  padding: 0.15em 0.3em;
+  font: inherit;
+  color: var(--text);
+  background: transparent;
+}
+
+/* 图表形状（v0.127）：PNG 还没渲好时的占位框——虚线框说的是「这里本该有一张图」 */
+.ppt-shape-chart-hollow {
+  width: 100%;
+  height: 100%;
+  box-sizing: border-box;
+  border: 1px dashed var(--border);
+  border-radius: 4px;
+  background: var(--panel);
+}
+
+/* 图表数据的 CSV 编辑面板：形状条挂不下网格，做成一层小浮层 */
+.ppt-chart-data {
+  position: absolute;
+  left: 0;
+  bottom: calc(100% + 40px);
+  width: 320px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 8px;
+  box-shadow: 0 2px 8px rgba(31, 41, 55, 0.18);
+  z-index: 6;
+}
+
+.ppt-chart-data-label {
+  font-size: 12px;
+  color: var(--text-2);
+}
+
+.ppt-chart-data-csv {
+  width: 100%;
+  height: 120px;
+  resize: vertical;
+  font-family: ui-monospace, 'Cascadia Mono', Consolas, monospace;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 4px 6px;
+}
+
+/* 表格形状（v0.127） */
+.ppt-shape-table {
+  overflow: hidden;
+}
+
+.ppt-table-grid {
+  width: 100%;
+  height: 100%;
+  overflow: auto;
+  background: var(--panel);
+}
+
+.ppt-table-cell {
+  width: 100%;
+  box-sizing: border-box;
+  border: 0;
+  padding: 0.15em 0.3em;
+  font: inherit;
+  color: var(--text);
+  background: transparent;
+}
+
+/* 图表形状（v0.127）：PNG 还没渲好时的占位框——虚线框说的是「这里本该有一张图」 */
+.ppt-shape-chart-hollow {
+  width: 100%;
+  height: 100%;
+  box-sizing: border-box;
+  border: 1px dashed var(--border);
+  border-radius: 4px;
+  background: var(--panel);
+}
+
+/* 图表数据的 CSV 编辑面板：形状条挂不下网格，做成一层小浮层 */
+.ppt-chart-data {
+  position: absolute;
+  left: 0;
+  bottom: calc(100% + 40px);
+  width: 320px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 8px;
+  box-shadow: 0 2px 8px rgba(31, 41, 55, 0.18);
+  z-index: 6;
+}
+
+.ppt-chart-data-label {
+  font-size: 12px;
+  color: var(--text-2);
+}
+
+.ppt-chart-data-csv {
+  width: 100%;
+  height: 120px;
+  resize: vertical;
+  font-family: ui-monospace, 'Cascadia Mono', Consolas, monospace;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 4px 6px;
 }
 
 /* 静态幻灯片渲染（缩略图 / 放映共用，靠父级 font-size 缩放） */
@@ -3107,6 +3513,103 @@ button {
   pointer-events: none;
 }
 
+/* v0.129 原地改字：文字层让位给命中判定；草稿/待写框各自一套视觉，
+   草稿是"正在改这一格"，待写是"已经排上队、保存后才烧进去" */
+.pdf-page.textedit-mode .pdf-textlayer {
+  pointer-events: none;
+}
+
+.pdf-page.textedit-mode {
+  cursor: text;
+}
+
+.pdf-te-draft {
+  position: absolute;
+  z-index: 2;
+  border: 2px dashed var(--accent);
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+  pointer-events: none;
+}
+
+.pdf-te-pending {
+  position: absolute;
+  z-index: 1;
+  border: 1px dashed #d97706;
+  background: rgba(217, 119, 6, 0.1);
+  pointer-events: none;
+}
+
+.pdf-te-pop {
+  position: absolute;
+  z-index: 30;
+  min-width: 260px;
+  padding: 8px 10px;
+  background: var(--panel, #fff);
+  border: 1px solid var(--border, #d0d0d0);
+  border-radius: 6px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.18);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.pdf-te-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.pdf-te-from {
+  font-size: 12px;
+  color: var(--text-2, #666);
+  word-break: break-all;
+}
+
+.pdf-te-input {
+  flex: 1;
+  min-width: 0;
+  padding: 4px 6px;
+  font-size: 13px;
+  border: 1px solid var(--border, #d0d0d0);
+  border-radius: 4px;
+  background: var(--panel, #fff);
+  color: inherit;
+}
+
+.pdf-te-err {
+  font-size: 12px;
+  color: #dc2626;
+}
+
+.pdf-te-btns button {
+  padding: 3px 10px;
+  font-size: 12px;
+  border: 1px solid var(--border, #d0d0d0);
+  border-radius: 4px;
+  background: var(--panel, #fff);
+  color: inherit;
+  cursor: pointer;
+}
+
+.pdf-te-btns button:first-child {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+
+.pdf-te-hint {
+  font-size: 11px;
+  line-height: 1.4;
+  color: var(--text-2, #888);
+}
+
+.pdf-tools-note {
+  font-size: 12px;
+  color: var(--text-2, #666);
+  align-self: center;
+  padding-left: 4px;
+}
+
 .pdf-page.anno-mode .pdf-anno-hl {
   pointer-events: auto;
   cursor: move;
@@ -3271,6 +3774,24 @@ button {
   text-align: center;
   cursor: pointer;
   filter: saturate(1.2);
+}
+
+/* 文本框（v0.128）：屏上这一段是用系统字画出来的"预览"，
+   真落盘是 /FreeText 注解，字形由打开文件的阅读器按 /DA 自己配——
+   两边字体可能不一样，所以这里不追求像素级一致，只保证位置与大小对得上 */
+.pdf-anno-textbox {
+  position: absolute;
+  z-index: 3;
+  line-height: 1.4;
+  white-space: pre-wrap;
+  word-break: break-word;
+  cursor: text;
+  pointer-events: auto;
+}
+
+.pdf-anno-textbox.sel {
+  outline: 1px dashed var(--accent);
+  outline-offset: 1px;
 }
 
 /* v0.29 Acrobat 风便签弹卡：淡黄便签纸 */
