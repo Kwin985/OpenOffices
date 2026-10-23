@@ -1,6 +1,6 @@
-// 复杂文字与语言的四枚字符级槽（v0.138）
+// 复杂文字与语言的八枚字符级槽（v0.138，iCs/bCs/smallCaps 三枚 v0.143 补）
 //
-// docx 的 rPr 上有六样东西在 HTML/CSS 里没有现成对应物，但**文件往返不能丢**：
+// docx 的 rPr 上有八样东西在 HTML/CSS 里没有现成对应物，但**文件往返不能丢**：
 //   rFonts/@w:cs   复杂文字（阿拉伯/希伯来/泰文）的字族
 //   rFonts/@w:hint 含混字符用哪族字体（屏上那一半在 docx-fidelity 的 emitRunText 里直接兑现，
 //                   这一枚只为存盘时不丢）
@@ -8,14 +8,18 @@
 //   w:lang/@w:val  这段文字的语言（w:eastAsia 另存一枚）
 //   w:pos/@w:val   基线升降（半点）——屏上走 vertical-align，由本 mark 的 renderHTML 画
 //   w:kern/@w:val  字偶距阈值（0 = 关）——屏上走 font-kerning，同上
-// 读侧由 docx-fidelity 发成 span[data-cs|data-hint|data-szcs|data-lang|data-lang-ea|data-pos|data-kern]，
-// 这个 mark 接住；写侧由 docx.ts 读回 mark 属性落回 rPr。
+//   w:iCs/@w:bCs   复杂文字的斜体/粗体（只管 cs 字族那一口，与 w:i/w:b 平级）
+//   w:smallCaps    小型大写——屏上走 font-variant，由本 mark 画（v0.143）
+// 读侧由 docx-fidelity 发成 span[data-cs|data-hint|data-szcs|data-lang|data-lang-ea|data-pos|data-kern|
+// data-ics|data-bcs|data-smallcaps]，这个 mark 接住；写侧由 docx.ts 读回 mark 属性落回 rPr。
 //
-// **六枚全都能落盘**，但路径分两种，值得记一笔：cs/hint/szCs/lang/pos/kern 在 docx 库的
+// **全都能落盘**，但路径分两种，值得记一笔：cs/hint/szCs/lang/pos/kern 在 docx 库的
 // RunProperties 里都实现着（createRunFonts 的 attrs.hint、options.sizeComplexScript、
 // options.language、options.position、options.kern 逐枚都在），只是 **TS 的类型面没暴露**
 // 这几枚（IRunStylePropertiesOptions 里查不到）。所以 docx.ts 那一头是按库外槽传的——
 // 哪天升级 docx 把类型补上，`withCharExtra` 里的 `as unknown as T` 那个断言可以拆掉。
+// iCs/bCs/smallCaps 三枚同理（v0.143）：库里实现着（boldComplexScript / italicComplexScript /
+// smallCaps，dist 产物里逐枚有），类型面同样没暴露，走同一个库外槽。
 
 import { Mark, mergeAttributes } from '@tiptap/core'
 
@@ -83,6 +87,27 @@ export const CharExtra = Mark.create({
         renderHTML: (attrs: Record<string, unknown>) =>
           num(attrs.kern) === 0 ? { 'data-kern': '0', style: 'font-kerning: none' } : {},
       },
+      // iCs/bCs（v0.143）：复杂文字的斜体/粗体。CSS 没有「只对 cs 字族生效」这一族开关，
+      // 屏上不兑现——只随 data-* 进模型再走往返（与 cs/szCs 同纪律）。
+      // 载荷是 '1'（开）或 null（没声明）：OOXML 的 onOff 语义，w:iCs w:val="0" 也是「关」，
+      // 而「关」与「没写」在往返里同结果，不必存 false
+      ics: {
+        default: null as string | null,
+        parseHTML: (el: HTMLElement) => str(el.getAttribute('data-ics')),
+        renderHTML: (attrs: Record<string, unknown>) => (str(attrs.ics) ? { 'data-ics': '1' } : {}),
+      },
+      bcs: {
+        default: null as string | null,
+        parseHTML: (el: HTMLElement) => str(el.getAttribute('data-bcs')),
+        renderHTML: (attrs: Record<string, unknown>) => (str(attrs.bcs) ? { 'data-bcs': '1' } : {}),
+      },
+      // smallCaps（v0.143）：小型大写。CSS 的 font-variant-caps 正好是这一个，
+      // 屏上直接兑现（pos/kern 同款：mark 自己发 CSS）
+      smallcaps: {
+        default: null as string | null,
+        parseHTML: (el: HTMLElement) => str(el.getAttribute('data-smallcaps')),
+        renderHTML: (attrs: Record<string, unknown>) => (str(attrs.smallcaps) ? { 'data-smallcaps': '1', style: 'font-variant-caps: small-caps' } : {}),
+      },
     }
   },
 
@@ -95,6 +120,9 @@ export const CharExtra = Mark.create({
       { tag: 'span[data-lang-ea]' },
       { tag: 'span[data-pos]' },
       { tag: 'span[data-kern]' },
+      { tag: 'span[data-ics]' },
+      { tag: 'span[data-bcs]' },
+      { tag: 'span[data-smallcaps]' },
     ]
   },
 

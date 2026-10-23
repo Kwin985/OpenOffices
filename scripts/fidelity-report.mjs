@@ -117,6 +117,8 @@ const FIXTURE_DOC =
   `<w:right w:val="double" w:sz="6" w:space="3" w:color="FFFF00"/></w:pBdr></w:pPr>` +
   `<w:r><w:rPr><w:rFonts w:ascii="Times New Roman" w:eastAsia="宋体" w:hint="eastAsia" w:cs="Arial"/>` +
   `<w:sz w:val="24"/><w:szCs w:val="28"/><w:b w:val="0"/>` +
+  // v0.143：复杂文字粗斜与小型大写（iCs/bCs 只往返，smallCaps 屏上走 font-variant-caps）
+  `<w:iCs/><w:bCs/><w:smallCaps/>` +
   `<w:lang w:val="en-US" w:eastAsia="zh-CN"/><w:kern w:val="2"/><w:pos w:val="12"/></w:rPr>` +
   `<w:t xml:space="preserve"> 带空白的正文 </w:t></w:r></w:p>` +
   // v0.142：主题色 run（accent1 + tint/shade 双戴）与图案底纹段（pct25 前景 FF0000/背景 FFFFFF）
@@ -126,6 +128,10 @@ const FIXTURE_DOC =
   // v0.142：编号段——0 层子弹（符面 ·），与 numId=1 的 startOverride=3 无关（子弹不看起始号）
   `<w:p><w:pPr><w:numPr><w:ilvl w:val="0"/><w:numId w:val="1"/></w:numPr></w:pPr>` +
   `<w:r><w:t>列表项</w:t></w:r></w:p>` +
+  // v0.143：分页四件套（只往返不屏现）——四件全开 + widowControl 显式关各一枚
+  `<w:p><w:pPr><w:pageBreakBefore/><w:keepNext/><w:keepLines/><w:widowControl w:val="1"/></w:pPr>` +
+  `<w:r><w:t>分页四件套</w:t></w:r></w:p>` +
+  `<w:p><w:pPr><w:widowControl w:val="0"/></w:pPr><w:r><w:t>显式关孤行</w:t></w:r></w:p>` +
   `<w:sectPr><w:pgSz w:w="11906" w:h="16838" w:orient="portrait"/>` +
   `<w:pgMar w:top="1440" w:right="1800" w:bottom="1440" w:left="1800" w:header="851" w:footer="992" w:gutter="0"/></w:sectPr>` +
   `</w:body></w:document>`
@@ -183,6 +189,16 @@ const MUST_SEE = [
   'right|space',
   'bottom|space',
   'left|space',
+  // v0.143 D2-3/D2-4：复杂文字粗斜、小型大写与分页四件套。iCs/bCs 只往返
+  // （CSS 无「只对 cs 字族」的开关），smallCaps 屏上走 font-variant-caps，
+  // 四件套屏上不兑现——七枚都只为存盘不丢
+  'iCs|val',
+  'bCs|val',
+  'smallCaps|val',
+  'pageBreakBefore|val',
+  'keepNext|val',
+  'keepLines|val',
+  'widowControl|val',
 ]
 // 我放进夹具而读手一寸不查的：beforeAutospacing / afterAutospacing 在源码里没有查问处；
 // t 的 xml:space 是**裁定不查**——escText 无条件保留空白（连续空格第二个起换 nbsp），

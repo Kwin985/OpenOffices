@@ -1056,11 +1056,25 @@ function paraFormatOf(node: PMNode, pstyle?: string | null) {
   const sp = spacingOf(node)
   const sh = shadingOf(node.attrs)
   const bd = bordersOf(node.attrs)
+  // 分页四件套（v0.143）：data-* 三态 → docx 包原生槽。'0' 显式传 false
+  // （widowControl 的「关」是真值），null 不传（落回 Word 默认的开）
+  const flag = (a: string): boolean | undefined => {
+    const v = node.attrs?.[a]
+    return v === '1' ? true : v === '0' ? false : undefined
+  }
+  const keepNext = flag('keepNext')
+  const keepLines = flag('keepLines')
+  const pageBreakBefore = flag('pageBreakBefore')
+  const widowControl = flag('widowControl')
   return {
     ...(pstyle ? { style: pstyle } : {}),
     ...(sp ? { spacing: sp } : {}),
     ...(sh ? { shading: sh } : {}),
     ...(bd ? { border: bd } : {}),
+    ...(keepNext !== undefined ? { keepNext } : {}),
+    ...(keepLines !== undefined ? { keepLines } : {}),
+    ...(pageBreakBefore !== undefined ? { pageBreakBefore } : {}),
+    ...(widowControl !== undefined ? { widowControl } : {}),
   }
 }
 
@@ -1212,11 +1226,22 @@ function withCharExtra<T extends object>(opts: T, child: PMNode): T {
   const langEa = str('langEa')
   const pos = num('pos')
   const kern = num('kern')
+  // v0.143：复杂文字粗斜与小型大写。库里实现着（boldComplexScript / **italicsComplexScript**
+  // ——斜体那枚是复数 italics，类型面 dist/index.d.ts:1644 与实现一致，写单数 italic 不报错
+  // 但静默不输出 / smallCaps），TS 类型面同样没暴露这几枚——与 szcs/lang 同走库外槽。
+  // 另注意 boldComplexScript/italicsComplexScript 在库里是「跟随 b/i 的三态」：
+  // 不显式传就吃 options.bold/italics，所以这里必须显式传 true（本函数从不管粗斜体本身）
+  const ics = str('ics')
+  const bcs = str('bcs')
+  const sc = str('smallcaps')
   const extra: Record<string, unknown> = {}
   if (szcs !== undefined && szcs > 0) extra.sizeComplexScript = szcs
   if (lang || langEa) extra.language = { value: lang || undefined, eastAsia: langEa || undefined }
   if (pos !== undefined && pos !== 0) extra.position = pos
   if (kern !== undefined && kern > 0) extra.kern = kern
+  if (ics) extra.italicsComplexScript = true
+  if (bcs) extra.boldComplexScript = true
+  if (sc) extra.smallCaps = true
   return Object.keys(extra).length ? ({ ...opts, ...extra } as unknown as T) : opts
 }
 

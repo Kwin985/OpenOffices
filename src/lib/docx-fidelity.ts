@@ -296,6 +296,19 @@ const PPR_ATTR_SLOTS: Record<string, AttrSlot[]> = {
   spacing: [{ members: ['line', 'lineRule'], primary: 'line' }],
 }
 
+/**
+ * 分页四件套（v0.143）：Word 的分页与孤行控制，住 pPr 顶层（与 spacing/ind 平级）。
+ * 屏上不兑现（Web 流式排版没有分页），只随 data-* 进出保往返——落点在
+ * lib/paragraph-style.ts 的四个布尔属性，写手由 paraFormatOf 折回 w:pageBreakBefore 等。
+ */
+const PAGE_FLAGS = ['pageBreakBefore', 'keepNext', 'keepLines', 'widowControl'] as const
+const FLAG_ATTR: Record<(typeof PAGE_FLAGS)[number], string> = {
+  pageBreakBefore: 'pagebreak-before',
+  keepNext: 'keepnext',
+  keepLines: 'keeplines',
+  widowControl: 'widowcontrol',
+}
+
 /** 属性级合并：同名后者压前者，后写层没写的属性留前写层那一枚；槽见 PPR_ATTR_SLOTS */
 function mergeAttrAttrs(base: Record<string, string>, add: Record<string, string>, slots: AttrSlot[]): Record<string, string> {
   const out: Record<string, string> = {}
@@ -684,6 +697,12 @@ interface RunProps {
   kern?: number
   /** w:pos/@w:val：基线升降，半点，正升负降（手工调的上下标走这里，不走 vertAlign） */
   pos?: number
+  /** w:iCs/@w:val：复杂文字（cs 字族）的斜体。CSS 无对应物，屏上不兑现（v0.143） */
+  iCs?: boolean
+  /** w:bCs/@w:val：复杂文字的粗体。同上（v0.143） */
+  bCs?: boolean
+  /** w:smallCaps/@w:val：小型大写。屏上走 font-variant-caps（v0.143） */
+  smallCaps?: boolean
 }
 
 const NONE: RunProps = {}
@@ -749,6 +768,14 @@ function readRPr(el: XEl | undefined, p: RunProps, tc?: ThemeColors): RunProps {
   const pos = valNum(el, 'w:pos')
   // 0 是"没升降"而不是"升降 0"，与 w:spacing 那枚字符间距不同口径——那一枚 0 是真值（见上）
   if (pos !== undefined && pos !== 0) o.pos = pos
+  // 复杂文字的粗斜与小型大写（v0.143）：与 w:b/w:i 平级的 onOff，只管 cs 字族那一口。
+  // 「关」（val=0）与「没写」在往返里同结果，只存 true
+  const iCs = on(find(el, 'w:iCs'))
+  if (iCs) o.iCs = true
+  const bCs = on(find(el, 'w:bCs'))
+  if (bCs) o.bCs = true
+  const sc = on(find(el, 'w:smallCaps'))
+  if (sc) o.smallCaps = true
   return o
 }
 
@@ -879,6 +906,9 @@ function marked(inner: string, p: RunProps): string {
     p.hint ? ` data-hint="${attrEsc(p.hint)}"` : '',
     p.pos !== undefined ? ` data-pos="${p.pos}"` : '',
     p.kern !== undefined ? ` data-kern="${p.kern}"` : '',
+    p.iCs ? ' data-ics="1"' : '',
+    p.bCs ? ' data-bcs="1"' : '',
+    p.smallCaps ? ' data-smallcaps="1"' : '',
   ].join('')
   if (css || extra) s = `<span${css ? ` style="${css}"` : ''}${extra}>${s}</span>`
   if (p.hl) s = `<mark data-color="${p.hl}" style="background-color: ${p.hl}; color: inherit">${s}</mark>`
@@ -1316,7 +1346,16 @@ class Fidelity {
     // 图案底纹的往返载荷（v0.142）：CSS 的 background-image 画得出图案，回写时还要知道
     // 是哪一档图案、前景背景各是什么色——data-shade 三件套随标签进出（clear 不挂）
     const shadeAttr = shadePayload(find(effPPr, 'w:shd'), this.themeColors)
-    const body = this.layout(shadeAttr ? `${tag} data-shade="${shadeAttr}"` : tag, style, pieces)
+    // 分页四件套（v0.143）：w:pageBreakBefore / w:keepNext / w:keepLines / w:widowControl。
+    // Web 流式排版没有分页与孤行控制，屏上不兑现——只随 data-* 进出保往返。
+    // onOff 三态：'1' 开、'0' 关（widowControl 在 Word 里默认就是开，「显式关」是真值，
+    // 不能与「没写」同路）、没写不挂。样式链合并后的 effPPr 上读，样式层说的算数
+    const flags: string[] = []
+    for (const f of PAGE_FLAGS) {
+      const v = on(find(effPPr, `w:${f}`))
+      if (v !== undefined) flags.push(` data-${FLAG_ATTR[f]}="${v ? '1' : '0'}"`)
+    }
+    const body = this.layout(`${tag}${shadeAttr ? ` data-shade="${shadeAttr}"` : ''}${flags.join('')}`, style, pieces)
     return view.quote ? prefix + `<blockquote>${body}</blockquote>` : prefix + body
   }
 

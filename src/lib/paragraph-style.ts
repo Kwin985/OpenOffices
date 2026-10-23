@@ -217,6 +217,33 @@ export const ParagraphStyle = Extension.create({
               },
             ]),
           ),
+          // 分页四件套（v0.143）：w:pageBreakBefore / keepNext / keepLines / widowControl。
+          // 屏上不兑现（Web 流式排版没有分页与孤行控制），只随 data-* 进出保往返。
+          // 三态：'1' 开、'0' 关、null 没写——widowControl 的「显式关」是真值
+          // （Word 默认就是开，关掉必须带得回来）。载荷字面 '1'/'0'，解析同形
+          ...Object.fromEntries(
+            (
+              [
+                ['pageBreakBefore', 'pagebreak-before'],
+                ['keepNext', 'keepnext'],
+                ['keepLines', 'keeplines'],
+                ['widowControl', 'widowcontrol'],
+              ] as const
+            ).map(([attr, dataAttr]) => [
+              attr,
+              {
+                default: null as string | null,
+                parseHTML: (el: HTMLElement) => {
+                  const v = el.getAttribute(`data-${dataAttr}`)
+                  return v === '1' || v === '0' ? v : null
+                },
+                renderHTML: (attrs: Record<string, unknown>) => {
+                  const v = attrs[attr]
+                  return v === '1' || v === '0' ? { [`data-${dataAttr}`]: v } : {}
+                },
+              },
+            ]),
+          ),
         },
       },
     ]
