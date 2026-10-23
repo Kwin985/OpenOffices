@@ -36,12 +36,12 @@
     "meaningfulOccurrences": 23761
   },
   "coverage": {
-    "byPair": 0.23313782991202345,
-    "byOccurrence": 0.7307773241866925,
-    "consultedPairs": 159,
-    "consultedOccurrences": 17364,
-    "neverConsultedPairs": 523,
-    "neverConsultedOccurrences": 6397
+    "byPair": 0.25219941348973607,
+    "byOccurrence": 0.7579647321240689,
+    "consultedPairs": 172,
+    "consultedOccurrences": 18010,
+    "neverConsultedPairs": 510,
+    "neverConsultedOccurrences": 5751
   },
   "consulted": [
     [
@@ -165,6 +165,10 @@
       183
     ],
     [
+      "bottom|space",
+      183
+    ],
+    [
       "bottom|sz",
       183
     ],
@@ -174,6 +178,10 @@
     ],
     [
       "right|color",
+      180
+    ],
+    [
+      "right|space",
       180
     ],
     [
@@ -202,6 +210,10 @@
     ],
     [
       "left|color",
+      165
+    ],
+    [
+      "left|space",
       165
     ],
     [
@@ -357,6 +369,10 @@
       34
     ],
     [
+      "ind|rightChars",
+      34
+    ],
+    [
       "docPr|name",
       32
     ],
@@ -401,6 +417,10 @@
       19
     ],
     [
+      "widowControl|val",
+      18
+    ],
+    [
       "shd|themeFill",
       17
     ],
@@ -417,6 +437,14 @@
       14
     ],
     [
+      "iCs|val",
+      13
+    ],
+    [
+      "pageBreakBefore|val",
+      13
+    ],
+    [
       "spacing|beforeLines",
       13
     ],
@@ -425,12 +453,24 @@
       12
     ],
     [
+      "keepNext|val",
+      12
+    ],
+    [
+      "bCs|val",
+      11
+    ],
+    [
       "shape|style",
       11
     ],
     [
       "shd|themeFillTint",
       11
+    ],
+    [
+      "keepLines|val",
+      10
     ],
     [
       "num|numId",
@@ -509,6 +549,10 @@
       6
     ],
     [
+      "ind|hangingChars",
+      5
+    ],
+    [
       "pgMar|left",
       5
     ],
@@ -578,6 +622,10 @@
     ],
     [
       "between|color",
+      1
+    ],
+    [
+      "between|space",
       1
     ],
     [
@@ -665,6 +713,10 @@
       1
     ],
     [
+      "smallCaps|val",
+      1
+    ],
+    [
       "tl2br|val",
       1
     ],
@@ -709,18 +761,6 @@
     [
       "pt|y",
       290
-    ],
-    [
-      "bottom|space",
-      183
-    ],
-    [
-      "right|space",
-      180
-    ],
-    [
-      "left|space",
-      165
     ],
     [
       "gd|fmla",
@@ -793,10 +833,6 @@
     [
       "snapToGrid|val",
       36
-    ],
-    [
-      "ind|rightChars",
-      34
     ],
     [
       "bookmarkEnd|id",
@@ -883,10 +919,6 @@
       19
     ],
     [
-      "widowControl|val",
-      18
-    ],
-    [
       "inline|distB",
       15
     ],
@@ -927,15 +959,7 @@
       13
     ],
     [
-      "iCs|val",
-      13
-    ],
-    [
       "noWrap|val",
-      13
-    ],
-    [
-      "pageBreakBefore|val",
       13
     ],
     [
@@ -947,20 +971,12 @@
       12
     ],
     [
-      "keepNext|val",
-      12
-    ],
-    [
       "lock|aspectratio",
       12
     ],
     [
       "lock|ext",
       12
-    ],
-    [
-      "bCs|val",
-      11
     ],
     [
       "caps|val",
@@ -980,10 +996,6 @@
     ],
     [
       "fill|focussize",
-      10
-    ],
-    [
-      "keepLines|val",
       10
     ],
     [
@@ -1160,10 +1172,6 @@
     ],
     [
       "document|Ignorable",
-      5
-    ],
-    [
-      "ind|hangingChars",
       5
     ],
     [
@@ -1544,10 +1552,6 @@
     ],
     [
       "background|themeShade",
-      1
-    ],
-    [
-      "between|space",
       1
     ],
     [
@@ -2559,10 +2563,6 @@
       1
     ],
     [
-      "smallCaps|val",
-      1
-    ],
-    [
       "smartTag|element",
       1
     ],
@@ -2871,18 +2871,6 @@
       262
     ],
     [
-      "bottom",
-      183
-    ],
-    [
-      "right",
-      180
-    ],
-    [
-      "left",
-      165
-    ],
-    [
       "pos",
       128
     ],
@@ -2971,10 +2959,6 @@
       39
     ],
     [
-      "ind",
-      39
-    ],
-    [
       "snapToGrid",
       36
     ],
@@ -3047,10 +3031,6 @@
       19
     ],
     [
-      "widowControl",
-      18
-    ],
-    [
       "imagedata",
       15
     ],
@@ -3083,15 +3063,7 @@
       13
     ],
     [
-      "iCs",
-      13
-    ],
-    [
       "noWrap",
-      13
-    ],
-    [
-      "pageBreakBefore",
       13
     ],
     [
@@ -3115,16 +3087,8 @@
       12
     ],
     [
-      "keepNext",
-      12
-    ],
-    [
       "ln",
       12
-    ],
-    [
-      "bCs",
-      11
     ],
     [
       "caps",
@@ -3132,10 +3096,6 @@
     ],
     [
       "attr",
-      10
-    ],
-    [
-      "keepLines",
       10
     ],
     [
@@ -3451,10 +3411,6 @@
       1
     ],
     [
-      "between",
-      1
-    ],
-    [
       "calcOnExit",
       1
     ],
@@ -3624,10 +3580,6 @@
     ],
     [
       "satOff",
-      1
-    ],
-    [
-      "smallCaps",
       1
     ],
     [

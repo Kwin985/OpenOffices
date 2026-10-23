@@ -8693,6 +8693,51 @@ Word 的默认样式几乎从不写具名颜色，只写 `themeColor="accent1"` 
 - **push 仍没成功**：网络通了但非交互环境取不到 Windows 凭据（`fatal: User cancelled dialog` / `terminal prompts disabled`），本地领先 origin/main 的提交继续攒着（本轮后 22 个）；网络与凭据一恢复 `git push origin main` 一条命令的事。
 
 
+## 发行说明：v0.143 —— docx 长尾第二轮：边框间距 / ind 字符档 / 复杂文字字形 / 分页四件套（13 对上账）
+
+一句立项：v0.142 审计文档列了 D2 顺延清单，这一节照单开工——四族全部过「读 → 模型 → 写」三层往返，覆盖率按对 23.3% → **25.2%**、按字面 73.1% → **75.8%**（分母 701 对不变，consulted 159 → 172）。裁决与顺延清单见 `docs/docx-fidelity-audit.md` 的 v0.143 追加节。
+
+### 1. 边框与文字的间距：w:space（528 字面，本轮最大单项）
+
+`w:top/@w:space` 一族是「边框线离框内内容多远」（磅）。CSS 的 padding 正是 border 盒与内容盒的距离，语义同形——但段落与单元格的落点不同，因为**单元格已有 tcMar 竞争同一条 padding**：
+
+- **段落**（pBdr）：没有「内边距」这一层，space 是唯一来源，ParagraphStyle 新增 `pad*` 四属性直接落 padding-{side}，读回从同一条 CSS 解析，无歧义。
+- **单元格**（tcBorders）：tcMar 与 space 在 Word 里是**叠加**的，CSS 一条 padding 表达不了叠加——space 走独立 `data-bdspace-{side}` 载荷，渲染时与 pad* 相加输出一条 padding，回写时 space 归 `w:tcBorders/@w:space`、pad 归 `w:tcMar`，两边各得各的，往返无损。表级 tblBorders/insideH/insideV 的 space 不读（单元格共用边框，padding 会重复计数），between 边 warn。
+
+### 2. ind 字符档：hangingChars 与 rightChars（39 字面）
+
+Word「缩进」对话框「按字符」那一列写的就是这族（0.01 字符 = 字号的百分之一）。补齐后与既有 leftChars/firstLineChars 同一纪律：**缇值整枚没写才让字符档说话**。写手零改动——Chars 档经 PM 归一成 px，走既有的 indentOf 回写缇档（与 v0.141 的 leftChars 同设计）。夹具里 `ind|hangingChars` 从 MUST_NOT_SEE **翻面移入 MUST_SEE**（v0.142 审计文档点名要翻的一条）。
+
+### 3. rPr 字形族：iCs / bCs / smallCaps（25 字面）
+
+复杂文字（阿拉伯/希伯来/泰文）的粗斜与小型大写。iCs/bCs 搭 char-extra 的船只往返（CSS 没有「只对 cs 字族生效」的开关），smallCaps 屏上直接走 font-variant-caps（mark 自发 CSS，pos/kern 同款）。写手侧发现 docx 包的坑：**斜体那枚叫 `italicsComplexScript`（复数 italics）**——写单数 `italicComplexScript` TS 不报错、XML 静默不输出，是 tmp 往返脚本逐字段比对抓到的；另两枚 boldComplexScript/smallCaps 是常规拼写，且库里这两枚是「跟随 b/i 的三态」，必须显式传 true。
+
+### 4. 分页四件套：pageBreakBefore / keepNext / keepLines / widowControl（53 字面）
+
+段前分页、与下段同页、段内不分页、孤行控制。Web 流式排版没有分页，屏上不兑现——ParagraphStyle 四枚 data-* 布尔属性只保往返，三态 '1'/'0'/null（**widowControl 的「显式关」是真值**：Word 默认就是开，关掉必须带得回来）。样式层说的（w:style 里带 keepNext）经 effPPr 合并上账；paraFormatOf 折回 docx 包原生槽。
+
+### 5. 账上的数
+
+| 腿 | 数 |
+|---|---|
+| tsc / vite build | 退出码 0 / ✓（9.78s） |
+| selftest | 夹具 91 对全上账；51 见全命中 / 5 不见全落空（双向） |
+| docx 主腿（合成语料 5 件） | 分母 701 对 / 31,472 字面；按对 **25.2%**（v0.142：23.3%，+1.9pp）/ 按字面 **75.8%**（73.1%，+2.7pp）；consulted 159 → **172** 对 |
+| 等价腿 | 相同 5 / 不同 0 / 两边同错 0 / 只一边错 0 |
+| 变异腿 | `--mut no-attrL` 23.3% / 68.0%（attrL 漏斗独有 17 对）；`--mut no-attr` 7.6% / 30.5%（attr 漏斗独有 129 对） |
+| pptx selftest 干净腿 | 70.1% / 74.3%（本轮未动 pptx，逐字相同） |
+| 复位 | 变异腿后干净腿复跑，账本 md5 与主腿一致 |
+| 往返（tmp 脚本） | 边框 space 段/格（含 tcMar 叠加与回写分工）、ind 字符档、iCs/bCs/smallCaps、分页四件套（含样式层与显式关）逐字段一致 |
+
+### 明确不做的（这一节）
+
+- **w:tab 制表位族（88 字面）顺延**：需新建 Tiptap tab 扩展 + 写手回写，单列一轮（D3 头名）。
+- **docPr|descr（7 字面）顺延**：图形替代文本要改 PM Image 模型 + 写手库外槽（docx 包 ImageRun 没有 descr），收益不抵成本。
+- **表级/条件层边框 space（76 字面）不读**：单元格共用边框，padding 近似会重复计数，已 warn 记账。
+- **framePr/tblpPr 浮动定位族顺延**：需新模型槽。
+- **push 仍没成功**：代理对 github.com:443 返 CONNECT 502，本地领先 origin/main 的提交继续攒着（本轮后 25 个）；网络一恢复 `git push origin main` 一条命令的事。
+
+
 ## 性能（v0.3）
 
 

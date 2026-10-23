@@ -73,3 +73,34 @@
 - `startOverride|val` 只有 selftest 夹具实例：宇宙里那 1 对实例所在路径读手不走（num 之外的部件），合成语料又无此形态——下轮造语料时补一枚 num/lvlOverride 组合实例可让它也进普查分子。
 - `lvl|tentative` / `lvl|tplc` 判为有意不读，但若将来做「编号定义去重/合并」，tplc 是模板链接的关键。
 - pptx 侧本轮零改动，`W3 Impress` 长尾任务（#31/#36）仍在队列。
+
+---
+
+# v0.143 追加节：D2 轮（边框 space / ind 字符档 / rPr 字形 / 分页四件套）
+
+代码：`1247681`（D2-1/D2-2）+ `fafa35f`（D2-3/D2-4）。新上账 **13 对**（consulted 159 → 172）：
+按对 23.3% → **25.2%**、按字面 73.1% → **75.8%**（分母 701 对不变）。
+
+| 族 | 新上账对（次数） | 实现要点 |
+|---|---|---|
+| 边框 space | `bottom\|space`(183) `right\|space`(180) `left\|space`(165) `between\|space`(1) | `edgeSpacePx`（磅×4/3）；段落 pBdr → ParagraphStyle 新增 `pad*` 四属性（段落无 tcMar 竞争，padding-{side} 就是它自己）；单元格 tcBorders direct 层 → `data-bdspace-{side}` 独立载荷（tcMar 与 space 在 Word 里**叠加**，renderHTML 相加输出一条 padding、回写 space 归 tcBorders、pad 归 tcMar，两边各得各的）；表级 tblBorders/insideH/insideV 的 space 不读（单元格共用边框，padding 会重复）；between 只 warn |
+| ind 字符档 | `ind\|rightChars`(34) `ind\|hangingChars`(5) | paraCss 补读：rightChars → margin-right（与 right 平级、缇值先说话）、hangingChars → 负 text-indent（与 hang 平级）。写手零改动——Chars 档经 PM 归一成 px 走既有 indentOf 回写缇档。夹具 MUST_NOT_SEE 的 `ind\|hangingChars` 翻面移入 MUST_SEE（v0.142 审计文档第 4 节第一条） |
+| rPr 字形 | `iCs\|val`(13) `bCs\|val`(11) `smallCaps\|val`(1) | 搭 char-extra 船加三枚：iCs/bCs 只往返（CSS 无「只对 cs 字族」开关），smallCaps 屏上走 font-variant-caps（mark 自发 CSS，pos/kern 同款） |
+| 分页四件套 | `pageBreakBefore\|val`(13) `keepNext\|val`(12) `keepLines\|val`(10) `widowControl\|val`(18) | ParagraphStyle 四枚 data-* 布尔属性，三态 '1'/'0'/null——widowControl 的「显式关」是真值（Word 默认开）；读 effPPr（样式层说的算数）；paraFormatOf 折回 docx 包原生槽。屏上不兑现（Web 流式无分页） |
+
+## 过程中的坑（量具与库各一枚）
+
+1. **量具老坑复踩一次**：D2 代码改完直接跑 selftest，4 条 FAIL——量具测的是 `git show HEAD` 副本，未提交的改动测不到（top|space 能过只因旧代码 warn 就查 top）。**改完先提交再跑腿**。
+2. **docx 包的 `italicsComplexScript`（复数 italics）**：iCs 按直觉写 `italicComplexScript`，TS 不报错（类型面本就没这几枚）、XML 静默不输出——是 tmp 往返脚本逐字段比对抓到的。库的 dist 里斜体那枚是 `italicsComplexScript`（`index.d.ts:1644` 同款复数），boldComplexScript/smallCaps 是常规拼写。另注意库里 boldComplexScript/italicsComplexScript 是「跟随 b/i 的三态」：不显式传就吃 options.bold/italics，所以必须显式传 true。
+3. **语料 push 合并再咬一口**（v0.142 同款形态，这次提前防住）：组合属性实例要进「读手 find 取首」的容器时，必须换 open 串独占段落——单属性实例与组合实例同 open 会合并进同一 pPr，组合实例排在末尾永远踩不到。
+
+## v0.143 顺延清单（D3）
+
+| 对（族） | 次数 | 备注 |
+|---|---|---|
+| `w:tab` 族（tab\|pos/val/leader） | 88 | 制表位。需新建 Tiptap tab 扩展 + 写手，单列一轮 |
+| `docPr\|descr` | 7 | 图形替代文本。需改 PM Image 模型 + 写手库外槽（docx 包 ImageRun 无 descr） |
+| 表级/条件层边框 space（tblBorders/insideH/insideV） | 76 | 单元格共用边框，CSS 无对应物，已 warn 记账 |
+| `framePr` / `tblpPr` 浮动定位族 | 12 / 11 | 需新模型槽 |
+| `multiLevelType` / `tblInd\|type` / `lvlPicBulletId` / `lvlRestart` | 9 / 9 / 1 / 1 | 多级类型、表缩进档位、图片子弹、层级重启 |
+| `startOverride\|val` 普查实例 | 1 | 宇宙里 1 对实例所在路径读手不走；造语料时补一枚 num/lvlOverride 组合实例可进普查分子 |
