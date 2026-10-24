@@ -352,3 +352,69 @@ neverConsulted 436 → 410 对。**语料分母只增 1 字面**（31,472 → 31
 | `rsid\|val` / `instrText\|space` | 27 / 15 | 会话痕迹与域指令，逐枚成本高于收益 |
 | VML 图片壳（`lock\|aspectratio/ext` 12×2、`imagedata\|title` 11、`shape\|id` 11、`fill\|on` 11、`stroke\|on` 8） | 约 90 | `w:pict` 那一支也能骑在 img 上（读手已走 `imagedata`），是下一块划算的 |
 | `caps\|val` 11 / `noWrap\|val` 13 | 24 | rPr 与 tcPr 各一枚；包有没有槽要实测（v0.147 里 grep 过没找到，可能也要补丁） |
+
+## v0.149（D8）——VML 图片壳 + 浮动锚点闸门 + 两枚可写壳属性
+
+上一轮把「VML 图片壳」标为下一块划算的（`w:pict` 那支同样能骑在 img 上），本轮兑现：
+**23 对上账、180 字面**。覆盖率 **按对 39.9% → 43.3%、按字面 89.8% → 90.6%**；
+consulted 272 → 295 对，neverConsulted 410 → 387 对。语料分母 31,473 → 31,470（−3，
+只因 `v:fill`/`v:stroke` 挪进 `v:main` 后少了一层嵌套元素）。
+
+| 族 | 对 | 字面 | 落点 |
+|---|---|---|---|
+| `v:shape` 壳属性 | `shape\|id/spid/spt/type/coordsize` 11+8+7+6+8、`shape\|filled/stroked` 8+9 | 57 | `readImgPayload` 的 VML 分支 |
+| `o:lock` | `lock\|aspectratio` 12、`lock\|ext` 12 | 24 | 同上（VML 的 `o:` 前缀走 attrL） |
+| `v:fill` | `fill\|on` 11、`fill\|focussize` 10 | 21 | 同上 |
+| `v:stroke` | `stroke\|on` 8、`joinstyle` 6、`weight` 6 | 18 | 同上 |
+| `v:imagedata` | `imagedata\|title` 11 | 11 | 同上 |
+| `wp:anchor` 六枚闸门 | `allowOverlap`/`behindDoc`/`layoutInCell`/`locked`/`relativeHeight`/`simplePos` 各 6 | 36 | 同上（只读不写） |
+| DrawingML 两枚 | `picLocks\|noChangeArrowheads` 6、`spPr\|bwMode` 7 | 13 | 读手同上；**写手 `patchImgXml` 可写回** |
+
+### 实现要点
+
+1. **VML 壳与 DrawingML 壳共用一枚载荷**（`data-img`），靠键名分族。位图字节在
+   `v:imagedata` 上，读手的 `bitmap()` 短路链（blip/imagedata → rid → rel → media）
+   本来就认 `imagedata`，所以 `w:pict` 那一支**一张多余的代码都不用加**就在链上了
+   ——这正是上一轮判断「这块划算」的依据，本轮印证了。
+2. **`o:` 前缀要按 local name 取**。VML 的属性常带 `o:`（`o:title`、`o:lock`、
+   `o:ext`），而 DrawingML 那边同名的不带前缀。`attr()` 是全名精确匹配，读不到
+   `o:title`——整族改走 `attrL()`（探针在两处都注入，换漏斗不影响记账）。
+3. **onOff 扩到 ST_TrueFalse**：VML 用 `t`/`f`，CT_OnOff 用 1/0/true/false/on/off，
+   两者值域不重叠，`onOff()` 一并收。载荷里统一存 1/0（写侧不写 VML，存原值没有意义）。
+4. **`shape\|gfxdata` 裁定不收**（7 字面）：Word 缓存的图元字节（base64），
+   能有几 KB，挂进 HTML 属性性价比极差，且写侧根本写不回去——与 `t\|space` 同款裁定。
+5. **只有两枚能写回**：`a:picLocks` 的 `noChangeArrowheads`（与纵横比锁同一枚元素
+   两个属性，各补各的）与 `pic:spPr` 的 `bwMode`（包恒写 `auto`，说了才改）。
+   其余 21 对是**只读不写**——写侧只发 DrawingML 内嵌图，包没有 `w:pict` /
+   `wp:anchor` 的槽，读得回写不出（与 v0.148 的浮动锚点定位同款边界，已在账上标明）。
+
+### 过程中的坑（两枚）
+
+1. **又踩一次「语料段内没有 blip」的短路**（v0.148 已踩过一次，这次是 VML 版）：
+   `v:fill` / `v:stroke` 那两个上下文的段里只有壳元素、**没有 `v:imagedata`**，
+   `bitmap()` 第一步就返回 null，整段连 `readImgPayload` 都不会被调用——
+   第一版跑完 `fill\|*` 与 `stroke\|*` 五枚（39 字面）凭空掉零，其余 18 对都正常。
+   修法与上次同源：**挪到自带 imagedata 的上下文**（这里是 `v:main`，它的 open 里
+   挂了一枚），而不是给那两个上下文补 imagedata（补一枚就给 `imagedata\|id`
+   的分母多算一份）。**教训：新增「骑在 img 上」的属性族时，先确认承放上下文的
+   短路链通不通，别等跑完再回头找。**
+2. **`spPr` 会套两层**：`pic:spPr` 里再嵌一枚 `a:spPr`（VML↔DrawingML 互转的老文件
+   里常见），语料里 7 枚 `bwMode` 有 6 枚在嵌套的那一层。`findDesc` 只取第一枚，
+   那 6 字面会掉——改走 `allDesc` 全查一遍取第一枚说得上话的。
+
+### 顺带：剩余 neverConsulted 的形状
+
+本轮把 VML 那一族（约 90 字面，实际 180）与 `wp:anchor` 六枚闸门清掉后，榜首仍是
+图形几何族（`pt`/`gd`/`schemeClr`/`cxn`/`pos`，约 1,100 字面，需形状模型）。
+
+## v0.149 顺延清单（D9）
+
+| 对（族） | 次数 | 备注 |
+|---|---|---|
+| `t\|space` | 348 | **裁定不查**（v0.143 起），同前 |
+| 图形几何族 `pt\|x/y` 290×2、`gd\|fmla/name` 131×2、`schemeClr\|val` 82、`cxn\|ang` 64、`pos\|x/y` 64×2 | 约 1,100 | 仍需形状模型（preset geometry + gradient + connection） |
+| `proofErr\|type` | 64 | 位置标记（不是区间包壳），PM 侧要有承载点 |
+| `lvl\|tentative` / `lvl\|tplc` | 37 / 29 | 编号定义档位，包无槽，需 numbering.xml 补丁 |
+| `rsid\|val` / `instrText\|space` | 27 / 15 | 会话痕迹与域指令，逐枚成本高于收益 |
+| `noWrap\|val` / `caps\|val` | 13 / 11 | tcPr 与 rPr 各一枚；包似乎无槽（v0.147 grep 过没找到），要实测后走补丁 |
+| `shape\|gfxdata` | 7 | **裁定不收**（v0.149）：Word 缓存的图元字节，见上 |

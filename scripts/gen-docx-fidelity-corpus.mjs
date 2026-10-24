@@ -575,11 +575,15 @@ const PLACE = {
     },
   ],
   shapetype: [{ c: 'v:pict', p: P.v, bare: true, av: { adj: '', anchorId: '', coordsize: '1000,1000', filled: 'f', id: '_x0000_t75', oned: 'f', path: 'm0,0 l100,0 e', preferrelative: 't', spt: '75', stroked: 'f' } }],
-  fill: [{ c: 'v:fill', p: P.v, bare: true, av: { color2: '#0000ff', colors: '', ext: 'view', focus: '0,0', focusposition: '0,0', focussize: '0,0', id: '', on: 't', opacity: '', opacity2: '', recolor: 't', rotate: '0', title: '', type: 'solid' } }],
+  // v0.149：v:fill / v:stroke 两族挪进 v:main——v:fill 与 v:stroke 那两个上下文的段里
+  // 没有 v:imagedata，bitmap() 会在短路链第一步返回 null，整段连 readImgPayload 都
+  // 不被调用（与 v0.148 的 d:inline 同款）。v:main 的 open 自带一枚 imagedata。
+  // 骨架一律不带属性，分母不受影响
+  fill: [{ c: 'v:main', p: P.v, bare: true, av: { color2: '#0000ff', colors: '', ext: 'view', focus: '0,0', focusposition: '0,0', focussize: '0,0', id: '', on: 't', opacity: '', opacity2: '', recolor: 't', rotate: '0', title: '', type: 'solid' } }],
   fillRect: [{ c: 'v:fill', p: P.v, bare: true, av: { b: '0', t: '0' } }],
   fillToRect: [{ c: 'v:fill', p: P.v, bare: true, av: { b: '0', l: '0', r: '0', t: '0' } }],
   lin: [{ c: 'v:fill', p: P.v, bare: true, av: { ang: '0', scaled: '0' } }],
-  stroke: [{ c: 'v:stroke', p: P.v, bare: true, av: { color: '#000080', dashstyle: 'solid', endarrow: 'none', endcap: 'flat', joinstyle: 'round', miterlimit: '8', on: 't', startarrow: 'none', weight: '1pt' } }],
+  stroke: [{ c: 'v:main', p: P.v, bare: true, av: { color: '#000080', dashstyle: 'solid', endarrow: 'none', endcap: 'flat', joinstyle: 'round', miterlimit: '8', on: 't', startarrow: 'none', weight: '1pt' } }],
   shadow: [{ c: 'v:main', p: P.v, bare: true, av: { algn: 'tl', blurRad: '0', dir: '2700000', dist: '2pt', kx: '0', ky: '0', offset: '2pt,2pt', on: 't', opacity: '', origin: '', sx: '100000', sy: '100000', val: '' } }],
   textbox: [{ c: 'v:main', p: P.v, bare: true, av: { inset: '0,0,0,0', style: 'mso-fit-shape-to-text:t' } }],
   path: [{ c: 'v:path', p: P.v, bare: true, av: { arrowok: 't', connectangles: '', connectlocs: '', connecttype: 'segments', extrusionok: 'f', fillok: 't', gradientshapeok: 't', h: '1000', path: 'm0,0 l100,0 e', textboxrect: '0,0,1000,1000', w: '1000' } }],

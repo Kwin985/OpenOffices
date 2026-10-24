@@ -13,7 +13,7 @@
     "files": 5,
     "readable": 5,
     "unreadable": 0,
-    "bytes": 22041,
+    "bytes": 22029,
     "scopeParts": [
       "word/document.xml",
       "word/styles.xml",
@@ -29,19 +29,19 @@
   },
   "totals": {
     "distinctPairs": 701,
-    "occurrences": 31473,
+    "occurrences": 31470,
     "noisePairs": 19,
     "noiseOccurrences": 7711,
     "meaningfulPairs": 682,
-    "meaningfulOccurrences": 23762
+    "meaningfulOccurrences": 23759
   },
   "coverage": {
-    "byPair": 0.39882697947214074,
-    "byOccurrence": 0.8983671408130629,
-    "consultedPairs": 272,
-    "consultedOccurrences": 21347,
-    "neverConsultedPairs": 410,
-    "neverConsultedOccurrences": 2415
+    "byPair": 0.43255131964809385,
+    "byOccurrence": 0.9060566522160024,
+    "consultedPairs": 295,
+    "consultedOccurrences": 21527,
+    "neverConsultedPairs": 387,
+    "neverConsultedOccurrences": 2232
   },
   "consulted": [
     [
@@ -633,7 +633,27 @@
       12
     ],
     [
+      "lock|aspectratio",
+      12
+    ],
+    [
+      "lock|ext",
+      12
+    ],
+    [
       "bCs|val",
+      11
+    ],
+    [
+      "fill|on",
+      11
+    ],
+    [
+      "imagedata|title",
+      11
+    ],
+    [
+      "shape|id",
       11
     ],
     [
@@ -643,6 +663,10 @@
     [
       "shd|themeFillTint",
       11
+    ],
+    [
+      "fill|focussize",
+      10
     ],
     [
       "keepLines|val",
@@ -677,6 +701,10 @@
       9
     ],
     [
+      "shape|stroked",
+      9
+    ],
+    [
       "tblInd|type",
       9
     ],
@@ -691,6 +719,18 @@
     [
       "top|themeColor",
       9
+    ],
+    [
+      "shape|coordsize",
+      8
+    ],
+    [
+      "shape|filled",
+      8
+    ],
+    [
+      "shape|spid",
+      8
     ],
     [
       "tblStyle|val",
@@ -709,6 +749,10 @@
       7
     ],
     [
+      "shape|spt",
+      7
+    ],
+    [
       "simplePos|x",
       7
     ],
@@ -717,12 +761,28 @@
       7
     ],
     [
+      "spPr|bwMode",
+      7
+    ],
+    [
       "strike|val",
+      7
+    ],
+    [
+      "stroke|on",
       7
     ],
     [
       "suppressLineNumbers|val",
       7
+    ],
+    [
+      "anchor|allowOverlap",
+      6
+    ],
+    [
+      "anchor|behindDoc",
+      6
     ],
     [
       "anchor|distB",
@@ -741,6 +801,22 @@
       6
     ],
     [
+      "anchor|layoutInCell",
+      6
+    ],
+    [
+      "anchor|locked",
+      6
+    ],
+    [
+      "anchor|relativeHeight",
+      6
+    ],
+    [
+      "anchor|simplePos",
+      6
+    ],
+    [
       "cNvPr|descr",
       6
     ],
@@ -749,11 +825,23 @@
       6
     ],
     [
+      "picLocks|noChangeArrowheads",
+      6
+    ],
+    [
       "right|themeColor",
       6
     ],
     [
+      "shape|type",
+      6
+    ],
+    [
       "srgbClr|val",
+      6
+    ],
+    [
+      "stroke|joinstyle",
       6
     ],
     [
@@ -830,6 +918,10 @@
     ],
     [
       "shd|themeFillShade",
+      5
+    ],
+    [
+      "stroke|weight",
       5
     ],
     [
@@ -1195,32 +1287,8 @@
       13
     ],
     [
-      "lock|aspectratio",
-      12
-    ],
-    [
-      "lock|ext",
-      12
-    ],
-    [
       "caps|val",
       11
-    ],
-    [
-      "fill|on",
-      11
-    ],
-    [
-      "imagedata|title",
-      11
-    ],
-    [
-      "shape|id",
-      11
-    ],
-    [
-      "fill|focussize",
-      10
     ],
     [
       "multiLevelType|val",
@@ -1235,10 +1303,6 @@
       9
     ],
     [
-      "shape|stroked",
-      9
-    ],
-    [
       "tmpl|val",
       9
     ],
@@ -1247,72 +1311,8 @@
       8
     ],
     [
-      "shape|coordsize",
-      8
-    ],
-    [
-      "shape|filled",
-      8
-    ],
-    [
-      "shape|spid",
-      8
-    ],
-    [
-      "stroke|on",
-      8
-    ],
-    [
       "shape|gfxdata",
       7
-    ],
-    [
-      "shape|spt",
-      7
-    ],
-    [
-      "spPr|bwMode",
-      7
-    ],
-    [
-      "anchor|allowOverlap",
-      6
-    ],
-    [
-      "anchor|behindDoc",
-      6
-    ],
-    [
-      "anchor|layoutInCell",
-      6
-    ],
-    [
-      "anchor|locked",
-      6
-    ],
-    [
-      "anchor|relativeHeight",
-      6
-    ],
-    [
-      "anchor|simplePos",
-      6
-    ],
-    [
-      "picLocks|noChangeArrowheads",
-      6
-    ],
-    [
-      "shape|type",
-      6
-    ],
-    [
-      "stroke|joinstyle",
-      6
-    ],
-    [
-      "stroke|weight",
-      6
     ],
     [
       "attr|name",
@@ -1388,10 +1388,6 @@
     ],
     [
       "shape|fillcolor",
-      4
-    ],
-    [
-      "stroke|color",
       4
     ],
     [
@@ -1504,6 +1500,10 @@
     ],
     [
       "rect|t",
+      3
+    ],
+    [
+      "stroke|color",
       3
     ],
     [
@@ -2871,10 +2871,6 @@
       128
     ],
     [
-      "shape",
-      85
-    ],
-    [
       "schemeClr",
       82
     ],
@@ -2895,24 +2891,12 @@
       44
     ],
     [
-      "anchor",
-      38
-    ],
-    [
-      "fill",
-      34
-    ],
-    [
-      "stroke",
-      31
+      "shape",
+      28
     ],
     [
       "rsid",
       27
-    ],
-    [
-      "lock",
-      25
     ],
     [
       "rect",
@@ -2927,10 +2911,6 @@
       21
     ],
     [
-      "imagedata",
-      15
-    ],
-    [
       "instrText",
       15
     ],
@@ -2940,6 +2920,10 @@
     ],
     [
       "cnfStyle",
+      13
+    ],
+    [
+      "fill",
       13
     ],
     [
@@ -2975,6 +2959,10 @@
       10
     ],
     [
+      "stroke",
+      10
+    ],
+    [
       "multiLevelType",
       9
     ],
@@ -2995,10 +2983,6 @@
       8
     ],
     [
-      "spPr",
-      7
-    ],
-    [
       "inline",
       6
     ],
@@ -3008,10 +2992,6 @@
     ],
     [
       "insideV",
-      6
-    ],
-    [
-      "picLocks",
       6
     ],
     [
@@ -3076,6 +3056,10 @@
     ],
     [
       "headerReference",
+      4
+    ],
+    [
+      "imagedata",
       4
     ],
     [
@@ -3157,6 +3141,10 @@
     [
       "u",
       3
+    ],
+    [
+      "anchor",
+      2
     ],
     [
       "blipFill",
@@ -3383,6 +3371,10 @@
       1
     ],
     [
+      "lock",
+      1
+    ],
+    [
       "lvlPicBulletId",
       1
     ],
@@ -3492,7 +3484,7 @@
     ]
   ],
   "partTotals": {
-    "word/document.xml": 24936,
+    "word/document.xml": 24933,
     "word/styles.xml": 4249,
     "word/numbering.xml": 2265,
     "word/footnotes.xml": 7,
@@ -3514,8 +3506,8 @@
     "scaledLiteralSum": 31321,
     "rawScaledSum": 31085.229999999945,
     "scaleInflationPct": 0.7584631028950239,
-    "actualLiteralSum": 31473,
-    "literalDriftPct": 0.4852974042974356,
+    "actualLiteralSum": 31470,
+    "literalDriftPct": 0.4757191660547333,
     "comparableByPair": true,
     "comparableByOccurrence": false,
     "note": "按对覆盖率与旧账（313 件真件语料）可比；按字面不可比——重建按 count/100 缩放，取整与 max(1,·) 会把稀有对抬起来（见「scaling step itself」那一行），另有少量承重包裹属性（bitmap 链的 r:embed/extent/docPr、numbering 关联的 abstractNumId 等）在包裹处顺带出现；末行是「实测 vs 缩放期望」，与缩放那行基准不同，别混读"

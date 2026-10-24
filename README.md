@@ -8914,7 +8914,39 @@ Word 语义里 `descr` 才是替代文本（读屏软件念的那段），`name`
 | pptx | 70.1% / 74.3% 不动 |
 | 语料分母 | 只增 1 字面（新上下文的骨架一律不带属性，唯一例外是链上必需的 `a:blip r:embed`） |
 
-- **push 仍没成功**：非交互环境取不到 Windows 凭据（`terminal prompts disabled`），本地领先 origin/main 的提交继续攒着（本轮后 37 个）；凭据恢复后 `git push origin main` 一条命令的事。
+### v0.149（D8）——VML 图片壳 / 浮动锚点闸门 / 两枚可写壳属性
+
+兑现上一轮标出的「VML 图片壳」：`w:pict` 那一支同样能骑在 img 节点上。**23 对上账、180 字面**，
+覆盖率 **按对 39.9% → 43.3%、按字面 89.8% → 90.6%**；consulted 272 → 295 对。
+
+| 族 | 字面 | 往返 |
+|---|---|---|
+| `v:shape` 壳属性（id / spid / spt / type / coordsize / filled / stroked） | 57 | 只读 |
+| `wp:anchor` 六枚闸门（allowOverlap / behindDoc / layoutInCell / locked / relativeHeight / simplePos） | 36 | 只读 |
+| `o:lock` 两枚（aspectratio / ext） | 24 | 只读 |
+| `v:fill` 两枚（on / focussize） | 21 | 只读 |
+| `v:stroke` 三枚（on / joinstyle / weight） | 18 | 只读 |
+| `v:imagedata` 的 title | 11 | 只读 |
+| `a:picLocks` 的箭头锁、`pic:spPr` 的黑白模式档位 | 13 | **读写** |
+
+- **共用一枚载荷**：VML 壳与 DrawingML 壳都挂在 `data-img` 上，靠键名分族——读手的
+  `bitmap()` 短路链本来就认 `v:imagedata`，`w:pict` 那一支一张多余代码都不用加就在链上了。
+- **只读不写的 21 对**：写侧只发 DrawingML 内嵌图，包没有 `w:pict` / `wp:anchor` 的槽，
+  读得回写不出（与上一轮的浮动锚点定位同款边界，已在账上标明）。
+- **明确不做**：`shape|gfxdata`（7 字面）裁定不收——Word 缓存的图元字节（base64），
+  能有几 KB，挂进 HTML 属性性价比极差，且写侧根本写不回去（与 `t|space` 同款裁定）。
+
+**门禁**：tsc 0、build ✓；selftest MUST_SEE **169 枚全命中（新增 23）** / MUST_NOT_SEE 1 枚全落空；
+等价腿 5/5；变异腿有牙（no-attrL 38.4%/82.1%、no-attr 16.7%/35.6%）；变异后干净腿复位 md5 与
+主腿一致；pptx 70.1% / 74.3% 不动。语料分母 31,473 → 31,470。
+
+**过程中的坑**：①又踩一次「语料段内没有 blip」的短路（`v:fill` / `v:stroke` 上下文段里没有
+`v:imagedata`，`bitmap()` 第一步返回 null，五枚 39 字面凭空掉零）——修法是挪到自带 imagedata
+的 `v:main`，而不是补一枚 imagedata（那会给 `imagedata|id` 的分母多算一份）；②`spPr` 会套两层
+（`pic:spPr` 里再嵌一枚 `a:spPr`），7 枚 `bwMode` 有 6 枚在嵌套层，`findDesc` 只取第一枚会掉，
+改走 `allDesc` 全查。
+
+- **push 仍没成功**：非交互环境取不到 Windows 凭据（`terminal prompts disabled`），本地领先 origin/main 的提交继续攒着（本轮后 39 个）；凭据恢复后 `git push origin main` 一条命令的事。
 
 
 ## 性能（v0.3）

@@ -63,6 +63,9 @@ const WP = 'http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawi
 const A = 'http://schemas.openxmlformats.org/drawingml/2006/main'
 const PIC = 'http://schemas.openxmlformats.org/drawingml/2006/picture'
 const R = 'http://schemas.openxmlformats.org/officeDocument/2006/relationships'
+// v0.149：VML 图片壳（w:pict 那一支）要 v/o 两个命名空间
+const V = 'urn:schemas-microsoft-com:vml'
+const O = 'urn:schemas-microsoft-com:office:office'
 // 1x1 透明 PNG（图片段的关系与媒体目标）
 const PNG_B64 = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg=='
 // v0.142：clrScheme 与 fontScheme 并列。dk1/lt1 写成 sysClr（真件里 windowText/window
@@ -128,7 +131,8 @@ const FIXTURE_NUMBERING =
 const FIXTURE_DOC =
   `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>` +
   // v0.145：图片与浮动族要 wp/a/pic/r 四个命名空间（docPr/cNvPr/blip）
-  `<w:document xmlns:w="${W}" xmlns:wp="${WP}" xmlns:a="${A}" xmlns:pic="${PIC}" xmlns:r="${R}"><w:body>` +
+  `<w:document xmlns:w="${W}" xmlns:wp="${WP}" xmlns:a="${A}" xmlns:pic="${PIC}" xmlns:r="${R}"` +
+  ` xmlns:v="${V}" xmlns:o="${O}"><w:body>` +
   `<w:p w:rsidR="00A1" w:rsidRDefault="00A2" w:rsidP="00B3">` +
   `<w:pPr><w:pStyle w:val="ReportHead"/>` +
   `<w:spacing w:before="120" w:after="240" w:line="360" w:lineRule="auto" w:beforeAutospacing="0" w:afterAutospacing="0"/>` +
@@ -174,16 +178,20 @@ const FIXTURE_DOC =
   `<wp:cNvGraphicFramePr><a:graphicFrameLocks noChangeAspect="1"/></wp:cNvGraphicFramePr>` +
   `<a:graphic><a:graphicData uri="${PIC}">` +
   `<pic:pic><pic:nvPicPr><pic:cNvPr id="3" name="cNv 名" descr="图形级替代文本"/>` +
-  `<pic:cNvPicPr><a:picLocks noChangeAspect="0"/></pic:cNvPicPr></pic:nvPicPr>` +
+  // v0.149：a:picLocks 的箭头锁（与纵横比锁同一枚元素两个属性）、pic:spPr 的黑白模式
+  `<pic:cNvPicPr><a:picLocks noChangeAspect="0" noChangeArrowheads="1"/></pic:cNvPicPr></pic:nvPicPr>` +
   `<pic:blipFill><a:blip r:embed="rId1"/><a:stretch><a:fillRect/></a:stretch></pic:blipFill>` +
-  `<pic:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="914400" cy="914400"/></a:xfrm>` +
+  `<pic:spPr bwMode="gray"><a:xfrm><a:off x="0" y="0"/><a:ext cx="914400" cy="914400"/></a:xfrm>` +
   `<a:prstGeom prst="rect"><a:avLst/></a:prstGeom></pic:spPr></pic:pic>` +
   `</a:graphicData></a:graphic></wp:inline></w:drawing></w:r></w:p>` +
   // v0.148：浮动图（wp:anchor）——simplePos 的绝对坐标与 positionH/V 的基准。
   // 一个 w:drawing 里 inline 与 anchor 二选一，所以另开一段；写侧只发内嵌图，
   // 这一层壳读了写不回（审计里的已知边界），但读手查问照样进分子
   `<w:p><w:r><w:drawing>` +
-  `<wp:anchor distT="0" distB="0" distL="114300" distR="114300" simplePos="0" allowOverlap="1">` +
+  // v0.149：六枚闸门（allowOverlap / behindDoc / layoutInCell / locked / relativeHeight /
+  // simplePos）——写侧只发内嵌图，这一层壳读了写不回，但读手查问照样进分子
+  `<wp:anchor distT="0" distB="0" distL="114300" distR="114300" simplePos="0" allowOverlap="1"` +
+  ` behindDoc="0" layoutInCell="1" locked="0" relativeHeight="1">` +
   `<wp:simplePos x="360" y="720"/>` +
   `<wp:positionH relativeFrom="page"><wp:posOffset>360</wp:posOffset></wp:positionH>` +
   `<wp:positionV relativeFrom="margin"><wp:posOffset>720</wp:posOffset></wp:positionV>` +
@@ -195,6 +203,17 @@ const FIXTURE_DOC =
   `<pic:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="914400" cy="914400"/></a:xfrm>` +
   `<a:prstGeom prst="rect"><a:avLst/></a:prstGeom></pic:spPr></pic:pic>` +
   `</a:graphicData></a:graphic></wp:anchor></w:drawing></w:r></w:p>` +
+  // v0.149：VML 图片壳（w:pict 那一支）——位图字节在 v:imagedata 上，其余是壳：
+  // v:shape 七枚（id/spid/spt/type/coordsize/filled/stroked，gfxdata 裁定不收）、
+  // o:lock 两枚（aspectratio/ext，VML 的 o: 前缀走 attrL）、v:imagedata 的 o:title、
+  // v:fill 两枚（on/focussize）、v:stroke 三枚（on/joinstyle/weight）。
+  // 元素序按 VML 的规矩：imagedata 打头、其后 lock/fill/stroke/path
+  `<w:p><w:r><w:pict><v:shape id="_x0000_s1026" spid="_x0000_s1027" spt="75" type="#_x0000_t75"` +
+  ` coordsize="1000,1000" filled="t" stroked="f" style="width:100pt;height:50pt">` +
+  `<v:imagedata r:id="rId1" o:title="老式图的标题"/>` +
+  `<o:lock aspectratio="f" ext="edit"/>` +
+  `<v:fill on="t" focussize="0,0"/><v:stroke on="t" joinstyle="round" weight="1pt"/>` +
+  `</v:shape></w:pict></w:r></w:p>` +
   // v0.145：段落浮动框架——absolute 形态（x/y 在场，无 xAlign/yAlign），十二枚全上账
   `<w:p><w:pPr><w:framePr w:x="720" w:y="1440" w:w="2880" w:h="720" w:hRule="exact"` +
   ` w:hSpace="12" w:vSpace="24" w:hAnchor="page" w:vAnchor="text" w:wrap="around" w:anchorLock="1"/></w:pPr>` +
@@ -431,6 +450,31 @@ const MUST_SEE = [
   'simplePos|y',
   'positionH|relativeFrom',
   'positionV|relativeFrom',
+  // v0.149 D8：VML 图片壳十五枚 + wp:anchor 六枚闸门 + DrawingML 两枚
+  // （a:picLocks 的箭头锁、pic:spPr 的黑白模式档位）
+  'shape|id',
+  'shape|spid',
+  'shape|spt',
+  'shape|type',
+  'shape|coordsize',
+  'shape|filled',
+  'shape|stroked',
+  'lock|aspectratio',
+  'lock|ext',
+  'imagedata|title',
+  'fill|on',
+  'fill|focussize',
+  'stroke|on',
+  'stroke|joinstyle',
+  'stroke|weight',
+  'anchor|allowOverlap',
+  'anchor|behindDoc',
+  'anchor|layoutInCell',
+  'anchor|locked',
+  'anchor|relativeHeight',
+  'anchor|simplePos',
+  'picLocks|noChangeArrowheads',
+  'spPr|bwMode',
 ]
 // 我放进夹具而读手一寸不查的：t 的 xml:space 是**裁定不查**——escText 无条件保留空白
 // （连续空格第二个起换 nbsp），强于 preserve 所需，查了也没有第二行代码可写。
