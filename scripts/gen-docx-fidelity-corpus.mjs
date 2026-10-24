@@ -143,7 +143,25 @@ const CTX = {
     close: '</w:tc></w:tr></w:tbl>',
   },
   // ── 03-drawings：DrawingML ──
+  // 图片的位图层与容器层分开承放：d:inline 只装 wp:inline / wp:anchor 本身（属性在开标签
+  // 上，父是 w:drawing，层位合法），而 extent / effectExtent / docPr 是 wp:inline 的直子，
+  // 得进到 inline 里面才合法——d:wp 这一段就是为此另开的。
+  // **close 里必须带 blip**：bitmap() 的短路链是 blip→rid→rel→media，找不到 blip 就在
+  // 第一步返回 null，整段连 readImgPayload 都不会被调用，effectExtent 四边会凭空掉出
+  // 分子（v0.148 实测过：光把承放挪进 d:inline 是不够的）。骨架元素一律不带属性——
+  // 带一枚就给 census 分母多算一份（唯一例外的 a:blip r:embed 是这条链必需的）
   'd:inline': { f: '03-drawings', part: 'document', open: '<w:p><w:r><w:drawing>', close: '</w:drawing></w:r></w:p>' },
+  'd:wp': {
+    f: '03-drawings',
+    part: 'document',
+    open: '<w:p><w:r><w:drawing><wp:inline>',
+    close:
+      '<wp:docPr/><wp:cNvGraphicFramePr/><a:graphic><a:graphicData><pic:pic>' +
+      '<pic:nvPicPr><pic:cNvPr/><pic:cNvPicPr><a:picLocks/></pic:cNvPicPr></pic:nvPicPr>' +
+      '<pic:blipFill><a:blip r:embed="rId2"/></pic:blipFill><pic:spPr/>' +
+      '</pic:pic></a:graphicData></a:graphic>' +
+      '</wp:inline></w:drawing></w:r></w:p>',
+  },
   'd:anchor-kids': {
     f: '03-drawings',
     part: 'document',
@@ -295,7 +313,7 @@ const ORDER = {
   '00-base': ['d0:tbl'],
   '01-body': ['b0', 'b:rpr', 'b:ppr', 'b:run', 'b:numpr', 'b:pbdr', 'b:tabs', 'b:omml', 'b:para'],
   '02-tables': ['t:sect', 't:cols-kids', 't:cols', 't:tblPr', 't:borders', 't:cellmar', 't:grid', 't:tr', 't:trPr', 't:tcPr', 't:tcborders', 't:tcmar', 't:b0'],
-  '03-drawings': ['d:inline', 'd:anchor-kids', 'd:pic', 'd:xfrm', 'd:clr', 'd:clr2', 'd:gs', 'd:ln', 'd:fx', 'd:scene', 'd:wps', 'd:bodypr'],
+  '03-drawings': ['d:inline', 'd:wp', 'd:anchor-kids', 'd:pic', 'd:xfrm', 'd:clr', 'd:clr2', 'd:gs', 'd:ln', 'd:fx', 'd:scene', 'd:wps', 'd:bodypr'],
   '04-vml': ['v:pict', 'v:shape-attr', 'v:main', 'v:fill', 'v:stroke', 'v:path', 'v:formulas', 'v:handles', 'v:group', 'v:object', 'v:object-run', 'v:ffdata', 'v:textinput'],
   styles: ['s:latent', 's:style-attrs', 's:style-kids', 's:style-rpr'],
   numbering: ['n:b0', 'n:abstract-attrs', 'n:abstract-kids', 'n:lvl-attrs', 'n:lvl-kids', 'n:lvl-rpr', 'n:num-attrs', 'n:num-kids'],
@@ -469,9 +487,9 @@ const PLACE = {
   // ── DrawingML（03-drawings）──
   inline: [{ c: 'd:inline', p: P.wp, bare: true, av: { anchorId: '', distB: '0', distL: '0', distR: '114300', distT: '0', editId: '' } }],
   anchor: [{ c: 'd:inline', p: P.wp, bare: true, av: { allowOverlap: '1', anchorId: '', behindDoc: '0', distB: '0', distL: '114300', distR: '114300', distT: '0', editId: '', layoutInCell: '1', locked: '0', relativeHeight: '1', simplePos: '0' } }],
-  extent: [{ c: 'd:inline', p: P.wp, bare: true, av: { cx: '914400', cy: '914400' } }],
-  effectExtent: [{ c: 'd:inline', p: P.wp, bare: true, av: { l: '0', t: '0', r: '0', b: '0' } }],
-  docPr: [{ c: 'd:inline', p: P.wp, bare: true, av: { id: '1', name: '图片 1', descr: '一只猫' } }],
+  extent: [{ c: 'd:wp', p: P.wp, bare: true, av: { cx: '914400', cy: '914400' } }],
+  effectExtent: [{ c: 'd:wp', p: P.wp, bare: true, av: { l: '0', t: '0', r: '0', b: '0' } }],
+  docPr: [{ c: 'd:wp', p: P.wp, bare: true, av: { id: '1', name: '图片 1', descr: '一只猫' } }],
   simplePos: [{ c: 'd:anchor-kids', p: P.wp, bare: true, av: { x: '0', y: '0' } }],
   positionH: [{ c: 'd:anchor-kids', p: P.wp, bare: true, av: { relativeFrom: 'page' } }],
   positionV: [{ c: 'd:anchor-kids', p: P.wp, bare: true, av: { relativeFrom: 'page' } }],

@@ -164,15 +164,37 @@ const FIXTURE_DOC =
   `<w:r><w:t>制表位</w:t></w:r></w:p>` +
   // v0.145：图片的替代文本——docPr@descr（画布级）与 pic:cNvPr@descr（图形级）两处都读，
   // descr 优先、name 兜底。r:embed 指向 selftest zip 里的 media/image1.png
+  // v0.148：同一段扩成完整的容器壳——wp:inline 四边避让、wp:effectExtent 四边、
+  // wp:cNvGraphicFramePr/a:graphicFrameLocks、pic:cNvPicPr/a:picLocks、xfrm 的 off+ext、
+  // a:prstGeom 档位（元素序按 CT_Inline / CT_GraphicalObject 的 schema，错序 Word 会报坏件）
   `<w:p><w:r><w:drawing>` +
-  `<wp:inline distT="0" distB="0" distL="0" distR="0"><wp:extent cx="914400" cy="914400"/>` +
-  `<wp:docPr id="1" name="图片 1" descr="画布级替代文本"/>` +
+  `<wp:inline distT="114300" distB="0" distL="114300" distR="0"><wp:extent cx="914400" cy="914400"/>` +
+  `<wp:effectExtent l="19050" t="9525" r="0" b="0"/>` +
+  `<wp:docPr id="7" name="图片 1" descr="画布级替代文本"/>` +
+  `<wp:cNvGraphicFramePr><a:graphicFrameLocks noChangeAspect="1"/></wp:cNvGraphicFramePr>` +
   `<a:graphic><a:graphicData uri="${PIC}">` +
-  `<pic:pic><pic:nvPicPr><pic:cNvPr id="1" name="cNv 名" descr="图形级替代文本"/><pic:cNvPicPr/></pic:nvPicPr>` +
+  `<pic:pic><pic:nvPicPr><pic:cNvPr id="3" name="cNv 名" descr="图形级替代文本"/>` +
+  `<pic:cNvPicPr><a:picLocks noChangeAspect="0"/></pic:cNvPicPr></pic:nvPicPr>` +
   `<pic:blipFill><a:blip r:embed="rId1"/><a:stretch><a:fillRect/></a:stretch></pic:blipFill>` +
   `<pic:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="914400" cy="914400"/></a:xfrm>` +
   `<a:prstGeom prst="rect"><a:avLst/></a:prstGeom></pic:spPr></pic:pic>` +
   `</a:graphicData></a:graphic></wp:inline></w:drawing></w:r></w:p>` +
+  // v0.148：浮动图（wp:anchor）——simplePos 的绝对坐标与 positionH/V 的基准。
+  // 一个 w:drawing 里 inline 与 anchor 二选一，所以另开一段；写侧只发内嵌图，
+  // 这一层壳读了写不回（审计里的已知边界），但读手查问照样进分子
+  `<w:p><w:r><w:drawing>` +
+  `<wp:anchor distT="0" distB="0" distL="114300" distR="114300" simplePos="0" allowOverlap="1">` +
+  `<wp:simplePos x="360" y="720"/>` +
+  `<wp:positionH relativeFrom="page"><wp:posOffset>360</wp:posOffset></wp:positionH>` +
+  `<wp:positionV relativeFrom="margin"><wp:posOffset>720</wp:posOffset></wp:positionV>` +
+  `<wp:extent cx="914400" cy="914400"/><wp:effectExtent l="0" t="0" r="0" b="0"/>` +
+  `<wp:docPr id="8" name="浮动图"/><wp:cNvGraphicFramePr/>` +
+  `<a:graphic><a:graphicData uri="${PIC}">` +
+  `<pic:pic><pic:nvPicPr><pic:cNvPr id="4" name="浮动图"/><pic:cNvPicPr><a:picLocks noChangeAspect="1"/></pic:cNvPicPr></pic:nvPicPr>` +
+  `<pic:blipFill><a:blip r:embed="rId1"/><a:stretch><a:fillRect/></a:stretch></pic:blipFill>` +
+  `<pic:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="914400" cy="914400"/></a:xfrm>` +
+  `<a:prstGeom prst="rect"><a:avLst/></a:prstGeom></pic:spPr></pic:pic>` +
+  `</a:graphicData></a:graphic></wp:anchor></w:drawing></w:r></w:p>` +
   // v0.145：段落浮动框架——absolute 形态（x/y 在场，无 xAlign/yAlign），十二枚全上账
   `<w:p><w:pPr><w:framePr w:x="720" w:y="1440" w:w="2880" w:h="720" w:hRule="exact"` +
   ` w:hSpace="12" w:vSpace="24" w:hAnchor="page" w:vAnchor="text" w:wrap="around" w:anchorLock="1"/></w:pPr>` +
@@ -383,6 +405,32 @@ const MUST_SEE = [
   'cols|space',
   'docGrid|type',
   'docGrid|linePitch',
+  // v0.148 D7：图片容器壳二十二枚——wp:inline/wp:anchor 的四边避让、wp:effectExtent
+  // 四边、wp:docPr 与 pic:cNvPr 的序号与对象名、两枚 locks（graphicFrameLocks /
+  // picLocks 的 noChangeAspect）、a:prstGeom 档位、a:xfrm 的 a:off/a:ext、
+  // wp:simplePos 坐标与 wp:positionH/V 的基准
+  'inline|distT',
+  'inline|distB',
+  'inline|distL',
+  'inline|distR',
+  'effectExtent|l',
+  'effectExtent|t',
+  'effectExtent|r',
+  'effectExtent|b',
+  'docPr|id',
+  'cNvPr|id',
+  'cNvPr|name',
+  'graphicFrameLocks|noChangeAspect',
+  'picLocks|noChangeAspect',
+  'prstGeom|prst',
+  'ext|cx',
+  'ext|cy',
+  'off|x',
+  'off|y',
+  'simplePos|x',
+  'simplePos|y',
+  'positionH|relativeFrom',
+  'positionV|relativeFrom',
 ]
 // 我放进夹具而读手一寸不查的：t 的 xml:space 是**裁定不查**——escText 无条件保留空白
 // （连续空格第二个起换 nbsp），强于 preserve 所需，查了也没有第二行代码可写。

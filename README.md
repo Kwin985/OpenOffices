@@ -8882,7 +8882,39 @@ Word 语义里 `descr` 才是替代文本（读屏软件念的那段），`name`
 - **编号档位 `lvl\|tentative` / `lvl\|tplc`（37/29）顺延**：包无槽，需 numbering.xml 补丁。
 - **docPr/cNvPr 的 id/name（32/26/26）顺延**：id 由包自动分配，name 收益薄。
 - **页边距往返经 mm 折一道**（缇 → mm 一位小数 → 缇）有 0.05mm 级误差，`pageSetupOf` 与旧正则腿同口径同源，非本轮引入。
-- **push 仍没成功**：非交互环境取不到 Windows 凭据（`terminal prompts disabled`），本地领先 origin/main 的提交继续攒着（本轮后 35 个）；凭据恢复后 `git push origin main` 一条命令的事。
+## 发行说明：v0.148 —— docx 长尾第七轮 D7：图片容器壳（26 对上账）
+
+上一轮把「图片容器族」列为图形几何族里最划算的一块（可骑在现有 img 节点上、不需要完整形状模型），本轮兑现。
+
+**一张位图在 OOXML 里不是「一个 `<img>`」而是三层壳**，除位图字节与尺寸外的属性屏上一条都不兑现（Web 流式排版没有文字环绕、没有对象名、图片框恒矩形），但换编辑器打开时它们决定图贴在哪个锚上：
+
+| 族 | 上账 |
+|---|---|
+| 画布四边避让（`wp:inline`/`wp:anchor` 的 distT/B/L/R） | 8 对 84 字面 |
+| 溢出区（`wp:effectExtent` 四边） | 4 对 84 字面 |
+| 对象序号与对象名（`wp:docPr@id`、`pic:cNvPr@id/name`） | 3 对 84 字面 |
+| 两枚锁（`graphicFrameLocks` / `picLocks` 的 noChangeAspect） | 2 对 34 字面 |
+| 图形框档位（`a:prstGeom@prst`） | 1 对 24 字面 |
+| 图形框自身尺寸（`a:xfrm` 的 `a:off`/`a:ext`） | 4 对 112 字面 |
+| 浮动锚点（`simplePos`、`positionH/V`） | 4 对 28 字面（**只读不写**） |
+
+- **读手**：`readImgPayload` 把整层壳收成 `data-img` 载荷挂在 `<img>` 上（EMU 档存整数原值，onOff 档存 1/0）；各层走 `findDesc` 深搜（一个 `w:drawing` 里同名元素各只有一枚），只有 `a:off`/`a:ext` 限定在 `a:xfrm` 内取——它们与 `wp:extent` 不是同一枚元素
+- **写手**：`patchImgXml` 按 `<w:drawing>` 出现序逐块**改值**。实测包把三层壳一个不缺地发出来了（`<wp:inline dist*=0>`、`effectExtent` 四边 0、两枚 locks 恒 1、`pic:cNvPr name=""`），**只是值全部硬编码**，所以这一族比上一轮的段落余量简单一档——不必算 schema 位次、不必插结点。计数闸门同款（块数与登记条数对不上整笔放弃）
+- **顺带修掉一个真 bug**：包把 `pic:cNvPr` 的 `name` 写成空串（v0.145 只把替代文本喂给了 `wp:docPr`），换编辑器打开时对象名丢了——现在随 `cNvPrName` 补回来
+
+**明确不做**：浮动锚点四枚（`wp:simplePos`/`positionH`/`positionV`）只读不写——写侧只发内嵌图，包没有 `wp:anchor` 的槽，那一层壳出不来（与「空书签往返丢失」同款，记在账上）；图形几何族（pt/gd/schemeClr/cxn/pos）仍需形状模型，继续顺延。
+
+| 门禁 | 结果 |
+|---|---|
+| 覆盖率（合成语料） | 按对 36.1% → **39.9%**、按字面 87.9% → **89.8%**（consulted 246 → 272 对） |
+| selftest 双向 | MUST_SEE **146 枚全命中**（新增 22）、MUST_NOT_SEE 1 枚全落空 |
+| 等价腿 | 5/5 逐字节相同 |
+| 变异腿 | no-attrL 37.2%/81.9%、no-attr 14.5%/35.0% |
+| 变异后复位 | md5 与主腿一致 |
+| pptx | 70.1% / 74.3% 不动 |
+| 语料分母 | 只增 1 字面（新上下文的骨架一律不带属性，唯一例外是链上必需的 `a:blip r:embed`） |
+
+- **push 仍没成功**：非交互环境取不到 Windows 凭据（`terminal prompts disabled`），本地领先 origin/main 的提交继续攒着（本轮后 37 个）；凭据恢复后 `git push origin main` 一条命令的事。
 
 
 ## 性能（v0.3）

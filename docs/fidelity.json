@@ -13,7 +13,7 @@
     "files": 5,
     "readable": 5,
     "unreadable": 0,
-    "bytes": 22005,
+    "bytes": 22041,
     "scopeParts": [
       "word/document.xml",
       "word/styles.xml",
@@ -29,19 +29,19 @@
   },
   "totals": {
     "distinctPairs": 701,
-    "occurrences": 31472,
+    "occurrences": 31473,
     "noisePairs": 19,
     "noiseOccurrences": 7711,
     "meaningfulPairs": 682,
-    "meaningfulOccurrences": 23761
+    "meaningfulOccurrences": 23762
   },
   "coverage": {
-    "byPair": 0.36070381231671556,
-    "byOccurrence": 0.8794242666554438,
-    "consultedPairs": 246,
-    "consultedOccurrences": 20896,
-    "neverConsultedPairs": 436,
-    "neverConsultedOccurrences": 2865
+    "byPair": 0.39882697947214074,
+    "byOccurrence": 0.8983671408130629,
+    "consultedPairs": 272,
+    "consultedOccurrences": 21347,
+    "neverConsultedPairs": 410,
+    "neverConsultedOccurrences": 2415
   },
   "consulted": [
     [
@@ -441,6 +441,10 @@
       33
     ],
     [
+      "docPr|id",
+      32
+    ],
+    [
       "docPr|name",
       32
     ],
@@ -454,15 +458,59 @@
     ],
     [
       "blip|embed",
-      27
+      28
+    ],
+    [
+      "ext|cx",
+      28
+    ],
+    [
+      "ext|cy",
+      28
+    ],
+    [
+      "off|x",
+      28
+    ],
+    [
+      "off|y",
+      28
+    ],
+    [
+      "cNvPr|id",
+      26
+    ],
+    [
+      "cNvPr|name",
+      26
     ],
     [
       "tblLayout|type",
       26
     ],
     [
+      "prstGeom|prst",
+      24
+    ],
+    [
       "b|val",
       22
+    ],
+    [
+      "effectExtent|b",
+      21
+    ],
+    [
+      "effectExtent|l",
+      21
+    ],
+    [
+      "effectExtent|r",
+      21
+    ],
+    [
+      "effectExtent|t",
+      21
     ],
     [
       "graphicData|uri",
@@ -489,6 +537,10 @@
       21
     ],
     [
+      "graphicFrameLocks|noChangeAspect",
+      19
+    ],
+    [
       "trHeight|hRule",
       19
     ],
@@ -507,6 +559,26 @@
     [
       "tblStylePr|type",
       16
+    ],
+    [
+      "inline|distB",
+      15
+    ],
+    [
+      "inline|distL",
+      15
+    ],
+    [
+      "inline|distR",
+      15
+    ],
+    [
+      "inline|distT",
+      15
+    ],
+    [
+      "picLocks|noChangeAspect",
+      15
     ],
     [
       "spacing|afterAutospacing",
@@ -629,12 +701,44 @@
       7
     ],
     [
+      "positionH|relativeFrom",
+      7
+    ],
+    [
+      "positionV|relativeFrom",
+      7
+    ],
+    [
+      "simplePos|x",
+      7
+    ],
+    [
+      "simplePos|y",
+      7
+    ],
+    [
       "strike|val",
       7
     ],
     [
       "suppressLineNumbers|val",
       7
+    ],
+    [
+      "anchor|distB",
+      6
+    ],
+    [
+      "anchor|distL",
+      6
+    ],
+    [
+      "anchor|distR",
+      6
+    ],
+    [
+      "anchor|distT",
+      6
     ],
     [
       "cNvPr|descr",
@@ -1075,87 +1179,15 @@
       37
     ],
     [
-      "docPr|id",
-      32
-    ],
-    [
       "lvl|tplc",
       29
-    ],
-    [
-      "ext|cx",
-      28
-    ],
-    [
-      "ext|cy",
-      28
-    ],
-    [
-      "off|x",
-      28
-    ],
-    [
-      "off|y",
-      28
     ],
     [
       "rsid|val",
       27
     ],
     [
-      "cNvPr|id",
-      26
-    ],
-    [
-      "cNvPr|name",
-      26
-    ],
-    [
-      "prstGeom|prst",
-      24
-    ],
-    [
-      "effectExtent|b",
-      21
-    ],
-    [
-      "effectExtent|l",
-      21
-    ],
-    [
-      "effectExtent|r",
-      21
-    ],
-    [
-      "effectExtent|t",
-      21
-    ],
-    [
-      "graphicFrameLocks|noChangeAspect",
-      19
-    ],
-    [
-      "inline|distB",
-      15
-    ],
-    [
-      "inline|distL",
-      15
-    ],
-    [
-      "inline|distR",
-      15
-    ],
-    [
-      "inline|distT",
-      15
-    ],
-    [
       "instrText|space",
-      15
-    ],
-    [
-      "picLocks|noChangeAspect",
       15
     ],
     [
@@ -1231,27 +1263,11 @@
       8
     ],
     [
-      "positionH|relativeFrom",
-      7
-    ],
-    [
-      "positionV|relativeFrom",
-      7
-    ],
-    [
       "shape|gfxdata",
       7
     ],
     [
       "shape|spt",
-      7
-    ],
-    [
-      "simplePos|x",
-      7
-    ],
-    [
-      "simplePos|y",
       7
     ],
     [
@@ -1264,22 +1280,6 @@
     ],
     [
       "anchor|behindDoc",
-      6
-    ],
-    [
-      "anchor|distB",
-      6
-    ],
-    [
-      "anchor|distL",
-      6
-    ],
-    [
-      "anchor|distR",
-      6
-    ],
-    [
-      "anchor|distT",
       6
     ],
     [
@@ -2875,16 +2875,8 @@
       85
     ],
     [
-      "effectExtent",
-      84
-    ],
-    [
       "schemeClr",
       82
-    ],
-    [
-      "inline",
-      66
     ],
     [
       "lvl",
@@ -2899,32 +2891,16 @@
       64
     ],
     [
-      "anchor",
-      62
-    ],
-    [
-      "ext",
-      60
-    ],
-    [
-      "off",
-      56
-    ],
-    [
-      "cNvPr",
-      52
-    ],
-    [
       "bodyPr",
       44
     ],
     [
-      "fill",
-      34
+      "anchor",
+      38
     ],
     [
-      "docPr",
-      32
+      "fill",
+      34
     ],
     [
       "stroke",
@@ -2939,10 +2915,6 @@
       25
     ],
     [
-      "prstGeom",
-      24
-    ],
-    [
       "rect",
       24
     ],
@@ -2955,14 +2927,6 @@
       21
     ],
     [
-      "picLocks",
-      21
-    ],
-    [
-      "graphicFrameLocks",
-      19
-    ],
-    [
       "imagedata",
       15
     ],
@@ -2973,10 +2937,6 @@
     [
       "line",
       15
-    ],
-    [
-      "simplePos",
-      14
     ],
     [
       "cnfStyle",
@@ -3035,16 +2995,12 @@
       8
     ],
     [
-      "positionH",
-      7
-    ],
-    [
-      "positionV",
-      7
-    ],
-    [
       "spPr",
       7
+    ],
+    [
+      "inline",
+      6
     ],
     [
       "insideH",
@@ -3052,6 +3008,10 @@
     ],
     [
       "insideV",
+      6
+    ],
+    [
+      "picLocks",
       6
     ],
     [
@@ -3088,6 +3048,10 @@
     ],
     [
       "effectRef",
+      4
+    ],
+    [
+      "ext",
       4
     ],
     [
@@ -3528,7 +3492,7 @@
     ]
   ],
   "partTotals": {
-    "word/document.xml": 24935,
+    "word/document.xml": 24936,
     "word/styles.xml": 4249,
     "word/numbering.xml": 2265,
     "word/footnotes.xml": 7,
@@ -3550,8 +3514,8 @@
     "scaledLiteralSum": 31321,
     "rawScaledSum": 31085.229999999945,
     "scaleInflationPct": 0.7584631028950239,
-    "actualLiteralSum": 31472,
-    "literalDriftPct": 0.48210465821654225,
+    "actualLiteralSum": 31473,
+    "literalDriftPct": 0.4852974042974356,
     "comparableByPair": true,
     "comparableByOccurrence": false,
     "note": "按对覆盖率与旧账（313 件真件语料）可比；按字面不可比——重建按 count/100 缩放，取整与 max(1,·) 会把稀有对抬起来（见「scaling step itself」那一行），另有少量承重包裹属性（bitmap 链的 r:embed/extent/docPr、numbering 关联的 abstractNumId 等）在包裹处顺带出现；末行是「实测 vs 缩放期望」，与缩放那行基准不同，别混读"

@@ -279,3 +279,76 @@
 | `docPr\|id` / `cNvPr\|id` / `cNvPr\|name` | 32 / 26 / 26 | 写侧 id 由包自动分配；name 可补但收益薄 |
 | 图片容器族（`inline` 四 dist、`graphicFrameLocks`、`picLocks`、`lock\|aspectratio/ext`、`positionH/V`、`simplePos`） | 约 200 | 可骑在现有 img 节点上（无需完整形状模型），是图形族里最划算的一块 |
 | `rsid\|val` / `instrText\|space` / `imagedata\|title` | 27 / 15 / 11 | 会话痕迹与域指令，逐枚成本高于收益 |
+
+## v0.148（D7）——图片容器壳
+
+上一轮把「图片容器族」列为图形几何族里最划算的一块（可骑在现有 img 节点上、不需要
+完整形状模型），本轮兑现：**26 对上账、450 字面**（其中 `anchor|dist*` 四枚是读手顺带
+查问到的）。覆盖率 **按对 36.1% → 39.9%、按字面 87.9% → 89.8%**；consulted 246 → 272 对，
+neverConsulted 436 → 410 对。**语料分母只增 1 字面**（31,472 → 31,473）。
+
+| 族 | 对 | 字面 | 落点 |
+|---|---|---|---|
+| 画布四边避让 | `inline\|distT/B/L/R` 15×4、`anchor\|distT/B/L/R` 6×4 | 84 | `wp:inline`/`wp:anchor` 开标签属性 |
+| 溢出区 | `effectExtent\|l/t/r/b` 21×4 | 84 | `wp:effectExtent` 四边 |
+| 对象序号与对象名 | `docPr\|id` 32、`cNvPr\|id` 26、`cNvPr\|name` 26 | 84 | 两处各查各的（不用 `??` 短路） |
+| 两枚锁 | `graphicFrameLocks\|noChangeAspect` 19、`picLocks\|noChangeAspect` 15 | 34 | onOff 三态 |
+| 图形框档位 | `prstGeom\|prst` 24 | 24 | 图片恒 rect，照收原值 |
+| 图形框自身尺寸 | `ext\|cx/cy` 28×2、`off\|x/y` 28×2 | 112 | `a:xfrm` 的 `a:ext`/`a:off`（与 `wp:extent` 不是同一枚元素） |
+| 浮动锚点 | `simplePos\|x/y` 7×2、`positionH\|relativeFrom` 9、`positionV\|relativeFrom` 7 | 28 | 只读不写，见下 |
+
+### 实现要点
+
+1. **这一族不用插元素，只要改值**。实测包对一张图发的是完整三层壳——`<wp:inline
+   distT="0" distB="0" distL="0" distR="0">`、`<wp:effectExtent t="0" r="0" b="0" l="0"/>`、
+   `<wp:docPr id="1" …>`、`<pic:cNvPr id="0" name="" descr=""/>`、`<a:graphicFrameLocks
+   noChangeAspect="1"/>`、`<a:picLocks …>`、`<a:xfrm><a:off x="0" y="0"/><a:ext …/></a:xfrm>`、
+   `<a:prstGeom prst="rect">`——一个不缺，**只是值全部硬编码**。所以 `patchImgXml` 比
+   v0.147 的 `patchParaProps` 简单一档：按 `<w:drawing>` 块序逐块改属性值，不必算 schema
+   位次、不必插结点。计数闸门同款（块数与登记条数对不上整笔放弃）。
+2. **顺带修掉一个真 bug**：包把 `pic:cNvPr` 的 `name` 写成**空串**（v0.145 只把替代
+   文本喂给了 `wp:docPr`，图形级那一枚一直是空的）。换编辑器打开时对象名丢了——
+   现在随 `cNvPrName` 补回来。
+3. **读手按层深搜，不按层硬走**：一个 `w:drawing` 里 `wp:inline`、`pic:pic`、
+   `a:xfrm` 各只有一枚，`findDesc` 深搜不会认错，省掉一层层 `find` 的路径耦合。
+   唯一例外是 `a:off`/`a:ext`——限定在 `a:xfrm` 内取，因为它们与 `wp:extent`
+   是不同一枚元素（图片里两者同值，但换编辑器只认 xfrm 那一枚）。
+4. **两处 id 各查各的**：`docPrId` 与 `cNvPrId` 写成两条独立语句，不用 `??` 短路——
+   右支不求值的话后一枚永远进不了探针账（`bitmap()` 里取 descr 那处早就是这么写的）。
+5. **EMU 档存整数原值**：`width`/`height` 那一道 EMU→px 只在尺寸上做过（且 `Math.round`
+   有损），载荷里要的是能原样写回去的数，所以另存一份原值。
+
+### 过程中的坑（三枚）
+
+1. **语料承放不在合法层位，且 d:inline 段里没有 blip**。第一版把 extent / effectExtent /
+   docPr 留在 `d:inline`（open 只到 `<w:drawing>`），结果三族全部落在 `w:drawing` 直子——
+   层位不合法（应在 `wp:inline` 下），更要命的是**那些段落里没有 `a:blip`**：`bitmap()`
+   的短路链是 blip→rid→rel→media，第一步就返回 null，整段连 `readImgPayload` 都不会被
+   调用，`effectExtent` 四边凭空掉出分子（先跑了一遍才发现：别的 22 对都上账，只有
+   这四枚不动）。修法：另开 `d:wp` 上下文（open 到 `<wp:inline>`），close 里补完 graphic
+   骨架。**骨架元素一律不带属性**——带一枚就给 census 分母多算一份，唯一例外是链上
+   必需的 `a:blip r:embed`。实测分母只增 1 字面。
+2. **write 侧改属性不能靠拼串**。`tagWithAttrs` 先试替换已有同名属性、没有才往 `>` 前
+   追加；写成「直接替换整枚标签」会把包自己带上的 `noChangeArrowheads` 之类冲掉。
+3. **浮动锚点四枚只读不写**。`wp:simplePos` / `wp:positionH` / `wp:positionV` 只在
+   `wp:anchor`（浮动图）那一层壳里，写侧只发内嵌图（包没有 anchor 的槽），
+   所以读了也写不回去——与「空书签往返丢失」同款，记在账上：
+   **读手查问进分子，但这一族只保住一半**。
+
+### 顺带：剩余 neverConsulted 的形状变了
+
+`ext|cx/cy`、`off|x/y`、`prstGeom|prst`、`docPr|id`、`cNvPr|id/name` 本来被归在
+「图形几何族约 1,700 字面」里，本轮证明它们**不需要形状模型**——骑在 img 上就够了。
+图形几何族因此缩到约 1,100 字面（纯形状：pt/gd/schemeClr/cxn/pos/ln 等）。
+
+## v0.148 顺延清单（D8）
+
+| 对（族） | 次数 | 备注 |
+|---|---|---|
+| `t\|space` | 348 | **裁定不查**（v0.143 起），同前 |
+| 图形几何族 `pt\|x/y` 290×2、`gd\|fmla/name` 131×2、`schemeClr\|val` 82、`cxn\|ang` 64、`pos\|x/y` 64×2 | 约 1,100 | 本轮剥离出图片那几族后剩下的，仍需形状模型 |
+| `proofErr\|type` | 64 | 位置标记（不是区间包壳），PM 侧要有承载点 |
+| `lvl\|tentative` / `lvl\|tplc` | 37 / 29 | 编号定义档位，包无槽，需 numbering.xml 补丁 |
+| `rsid\|val` / `instrText\|space` | 27 / 15 | 会话痕迹与域指令，逐枚成本高于收益 |
+| VML 图片壳（`lock\|aspectratio/ext` 12×2、`imagedata\|title` 11、`shape\|id` 11、`fill\|on` 11、`stroke\|on` 8） | 约 90 | `w:pict` 那一支也能骑在 img 上（读手已走 `imagedata`），是下一块划算的 |
+| `caps\|val` 11 / `noWrap\|val` 13 | 24 | rPr 与 tcPr 各一枚；包有没有槽要实测（v0.147 里 grep 过没找到，可能也要补丁） |
