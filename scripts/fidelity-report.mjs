@@ -210,8 +210,25 @@ const FIXTURE_DOC =
   `<w:tc><w:p><w:r><w:t>乙</w:t></w:r></w:p></w:tc></w:tr>` +
   `<w:tr><w:tc><w:p><w:r><w:t>丙</w:t></w:r></w:p></w:tc>` +
   `<w:tc><w:p><w:r><w:t>丁</w:t></w:r></w:p></w:tc></w:tr></w:tbl>` +
+  // v0.147：段落属性余量——pPr 里那批屏上不兑现的直接属性。七枚 onOff 里特意混着
+  // 显式 0 与显式 1（snapToGrid 在 Word 里默认就是开，「显式关」是真值，不能与没写同路），
+  // textAlignment 是枚举档；w:spacing 身上再挂两枚自动段距
+  `<w:p><w:pPr>` +
+  `<w:adjustRightInd w:val="0"/><w:snapToGrid w:val="1"/><w:topLinePunct w:val="0"/>` +
+  `<w:bidi w:val="1"/><w:autoSpaceDE w:val="1"/><w:autoSpaceDN w:val="0"/>` +
+  `<w:suppressLineNumbers w:val="1"/><w:textAlignment w:val="center"/>` +
+  `<w:spacing w:beforeAutospacing="1" w:afterAutospacing="0"/>` +
+  `</w:pPr><w:r><w:t>属性余量段</w:t></w:r></w:p>` +
+  // v0.147：表自身的条件层闸门——w:tblPr 上那一枚 w:tblLook（与样式里那一枚同名同义，
+  // 归属不同：这张表自己说的压过样式说的）
+  `<w:tbl><w:tblPr><w:tblLook w:val="01E0" w:noHBand="1" w:noVBand="0"/></w:tblPr>` +
+  `<w:tblGrid><w:gridCol w:w="5000"/></w:tblGrid>` +
+  `<w:tr><w:tc><w:p><w:r><w:t>闸门表</w:t></w:r></w:p></w:tc></w:tr></w:tbl>` +
   `<w:sectPr><w:pgSz w:w="11906" w:h="16838" w:orient="portrait"/>` +
-  `<w:pgMar w:top="1440" w:right="1800" w:bottom="1440" w:left="1800" w:header="851" w:footer="992" w:gutter="0"/></w:sectPr>` +
+  `<w:pgMar w:top="1440" w:right="1800" w:bottom="1440" w:left="1800" w:header="851" w:footer="992" w:gutter="0"/>` +
+  // v0.147：节属性余下两族——分栏（w:cols）与文档网格（w:docGrid）。纸型与页边距
+  // 那两枚早就在夹具里（读手原先不读其中的 top/bottom/header/footer/gutter/orient）
+  `<w:cols w:num="2" w:space="720"/><w:docGrid w:type="lines" w:linePitch="312"/></w:sectPr>` +
   `</w:body></w:document>`
 
 // 读手按名查问过的（源码里 spacing / ind / jc / pStyle / rFonts / sz / b / 顶边 都走 attr 或 attrL）
@@ -338,19 +355,44 @@ const MUST_SEE = [
   'style|customStyle',
   'insideH|space',
   'insideV|space',
-]
-// 我放进夹具而读手一寸不查的：beforeAutospacing / afterAutospacing 在源码里没有查问处；
-// t 的 xml:space 是**裁定不查**——escText 无条件保留空白（连续空格第二个起换 nbsp），
-// 强于 preserve 所需，查了也没有第二行代码可写；
-// pgSz|orient 与 pgMar|gutter 走 docxToDocMeta 另一条路，不在本读手的账上。
-// （v0.143 注：ind|hangingChars 与 left|space 曾在此列——那一轮起 hangingChars 进了
-// paraCss 的负 text-indent 分支、pBdr 四边 space 进了 padding，两枚移入 MUST_SEE）
-const MUST_NOT_SEE = [
+  // v0.147 D6：段落属性余量九枚（pPr 七枚 onOff + textAlignment 枚举 + w:spacing 上的
+  // 两枚自动段距）、表自身闸门三枚（w:tblPr/w:tblLook 的 val/noHBand/noVBand）、
+  // 节属性九枚（pgSz 的 h 与 orient、pgMar 的 top/bottom/header/footer/gutter、
+  // cols 的 num/space、docGrid 的 type/linePitch）
+  'adjustRightInd|val',
+  'snapToGrid|val',
+  'topLinePunct|val',
+  'bidi|val',
+  'autoSpaceDE|val',
+  'autoSpaceDN|val',
+  'suppressLineNumbers|val',
+  'textAlignment|val',
   'spacing|beforeAutospacing',
   'spacing|afterAutospacing',
-  't|space',
+  'tblLook|val',
+  'tblLook|noHBand',
+  'tblLook|noVBand',
+  'pgSz|h',
   'pgSz|orient',
+  'pgMar|top',
+  'pgMar|bottom',
+  'pgMar|header',
+  'pgMar|footer',
   'pgMar|gutter',
+  'cols|num',
+  'cols|space',
+  'docGrid|type',
+  'docGrid|linePitch',
+]
+// 我放进夹具而读手一寸不查的：t 的 xml:space 是**裁定不查**——escText 无条件保留空白
+// （连续空格第二个起换 nbsp），强于 preserve 所需，查了也没有第二行代码可写。
+// （v0.143 注：ind|hangingChars 与 left|space 曾在此列——那一轮起 hangingChars 进了
+// paraCss 的负 text-indent 分支、pBdr 四边 space 进了 padding，两枚移入 MUST_SEE。
+// v0.147 注：spacing 两枚自动段距、pgSz|orient 与 pgMar|gutter 也曾在此列——节属性
+// 那一族原是 docxToDocMeta 用正则读的（读是读了、账上是盲区），本轮改由读手走 attr
+// 漏斗读，四枚一并移入 MUST_SEE）
+const MUST_NOT_SEE = [
+  't|space',
 ]
 
 const md5 = (s) => createHash('md5').update(s).digest('hex')

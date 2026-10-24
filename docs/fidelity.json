@@ -36,12 +36,12 @@
     "meaningfulOccurrences": 23761
   },
   "coverage": {
-    "byPair": 0.3255131964809384,
-    "byOccurrence": 0.8686082235596145,
-    "consultedPairs": 222,
-    "consultedOccurrences": 20639,
-    "neverConsultedPairs": 460,
-    "neverConsultedOccurrences": 3122
+    "byPair": 0.36070381231671556,
+    "byOccurrence": 0.8794242666554438,
+    "consultedPairs": 246,
+    "consultedOccurrences": 20896,
+    "neverConsultedPairs": 436,
+    "neverConsultedOccurrences": 2865
   },
   "consulted": [
     [
@@ -353,6 +353,10 @@
       49
     ],
     [
+      "adjustRightInd|val",
+      48
+    ],
+    [
       "fldChar|fldCharType",
       44
     ],
@@ -411,6 +415,10 @@
     [
       "insideV|sz",
       38
+    ],
+    [
+      "snapToGrid|val",
+      36
     ],
     [
       "basedOn|val",
@@ -477,6 +485,10 @@
       21
     ],
     [
+      "textAlignment|val",
+      21
+    ],
+    [
       "trHeight|hRule",
       19
     ],
@@ -497,12 +509,28 @@
       16
     ],
     [
+      "spacing|afterAutospacing",
+      14
+    ],
+    [
+      "spacing|beforeAutospacing",
+      14
+    ],
+    [
       "tblW|type",
       14
     ],
     [
       "tblW|w",
       14
+    ],
+    [
+      "topLinePunct|val",
+      14
+    ],
+    [
+      "bidi|val",
+      13
     ],
     [
       "iCs|val",
@@ -518,6 +546,14 @@
     ],
     [
       "abstractNum|abstractNumId",
+      12
+    ],
+    [
+      "autoSpaceDE|val",
+      12
+    ],
+    [
+      "autoSpaceDN|val",
       12
     ],
     [
@@ -577,6 +613,10 @@
       9
     ],
     [
+      "tblLook|val",
+      9
+    ],
+    [
       "top|themeColor",
       9
     ],
@@ -590,6 +630,10 @@
     ],
     [
       "strike|val",
+      7
+    ],
+    [
+      "suppressLineNumbers|val",
       7
     ],
     [
@@ -625,11 +669,39 @@
       6
     ],
     [
+      "tblLook|noHBand",
+      6
+    ],
+    [
+      "tblLook|noVBand",
+      6
+    ],
+    [
       "vertAlign|val",
       6
     ],
     [
+      "cols|space",
+      5
+    ],
+    [
       "ind|hangingChars",
+      5
+    ],
+    [
+      "pgMar|bottom",
+      5
+    ],
+    [
+      "pgMar|footer",
+      5
+    ],
+    [
+      "pgMar|gutter",
+      5
+    ],
+    [
+      "pgMar|header",
       5
     ],
     [
@@ -641,12 +713,24 @@
       5
     ],
     [
+      "pgMar|top",
+      5
+    ],
+    [
+      "pgSz|h",
+      5
+    ],
+    [
       "pgSz|w",
       5
     ],
     [
       "shd|themeFillShade",
       5
+    ],
+    [
+      "docGrid|linePitch",
+      4
     ],
     [
       "imagedata|id",
@@ -673,6 +757,10 @@
       3
     ],
     [
+      "docGrid|type",
+      3
+    ],
+    [
       "endnote|id",
       3
     ],
@@ -691,6 +779,10 @@
     [
       "hyperlink|anchor",
       3
+    ],
+    [
+      "cols|num",
+      2
     ],
     [
       "bar|color",
@@ -869,6 +961,10 @@
       1
     ],
     [
+      "pgSz|orient",
+      1
+    ],
+    [
       "right|themeShade",
       1
     ],
@@ -975,16 +1071,8 @@
       64
     ],
     [
-      "adjustRightInd|val",
-      48
-    ],
-    [
       "lvl|tentative",
       37
-    ],
-    [
-      "snapToGrid|val",
-      36
     ],
     [
       "docPr|id",
@@ -1043,10 +1131,6 @@
       21
     ],
     [
-      "textAlignment|val",
-      21
-    ],
-    [
       "graphicFrameLocks|noChangeAspect",
       19
     ],
@@ -1075,32 +1159,8 @@
       15
     ],
     [
-      "spacing|afterAutospacing",
-      14
-    ],
-    [
-      "spacing|beforeAutospacing",
-      14
-    ],
-    [
-      "topLinePunct|val",
-      14
-    ],
-    [
-      "bidi|val",
-      13
-    ],
-    [
       "noWrap|val",
       13
-    ],
-    [
-      "autoSpaceDE|val",
-      12
-    ],
-    [
-      "autoSpaceDN|val",
-      12
     ],
     [
       "lock|aspectratio",
@@ -1144,10 +1204,6 @@
     ],
     [
       "shape|stroked",
-      9
-    ],
-    [
-      "tblLook|val",
       9
     ],
     [
@@ -1200,10 +1256,6 @@
     ],
     [
       "spPr|bwMode",
-      7
-    ],
-    [
-      "suppressLineNumbers|val",
       7
     ],
     [
@@ -1263,14 +1315,6 @@
       6
     ],
     [
-      "tblLook|noHBand",
-      6
-    ],
-    [
-      "tblLook|noVBand",
-      6
-    ],
-    [
       "attr|name",
       5
     ],
@@ -1287,35 +1331,7 @@
       5
     ],
     [
-      "cols|space",
-      5
-    ],
-    [
       "document|Ignorable",
-      5
-    ],
-    [
-      "pgMar|bottom",
-      5
-    ],
-    [
-      "pgMar|footer",
-      5
-    ],
-    [
-      "pgMar|gutter",
-      5
-    ],
-    [
-      "pgMar|header",
-      5
-    ],
-    [
-      "pgMar|top",
-      5
-    ],
-    [
-      "pgSz|h",
       5
     ],
     [
@@ -1332,10 +1348,6 @@
     ],
     [
       "Choice|Requires",
-      4
-    ],
-    [
-      "docGrid|linePitch",
       4
     ],
     [
@@ -1424,10 +1436,6 @@
     ],
     [
       "bodyPr|vert",
-      3
-    ],
-    [
-      "docGrid|type",
       3
     ],
     [
@@ -1524,10 +1532,6 @@
     ],
     [
       "cNvSpPr|txBox",
-      2
-    ],
-    [
-      "cols|num",
       2
     ],
     [
@@ -2263,10 +2267,6 @@
       1
     ],
     [
-      "pgSz|orient",
-      1
-    ],
-    [
       "props3d|contourW",
       1
     ],
@@ -2915,16 +2915,8 @@
       52
     ],
     [
-      "adjustRightInd",
-      48
-    ],
-    [
       "bodyPr",
       44
-    ],
-    [
-      "snapToGrid",
-      36
     ],
     [
       "fill",
@@ -2939,19 +2931,11 @@
       31
     ],
     [
-      "spacing",
-      28
-    ],
-    [
       "rsid",
       27
     ],
     [
       "lock",
-      25
-    ],
-    [
-      "pgMar",
       25
     ],
     [
@@ -2975,14 +2959,6 @@
       21
     ],
     [
-      "tblLook",
-      21
-    ],
-    [
-      "textAlignment",
-      21
-    ],
-    [
       "graphicFrameLocks",
       19
     ],
@@ -3001,14 +2977,6 @@
     [
       "simplePos",
       14
-    ],
-    [
-      "topLinePunct",
-      14
-    ],
-    [
-      "bidi",
-      13
     ],
     [
       "cnfStyle",
@@ -3031,14 +2999,6 @@
       13
     ],
     [
-      "autoSpaceDE",
-      12
-    ],
-    [
-      "autoSpaceDN",
-      12
-    ],
-    [
       "ln",
       12
     ],
@@ -3053,10 +3013,6 @@
     [
       "shapetype",
       10
-    ],
-    [
-      "docGrid",
-      9
     ],
     [
       "multiLevelType",
@@ -3079,14 +3035,6 @@
       8
     ],
     [
-      "cols",
-      8
-    ],
-    [
-      "pgSz",
-      7
-    ],
-    [
       "positionH",
       7
     ],
@@ -3096,10 +3044,6 @@
     ],
     [
       "spPr",
-      7
-    ],
-    [
-      "suppressLineNumbers",
       7
     ],
     [
@@ -3271,6 +3215,10 @@
       2
     ],
     [
+      "docGrid",
+      2
+    ],
+    [
       "fillRect",
       2
     ],
@@ -3364,6 +3312,10 @@
     ],
     [
       "cntxtalts",
+      1
+    ],
+    [
+      "cols",
       1
     ],
     [
@@ -3508,6 +3460,10 @@
     ],
     [
       "overflowPunct",
+      1
+    ],
+    [
+      "pgSz",
       1
     ],
     [

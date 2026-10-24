@@ -211,3 +211,71 @@
 | `lvlPicBulletId` / `lvlRestart` | 1 / 1 | v0.145 顺延而来，编号深层属性 |
 | `startOverride\|val` 普查实例 | 1 | v0.145 顺延而来，语料路径读手不走 |
 | 杂项长尾（pPr/pgNum 之外的一对对） | — | 榜单已进入个位数区，逐枚成本高于收益；下一轮方向改为「按字面权重扫剩余 neverConsulted」 |
+
+## v0.147（D6）——段落属性余量 / 节属性迁读手 / 表闸门原文
+
+按字面权重扫 v0.146 榜单里剩下能做的（图形几何族需形状模型，继续顺延）：**24 对上账、254 字面**。
+覆盖率 **按对 32.6% → 36.1%、按字面 86.9% → 87.9%**；consulted 222 → 246 对，neverConsulted 460 → 436 对。
+
+| 族 | 对 | 字面 | 落点 |
+|---|---|---|---|
+| 段落属性余量 | `adjustRightInd\|val` 48、`snapToGrid\|val` 36、`textAlignment\|val` 21、`topLinePunct\|val` 14、`bidi\|val` 13、`autoSpaceDE\|val` 12、`autoSpaceDN\|val` 12、`suppressLineNumbers\|val` 7 | 163 | 读手 `readPprPayload` → `data-ppr` 载荷 → 写手 `patchParaProps` |
+| 自动段距 | `spacing\|beforeAutospacing` / `afterAutospacing` | 28 | 读手同上；写手走包原生槽（`beforeAutoSpacing`） |
+| 表闸门 | `tblLook\|val` / `noHBand` / `noVBand` | 21 | 读手读表**自己** `w:tblPr` 上那一枚 → `data-tlook`；样式里那一枚也读（照抄优先） |
+| 节属性 | `pgMar\|top/bottom/header/footer/gutter`、`pgSz\|h`、`cols\|num/space`、`docGrid\|type/linePitch` | 42 | 读手新增 `sectionOf`（原本是 `docxToDocMeta` 的正则读） |
+
+### 实现要点
+
+1. **段落属性余量走「按出现序 + 计数闸门」的打包后补丁**。包里这一族只有一个槽
+   （`autoSpaceEastAsianText` → `w:autoSpaceDN`），且它把 onOff 写成裸元素、带不出
+   `w:val` 的「显式关」——`snapToGrid` 在 Word 里默认就是开，「显式关」是真值，丢了
+   就变默认开。所以九枚全部走补丁：`blocksOf` 造段落时同步把余量 XML 推进
+   `dt.pprExtras`（顺序即 `<w:p>` 出现序），出包后 `patchParaProps` 逐段贴回。
+2. **贴回位置按 schema 位次算，不是无脑追加**：`w:pPr` 是 CT_PPrBase 有序序列，
+   `rPr`/`sectPr` 在末尾、`jc`/`spacing` 在中间。补丁按 `PPR_RANK` 给每枚余量找
+   「第一个位次更靠后的现有子元素」插在它前面——实测 `<w:suppressLineNumbers>` …
+   `<w:snapToGrid>` 落在 `<w:spacing>` 之前、`<w:textAlignment>` 落在它之后，与
+   schema 一致。
+3. **计数闸门**：document.xml 里 `<w:p>` 的枚数必须与 `dt.pprExtras` 条数相等，
+   对不上整笔放弃（宁可不补，也绝不补到别的段落上）。表闸门那一路同款
+   （`<w:tblPr>` 枚数 vs `dt.tblLooks`）。
+4. **节属性从「正则」迁进「读手」**：原先 `docxToDocMeta` 用正则读 `w:pgSz/w:pgMar`
+   ——读是读了，但正则不进 attr 漏斗，保真账本上是盲区（这正是「账上没有」的那类
+   缺口）。现在读手 `sectionOf` 走 attr 读一遍、随 `DocxImport.section` 出来，调用方
+   用 `pageSetupOf` 折成 `PageSetup` 并入 meta；同一份数只有一个读数出处。
+   连带把 gutter / header / footer / docGrid / orient 补进 `PageSetup` 与写手
+   （都是包的原生槽：`page.margin.gutter`、`grid`、`size.orientation`）。
+5. **表闸门两处同名的三枚**：`w:tblLook` 既在表样式的 `w:tblPr` 里、也在表自己的
+   `w:tblPr` 里。语料把这一族承放在**表自己**那一处，只读样式那一枚的话三对会凭空
+   掉出分子。所以两处都读：样式那一枚进 `table.look`（有原文照抄、没有才由
+   `condLookBits` 反推），表自己那一枚进 `data-tlook`；写侧后者压过前者。
+6. **载荷纪律沿用**：`data-ppr`/`data-tlook` 都是 `key=value;…` 载荷（与 `data-frame`、
+   `data-tblp` 同一套 parse/format），屏上一条都不兑现，只随 HTML 进出保往返。
+
+### 过程中的坑（四枚）
+
+1. **`parseXml` 出来的是 `#doc` 壳**：`find(doc,'w:body')` 落空（真正的根元素在下一层），
+   `sectionOf` 第一版整族读不到。读手里凡是直接 `parseXml(部件)` 的地方都得走
+   `findDesc` 或先取根元素——`readStyles` 之所以没事，是因为它 `find(...,'w:styles')`
+   时那个根就是壳的直接子。
+2. **包把 `wordWrap` 的布尔反着写**（`wordWrap: true` → `w:val="0"`），`bidirectional` /
+   `suppressLineNumbers` / `overflowPunctuation` 则写成**不带 val 的裸元素**。这族若走
+   原生槽，onOff 的「显式关」就没了；`autoSpaceEastAsianText` 还把 DE 写成 DN。
+   ——**包「有槽」不等于「能带得出 val」**，一律改用补丁。
+3. **补丁里的属性顺序不是源文件的顺序**：`<w:cols>` 包写成 `w:space` 在前、`w:num`
+   在后，探针最初按 `num` 在前写正则白报一条 FAIL。断言属性集合而非属性串。
+4. **页边距经 mm 折过一道**（缇 → mm 一位小数 → 缇）：1800 缇 → 31.8mm → 1803 缇，
+   0.05mm 的往返误差。`pageSetupOf` 与 `docxToDocMeta` 同一口径、同源误差，不是本轮
+   引入的（旧路径一直如此），记在这里免得后面当成新账。
+
+## v0.147 顺延清单（D7）
+
+| 对（族） | 次数 | 备注 |
+|---|---|---|
+| `t\|space` | 348 | **裁定不查**（v0.143 起），同前 |
+| 图形几何族 `pt\|x/y` 290×2、`gd\|fmla/name` 131×2、`schemeClr\|val` 82、`cxn\|ang` 64、`pos\|x/y` 64×2、`ext\|cx/cy`、`off\|x/y`、`prstGeom\|prst`、`effectExtent` 四边 … | 约 1,700 | 需形状模型（preset geometry + gradient + connection + effect），仍是最大的一族 |
+| `proofErr\|type` | 64 | 拼写/语法会话痕迹；它是位置标记（不是区间包壳），PM 侧要有承载点 |
+| `lvl\|tentative` / `lvl\|tplc` | 37 / 29 | 编号定义档位，包无槽，需 numbering.xml 补丁 |
+| `docPr\|id` / `cNvPr\|id` / `cNvPr\|name` | 32 / 26 / 26 | 写侧 id 由包自动分配；name 可补但收益薄 |
+| 图片容器族（`inline` 四 dist、`graphicFrameLocks`、`picLocks`、`lock\|aspectratio/ext`、`positionH/V`、`simplePos`） | 约 200 | 可骑在现有 img 节点上（无需完整形状模型），是图形族里最划算的一块 |
+| `rsid\|val` / `instrText\|space` / `imagedata\|title` | 27 / 15 / 11 | 会话痕迹与域指令，逐枚成本高于收益 |

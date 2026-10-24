@@ -8852,6 +8852,39 @@ Word 语义里 `descr` 才是替代文本（读屏软件念的那段），`name`
 - **push 仍没成功**：非交互环境取不到 Windows 凭据（`terminal prompts disabled`），本地领先 origin/main 的提交继续攒着（本轮后 32 个）；凭据恢复后 `git push origin main` 一条命令的事。
 
 
+## 发行说明：v0.147 —— docx 长尾第六轮 D6：段落属性余量 / 节属性迁读手 / 表闸门（24 对上账）
+
+一句立项：按字面权重扫剩余 neverConsulted，图形几何族需形状模型继续顺延，取余下能做的三族——段落属性余量 163 字面（adjustRightInd / snapToGrid / textAlignment / topLinePunct / bidi / autoSpaceDE / autoSpaceDN / suppressLineNumbers）、自动段距 28、表闸门 21、节属性 42，合计 **24 对 254 字面**。覆盖率按对 32.6% → **36.1%**（+3.5pp）、按字面 86.9% → **87.9%**（+1.0pp；分母 701 对不变，consulted 222 → 246）。
+
+### 这一轮做了什么
+
+- **段落属性余量（九枚）**：`w:pPr` 里那批「说了也不改屏上排版」的直接属性（编号右边缩进跟随、对齐文档网格、首尾标点压缩、段落从右往左、中西文/数字自动间距、本段不编号、行内文字上下对齐）收成 `data-ppr` 载荷往返；`w:spacing` 上的两枚自动段距同路。包里这一族只有一个槽（还把 onOff 写成裸元素、带不出 `w:val` 的「显式关」），故九枚全部走**打包后补丁**：造段落时同步登记余量（顺序即 `<w:p>` 出现序），出包后按 **CT_PPrBase 的 schema 位次**插回各自的 `<w:pPr>`（`<w:snapToGrid>` 落在 `<w:spacing>` 前、`<w:textAlignment>` 落在它后）。**计数闸门**：`<w:p>` 枚数与登记条数对不上就整笔放弃——宁可不补，也绝不补到别的段落上。
+- **节属性迁进读手**：`w:pgSz/w:pgMar/w:cols/w:docGrid` 原先由 `docxToDocMeta` 用**正则**读——读是读了，但正则不进 attr 漏斗，保真账本上是盲区（「账上没有」的那类缺口）。现在读手 `sectionOf` 走 attr 读一遍、随 `DocxImport.section` 出来折成 `PageSetup` 并入 meta，同一份数只有一个读数出处。连带把 **装订线 / 页眉页脚距纸边 / 文档网格 / 纸张方向**补进页面设置与写手（都是包的原生槽）。
+- **表闸门原文（`w:tblLook` 三枚）**：它既在表样式的 `w:tblPr` 里、也在表自己的 `w:tblPr` 里——语料承放在**表自己**那一处，只读样式那枚的话三对会凭空掉出分子。两处都读：样式那一枚照抄优先（没有才由条件层反推），表自己那一枚进 `data-tlook`，写侧后者压过前者。
+
+### 门禁数字
+
+| 项 | 结果 |
+|---|---|
+| tsc / build | 0 错 / 通过 |
+| selftest 双向 | MUST_SEE **124 枚全命中**（新增 24），MUST_NOT_SEE 1 枚（`t\|space`）全落空 |
+| 干净腿（合成语料） | 按对 **36.1%** / 按字面 **87.9%**（consulted 246 对） |
+| 等价腿 | 相同 5 / 不同 0 / 只一边错 0 |
+| 变异腿有牙 | `--mut no-attrL` 33.7%/80.2%、`--mut no-attr` 11.9%/33.7% |
+| 变异后复位 | 干净腿 md5 与主腿逐字节一致 |
+| pptx | 按对 70.1% / 按字面 74.3% 不动 |
+
+### 明确不做的（这一节）
+
+- **`t\|space`（348 字面）继续裁定不查**：escText 无条件保空白，强于 preserve 所需（v0.143 起的旧裁定）。
+- **图形几何族继续顺延**（`pt\|xy` / `gd\|fmla,name` / `schemeClr\|val` / `cxn\|ang` / `pos\|xy` / `ext\|xy` / `off\|xy` / `prstGeom` / `effectExtent` …，约 1,700 字面）：需形状模型，长尾里最大的一坨。
+- **`proofErr\|type`（64）顺延**：它是位置标记而不是区间包壳，PM 侧要新找承载点。
+- **编号档位 `lvl\|tentative` / `lvl\|tplc`（37/29）顺延**：包无槽，需 numbering.xml 补丁。
+- **docPr/cNvPr 的 id/name（32/26/26）顺延**：id 由包自动分配，name 收益薄。
+- **页边距往返经 mm 折一道**（缇 → mm 一位小数 → 缇）有 0.05mm 级误差，`pageSetupOf` 与旧正则腿同口径同源，非本轮引入。
+- **push 仍没成功**：非交互环境取不到 Windows 凭据（`terminal prompts disabled`），本地领先 origin/main 的提交继续攒着（本轮后 35 个）；凭据恢复后 `git push origin main` 一条命令的事。
+
+
 ## 性能（v0.3）
 
 

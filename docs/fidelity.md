@@ -23,10 +23,10 @@ probe injected at 3 points: attr, attrL, reader.__PROBE(再导出)).
 | In scope (7 parts, 5 readable files) | 701 | 31,472 |
 | Word save-session noise | 19 | 7,711 |
 | Meaningful universe | 682 | 23,761 |
-| Consulted | 222 | 20,639 |
-| Never consulted | 460 | 3,122 |
+| Consulted | 246 | 20,896 |
+| Never consulted | 436 | 2,865 |
 
-**Coverage: 32.6% of distinct pairs, 86.9% of meaningful literals.**
+**Coverage: 36.1% of distinct pairs, 87.9% of meaningful literals.**
 
 The corpus held 5 synthetic .docx files (21 KiB); 0 were
 unreadable as archives and are reported by failure class only, never by name.
@@ -61,9 +61,7 @@ run into `docs/fidelity-universe.json` and rebuilt at 1/100 scale by `scripts/ge
 | `pos|x` | 64 |
 | `pos|y` | 64 |
 | `proofErr|type` | 64 |
-| `adjustRightInd|val` | 48 |
 | `lvl|tentative` | 37 |
-| `snapToGrid|val` | 36 |
 | `docPr|id` | 32 |
 | `lvl|tplc` | 29 |
 | `ext|cx` | 28 |
@@ -78,9 +76,11 @@ run into `docs/fidelity-universe.json` and rebuilt at 1/100 scale by `scripts/ge
 | `effectExtent|l` | 21 |
 | `effectExtent|r` | 21 |
 | `effectExtent|t` | 21 |
-| `textAlignment|val` | 21 |
 | `graphicFrameLocks|noChangeAspect` | 19 |
 | `inline|distB` | 15 |
+| `inline|distL` | 15 |
+| `inline|distR` | 15 |
+| `inline|distT` | 15 |
 
 ## Which elements the missing literals sit on
 
@@ -101,11 +101,11 @@ run into `docs/fidelity-universe.json` and rebuilt at 1/100 scale by `scripts/ge
 | `ext` | 60 |
 | `off` | 56 |
 | `cNvPr` | 52 |
-| `adjustRightInd` | 48 |
 | `bodyPr` | 44 |
-| `snapToGrid` | 36 |
 | `fill` | 34 |
 | `docPr` | 32 |
+| `stroke` | 31 |
+| `rsid` | 27 |
 
 ## Consulted — the work already paid for
 
