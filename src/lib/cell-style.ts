@@ -362,6 +362,39 @@ export function tblpPayload(kv: TblpPayload): string {
     .join(';')
 }
 
+/* ── 表自身的条件层闸门（v0.147）───────────────────────────────
+ * `w:tblPr/w:tblLook` 既可能出现在表样式里（随样式走），也可能直接出现在某张表的
+ * `w:tblPr` 上（随这张表走）。两处同名的三枚属性：val / noHBand / noVBand。
+ * 载荷：`val=04A0;noHBand=0;noVBand=0`，屏上不兑现（只影响 Word 套条件格式那一层），
+ * 只随 data-tlook 往返。写侧走打包后补丁（包没有这一枚的槽）。 */
+export const TLOOK_ATTR = 'data-tlook'
+
+/** data-tlook 载荷 → key/value 表（只认这三枚键，脏值整键丢） */
+export function parseTlookPayload(raw: string | null | undefined): Record<string, string> {
+  const out: Record<string, string> = {}
+  if (!raw) return out
+  const ok = new Set(['val', 'noHBand', 'noVBand'])
+  for (const item of raw.split(';')) {
+    const i = item.indexOf('=')
+    if (i <= 0) continue
+    const k = item.slice(0, i).trim()
+    const v = item.slice(i + 1).trim()
+    if (!ok.has(k) || !v) continue
+    if (k !== 'val' && v !== '1' && v !== '0') continue
+    out[k] = v
+  }
+  return out
+}
+
+/** key/value 表 → data-tlook 载荷（与 parseTlookPayload 互逆） */
+export function tlookPayload(kv: Record<string, string>): string {
+  return Object.keys(kv)
+    .sort()
+    .filter((k) => kv[k] !== '')
+    .map((k) => `${k}=${kv[k]}`)
+    .join(';')
+}
+
 /* ── 段落属性余量（v0.147）─────────────────────────────────────
  * w:pPr 里那一批「说了也不改屏上排版」的直接属性：adjustRightInd（编号右边缩进跟随
  * 自动缩进）、snapToGrid（对齐到文档网格）、topLinePunct（首尾标点压缩）、bidi（段落
@@ -689,6 +722,18 @@ export const CellStyle = Extension.create({
               const raw = typeof attrs.tblp === 'string' ? attrs.tblp : ''
               return Object.keys(parseTblpPayload(raw)).length ? { [TBLP_ATTR]: raw } : {}
             },
+          },
+          /**
+           * 条件层闸门（v0.147）：表**自己** `w:tblPr` 上那一枚 `w:tblLook` 的三属性——
+           * `val`（Word 存的四位闸门原值）/ `noHBand` / `noVBand`。与样式里那一枚同名同义，
+           * 区别在于归属：样式那一枚随样式走、表这一枚随这张表走（表上的压过样式上的）。
+           * 屏上不兑现（门的开合只影响 Word 套条件格式的那一层），只随 data-tlook 往返
+           */
+          tlook: {
+            default: null as string | null,
+            parseHTML: (el: HTMLElement) => el.getAttribute(TLOOK_ATTR) || null,
+            renderHTML: (attrs: Record<string, unknown>) =>
+              typeof attrs.tlook === 'string' && attrs.tlook ? { [TLOOK_ATTR]: attrs.tlook } : {},
           },
           /** Word 的 `w:tblInd`：整张表离版心左边距多远 */
           marginLeft: {

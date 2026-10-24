@@ -50,7 +50,7 @@ import { all, allDesc, attr, attrL, attrNum, els, find, findDesc, findL, local, 
 import { FieldEngine, fieldLabel, parseInstr, recomputable } from './docx-fields'
 import { embedHtml, inlineFlatten, unwrapEmbed, type EmbedHtml } from './ole'
 import { chartToHtml, smartArtToHtml } from './ooxml-graphics'
-import { CELL_EDGES, CSS_BORDER_STYLE, FRAME_NUMERIC_KEYS, FRAME_STR_KEYS, PPR_ATTR, PPR_ONOFF_KEYS, PPR_STR_KEYS, TAB_LEADERS, bdSpaceAttrs, eighthsToPx, framePayload, pprPayload, ptToPx, rgb2hex, shadeCss, tblpPayload, tabsPayload, type CellEdge, type FramePayload, type PprPayload, type TabSpec, type TblpPayload } from './cell-style'
+import { CELL_EDGES, CSS_BORDER_STYLE, FRAME_NUMERIC_KEYS, FRAME_STR_KEYS, PPR_ATTR, PPR_ONOFF_KEYS, PPR_STR_KEYS, TAB_LEADERS, TLOOK_ATTR, bdSpaceAttrs, eighthsToPx, framePayload, pprPayload, ptToPx, rgb2hex, shadeCss, tblpPayload, tabsPayload, tlookPayload, type CellEdge, type FramePayload, type PprPayload, type TabSpec, type TblpPayload } from './cell-style'
 import { ooxmlLine } from './paragraph-style'
 import {
   asTableCondType,
@@ -486,6 +486,23 @@ function readTblpPayload(tblPr: XEl | undefined): string {
     if (v) kv[k] = v
   }
   return tblpPayload(kv)
+}
+
+/**
+ * 表自身的条件层闸门（v0.147）：`w:tblPr/w:tblLook` 的三枚属性 → `val=…;noHBand=…;noVBand=…`。
+ * val 是 Word 存的四位闸门原值（原样带），两枚 no*Band 走 onOff 归一。
+ */
+function readTlookPayload(tblPr: XEl | undefined): string {
+  const lk = tblPr ? find(tblPr, 'w:tblLook') : undefined
+  if (!lk) return ''
+  const kv: Record<string, string> = {}
+  const v = attr(lk, 'w:val')
+  if (v) kv.val = v
+  const hb = onOff(attr(lk, 'w:noHBand'))
+  if (hb !== undefined) kv.noHBand = hb ? '1' : '0'
+  const vb = onOff(attr(lk, 'w:noVBand'))
+  if (vb !== undefined) kv.noVBand = vb ? '1' : '0'
+  return tlookPayload(kv)
 }
 
 /**
@@ -2715,7 +2732,10 @@ class Fidelity {
     // 表格浮动（v0.145）：w:tblpPr 的 key=value 载荷。Word 的纸面浮动表，Web 没有页定位
     // 语义，屏上不兑现——只随 data-tblp 往返（framePr 同款纪律）
     const tblpAttr = readTblpPayload(tblPr)
-    let s = `<table${tblStyle ? ` style="${tblStyle}"` : ''}${ownerAttr}${tblpAttr ? ` data-tblp="${tblpAttr}"` : ''}>`
+    // 表自身的闸门（v0.147）：w:tblPr/w:tblLook 三枚。与样式里那一枚同名同义，
+    // 但归属不同——这张表自己说的压过样式说的，屏上一概不兑现，只随 data-tlook 往返
+    const tlookAttr = readTlookPayload(tblPr)
+    let s = `<table${tblStyle ? ` style="${tblStyle}"` : ''}${ownerAttr}${tblpAttr ? ` data-tblp="${tblpAttr}"` : ''}${tlookAttr ? ` ${TLOOK_ATTR}="${tlookAttr}"` : ''}>`
     for (let ri = 0; ri < plan.length; ri++) {
       const trPr = find(rows[ri], 'w:trPr')
       // 表头由 w:trPr/w:tblHeader 决定，不限首行（Word 里可以声明第 2 行起重复表头）

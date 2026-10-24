@@ -44,7 +44,7 @@ import {
   type ITableFloatOptions,
 } from 'docx'
 import { xml2js } from 'xml-js'
-import { borderParts, pxToEighths, pxToPt, parseFramePayload, parsePprPayload, parseShadePayload, parseTabsPayload, parseTblpPayload, CELL_EDGES, type CellEdge } from './cell-style'
+import { borderParts, pxToEighths, pxToPt, parseFramePayload, parsePprPayload, parseShadePayload, parseTabsPayload, parseTblpPayload, parseTlookPayload, CELL_EDGES, type CellEdge } from './cell-style'
 import { lineToOoxml, type LineRule } from './paragraph-style'
 import { decodeEnt } from './ooxml'
 import { condLookBits } from './table-cond'
@@ -1551,6 +1551,11 @@ interface DocTrack {
    * 导出走打包后补丁——补丁按出现序贴回 `<w:pPr>`，所以这条数组必须与段落同序同长
    */
   pprExtras: string[]
+  /**
+   * 表自身的条件层闸门（v0.147）：与 `section.children` 里每个 Table 一一对应、同序。
+   * 表上那一枚压过样式推出来的那一枚，同样走打包后补丁按出现序贴回 `<w:tblPr>`
+   */
+  tblLooks: string[]
 }
 
 type NoteKind = 'footnote' | 'endnote'
@@ -1570,6 +1575,7 @@ function newDocTrack(): DocTrack {
     seq: { footnote: 0, endnote: 0 },
     revId: 1,
     pprExtras: [],
+    tblLooks: [],
   }
 }
 
@@ -1907,6 +1913,8 @@ function blocksOf(
       // vertAnchor 值域含 top/bottom/center/inside/outside——BuilderElement 透传不校验，
       // 原值落；类型面按库外槽断言绕过
       const tblp = tblpFloatOf(node.attrs?.tblp)
+      // 表自身的闸门（v0.147）：与段落余量同理，按出现序登记，打包后贴回 <w:tblPr>
+      dt.tblLooks.push(tlookXmlOf(node.attrs?.tlook))
       out.push(
         new Table({
           // 表样式引用（v0.114）：表身上这枚 data-tstyle 就是 w:tblStyle，
@@ -2176,11 +2184,13 @@ export async function prosemirrorToDocxBytes(json: PMNode, meta?: DocMeta): Prom
   const latent = meta?.latentStyles
   // 段落属性余量（v0.147）：按出现序贴回各自的 <w:pPr>，与上面两笔同一路数
   const withPara = await patchParaProps(out, dt.pprExtras)
+  // 表闸门两张表都要补：样式推出来的（looks）与表自己带的（dt.tblLooks）
+  const needTbl = looks.size || dt.tblLooks.some((x) => x)
   if (custom.size || latent) {
     const patched = await patchStylesXml(withPara, latent, custom)
-    return looks.size ? await patchTblLook(patched, looks) : patched
+    return needTbl ? await patchTblLook(patched, looks, dt.tblLooks) : patched
   }
-  return looks.size ? patchTblLook(withPara, looks) : withPara
+  return needTbl ? patchTblLook(withPara, looks, dt.tblLooks) : withPara
 }
 
 /**
@@ -2450,19 +2460,44 @@ function pprOrder(inner: string, extra: string): string {
   return s
 }
 
-/** 给引用了这些表样式的每一张表补 `<w:tblLook>`：`<w:tblPr>` 的最后一位，插到 `</w:tblPr>` 之前就是了 */
-async function patchTblLook(bytes: Uint8Array, looks: Map<string, string>): Promise<Uint8Array> {
+/**
+ * 表自身的闸门载荷 → `<w:tblLook>` XML（v0.147）。三枚里 val 原样带，两枚 no*Band
+ * 是 onOff；一个都没说就给空串（那一格交给样式推出来的那一枚）
+ */
+function tlookXmlOf(raw: unknown): string {
+  const kv = parseTlookPayload(typeof raw === 'string' ? raw : null)
+  if (!Object.keys(kv).length) return ''
+  const parts: string[] = []
+  if (kv.val) parts.push(`w:val="${xmlAttr(kv.val)}"`)
+  if (kv.noHBand) parts.push(`w:noHBand="${kv.noHBand}"`)
+  if (kv.noVBand) parts.push(`w:noVBand="${kv.noVBand}"`)
+  return `<w:tblLook ${parts.join(' ')}/>`
+}
+
+/**
+ * 给表格补 `<w:tblLook>`：一是引用了带条件层样式的表（按 styleId 查 `looks`，老路数），
+ * 二是表**自己**带闸门的那一张（按出现序查 `own`，v0.147）——后者压过前者。
+ * 两路都走同一处补丁：贴 `<w:tblPr>` 的末位（已有 w:tblLook 就整枚替换）。
+ * 出现序的那一路由**计数闸门**兜底：`<w:tblPr>` 枚数与登记条数对不上就整笔放弃
+ */
+async function patchTblLook(bytes: Uint8Array, looks: Map<string, string>, own: string[] = []): Promise<Uint8Array> {
   const { default: JSZip } = await import('jszip')
   const zip = await JSZip.loadAsync(bytes)
   const file = zip.file('word/document.xml')
   if (!file) return bytes
   const xml = await file.async('string')
+  if (own.length && (xml.match(/<w:tblPr>/g) ?? []).length !== own.length) return bytes
+  let i = 0
   let touched = false
-  const patched = xml.replace(/<w:tblPr>([\s\S]*?)<\/w:tblPr>/g, (all, inner: string) => {
+  const patched = xml.replace(/<w:tblPr>([\s\S]*?)<\/w:tblPr>/g, (all: string) => {
+    const inner = all.slice('<w:tblPr>'.length, -'</w:tblPr>'.length)
+    const mine = own[i] ?? ''
+    i++
     const id = /<w:tblStyle w:val="([^"]+)"/.exec(inner)?.[1]
-    const look = id ? looks.get(id) : undefined
+    const look = mine || (id ? looks.get(id) : undefined)
     if (!look) return all
     touched = true
+    if (/<w:tblLook[^>]*\/>/.test(inner)) return all.replace(/<w:tblLook[^>]*\/>/, look)
     return all.replace('</w:tblPr>', `${look}</w:tblPr>`)
   })
   if (!touched) return bytes
