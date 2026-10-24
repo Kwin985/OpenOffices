@@ -167,4 +167,47 @@
 | `docPr\|descr` 写侧 cNvPr 单边缺口 | 6 | 包 NonVisualProperties 固定 descr:''；要补得动写后 XML（ImportedXmlComponent），收益不抵 |
 | `lvlPicBulletId` / `lvlRestart` | 1 / 1 | 图片子弹、层级重启——编号深层属性 |
 | `startOverride\|val` 普查实例 | 1 | 宇宙里 1 对实例所在路径读手不走；造语料时补一枚 num/lvlOverride 组合实例 |
+
+---
+
+# v0.146 追加节：D5 轮（潜在样式族 / 书签 / lang@bidi / 字符缩放 / 样式元数据 / 表级 space）
+
+代码：`4644861`。新上账 **22 对**（consulted 200 → 222）：
+按对 29.3% → **32.6%**（+3.3pp）、按字面 76.4% → **86.9%**（+10.5pp，本轮冲进 85+ 区）。
+22 对 2,497 字面，六族明细：
+
+| 族 | 新上账对（语料次数） | 实现要点 |
+|---|---|---|
+| 潜在样式族 | `latentStyles\|` 六枚各 1 + `lsdException\|` 六枚（name 666 / uiPriority 573 / semiHidden 411 / unhideWhenUsed 410 / qFormat 63 / locked 4），共 2,133 | `w:latentStyles` 容器 + 全部 `w:lsdException` 读成结构化数据随 meta 走（`onOff` 三态分「显式关」与「没写」）；导出走 `patchStylesXml` 后置补丁插回 `</w:docDefaults>` 后、首个 `<w:style ` 前。屏上不兑现（Word 样式库门面账，与正文排版无关） |
+| 书签 | `bookmarkStart\|id` / `bookmarkStart\|name` / `bookmarkEnd\|id` 各 33，共 99 | 新建 `bookmark-extension.ts`（Bookmark Mark，`span[data-oo-bookmark]`，`inclusive:false`）；读手 bookmarkStart/End 改开合区间（`wrapRange` 公共骨架与 `wrapComment` 同源），写手 `inlineToChildren` 预扫同名 mark 分组 `new Bookmark({id: name, children})` |
+| 复杂文字语言 | `lang\|bidi` 67 | `w:lang/@w:bidi` 与 val/eastAsia 同住 `w:lang` 上但只管 cs 字族；PM 走 char-extra `langBidi`，写手 `extra.language = {value, eastAsia, bidirectional}`（包原生槽） |
+| 字符缩放 | `w\|val` 40 | `w:w/@w:val` 百分比（元素名叫 `w`、属性叫 `val`——探针键 `w\|val`）；PM char-extra `scale`，写手 `extra.scale` 原生槽。0 与负数是病态值按没说话处理 |
+| 样式元数据 | `uiPriority\|val` 40 / `link\|val` 21 / `style\|customStyle` 21，共 82 | uiPriority/link 是 `w:style` 子元素、customStyle 长在 `w:style` 自己身上；读手 customStyle 先于 styleId 闸读（语料有裸 `<w:style w:customStyle="0"/>`）；写手 link/uiPriority 包原生发射，customStyle 走补丁 |
+| 表级边框 space | `insideH\|space` 38 / `insideV\|space` 38，共 76 | 六边 space 按「落到哪枚格边」分摊：外层四边贴外圈格、insideH/insideV 贴相邻两格，仅当该边边框真回落到表级（cb/cb2 都没接）时才挂——与边框风格同一套 fallback 口径。回写走格级 `tcBorders/@w:space`（磅） |
+
+**潜在样式族与 customStyle 都走后置补丁**（`patchStylesXml`：Packer 出包后解压 zip 改 XML 重压）——先例是 v0.143 的 `patchTblLook`。latentStyles 整个概念在 docx 包里不存在；customStyle 是包里**静默丢弃**的（见坑 1）。补丁位置有硬约束：latentStyles 必须排在 docDefaults 之后、全部 `w:style` 之前（Word 的 schema 序），customStyle 补在 `w:style` 开标签上。
+
+## 过程中的坑（六枚）
+
+1. **docx 包 `StyleForParagraph` 只把 `{type, styleId}` 交给 StyleAttributes**——`uiPriority`/`link` 原生发射（`IStyleOptions` 有这两个槽），`customStyle` 整个没有入口、静默丢弃。探针实测：段落样式只发 link/uiPriority，customStyle 补丁前导出再导入样式元数据缺一角。修法：customStyle 走 `patchStylesXml` 补开标签。**包里「有槽」与「没槽」要逐族探针实测，别按 API 表面推断**。
+2. **书签跨段不能一个 span 跨块**：PM mark 的 `inclusive:false` 也不跨块——沿用批注的跨段续挂机制（段末按下标倒序 wrap 仍开着的书签，每段各包一枚同名 span，与 `wrapComment` 同一骨架 `wrapRange`）。空书签（起终点相邻）PM 无处安放，往返丢失（记账内的已知边界）。
+3. **探针脚本 `.mjs` 里不能留 TS 注解**：`const wantBd: Record<string, string[]> =` 被 vite-node 报 PARSE_ERROR——tmp 探针是 .mjs，`chk` 的 `(cond: boolean, ...)` 同样中招。类型注解一处都不能留。
+4. **写手 `space` 只在边有边框时才附着**（`bordersOf` 的 `withSpace`：边都没有，间距无处附着）：探针第一版 PM 只给 `bdSpace*` 不给 `bd*`，tcBorders 整个不写、`w:space` 序列空。真实往返里读手会把表级 fallback 边框一并写进 cell style，`bd*` 天然在场——这是设计使然不是 bug，但**探针造 PM 文档时必须镜像读手输出形状**，否则量的是不存在的路径。
+5. **语料书签承放从 `b0` 挪进新 `b:para`**：`bookmarkStart/End` 属 EG_RangeMarkupElements，只有进到段落内容里才走 `inline()` 的 `visit()`——`b0` 是正文流直子上，块层分发根本不碰它，三对会凭空掉出分子（99 字面）。**承放上下文选错，量具分子静默为零，且不报错**。
+6. **单位换算两套口径**：磅→px（`ptToPx`，1pt=4/3px）走读手、px→磅（`pxToPt`，round2）走写手。探针期望值一开始把 1 磅写成 2px（把 sz 的八分之一点和 space 的磅搞混），白报三条 FAIL——**w:sz 与 w:space 同为「磅」但一个乘 8 一个乘 1**。
+
+## v0.146 顺延清单（D6）
+
+| 对（族） | 次数 | 备注 |
+|---|---|---|
+| `t\|space` | 348 | **裁定不查**（v0.143 起）：escText 无条件保空白，强于 preserve 所需，查了没有第二行代码可写 |
+| 图形几何族 `pt\|x/y`、`gd\|fmla/name`、`schemeClr\|val`、`cxn\|ang`、`pos\|x/y`、`ext\|cx/cy`、`off\|x/y` | 290/131×2/82/64×3/28×4 | 需形状模型（preset geometry + gradient + connection），工作量最大的一族 |
+| `proofErr\|type` | 64 | 拼写检查会话痕迹，只往返不屏现 |
+| `adjustRightInd\|val` / `lvl\|tentative` / `lvl\|tplc` | 48 / 37 / 29 | 编号三档，包无档位槽 |
+| `snapToGrid\|val` | 36 | pPr 层包无槽 |
+| `docPr\|id` / `cNvPr\|id` / `cNvPr\|name` | 32 / 26 / 26 | 写侧 id 包自动分配；name 可补但收益薄 |
+| `rsid\|val` | 27 | 保存会话痕迹，读手 warn 记账（v0.145 同款处理） |
+| `docPr\|descr` 写侧 cNvPr 单边缺口 | 6 | v0.145 顺延而来：包 NonVisualProperties 固定 descr:'' |
+| `lvlPicBulletId` / `lvlRestart` | 1 / 1 | v0.145 顺延而来，编号深层属性 |
+| `startOverride\|val` 普查实例 | 1 | v0.145 顺延而来，语料路径读手不走 |
 | 杂项长尾（pPr/pgNum 之外的一对对） | — | 榜单已进入个位数区，逐枚成本高于收益；下一轮方向改为「按字面权重扫剩余 neverConsulted」 |

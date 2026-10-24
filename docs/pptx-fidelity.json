@@ -2,7 +2,7 @@
   "measured": {
     "ref": "HEAD",
     "source": "git:HEAD",
-    "modules": 57,
+    "modules": 58,
     "injections": [
       "ga"
     ],
@@ -419,11 +419,5 @@
   "partTotals": {},
   "errors": {
     "census:Cannot read properties of undefined (reading '')": 1
-  },
-  "equivalence": {
-    "identical": 1,
-    "differing": 0,
-    "bothFailed": 0,
-    "onlyOneFailed": 0
   }
 }

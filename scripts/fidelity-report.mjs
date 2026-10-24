@@ -94,6 +94,20 @@ const FIXTURE_STYLES =
   `<w:style w:type="paragraph" w:styleId="ReportHead"><w:name w:val="report head"/>` +
   `<w:basedOn w:val="Normal"/><w:pPr><w:spacing w:after="120"/><w:ind w:left="420"/></w:pPr>` +
   `</w:style>` +
+  // v0.146：潜在样式族——Word 样式库门面账。容器六属性全带 + 两条 lsdException
+  // （第一条六属性全带，第二条只带四枚——缺的两枚不写，onOff 三态分得开）
+  `<w:latentStyles w:count="2" w:defLockedState="0" w:defUIPriority="99" w:defSemiHidden="0"` +
+  ` w:defUnhideWhenUsed="0" w:defQFormat="0">` +
+  `<w:lsdException w:name="heading 1" w:uiPriority="9" w:semiHidden="0" w:unhideWhenUsed="0" w:qFormat="1" w:locked="0"/>` +
+  `<w:lsdException w:name="Default Paragraph Font" w:uiPriority="1" w:semiHidden="1" w:unhideWhenUsed="1"/>` +
+  `</w:latentStyles>` +
+  // v0.146：样式元数据三枚——Report 段落样式带 customStyle=1，link 指配对的 ReportChar，
+  // uiPriority=9；ReportChar 是字符样式（link 回指 Report）；Plain 三枚都不带（负形态）
+  `<w:style w:type="paragraph" w:customStyle="1" w:styleId="Report"><w:name w:val="report"/>` +
+  `<w:basedOn w:val="Normal"/><w:link w:val="ReportChar"/><w:uiPriority w:val="9"/></w:style>` +
+  `<w:style w:type="character" w:styleId="ReportChar"><w:name w:val="report char"/>` +
+  `<w:basedOn w:val="Normal"/><w:link w:val="Report"/><w:uiPriority w:val="9"/></w:style>` +
+  `<w:style w:type="paragraph" w:styleId="Plain"><w:name w:val="plain"/></w:style>` +
   `</w:styles>`
 
 // v0.142：编号部件。numId=1 指 abstractNumId=0：0 层是子弹（·/左对齐），1 层是小写
@@ -171,6 +185,31 @@ const FIXTURE_DOC =
   `<w:tblGrid><w:gridCol w:w="5000"/></w:tblGrid>` +
   `<w:tr><w:tc><w:tcPr><w:tcW w:w="5000" w:type="dxa"/></w:tcPr>` +
   `<w:p><w:r><w:t>浮动表格</w:t></w:r></w:p></w:tc></w:tr></w:tbl>` +
+  // v0.146：书签区间——单段一枚（起终点夹住 run）+ 跨段一枚（本段开、下一段关，
+  // 段末续挂每段各包一枚 span）。空书签（起终点相邻）不产 span，是记账内的已知边界
+  `<w:p><w:bookmarkStart w:id="7" w:name="_Toc7"/><w:r><w:t>书签正文</w:t></w:r><w:bookmarkEnd w:id="7"/></w:p>` +
+  `<w:p><w:bookmarkStart w:id="9" w:name="_Cross"/><w:r><w:t>跨段前</w:t></w:r></w:p>` +
+  `<w:p><w:r><w:t>跨段后</w:t></w:r><w:bookmarkEnd w:id="9"/></w:p>` +
+  // v0.146：复杂文字语言与字符缩放（同 run）——w:lang 的 bidi 只管 cs 字族，
+  // w:w 是百分比（元素名叫 w、属性叫 val）
+  `<w:p><w:r><w:rPr><w:lang w:val="en-US" w:eastAsia="zh-CN" w:bidi="ar-SA"/><w:w w:val="150"/></w:rPr>` +
+  `<w:t>复杂文字</w:t></w:r></w:p>` +
+  // v0.146：表级边框 space——两行两列六边都带边框，space 只写在 top=1 / insideH=2 /
+  // insideV=3 三枚上（分摊口径：外层四边贴外圈格、insideH/insideV 贴相邻两格，
+  // 仅当该边边框真回落到表级时才挂——格内无 tcBorders，六边全回落）
+  `<w:tbl><w:tblPr><w:tblBorders>` +
+  `<w:top w:val="single" w:sz="4" w:space="1" w:color="000000"/>` +
+  `<w:left w:val="single" w:sz="4" w:space="0" w:color="000000"/>` +
+  `<w:bottom w:val="single" w:sz="4" w:space="0" w:color="000000"/>` +
+  `<w:right w:val="single" w:sz="4" w:space="0" w:color="000000"/>` +
+  `<w:insideH w:val="single" w:sz="4" w:space="2" w:color="000000"/>` +
+  `<w:insideV w:val="single" w:sz="4" w:space="3" w:color="000000"/>` +
+  `</w:tblBorders></w:tblPr>` +
+  `<w:tblGrid><w:gridCol w:w="2500"/><w:gridCol w:w="2500"/></w:tblGrid>` +
+  `<w:tr><w:tc><w:p><w:r><w:t>甲</w:t></w:r></w:p></w:tc>` +
+  `<w:tc><w:p><w:r><w:t>乙</w:t></w:r></w:p></w:tc></w:tr>` +
+  `<w:tr><w:tc><w:p><w:r><w:t>丙</w:t></w:r></w:p></w:tc>` +
+  `<w:tc><w:p><w:r><w:t>丁</w:t></w:r></w:p></w:tc></w:tr></w:tbl>` +
   `<w:sectPr><w:pgSz w:w="11906" w:h="16838" w:orient="portrait"/>` +
   `<w:pgMar w:top="1440" w:right="1800" w:bottom="1440" w:left="1800" w:header="851" w:footer="992" w:gutter="0"/></w:sectPr>` +
   `</w:body></w:document>`
@@ -271,6 +310,34 @@ const MUST_SEE = [
   'tblpPr|rightFromText',
   'tblpPr|overlap',
   'abstractNum|multiLevelType',
+  // v0.146 D5：潜在样式族 12 对（w:latentStyles 容器六属性 + w:lsdException 六属性）、
+  // 书签三对（bookmarkStart 的 id/name 与 bookmarkEnd 的 id——区间内容包成
+  // span[data-oo-bookmark] 由书签 mark 接住）、复杂文字语言（w:lang 的 bidi 只管
+  // cs 字族）、字符缩放（元素名叫 w、属性叫 val）、样式元数据三枚（uiPriority/link
+  // 是 w:style 的子元素、customStyle 长在 w:style 自己身上）、表级边框 space 的
+  // insideH/insideV 两对（外层四边的 space 键 v0.143 随 pBdr 已上账）
+  'latentStyles|count',
+  'latentStyles|defLockedState',
+  'latentStyles|defUIPriority',
+  'latentStyles|defSemiHidden',
+  'latentStyles|defUnhideWhenUsed',
+  'latentStyles|defQFormat',
+  'lsdException|name',
+  'lsdException|uiPriority',
+  'lsdException|semiHidden',
+  'lsdException|unhideWhenUsed',
+  'lsdException|qFormat',
+  'lsdException|locked',
+  'bookmarkStart|id',
+  'bookmarkStart|name',
+  'bookmarkEnd|id',
+  'lang|bidi',
+  'w|val',
+  'uiPriority|val',
+  'link|val',
+  'style|customStyle',
+  'insideH|space',
+  'insideV|space',
 ]
 // 我放进夹具而读手一寸不查的：beforeAutospacing / afterAutospacing 在源码里没有查问处；
 // t 的 xml:space 是**裁定不查**——escText 无条件保留空白（连续空格第二个起换 nbsp），

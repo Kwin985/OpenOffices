@@ -8810,6 +8810,48 @@ Word 语义里 `descr` 才是替代文本（读屏软件念的那段），`name`
 - **push 仍没成功**：非交互环境取不到 Windows 凭据（`terminal prompts disabled`），本地领先 origin/main 的提交继续攒着（本轮后 29 个）；凭据恢复后 `git push origin main` 一条命令的事。
 
 
+## 发行说明：v0.146 —— docx 长尾第五轮 D5：潜在样式族 / 书签 / 样式元数据（22 对上账）
+
+一句立项：按字面权重扫剩余 neverConsulted——潜在样式族 2,133 字面（latentStyles 容器六属性 + lsdException 六属性）打头，带书签三对 99、样式元数据三枚 82、表级边框 space 76（insideH/insideV）、lang@bidi 67、字符缩放 40，合计 22 对 2,497 字面。覆盖率按对 29.3% → **32.6%**（+3.3pp）、按字面 76.4% → **86.9%**（+10.5pp，冲进 85+ 区；分母 701 对不变，consulted 200 → 222）。裁决与顺延清单见 `docs/docx-fidelity-audit.md` 的 v0.146 追加节。
+
+### 1. 潜在样式族：Word 样式库门面账，走后置补丁回写
+
+`w:latentStyles`（容器六属性）+ 全部 `w:lsdException`（六属性）描述「Word 样式库里哪些内建样式露面、排第几档」，与正文排版无关——读成结构化数据随 meta 走，导出时 `patchStylesXml` 补丁插回 `</w:docDefaults>` 后、首个 `<w:style ` 前（Word 的 schema 序）。onOff 三态分得开「显式 0 关」与「没写」。docx 包连 latentStyles 的概念都没有，补丁是先例 v0.143 `patchTblLook` 的同一手法（Packer 出包后解压 zip 改 XML 重压）。
+
+### 2. 书签：跨段续挂 + 空区间记账
+
+新建 `bookmark-extension.ts`（Bookmark Mark，`span[data-oo-bookmark]`，`inclusive:false`）。读手 bookmarkStart/End 改开合区间，与批注同一骨架（`wrapRange`）；跨段书签每段各包一枚同名 span（PM mark 不跨块）；空书签（起终点相邻）PM 无处安放，往返丢失——记账内的已知边界。写手 `inlineToChildren` 预扫同名 mark 首到尾分组，包 `Bookmark` 原生发射（w:id 自动重排、w:name 承载锚点名）。
+
+### 3. 样式元数据 + lang@bidi + 字符缩放 + 表级 space
+
+- **样式元数据三枚**：`uiPriority`/`link` 是 `w:style` 子元素、`customStyle` 长在 `w:style` 自己身上。前两个包原生发射；customStyle 包里**静默丢弃**（`StyleForParagraph` 只传 `{type, styleId}` 给 StyleAttributes——探针实测），走补丁上开标签。读手 customStyle 先于 styleId 闸读（语料有裸 `<w:style w:customStyle="0"/>`）。
+- **lang@bidi**（67）：`w:lang/@w:bidi` 只管 cs 字族，与 val/eastAsia 同住 `w:lang`；写手 `extra.language.bidirectional` 原生槽。
+- **字符缩放**（40）：`w:w/@w:val` 百分比，元素名叫 `w`——探针键 `w|val`；写手 `extra.scale` 原生槽。
+- **表级边框 space**（76）：六边按「落到哪枚格边」分摊（外层四边贴外圈格、insideH/insideV 贴相邻两格），仅当该边边框真回落到表级时才挂；回写走格级 `tcBorders/@w:space`（磅）。Word 对该族两侧语义未经门面实测，数据往返不受影响。
+
+### 4. 账上的数
+
+| 腿 | 数 |
+|---|---|
+| tsc / vite build | 退出码 0 / ✓ |
+| selftest | MUST_SEE **100 枚全命中**（新增 22 枚）/ MUST_NOT_SEE 5 枚全落空（双向）；夹具查问对 164 |
+| docx 主腿（合成语料 5 件） | 分母 701 对 / 31,472 字面；按对 **32.6%**（v0.145：29.3%，+3.3pp）/ 按字面 **86.9%**（76.4%，+10.5pp）；consulted 200 → **222** 对 |
+| 等价腿 | 相同 5 / 不同 0 / 两边同错 0 / 只一边错 0 |
+| 变异腿 | `--mut no-attrL` 30.2% / 79.1%；`--mut no-attr` 10.7% / 33.5% |
+| pptx selftest 干净腿 | 70.1% / 74.3%（读手未动，账本只动模块数 57→58） |
+| 复位 | 变异腿后干净腿复跑，账本 md5 与主腿一致 |
+| 往返（tmp 脚本） | 六族读写双向：latentStyles 七值 + lsdException 两形态、书签三形态（单段/跨段两枚/空区间）、lang 三枚 + w:w、样式元数据三枚、表级 space 六边分摊逐格一致 |
+
+### 明确不做的（这一节）
+
+- **`t|space`（348 字面）继续裁定不查**：escText 无条件保空白，强于 preserve 所需——查了没有第二行代码可写（v0.143 起的旧裁定，本轮重申）。
+- **图形几何族顺延**（`pt|xy`/`gd|fmla,name`/`schemeClr|val`/`cxn|ang`/`pos|xy`/`ext|xy`/`off|xy`，约 1,228 字面）：需形状模型（preset geometry + 渐变 + 连接点），长尾里最大的一坨，单开一轮。
+- **编号三档 + snapToGrid 顺延**（adjustRightInd 48 / lvl|tentative 37 / lvl|tplc 29 / snapToGrid 36）：包无档位槽，要库外拼装，收益不抵。
+- **docPr|cNvPr 的 id/name 写侧不补**（32/26/26）：id 包自动分配，name 可补但读屏语义薄。
+- **空书签往返丢失是已知边界**：起终点相邻的区间在 PM 里无处安放（mark 总得包住点内容）。
+- **push 仍没成功**：非交互环境取不到 Windows 凭据（`terminal prompts disabled`），本地领先 origin/main 的提交继续攒着（本轮后 32 个）；凭据恢复后 `git push origin main` 一条命令的事。
+
+
 ## 性能（v0.3）
 
 

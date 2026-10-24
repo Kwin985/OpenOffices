@@ -97,6 +97,11 @@ const CTX = {
   // （keepNext 在 schema 序里位于 shd 之前，合法且读手不查问它）让组合实例独占一个段落。
   'b:ppr-shd': { f: '01-body', part: 'document', open: '<w:p><w:pPr><w:keepNext w:val="1"/>', close: '</w:pPr><w:r><w:t>纹</w:t></w:r></w:p>' },
   'b:run': { f: '01-body', part: 'document', open: '<w:p><w:r>', close: '</w:r></w:p>' },
+  // v0.146：书签区间专用段——bookmarkStart/End 属 EG_RangeMarkupElements，只有进到
+  // 段落内容里才走 inline() 的 visit()；b0 是正文流直子上，块层分发根本不碰它，
+  // 三对会凭空掉出分子。段内不放 run：书签区间可以为空（起终点相邻），
+  // 读者照读 id/name（空区间不产 span，是记账内的已知边界）
+  'b:para': { f: '01-body', part: 'document', open: '<w:p>', close: '</w:p>' },
   'b:numpr': { f: '01-body', part: 'document', open: '<w:p><w:pPr><w:numPr>', close: '</w:numPr></w:pPr><w:r><w:t>文</w:t></w:r></w:p>' },
   'b:pbdr': { f: '01-body', part: 'document', open: '<w:p><w:pPr><w:pBdr>', close: '</w:pBdr></w:pPr><w:r><w:t>文</w:t></w:r></w:p>' },
   'b:tabs': { f: '01-body', part: 'document', open: '<w:p><w:pPr><w:tabs>', close: '</w:tabs></w:pPr><w:r><w:t>文</w:t></w:r></w:p>' },
@@ -288,7 +293,7 @@ const PART_CTX = {
 // 每文件里 document.xml 上下文的出场顺序（sectPr 打头，见 CTX['t:sect'] 注）
 const ORDER = {
   '00-base': ['d0:tbl'],
-  '01-body': ['b0', 'b:rpr', 'b:ppr', 'b:run', 'b:numpr', 'b:pbdr', 'b:tabs', 'b:omml'],
+  '01-body': ['b0', 'b:rpr', 'b:ppr', 'b:run', 'b:numpr', 'b:pbdr', 'b:tabs', 'b:omml', 'b:para'],
   '02-tables': ['t:sect', 't:cols-kids', 't:cols', 't:tblPr', 't:borders', 't:cellmar', 't:grid', 't:tr', 't:trPr', 't:tcPr', 't:tcborders', 't:tcmar', 't:b0'],
   '03-drawings': ['d:inline', 'd:anchor-kids', 'd:pic', 'd:xfrm', 'd:clr', 'd:clr2', 'd:gs', 'd:ln', 'd:fx', 'd:scene', 'd:wps', 'd:bodypr'],
   '04-vml': ['v:pict', 'v:shape-attr', 'v:main', 'v:fill', 'v:stroke', 'v:path', 'v:formulas', 'v:handles', 'v:group', 'v:object', 'v:object-run', 'v:ffdata', 'v:textinput'],
@@ -646,9 +651,11 @@ const SPECIAL = {
   'hyperlink|history': { c: 'b0', item: '<w:p><w:hyperlink w:history="1"><w:r><w:t>文</w:t></w:r></w:hyperlink></w:p>' },
   'hyperlink|tgtFrame': { c: 'b0', item: '<w:p><w:hyperlink w:tgtFrame="blank"><w:r><w:t>文</w:t></w:r></w:hyperlink></w:p>' },
   'hyperlink|tooltip': { c: 'b0', item: '<w:p><w:hyperlink w:tooltip="提示"><w:r><w:t>文</w:t></w:r></w:hyperlink></w:p>' },
-  'bookmarkStart|id': { c: 'b0', item: '<w:bookmarkStart w:id="1"/>' },
-  'bookmarkStart|name': { c: 'b0', item: '<w:bookmarkStart w:name="_Toc1"/>' },
-  'bookmarkEnd|id': { c: 'b0', item: '<w:bookmarkEnd w:id="1"/>' },
+  // v0.146：书签三对从 b0 挪进 b:para（段内）——正文流直子上块层分发不碰
+  // bookmarkStart/End，探针不发，三对永远进不了分子
+  'bookmarkStart|id': { c: 'b:para', item: '<w:bookmarkStart w:id="1"/>' },
+  'bookmarkStart|name': { c: 'b:para', item: '<w:bookmarkStart w:name="_Toc1"/>' },
+  'bookmarkEnd|id': { c: 'b:para', item: '<w:bookmarkEnd w:id="1"/>' },
   'proofErr|type': { c: 'b0', item: '<w:proofErr w:type="spellStart"/>' },
   'smartTag|element': { c: 'b0', item: '<w:smartTag w:element="address"><w:r><w:t>文</w:t></w:r></w:smartTag>' },
   'smartTag|uri': { c: 'b0', item: '<w:smartTag w:uri="urn:schemas-microsoft-com:office:smarttags"><w:r><w:t>文</w:t></w:r></w:smartTag>' },

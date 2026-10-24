@@ -13,7 +13,7 @@ against the lookups our import path actually performs on them, at run time. A pa
 | **never consulted** | the pair appears in real files and no code path asks for it | the actionable list: fidelity we do not claim |
 | **noise** | `rsid*`, `paraId`, `textId` | Word's save-session bookkeeping: no rendering and no UI meaning |
 
-Measured on the committed product at `HEAD` (`git:HEAD`, 57 modules,
+Measured on the committed product at `HEAD` (`git:HEAD`, 58 modules,
 probe injected at 3 points: attr, attrL, reader.__PROBE(再导出)).
 
 ## Headline
@@ -23,10 +23,10 @@ probe injected at 3 points: attr, attrL, reader.__PROBE(再导出)).
 | In scope (7 parts, 5 readable files) | 701 | 31,472 |
 | Word save-session noise | 19 | 7,711 |
 | Meaningful universe | 682 | 23,761 |
-| Consulted | 200 | 18,142 |
-| Never consulted | 482 | 5,619 |
+| Consulted | 222 | 20,639 |
+| Never consulted | 460 | 3,122 |
 
-**Coverage: 29.3% of distinct pairs, 76.4% of meaningful literals.**
+**Coverage: 32.6% of distinct pairs, 86.9% of meaningful literals.**
 
 The corpus held 5 synthetic .docx files (21 KiB); 0 were
 unreadable as archives and are reported by failure class only, never by name.
@@ -51,42 +51,41 @@ run into `docs/fidelity-universe.json` and rebuilt at 1/100 scale by `scripts/ge
 
 | `element|attribute` | literals |
 |---|---:|
-| `lsdException|name` | 666 |
-| `lsdException|uiPriority` | 573 |
-| `lsdException|semiHidden` | 411 |
-| `lsdException|unhideWhenUsed` | 410 |
 | `t|space` | 348 |
 | `pt|x` | 290 |
 | `pt|y` | 290 |
 | `gd|fmla` | 131 |
 | `gd|name` | 131 |
 | `schemeClr|val` | 82 |
-| `lang|bidi` | 67 |
 | `cxn|ang` | 64 |
 | `pos|x` | 64 |
 | `pos|y` | 64 |
 | `proofErr|type` | 64 |
-| `lsdException|qFormat` | 63 |
 | `adjustRightInd|val` | 48 |
-| `uiPriority|val` | 40 |
-| `w|val` | 40 |
-| `insideH|space` | 38 |
-| `insideV|space` | 38 |
 | `lvl|tentative` | 37 |
 | `snapToGrid|val` | 36 |
-| `bookmarkEnd|id` | 33 |
-| `bookmarkStart|id` | 33 |
-| `bookmarkStart|name` | 33 |
 | `docPr|id` | 32 |
 | `lvl|tplc` | 29 |
 | `ext|cx` | 28 |
 | `ext|cy` | 28 |
+| `off|x` | 28 |
+| `off|y` | 28 |
+| `rsid|val` | 27 |
+| `cNvPr|id` | 26 |
+| `cNvPr|name` | 26 |
+| `prstGeom|prst` | 24 |
+| `effectExtent|b` | 21 |
+| `effectExtent|l` | 21 |
+| `effectExtent|r` | 21 |
+| `effectExtent|t` | 21 |
+| `textAlignment|val` | 21 |
+| `graphicFrameLocks|noChangeAspect` | 19 |
+| `inline|distB` | 15 |
 
 ## Which elements the missing literals sit on
 
 | element | never-consulted literals |
 |---|---:|
-| `lsdException` | 2,127 |
 | `pt` | 580 |
 | `t` | 348 |
 | `gd` | 262 |
@@ -94,8 +93,6 @@ run into `docs/fidelity-universe.json` and rebuilt at 1/100 scale by `scripts/ge
 | `shape` | 85 |
 | `effectExtent` | 84 |
 | `schemeClr` | 82 |
-| `lang` | 67 |
-| `bookmarkStart` | 66 |
 | `inline` | 66 |
 | `lvl` | 66 |
 | `cxn` | 64 |
@@ -106,6 +103,9 @@ run into `docs/fidelity-universe.json` and rebuilt at 1/100 scale by `scripts/ge
 | `cNvPr` | 52 |
 | `adjustRightInd` | 48 |
 | `bodyPr` | 44 |
+| `snapToGrid` | 36 |
+| `fill` | 34 |
+| `docPr` | 32 |
 
 ## Consulted — the work already paid for
 
@@ -116,11 +116,15 @@ run into `docs/fidelity-universe.json` and rebuilt at 1/100 scale by `scripts/ge
 | `sz|val` | 997 |
 | `szCs|val` | 966 |
 | `rFonts|hAnsi` | 927 |
+| `lsdException|name` | 666 |
 | `rFonts|cs` | 600 |
+| `lsdException|uiPriority` | 573 |
 | `rFonts|eastAsia` | 573 |
 | `tcW|type` | 417 |
 | `tcW|w` | 417 |
 | `lang|val` | 416 |
+| `lsdException|semiHidden` | 411 |
+| `lsdException|unhideWhenUsed` | 410 |
 | `color|val` | 409 |
 | `highlight|val` | 407 |
 | `jc|val` | 346 |
@@ -137,10 +141,6 @@ run into `docs/fidelity-universe.json` and rebuilt at 1/100 scale by `scripts/ge
 | `bottom|val` | 192 |
 | `ind|firstLineChars` | 191 |
 | `ind|left` | 189 |
-| `right|val` | 189 |
-| `top|val` | 186 |
-| `shd|val` | 185 |
-| `bottom|color` | 183 |
 
 ## Caveats, stated before anyone reads them off
 
@@ -177,5 +177,3 @@ output, so a diff of `docs/fidelity.md` is a diff of fidelity, not of a timestam
 | `--clean-pass` | the patched copy and an unpatched copy emit byte-identical HTML for every readable file: the observer does not perturb the product |
 | `--mut no-attrL` | coverage drops: the numerator really comes from run-time lookups, not from a name list in the source |
 | `scripts/fidelity-census.py` | a second, different XML parser (Python `xml.etree`) counts the same denominator |
-
-Last run: identical=5, differing=0, both-failed=0, only-one-failed=0.
