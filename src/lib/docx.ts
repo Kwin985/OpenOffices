@@ -1,6 +1,7 @@
 import {
   AlignmentType,
   BorderStyle,
+  Bookmark,
   CommentRangeEnd,
   CommentRangeStart,
   CommentReference,
@@ -239,6 +240,14 @@ export interface DocxStyleInfo {
   kind?: 'paragraph' | 'character' | 'table'
   /** 标题级别（1..9，outlineLvl+1），非标题没有 */
   level?: number
+  /**
+   * 样式元数据三枚（v0.146）：uiPriority 是 Word 样式库里的排序档位（w:uiPriority/@w:val），
+   * link 指着配对的反向样式（段落↔字符，w:link/@w:val），customStyle 是「用户自建」标记
+   * （w:style/@w:customStyle，onOff——false 是显式关，与没写不同结果）。屏上不兑现，只往返
+   */
+  uiPriority?: number
+  link?: string
+  customStyle?: boolean
   run: {
     font?: string
     sizePx?: number
@@ -289,6 +298,35 @@ export interface DocxStyleInfo {
   }
 }
 
+/**
+ * 潜在样式的一条（v0.146）：w:latentStyles/w:lsdException。onOff 三枚（semiHidden/
+ * unhideWhenUsed/qFormat/locked）存布尔三态——false 是显式「关」，与没写（undefined）
+ * 在 Word 里不同结果（显式关压过容器的 def* 缺省），往返必须分得开
+ */
+export interface DocxLsdException {
+  name?: string
+  uiPriority?: number
+  semiHidden?: boolean
+  unhideWhenUsed?: boolean
+  qFormat?: boolean
+  locked?: boolean
+}
+
+/**
+ * 潜在样式容器（v0.146）：w:latentStyles 自己那六枚 + 全部 lsdException。
+ * Word 样式库的门面账（哪些内建样式露面、排第几档），与正文排版无关，屏上不兑现。
+ * docx 包没有这一族的槽，导出走打包后补丁（patchLatentStyles，与 w:tblLook 同路数）
+ */
+export interface DocxLatentStyles {
+  count?: number
+  defLockedState?: boolean
+  defUIPriority?: number
+  defSemiHidden?: boolean
+  defUnhideWhenUsed?: boolean
+  defQFormat?: boolean
+  exceptions: DocxLsdException[]
+}
+
 // 页眉页脚设置 + 批注列表 + 页面设置：随 .odoc meta 存储，导出写入 OOXML
 export interface DocMeta {
   headerText?: string
@@ -306,6 +344,11 @@ export interface DocMeta {
   page?: PageSetup
   /** 文档带进来的段落样式清单（v0.102）：随 meta 持久化，导出时重建样式表 */
   styles?: DocxStyleInfo[]
+  /**
+   * 潜在样式（v0.146）：w:latentStyles 容器与全部 lsdException——Word 样式库的门面账。
+   * 屏上不兑现，只随 meta 持久化、导出时补丁回 styles.xml；ODT 没有这一族，odt 导入不设置
+   */
+  latentStyles?: DocxLatentStyles
 }
 
 export async function docxToHtml(bytes: Uint8Array): Promise<string> {
@@ -587,6 +630,7 @@ type ParagraphChildLike =
   | CommentReference
   | FootnoteReferenceRun
   | EndnoteReferenceRun
+  | Bookmark
 
 function markAttr(node: PMNode, mark: string, attr: string): string | undefined {
   const m = node.marks?.find((x) => x.type === mark)
@@ -594,15 +638,15 @@ function markAttr(node: PMNode, mark: string, attr: string): string | undefined 
   return typeof v === 'string' ? v : undefined
 }
 
-function inlineToChildren(node: PMNode, inherited: Inherited = {}, cs?: CommentTrack, dt?: DocTrack): ParagraphChildLike[] {
+/** 段内一个孩子 → 它的 run 们（书签分组在外层 inlineToChildren 做，这里只管格式） */
+function childToRuns(child: PMNode, inherited: Inherited, cs?: CommentTrack, dt?: DocTrack): ParagraphChildLike[] {
   const out: ParagraphChildLike[] = []
-  for (const child of node.content ?? []) {
-    if (child.type === 'text') {
-      if (cs) {
-        const cid = commentCidOf(child)
-        if (cid === null) closeComment(out, cs)
-        else openComment(out, cs, cid)
-      }
+  if (child.type === 'text') {
+    if (cs) {
+      const cid = commentCidOf(child)
+      if (cid === null) closeComment(out, cs)
+      else openComment(out, cs, cid)
+    }
       const text = textValue(child)
       const bold = inherited.bold || hasMark(child, 'bold')
       const italic = inherited.italic || hasMark(child, 'italic')
@@ -708,6 +752,40 @@ function inlineToChildren(node: PMNode, inherited: Inherited = {}, cs?: CommentT
     } else {
       out.push(...inlineToChildren(child, inherited, cs, dt))
     }
+  return out
+}
+
+/**
+ * 行内内容 → 段落孩子（v0.146 起重排为先转后组：书签区间在段内按名字分组）。
+ * 书签（w:bookmarkStart/End）在 PM 里是文字上的 mark，而 docx 要的是包住一串孩子的
+ * Bookmark 组件。mark 模型不记区间端点，这里按「同名 mark 的首个孩子到最后一个孩子」
+ * 切一段，中间无标记的内容（硬换行等）算在区间里——往返能保住名字与覆盖范围这两个
+ * 事实。同段同名两组（病态件）会并成一组；w:id 由 docx 库自动重排（Word 自己复制
+ * 书签时也重排）
+ */
+function inlineToChildren(node: PMNode, inherited: Inherited = {}, cs?: CommentTrack, dt?: DocTrack): ParagraphChildLike[] {
+  const kids = node.content ?? []
+  const spanStart = new Map<number, { name: string; last: number }>()
+  const open = new Map<string, [number, number]>()
+  kids.forEach((c, i) => {
+    if (c.type !== 'text') return
+    const nm = markAttr(c, 'bookmark', 'name')
+    if (!nm) return
+    const cur = open.get(nm)
+    if (cur) cur[1] = i
+    else open.set(nm, [i, i])
+  })
+  for (const [name, [first, last]] of open) spanStart.set(first, { name, last })
+  const out: ParagraphChildLike[] = []
+  for (let i = 0; i < kids.length; i++) {
+    const sp = spanStart.get(i)
+    if (sp) {
+      const inner = kids.slice(i, sp.last + 1).flatMap((c) => childToRuns(c, inherited, cs, dt))
+      out.push(new Bookmark({ id: sp.name, children: inner }))
+      i = sp.last
+      continue
+    }
+    out.push(...childToRuns(kids[i], inherited, cs, dt))
   }
   return out
 }
@@ -805,6 +883,11 @@ function styleDefOf(info: DocxStyleInfo): IParagraphStyleOptions | ICharacterSty
       id: info.id,
       name: info.name,
       ...(info.basedOn ? { basedOn: info.basedOn } : {}),
+      // 样式元数据（v0.146）：link/uiPriority 是包的原生槽（实测发射 w:link/w:uiPriority）；
+      // customStyle 包丢（StyleForParagraph 只把 type/styleId 交给 StyleAttributes），
+      // 由 patchStylesXml 补在开标签上
+      ...(info.link ? { link: info.link } : {}),
+      ...(info.uiPriority !== undefined ? { uiPriority: info.uiPriority } : {}),
       run,
     }
   }
@@ -830,6 +913,8 @@ function styleDefOf(info: DocxStyleInfo): IParagraphStyleOptions | ICharacterSty
     id: info.id,
     name: info.name,
     ...(info.basedOn ? { basedOn: info.basedOn } : {}),
+    ...(info.link ? { link: info.link } : {}),
+    ...(info.uiPriority !== undefined ? { uiPriority: info.uiPriority } : {}),
     run,
     paragraph,
   }
@@ -899,8 +984,14 @@ function bordersXml(borders: Partial<Record<CellEdge, string>> | undefined): str
 function tableStyleXml(s: DocxStyleInfo): string | undefined {
   const t = s.table
   if (!t) return undefined
-  let head = `<w:style w:type="table" w:styleId="${xmlAttr(s.id)}"><w:name w:val="${xmlAttr(s.name)}"/>`
+  // 样式元数据（v0.146）：customStyle 是 w:style 开标签上的属性（onOff），
+  // uiPriority/link 是按 CT_Style 序排在 basedOn 之后、rPr 之前的两枚子元素
+  let head =
+    `<w:style w:type="table"${s.customStyle !== undefined ? ` w:customStyle="${s.customStyle ? '1' : '0'}"` : ''}` +
+    ` w:styleId="${xmlAttr(s.id)}"><w:name w:val="${xmlAttr(s.name)}"/>`
   if (s.basedOn) head += `<w:basedOn w:val="${xmlAttr(s.basedOn)}"/>`
+  if (s.link) head += `<w:link w:val="${xmlAttr(s.link)}"/>`
+  if (s.uiPriority !== undefined) head += `<w:uiPriority w:val="${s.uiPriority}"/>`
   let rPr = ''
   const font = docFont(s.run.font)
   if (font) {
@@ -1307,6 +1398,11 @@ function withCharExtra<T extends object>(opts: T, child: PMNode): T {
   const szcs = num('szcs')
   const lang = str('lang')
   const langEa = str('langEa')
+  // v0.146：复杂文字语言（w:lang/@w:bidi）与字符缩放（w:w/@w:val）。两枚都是库里
+  // 实现着、类型面也暴露了的原生槽（IRunOptions.language.bidirectional / IRunOptions.scale），
+  // 不走库外断言
+  const langBidi = str('langBidi')
+  const scale = num('scale')
   const pos = num('pos')
   const kern = num('kern')
   // v0.143：复杂文字粗斜与小型大写。库里实现着（boldComplexScript / **italicsComplexScript**
@@ -1319,7 +1415,9 @@ function withCharExtra<T extends object>(opts: T, child: PMNode): T {
   const sc = str('smallcaps')
   const extra: Record<string, unknown> = {}
   if (szcs !== undefined && szcs > 0) extra.sizeComplexScript = szcs
-  if (lang || langEa) extra.language = { value: lang || undefined, eastAsia: langEa || undefined }
+  if (lang || langEa || langBidi)
+    extra.language = { value: lang || undefined, eastAsia: langEa || undefined, bidirectional: langBidi || undefined }
+  if (scale !== undefined && scale > 0) extra.scale = scale
   if (pos !== undefined && pos !== 0) extra.position = pos
   if (kern !== undefined && kern > 0) extra.kern = kern
   if (ics) extra.italicsComplexScript = true
@@ -1926,7 +2024,93 @@ export async function prosemirrorToDocxBytes(json: PMNode, meta?: DocMeta): Prom
     const look = tblLookOf(s)
     if (look) looks.set(s.id, look)
   }
+  // 潜在样式与 customStyle（v0.146）：两样包都没有槽（latentStyles 整族没有 API，
+  // customStyle 被 StyleForParagraph 丢掉——它只把 type/styleId 交给 StyleAttributes），
+  // 与 w:tblLook 同路数打包后回头补；表样式的 customStyle 走 tableStyleXml 原始 XML，
+  // 这里只补段落/字符两桶
+  const custom = new Map<string, string>()
+  for (const s of meta?.styles ?? []) {
+    if (s.customStyle !== undefined && s.kind !== 'table') custom.set(s.id, s.customStyle ? '1' : '0')
+  }
+  const latent = meta?.latentStyles
+  if (custom.size || latent) {
+    const patched = await patchStylesXml(out, latent, custom)
+    return looks.size ? await patchTblLook(patched, looks) : patched
+  }
   return looks.size ? patchTblLook(out, looks) : out
+}
+
+/**
+ * styles.xml 的两笔补丁（v0.146）：潜在样式容器 + 段落/字符样式的 `w:customStyle`。
+ *
+ * latentStyles 按 CT_Stylesheet 的序插在 `</w:docDefaults>` 之后、首个 `<w:style ` 之前
+ * （docDefaults → latentStyles → style*，乱序会被 Word 判损坏件）；customStyle 是
+ * `w:style` 开标签上的 onOff 属性，按 styleId 找到哪枚补哪枚。两笔共用一次解压/重压
+ */
+async function patchStylesXml(
+  bytes: Uint8Array,
+  latent: DocxLatentStyles | undefined,
+  custom: Map<string, string>,
+): Promise<Uint8Array> {
+  const { default: JSZip } = await import('jszip')
+  const zip = await JSZip.loadAsync(bytes)
+  const file = zip.file('word/styles.xml')
+  if (!file) return bytes
+  let xml = await file.async('string')
+  let touched = false
+  if (custom.size) {
+    xml = xml.replace(/<w:style\b[^>]*>/g, (all) => {
+      const id = /w:styleId="([^"]+)"/.exec(all)?.[1]
+      const v = id ? custom.get(id) : undefined
+      if (v === undefined) return all
+      touched = true
+      return all.replace(/>$/, ` w:customStyle="${v}">`)
+    })
+  }
+  if (latent) {
+    // 已有 latentStyles 的件（理论上是别的工具后处理过的）不重复插
+    if (!xml.includes('<w:latentStyles')) {
+      const at = xml.indexOf('<w:style ')
+      if (at >= 0) {
+        xml = xml.slice(0, at) + latentStylesXml(latent) + xml.slice(at)
+        touched = true
+      }
+    }
+  }
+  if (!touched) return bytes
+  zip.file('word/styles.xml', xml)
+  const buf = (await zip.generateAsync({ type: 'arraybuffer' })) as ArrayBuffer
+  return new Uint8Array(buf)
+}
+
+/** `DocxLatentStyles` → `<w:latentStyles>` 整块 XML（含全部 lsdException）；没话说的件给空容器 */
+function latentStylesXml(ls: DocxLatentStyles): string {
+  const bit = (v: boolean | undefined) => (v === undefined ? undefined : v ? '1' : '0')
+  const parts: string[] = []
+  if (ls.count !== undefined) parts.push(`w:count="${ls.count}"`)
+  if (ls.defUIPriority !== undefined) parts.push(`w:defUIPriority="${ls.defUIPriority}"`)
+  for (const [k, v] of [
+    ['w:defLockedState', ls.defLockedState],
+    ['w:defSemiHidden', ls.defSemiHidden],
+    ['w:defUnhideWhenUsed', ls.defUnhideWhenUsed],
+    ['w:defQFormat', ls.defQFormat],
+  ] as [string, boolean | undefined][]) {
+    const b = bit(v)
+    if (b !== undefined) parts.push(`${k}="${b}"`)
+  }
+  let inner = ''
+  for (const e of ls.exceptions) {
+    inner +=
+      `<w:lsdException` +
+      (e.name !== undefined ? ` w:name="${xmlAttr(e.name)}"` : '') +
+      (e.uiPriority !== undefined ? ` w:uiPriority="${e.uiPriority}"` : '') +
+      (bit(e.semiHidden) !== undefined ? ` w:semiHidden="${bit(e.semiHidden)}"` : '') +
+      (bit(e.unhideWhenUsed) !== undefined ? ` w:unhideWhenUsed="${bit(e.unhideWhenUsed)}"` : '') +
+      (bit(e.qFormat) !== undefined ? ` w:qFormat="${bit(e.qFormat)}"` : '') +
+      (bit(e.locked) !== undefined ? ` w:locked="${bit(e.locked)}"` : '') +
+      `/>`
+  }
+  return `<w:latentStyles${parts.length ? ` ${parts.join(' ')}` : ''}>${inner}</w:latentStyles>`
 }
 
 /**

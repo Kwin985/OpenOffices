@@ -1,17 +1,21 @@
-// 复杂文字与语言的八枚字符级槽（v0.138，iCs/bCs/smallCaps 三枚 v0.143 补）
+// 复杂文字与语言的十枚字符级槽（v0.138，iCs/bCs/smallCaps 三枚 v0.143 补，
+// langBidi/scale 两枚 v0.146 补）
 //
-// docx 的 rPr 上有八样东西在 HTML/CSS 里没有现成对应物，但**文件往返不能丢**：
+// docx 的 rPr 上有十样东西在 HTML/CSS 里没有现成对应物，但**文件往返不能丢**：
 //   rFonts/@w:cs   复杂文字（阿拉伯/希伯来/泰文）的字族
 //   rFonts/@w:hint 含混字符用哪族字体（屏上那一半在 docx-fidelity 的 emitRunText 里直接兑现，
 //                   这一枚只为存盘时不丢）
 //   w:szCs/@w:val  复杂文字的字号（半点）
 //   w:lang/@w:val  这段文字的语言（w:eastAsia 另存一枚）
+//   w:lang/@w:bidi 复杂文字的语言（v0.146）——只管 cs 字族那一口，CSS 无对应物
+//   w:w/@w:val     字符缩放百分比（v0.146）——CSS inline 排版没有等价横向缩放
 //   w:pos/@w:val   基线升降（半点）——屏上走 vertical-align，由本 mark 的 renderHTML 画
 //   w:kern/@w:val  字偶距阈值（0 = 关）——屏上走 font-kerning，同上
 //   w:iCs/@w:bCs   复杂文字的斜体/粗体（只管 cs 字族那一口，与 w:i/w:b 平级）
 //   w:smallCaps    小型大写——屏上走 font-variant，由本 mark 画（v0.143）
-// 读侧由 docx-fidelity 发成 span[data-cs|data-hint|data-szcs|data-lang|data-lang-ea|data-pos|data-kern|
-// data-ics|data-bcs|data-smallcaps]，这个 mark 接住；写侧由 docx.ts 读回 mark 属性落回 rPr。
+// 读侧由 docx-fidelity 发成 span[data-cs|data-hint|data-szcs|data-lang|data-lang-ea|data-lang-bidi|
+// data-scale|data-pos|data-kern|data-ics|data-bcs|data-smallcaps]，这个 mark 接住；
+// 写侧由 docx.ts 读回 mark 属性落回 rPr。
 //
 // **全都能落盘**，但路径分两种，值得记一笔：cs/hint/szCs/lang/pos/kern 在 docx 库的
 // RunProperties 里都实现着（createRunFonts 的 attrs.hint、options.sizeComplexScript、
@@ -61,6 +65,23 @@ export const CharExtra = Mark.create({
         default: null as string | null,
         parseHTML: (el: HTMLElement) => str(el.getAttribute('data-lang-ea')),
         renderHTML: (attrs: Record<string, unknown>) => (str(attrs.langEa) ? { 'data-lang-ea': str(attrs.langEa) } : {}),
+      },
+      // langBidi（v0.146）：w:lang/@w:bidi，复杂文字的语言。与 lang/langEa 同住 w:lang，
+      // 但只管 cs 字族那一口，CSS 没有对应物——只往返
+      langBidi: {
+        default: null as string | null,
+        parseHTML: (el: HTMLElement) => str(el.getAttribute('data-lang-bidi')),
+        renderHTML: (attrs: Record<string, unknown>) => (str(attrs.langBidi) ? { 'data-lang-bidi': str(attrs.langBidi) } : {}),
+      },
+      // scale（v0.146）：w:w/@w:val，字符缩放百分比（Word 的「字符缩放」）。
+      // CSS 的 inline 排版没有等价物（transform:scaleX 会破坏行盒），屏上不兑现——只往返
+      scale: {
+        default: null as number | null,
+        parseHTML: (el: HTMLElement) => {
+          const v = Number(el.getAttribute('data-scale'))
+          return Number.isFinite(v) && v > 0 ? v : null
+        },
+        renderHTML: (attrs: Record<string, unknown>) => (num(attrs.scale) ? { 'data-scale': String(num(attrs.scale)) } : {}),
       },
       // pos/kern 的屏上那一半由这里画：导入 HTML 上那枚 inline style 过不了 TipParse
       // （textStyle 只认自己那几个属性），所以升降与字偶距必须由 mark 自己发 CSS。
@@ -118,6 +139,8 @@ export const CharExtra = Mark.create({
       { tag: 'span[data-szcs]' },
       { tag: 'span[data-lang]' },
       { tag: 'span[data-lang-ea]' },
+      { tag: 'span[data-lang-bidi]' },
+      { tag: 'span[data-scale]' },
       { tag: 'span[data-pos]' },
       { tag: 'span[data-kern]' },
       { tag: 'span[data-ics]' },

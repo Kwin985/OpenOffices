@@ -56,6 +56,8 @@ import {
   asTableCondType,
   commentRowsOf,
   type DocComment,
+  type DocxLsdException,
+  type DocxLatentStyles,
   type DocxStyleInfo,
   type TableCond,
   type TableCondType,
@@ -76,6 +78,11 @@ export interface DocxImport {
   warnings: string[]
   /** 文档带进来的段落样式清单（v0.102）：摊平快照，编辑器下拉与导出样式表共用 */
   styles?: DocxStyleInfo[]
+  /**
+   * 潜在样式（v0.146）：w:latentStyles 容器与全部 lsdException——Word 样式库门面账。
+   * 屏上不兑现，随 meta 持久化、导出补丁回 styles.xml
+   */
+  latentStyles?: DocxLatentStyles
 }
 
 /** jszip 部件的最小视图（不为一次只读导入把 JSZip 的完整类型面拉进来） */
@@ -209,10 +216,36 @@ interface StyleInfo {
   level?: number
   quote?: boolean
   preformatted?: boolean
+  /**
+   * 样式元数据三枚（v0.146）：`w:uiPriority` 决定 Word 样式库里的排序档位、
+   * `w:link` 指着配对的字符/段落样式（`w:styleLink` 的反向）、`w:customStyle`
+   * 标记用户自建样式。屏上一概不兑现，只为存盘不丢。
+   */
+  uiPriority?: number
+  link?: string
+  customStyle?: boolean
+}
+
+/**
+ * 潜在样式（v0.146）：`w:latentStyles` 容器 + 每条 `w:lsdException`。
+ *
+ * 这是 Word 样式库的门面数据——哪些内建样式在库里露面、排第几档、要不要隐藏，
+ * 与正文排版无关，屏上无处兑现（参照浮动框架 framePr 的纪律：只往返）。
+ * 写手没有库槽，由 docx.ts 打包后回头补进 styles.xml（与 w:tblLook 同一路数）。
+ * 类型住在 docx.ts（DocMeta 的一员），这里只负责读。
+ */
+
+/** onOff 属性值 → 三态布尔；认不出的值（空串/怪串）按没说话处理 */
+function onOff(v: string | undefined): boolean | undefined {
+  const s = (v ?? '').toLowerCase()
+  if (s === '1' || s === 'true' || s === 'on') return true
+  if (s === '0' || s === 'false' || s === 'off') return false
+  return undefined
 }
 
 interface StyleBook {
   byId: Map<string, StyleInfo>
+  latentStyles?: DocxLatentStyles
 }
 
 function headingLevelOf(name: string): number | undefined {
@@ -233,6 +266,9 @@ function readStyles(xml: string, theme?: ThemeFonts): StyleBook {
   // docDefaults 不并入基准运行属性：它是"这份文档的默认字体"，而本应用自带版式默认值；
   // 逐 run 盖上 Calibri/宋体 11pt 会把应用级字体选择全部压掉，还会让 HTML 胖一倍。
   for (const s of all(styles, 'w:style')) {
+    // customStyle 要先于 styleId 那道闸读（v0.146）：语料里有一枚不带 styleId 的裸
+    // <w:style w:customStyle="0"/>，attr 在不在身上都发探针，读了才上账
+    const cs = onOff(attr(s, 'w:customStyle'))
     const id = attr(s, 'w:styleId')
     if (!id) continue
     const name = val(s, 'w:name') ?? ''
@@ -249,6 +285,12 @@ function readStyles(xml: string, theme?: ThemeFonts): StyleBook {
       tcPr: find(s, 'w:tcPr'),
       tblStylePr: all(s, 'w:tblStylePr'),
     }
+    // 样式元数据三枚（v0.146）：uiPriority/link 是子元素，customStyle 是身上那枚属性
+    const up = valNum(s, 'w:uiPriority')
+    if (up !== undefined) info.uiPriority = up
+    const link = val(s, 'w:link')
+    if (link) info.link = link
+    if (cs !== undefined) info.customStyle = cs
     const outline = valNum(pPr, 'w:outlineLvl')
     if (outline !== undefined && outline >= 0 && outline <= 8) info.level = outline + 1
     info.level ??= headingLevelOf(name)
@@ -257,6 +299,42 @@ function readStyles(xml: string, theme?: ThemeFonts): StyleBook {
     if (nm === 'html preformatted' || nm === 'preformatted text' || nm === 'code' || nm === '预格式化')
       info.preformatted = true
     book.byId.set(id, info)
+  }
+  // 潜在样式（v0.146）：w:latentStyles 是 w:styles 的单例容器，排在 docDefaults 之后、
+  // 全部 w:style 之前。它是 Word 样式库的门面账（哪些内建样式露面、排第几档），与正文
+  // 排版无关——读成结构化数据随 meta 走，导出时补丁回 styles.xml
+  const latent = find(styles, 'w:latentStyles')
+  if (latent) {
+    const ls: DocxLatentStyles = { exceptions: [] }
+    const cnt = attrNum(latent, 'w:count')
+    if (cnt !== undefined) ls.count = cnt
+    const dls = onOff(attr(latent, 'w:defLockedState'))
+    if (dls !== undefined) ls.defLockedState = dls
+    const dup = attrNum(latent, 'w:defUIPriority')
+    if (dup !== undefined) ls.defUIPriority = dup
+    const dsh = onOff(attr(latent, 'w:defSemiHidden'))
+    if (dsh !== undefined) ls.defSemiHidden = dsh
+    const duu = onOff(attr(latent, 'w:defUnhideWhenUsed'))
+    if (duu !== undefined) ls.defUnhideWhenUsed = duu
+    const dqf = onOff(attr(latent, 'w:defQFormat'))
+    if (dqf !== undefined) ls.defQFormat = dqf
+    for (const e of all(latent, 'w:lsdException')) {
+      const ex: DocxLsdException = {}
+      const nm2 = attr(e, 'w:name')
+      if (nm2) ex.name = nm2
+      const up2 = attrNum(e, 'w:uiPriority')
+      if (up2 !== undefined) ex.uiPriority = up2
+      const sh = onOff(attr(e, 'w:semiHidden'))
+      if (sh !== undefined) ex.semiHidden = sh
+      const uu = onOff(attr(e, 'w:unhideWhenUsed'))
+      if (uu !== undefined) ex.unhideWhenUsed = uu
+      const qf = onOff(attr(e, 'w:qFormat'))
+      if (qf !== undefined) ex.qFormat = qf
+      const lk = onOff(attr(e, 'w:locked'))
+      if (lk !== undefined) ex.locked = lk
+      ls.exceptions.push(ex)
+    }
+    book.latentStyles = ls
   }
   return book
 }
@@ -272,6 +350,15 @@ function styleChain(book: StyleBook, id: string | undefined): StyleInfo[] {
     cur = cur.basedOn ? book.byId.get(cur.basedOn) : undefined
   }
   return out
+}
+
+/** 样式元数据三枚（v0.146）→ 快照字段；没说的不挂，与旧字节一致 */
+function styleMetaOf(info: StyleInfo): Pick<DocxStyleInfo, 'uiPriority' | 'link' | 'customStyle'> {
+  return {
+    ...(info.uiPriority !== undefined ? { uiPriority: info.uiPriority } : {}),
+    ...(info.link ? { link: info.link } : {}),
+    ...(info.customStyle !== undefined ? { customStyle: info.customStyle } : {}),
+  }
 }
 
 /**
@@ -764,6 +851,16 @@ interface RunProps {
   lang?: string
   /** w:lang/@w:eastAsia：东亚文字的语言 */
   langEa?: string
+  /**
+   * w:lang/@w:bidi（v0.146）：复杂文字（阿拉伯/希伯来）的语言。CSS 没有这一槽，
+   * 屏上不兑现——只随 data-lang-bidi 进模型再走往返（写手落 language.bidirectional）
+   */
+  langBidi?: string
+  /**
+   * w:w/@w:val（v0.146）：字符缩放百分比（Word 的「字符缩放」，1..600）。
+   * CSS 的 inline 排版没有等价的横向缩放（transform:scaleX 会破坏行盒），屏上不兑现
+   */
+  scale?: number
   /** w:kern/@w:val：小于这个缇数的字对才做字偶距（0 = 关掉） */
   kern?: number
   /** w:pos/@w:val：基线升降，半点，正升负降（手工调的上下标走这里，不走 vertAlign） */
@@ -833,7 +930,14 @@ function readRPr(el: XEl | undefined, p: RunProps, tc?: ThemeColors): RunProps {
     if (v) o.lang = v
     const ea = attr(langEl, 'w:eastAsia')
     if (ea) o.langEa = ea
+    // v0.146：复杂文字语言。w:bidi 与 val/eastAsia 同住 w:lang 上，但语义只管 cs 字族
+    const bidi = attr(langEl, 'w:bidi')
+    if (bidi) o.langBidi = bidi
   }
+  // v0.146：字符缩放（w:w/@w:val，百分比）。元素名叫 w 而属性叫 val——探针键是 w|val。
+  // 0 与负数是病态值（Word 只收 1..600），按没说话处理
+  const scale = valNum(el, 'w:w')
+  if (scale !== undefined && scale > 0) o.scale = scale
   const kern = valNum(el, 'w:kern')
   if (kern !== undefined && kern >= 0) o.kern = kern
   const pos = valNum(el, 'w:pos')
@@ -974,6 +1078,9 @@ function marked(inner: string, p: RunProps): string {
     p.szCs !== undefined ? ` data-szcs="${p.szCs}"` : '',
     p.lang ? ` data-lang="${attrEsc(p.lang)}"` : '',
     p.langEa ? ` data-lang-ea="${attrEsc(p.langEa)}"` : '',
+    // v0.146：复杂文字语言与字符缩放。两枚 CSS 都没有对应物，只随 data-* 进模型再走往返
+    p.langBidi ? ` data-lang-bidi="${attrEsc(p.langBidi)}"` : '',
+    p.scale !== undefined ? ` data-scale="${p.scale}"` : '',
     p.hint ? ` data-hint="${attrEsc(p.hint)}"` : '',
     p.pos !== undefined ? ` data-pos="${p.pos}"` : '',
     p.kern !== undefined ? ` data-kern="${p.kern}"` : '',
@@ -1087,6 +1194,11 @@ interface InlineState {
   pieces: Piece[]
   /** cid → 该批注区间在本段起始的下标 */
   openAt: Map<number, number>
+  /**
+   * 书签 id → 该区间在本段起始的下标与名字（v0.146）。与 openAt 同构：跨段书签
+   * 每段各包一枚 span（mark 不能跨块），段界不断区间
+   */
+  openBm: Map<string, { name: string | undefined; at: number }>
   /** 域代码深度与"是否已到结果显示段" */
   fld: number
   show: boolean
@@ -1131,17 +1243,32 @@ function suppressField(st: InlineState): boolean {
 
 /** 批注区间原位包 span：块级插入物（图片/分页符）前的行内容先闭合，块原样保留 */
 function wrapComment(pieces: Piece[], from: number, cid: number): Piece[] {
+  return wrapRange(pieces, from, (buf) => `<span data-oo-comment="${cid}">${buf}</span>`)
+}
+
+/**
+ * 书签区间原位包 span（v0.146）：与批注同一副骨架——块级插入物前的行内容先闭合、
+ * 块原样保留。空区间（起终点相邻、不包内容）产出空串，PM 的 mark 模型无处安放
+ * 一枚没有内容的标记，往返丢失（记账，见审计）
+ */
+function wrapBookmark(pieces: Piece[], from: number, name: string | undefined): Piece[] {
+  if (!name) return []
+  return wrapRange(pieces, from, (buf) => `<span data-oo-bookmark="${attrEsc(name)}">${buf}</span>`)
+}
+
+/** 区间包裹的公共骨架：from 起的行内片并成一枚 span，块级片原样留在 span 之外 */
+function wrapRange(pieces: Piece[], from: number, wrap: (buf: string) => string): Piece[] {
   const tail = pieces.slice(from)
   const out: Piece[] = []
   let buf = ''
   for (const p of tail) {
     if (p.kind === 'block') {
-      if (buf) out.push({ kind: 'inline', html: `<span data-oo-comment="${cid}">${buf}</span>` })
+      if (buf) out.push({ kind: 'inline', html: wrap(buf) })
       buf = ''
       out.push(p)
     } else buf += p.html
   }
-  if (buf) out.push({ kind: 'inline', html: `<span data-oo-comment="${cid}">${buf}</span>` })
+  if (buf) out.push({ kind: 'inline', html: wrap(buf) })
   return out
 }
 
@@ -1152,6 +1279,8 @@ class Fidelity {
   warnings = new Map<string, number>()
   comments: DocComment[] = []  /** 已开未关的批注区间 id：跨段续挂（mark 不能跨块，故每段各一枚 span） */
   private openRanges = new Set<number>()
+  /** 已开未关的书签 id → 名字（v0.146）：跨段书签与批注同规矩，每段各包一枚 span */
+  private openBookmarks = new Map<string, string | undefined>()
   private rels = new Map<string, { target: string; external: boolean }>()
   private media = new Map<string, Promise<string | null>>()
   /** 图形类部件（diagrams/dataN.xml、charts/chartN.xml）的 XML 文本缓存 */
@@ -1175,8 +1304,7 @@ class Fidelity {
     /** 嵌套深度：文档里嵌文档再嵌文档会没完，展平到这一层就停手记边界 */
     private depth = 0,
     /** 主题字体槽（v0.138）：document 树在 run() 里落地，styles/numbering 在读入时已落地 */
-    private theme?: ThemeFonts,
-    /** 主题色槽（v0.142）：w:color/@w:themeColor、w:shd/@w:themeFill 与边框上的同名属性引用的就是这些槽 */
+    private theme?: ThemeFonts,    /** 主题色槽（v0.142）：w:color/@w:themeColor、w:shd/@w:themeFill 与边框上的同名属性引用的就是这些槽 */
     private themeColors?: ThemeColors,
   ) {}
 
@@ -1577,6 +1705,14 @@ class Fidelity {
   }
 
   /**
+   * 潜在样式（v0.146）：读 styles.xml 时收的 w:latentStyles 容器与全部 lsdException——
+   * Word 样式库的门面账。屏上不兑现，随 DocxImport 出去、导出时补丁回 styles.xml
+   */
+  get latentStyles(): DocxLatentStyles | undefined {
+    return this.book.latentStyles
+  }
+
+  /**
    * 命名样式清单（v0.102 段落 / v0.113 字符 / v0.114 表格）：styles.xml 里
    * type="paragraph|character|table" 的每一枚，沿 basedOn 链摊平成结构化快照——
    * run 层逐层 readRPr，para 层取合并视图 pPr 的各枚值（与 paraCss 同一套读取口径），
@@ -1729,6 +1865,7 @@ class Fidelity {
           name: info.name,
           kind: 'table',
           ...(info.basedOn ? { basedOn: info.basedOn } : {}),
+          ...styleMetaOf(info),
           run,
           para: {},
           table: tbl,
@@ -1741,6 +1878,7 @@ class Fidelity {
           name: info.name,
           kind: 'character',
           ...(info.basedOn ? { basedOn: info.basedOn } : {}),
+          ...styleMetaOf(info),
           run,
           para: {},
         })
@@ -1795,6 +1933,7 @@ class Fidelity {
         id: info.id,
         name: info.name,
         ...(info.basedOn ? { basedOn: info.basedOn } : {}),
+        ...styleMetaOf(info),
         ...(view.level !== undefined ? { level: view.level } : {}),
         run,
         para,
@@ -1832,11 +1971,21 @@ class Fidelity {
     // 跨段批注：上一段开着没关的区间，在本段开头继续（mark 不能跨块，故每段各一枚 span）
     const openAt = new Map<number, number>()
     for (const cid of this.openRanges) openAt.set(cid, 0)
-    const st: InlineState = { pieces: [], openAt, fld: 0, show: false, stack: [], outSeq: 0, split: false, inCell }
+    // 跨段书签同理（v0.146）：上一段开着的书签在本段开头续挂
+    const openBm = new Map<string, { name: string | undefined; at: number }>()
+    for (const [id, name] of this.openBookmarks) openBm.set(id, { name, at: 0 })
+    const st: InlineState = { pieces: [], openAt, openBm, fld: 0, show: false, stack: [], outSeq: 0, split: false, inCell }
     await this.children(el, base, st)
     for (const [cid, from] of st.openAt) {
       st.pieces.splice(from, st.pieces.length - from, ...wrapComment(st.pieces, from, cid))
       st.openAt.delete(cid)
+    }
+    // 段末仍开着的书签：本段这份内容包成一枚 span，区间继续开到下一段。
+    // 按下标倒序处理——正序会让后一个区间的起始下标在前一次 splice 后失位
+    const stillOpen = [...st.openBm.entries()].sort((a, b) => b[1].at - a[1].at)
+    for (const [id, open] of stillOpen) {
+      st.pieces.splice(open.at, st.pieces.length - open.at, ...wrapBookmark(st.pieces, open.at, open.name))
+      st.openBm.delete(id)
     }
     return st.pieces
   }
@@ -1850,17 +1999,34 @@ class Fidelity {
   private async visit(node: XEl, props: RunProps, st: InlineState): Promise<void> {
     const t = local(node.name)
     switch (t) {
-      // 段落属性、书签、校对标记、已删除内容：都不产出可见文字
+      // 段落属性、校对标记、已删除内容：都不产出可见文字
       // （w:del / w:moveFrom 不在这里——它们在下面有各自的修订分支）
       case 'pPr':
       case 'proofErr':
-      case 'bookmarkStart':
-      case 'bookmarkEnd':
       case 'commentReference':
       case 'lastRenderedPageBreak':
       case 'delInstrText':
       case 'delText':
         return
+      case 'bookmarkStart':
+      case 'bookmarkEnd': {
+        // 书签区间（v0.146）：bookmarkStart/End 本身不产文字，但 id 与 name 两对要查问
+        // （探针键 bookmarkStart|id / bookmarkStart|name / bookmarkEnd|id），区间内容
+        // 包成 span[data-oo-bookmark] 由书签 mark 接住。跨段的在段末续挂（见 inline）
+        const id = attr(node, 'w:id') ?? ''
+        if (t === 'bookmarkStart') {
+          const name = attr(node, 'w:name')
+          st.openBm.set(id, { name, at: st.pieces.length })
+          this.openBookmarks.set(id, name)
+          return
+        }
+        const open = st.openBm.get(id)
+        st.openBm.delete(id)
+        this.openBookmarks.delete(id)
+        if (open === undefined) return
+        st.pieces.splice(open.at, st.pieces.length - open.at, ...wrapBookmark(st.pieces, open.at, open.name))
+        return
+      }
       case 'instrText': {
         // 域代码原文本身不显示，但 SEQ/REF 要靠它才知道该现算什么
         const f = st.stack[st.stack.length - 1]
@@ -1997,6 +2163,8 @@ class Fidelity {
         const sub: InlineState = {
           pieces: [],
           openAt: new Map(),
+          // 书签不随子状态开合：链接里的书签区间归主序列管（与批注同一本账）
+          openBm: new Map(),
           fld: st.fld,
           show: st.show,
           stack: st.stack,
@@ -2010,6 +2178,8 @@ class Fidelity {
         st.outSeq += sub.outSeq
         const base = st.pieces.length
         for (const [cid, from] of sub.openAt) st.openAt.set(cid, base + from)
+        // 链接里开着没关的书签：区间续到主序列，下标按追加位置换算（同 openAt）
+        for (const [id, open] of sub.openBm) st.openBm.set(id, { name: open.name, at: base + open.at })
         const href = rel?.external ? rel.target : anchor ? `#${anchor}` : undefined
         if (!href) {
           for (const p of sub.pieces) st.pieces.push(p)
@@ -2338,7 +2508,17 @@ class Fidelity {
     const tblPr = find(el, 'w:tblPr')
     const gridRaw = all(find(el, 'w:tblGrid'), 'w:gridCol').map((g) => Math.round((attrNum(g, 'w') ?? 0) * TWIP_PX))
     const rows = all(el, 'w:tr')
-    const tb = borderEdges(tblPr ? find(tblPr, 'w:tblBorders') : undefined, this.themeColors)
+    const tblBordersEl = tblPr ? find(tblPr, 'w:tblBorders') : undefined
+    const tb = borderEdges(tblBordersEl, this.themeColors)
+    // 表级边框间距（v0.146）：六边的 space。单元格共用边框在 CSS 里没有对应物，
+    // 但 space 与边框风格一样可以按「落到哪枚格边」分摊——外层四边贴外圈格，
+    // insideH/insideV 贴相邻两格（每枚格边带自己那条边的 space，与 v0.143 实测的
+    // 逐格 tcBorders direct 层同口径）。只在该边边框真回落到表级时才挂
+    const tbSpace: Partial<Record<string, number>> = {}
+    for (const edge of ['top', 'bottom', 'left', 'right', 'insideH', 'insideV']) {
+      const sp = edgeSpacePx(find(tblBordersEl, `w:${edge}`))
+      if (sp > 0) tbSpace[edge] = sp
+    }
     const tblInd = tblPr ? attrNum(find(tblPr, 'w:tblInd'), 'w') : undefined
     // w:tblInd/@w:type（v0.144）：dxa（默认）时 w:w 是缇，现状读的就是它；pct 档 w:w 是
     // 百分之五十步长（ST_MeasurementOrPercent），nil 是不缩进、chars 是字符。非 dxa 档
@@ -2551,6 +2731,35 @@ class Fidelity {
         for (const edge of CELL_EDGES) {
           const sp = edgeSpacePx(find(tcBordersEl, `w:${edge}`))
           if (sp > 0) bdSpace[edge] = sp
+        }
+        // 表级边框的 space 补位（v0.146）：direct 层没说 space、且该边的边框风格本就
+        // 回落到表级（cb/cb2 都没接）时，表级那条边的 space 归这枚格边。与边框风格
+        // 同一套 fallback 口径（见下面 cellStyleCss 那一行），不会把表级 space 盖到
+        // 格级边框上——Word 里格级 tcBorders 整条盖掉表级，space 随之一并不留
+        for (const edge of CELL_EDGES) {
+          if (bdSpace[edge]) continue
+          if (edge === 'top' && (cb.top || cb2.top)) continue
+          if (edge === 'bottom' && (cb.bottom || cb2.bottom)) continue
+          if (edge === 'left' && (cb.left || cb2.left)) continue
+          if (edge === 'right' && (cb.right || cb2.right)) continue
+          const tblEdge =
+            edge === 'top'
+              ? ri === 0
+                ? 'top'
+                : 'insideH'
+              : edge === 'bottom'
+                ? ri === last
+                  ? 'bottom'
+                  : 'insideH'
+                : edge === 'left'
+                  ? c.gc === 0
+                    ? 'left'
+                    : 'insideV'
+                  : c.gc + c.colspan >= rowEnd
+                    ? 'right'
+                    : 'insideV'
+          const sp = tbSpace[tblEdge]
+          if (sp) bdSpace[edge] = sp
         }
         const style = [cellStyleCss(tcPr, {
           top: cb.top ?? cb2.top ?? (ri === 0 ? tb.top : tb.insideH),
@@ -3238,5 +3447,12 @@ export async function docxToHtmlFidelity(bytes: Uint8Array, depth = 0): Promise<
   f.setNotes(await read('word/footnotes.xml'), await read('word/endnotes.xml'))
   f.setComments(await read('word/comments.xml'), await read('word/commentsExtended.xml'))
   const { html, blocks } = await f.run(documentXml)
-  return { html, comments: f.comments, blocks, warnings: f.warningList(), styles: f.styleList() }
+  return {
+    html,
+    comments: f.comments,
+    blocks,
+    warnings: f.warningList(),
+    styles: f.styleList(),
+    ...(f.latentStyles ? { latentStyles: f.latentStyles } : {}),
+  }
 }

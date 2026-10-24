@@ -37,6 +37,7 @@ import {
   type TableCondType,
 } from '../lib/docx'
 import { Comment, addCommentMark, findCommentAnchor, removeCommentMark } from '../lib/comment-extension'
+import { Bookmark } from '../lib/bookmark-extension'
 import { RevDel, RevIns, RevMode, acceptRevisions, deleteAsRevision, rejectRevisions, revModeOnState, toggleRevMode } from '../lib/revision-extension'
 import {
   Note,
@@ -293,6 +294,8 @@ function DocEditor({ tab }: Props) {
       RStyleMark,
       // 复杂文字与语言四槽（v0.138）：cs/szCs/lang/hint 读进来落 data-*，导出按库的选项面能写多少写多少
       CharExtra,
+      // 书签区间（v0.146）：w:bookmarkStart/End 读进来落 span[data-oo-bookmark]，导出包回 Bookmark
+      Bookmark,
       Highlight.configure({ multicolor: true }),
       CharacterCount,
       Toc,
@@ -597,6 +600,8 @@ function DocEditor({ tab }: Props) {
               setMeta({
                 ...m,
                 ...(fid.styles?.length ? { styles: fid.styles } : {}),
+                // 潜在样式（v0.146）：Word 样式库门面账，只往返不屏现
+                ...(fid.latentStyles ? { latentStyles: fid.latentStyles } : {}),
                 ...(fid.comments.length ? { comments: fid.comments } : {}),
               })
               if (fid.comments.length) setCmOpen(true)
