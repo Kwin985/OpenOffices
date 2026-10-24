@@ -50,7 +50,7 @@ import { all, allDesc, attr, attrL, attrNum, els, find, findDesc, findL, local, 
 import { FieldEngine, fieldLabel, parseInstr, recomputable } from './docx-fields'
 import { embedHtml, inlineFlatten, unwrapEmbed, type EmbedHtml } from './ole'
 import { chartToHtml, smartArtToHtml } from './ooxml-graphics'
-import { CELL_EDGES, CSS_BORDER_STYLE, FRAME_NUMERIC_KEYS, FRAME_STR_KEYS, TAB_LEADERS, bdSpaceAttrs, eighthsToPx, framePayload, ptToPx, rgb2hex, shadeCss, tblpPayload, tabsPayload, type CellEdge, type FramePayload, type TabSpec, type TblpPayload } from './cell-style'
+import { CELL_EDGES, CSS_BORDER_STYLE, FRAME_NUMERIC_KEYS, FRAME_STR_KEYS, PPR_ATTR, PPR_ONOFF_KEYS, PPR_STR_KEYS, TAB_LEADERS, bdSpaceAttrs, eighthsToPx, framePayload, pprPayload, ptToPx, rgb2hex, shadeCss, tblpPayload, tabsPayload, type CellEdge, type FramePayload, type PprPayload, type TabSpec, type TblpPayload } from './cell-style'
 import { ooxmlLine } from './paragraph-style'
 import {
   asTableCondType,
@@ -58,6 +58,7 @@ import {
   type DocComment,
   type DocxLsdException,
   type DocxLatentStyles,
+  type DocxSection,
   type DocxStyleInfo,
   type TableCond,
   type TableCondType,
@@ -83,6 +84,12 @@ export interface DocxImport {
    * 屏上不兑现，随 meta 持久化、导出补丁回 styles.xml
    */
   latentStyles?: DocxLatentStyles
+  /**
+   * 节属性原文（v0.147）：body 末尾 sectPr 的 pgSz/pgMar/cols/docGrid，单位仍是缇。
+   * 屏上有对应物的是页面设置那一半（纸型与页边距），装订线/页眉页脚距/文档网格只往返。
+   * 由调用方折成 PageSetup（pageSetupOf）合并进 meta
+   */
+  section?: DocxSection
 }
 
 /** jszip 部件的最小视图（不为一次只读导入把 JSZip 的完整类型面拉进来） */
@@ -224,6 +231,13 @@ interface StyleInfo {
   uiPriority?: number
   link?: string
   customStyle?: boolean
+  /**
+   * 条件层的闸门（v0.147）：表样式 `w:tblPr/w:tblLook` 的那三枚属性——`w:val`
+   * （Word 存的那份四位闸门原值）、`w:noHBand`/`w:noVBand`（隔行/隔列带不套）。
+   * 写侧原本是拿 table.cond 反推的（`condLookBits`），推出来的与原文那枚不一定同；
+   * 带上原文这一枚就照抄，没带才回落到反推。
+   */
+  look?: { val?: string; noHBand?: boolean; noVBand?: boolean }
 }
 
 /**
@@ -291,6 +305,20 @@ function readStyles(xml: string, theme?: ThemeFonts): StyleBook {
     const link = val(s, 'w:link')
     if (link) info.link = link
     if (cs !== undefined) info.customStyle = cs
+    // 条件层闸门（v0.147）：表样式 w:tblPr/w:tblLook 的三枚属性。val 是枚举串，
+    // noHBand/noVBand 是 onOff——写侧原本拿 table.cond 反推（condLookBits），
+    // 带上原文这一枚就照抄，没带才回落到反推
+    const lookEl = info.tblPr ? find(info.tblPr, 'w:tblLook') : undefined
+    if (lookEl) {
+      const look: StyleInfo['look'] = {}
+      const lv = attr(lookEl, 'w:val')
+      if (lv) look.val = lv
+      const hb = onOff(attr(lookEl, 'w:noHBand'))
+      if (hb !== undefined) look.noHBand = hb
+      const vb = onOff(attr(lookEl, 'w:noVBand'))
+      if (vb !== undefined) look.noVBand = vb
+      if (Object.keys(look).length) info.look = look
+    }
     const outline = valNum(pPr, 'w:outlineLvl')
     if (outline !== undefined && outline >= 0 && outline <= 8) info.level = outline + 1
     info.level ??= headingLevelOf(name)
@@ -458,6 +486,40 @@ function readTblpPayload(tblPr: XEl | undefined): string {
     if (v) kv[k] = v
   }
   return tblpPayload(kv)
+}
+
+/**
+ * 段落属性余量（v0.147）：pPr 里那批「说了也不改屏上排版」的直接属性 → `key=value;...`
+ * 载荷。七枚 onOff（adjustRightInd/snapToGrid/topLinePunct/bidi/autoSpaceDE/autoSpaceDN/
+ * suppressLineNumbers）走 attr 读 w:val 后经 onOff 归一（**元素在场而无 val 按「开」**——
+ * 不能与「没写」同路，Word 里 snapToGrid 默认开、显式关是真值）；textAlignment 是枚举档
+ * 原样存；w:spacing 上的 beforeAutospacing/afterAutospacing 顺带（包里把布尔写成
+ * "true"，语义与 '1' 同档）。样式链合并后的 effPPr 上读——样式层说的算数。
+ */
+function readPprPayload(pPr: XEl | undefined): string {
+  if (!pPr) return ''
+  const kv: PprPayload = {}
+  for (const k of PPR_ONOFF_KEYS) {
+    // 两枚自动段距住在 w:spacing 身上，其余各是 pPr 的直子
+    const el = k === 'beforeAutoSpace' || k === 'afterAutoSpace' ? find(pPr, 'w:spacing') : find(pPr, `w:${k}`)
+    if (!el) continue
+    const name = k === 'beforeAutoSpace' ? 'w:beforeAutospacing' : k === 'afterAutoSpace' ? 'w:afterAutospacing' : `w:val`
+    const v = onOff(attr(el, name))
+    // 元素在场、没写 w:val：按「开」记（onOff 对 undefined 给 undefined，这里补 true）
+    if (v === undefined) {
+      if (name !== 'w:val') continue
+      kv[k] = '1'
+      continue
+    }
+    kv[k] = v ? '1' : '0'
+  }
+  for (const k of PPR_STR_KEYS) {
+    const el = find(pPr, `w:${k}`)
+    if (!el) continue
+    const v = attr(el, 'w:val')
+    if (v) kv[k] = v
+  }
+  return pprPayload(kv)
 }
 
 /** 属性级合并：同名后者压前者，后写层没写的属性留前写层那一枚；槽见 PPR_ATTR_SLOTS */
@@ -1572,8 +1634,10 @@ class Fidelity {
     // 浮动框架（v0.145）：w:framePr 的 key=value 载荷。Word 的纸面框架定位，Web 流式
     // 排版没有页这一层，屏上不兑现——只随 data-frame 往返
     const frameAttr = readFramePayload(effPPr)
+    // 段落属性余量（v0.147）：pPr 里那批屏上不兑现的直接属性 → data-ppr 载荷
+    const pprAttr = readPprPayload(effPPr)
     const body = this.layout(
-      `${tag}${shadeAttr ? ` data-shade="${shadeAttr}"` : ''}${tabsAttr ? ` data-tabs="${tabsAttr}"` : ''}${frameAttr ? ` data-frame="${frameAttr}"` : ''}${flags.join('')}`,
+      `${tag}${shadeAttr ? ` data-shade="${shadeAttr}"` : ''}${tabsAttr ? ` data-tabs="${tabsAttr}"` : ''}${frameAttr ? ` data-frame="${frameAttr}"` : ''}${pprAttr ? ` ${PPR_ATTR}="${pprAttr}"` : ''}${flags.join('')}`,
       style,
       pieces,
     )
@@ -1860,6 +1924,8 @@ class Fidelity {
         if (bg) tbl.background = bg
         // 一块载荷都没有的那几个型不进快照（点了又清空的部位不该在文件里留下痕迹）
         if (Object.keys(cond).length) tbl.cond = cond
+        // 闸门原文（v0.147）：只认被快照这枚样式自己那一份，不沿链合并
+        if (info.look) tbl.look = info.look
         out.push({
           id: info.id,
           name: info.name,
@@ -3447,6 +3513,10 @@ export async function docxToHtmlFidelity(bytes: Uint8Array, depth = 0): Promise<
   f.setNotes(await read('word/footnotes.xml'), await read('word/endnotes.xml'))
   f.setComments(await read('word/comments.xml'), await read('word/commentsExtended.xml'))
   const { html, blocks } = await f.run(documentXml)
+  // 节属性（v0.147）：body 末尾 sectPr 走 attr 漏斗读一遍。这一族原本是 docxToDocMeta
+  // 用正则读的（正则不进漏斗，保真账本上是盲区——读是读了，账上没有）；改由读手读、
+  // 随 DocxImport 出来后调用方折成 PageSetup，同一份数只有一个读数出处
+  const section = sectionOf(parseXml(documentXml))
   return {
     html,
     comments: f.comments,
@@ -3454,5 +3524,54 @@ export async function docxToHtmlFidelity(bytes: Uint8Array, depth = 0): Promise<
     warnings: f.warningList(),
     styles: f.styleList(),
     ...(f.latentStyles ? { latentStyles: f.latentStyles } : {}),
+    ...(section ? { section } : {}),
   }
+}
+
+/**
+ * 节属性原文（v0.147）：body 末尾 `w:sectPr` 的 pgSz/pgMar/cols/docGrid，单位仍是缇。
+ * 值域不做裁剪（pgSz/@w:orient 只认 portrait/landscape，docGrid/@w:type 原样带）。
+ */
+function sectionOf(doc: XEl | undefined): DocxSection | undefined {
+  if (!doc) return undefined
+  // parseXml 出来的是 #doc 壳（真正的根元素在它下面一层），故这里走 findDesc
+  const body = findDesc(doc, 'w:body')
+  const sect = body ? find(body, 'w:sectPr') : undefined
+  if (!sect) return undefined
+  const out: DocxSection = {}
+  const pg = find(sect, 'w:pgSz')
+  if (pg) {
+    const w = attrNum(pg, 'w')
+    if (w !== undefined) out.w = w
+    const h = attrNum(pg, 'h')
+    if (h !== undefined) out.h = h
+    const o = (attr(pg, 'w:orient') ?? '').toLowerCase()
+    if (o === 'landscape' || o === 'portrait') out.orient = o
+  }
+  const mar = find(sect, 'w:pgMar')
+  if (mar) {
+    const m: NonNullable<DocxSection['margin']> = {}
+    for (const k of ['top', 'right', 'bottom', 'left', 'header', 'footer', 'gutter'] as const) {
+      const v = attrNum(mar, `w:${k}`)
+      if (v !== undefined) m[k] = v
+    }
+    if (Object.keys(m).length) out.margin = m
+  }
+  const cols = find(sect, 'w:cols')
+  if (cols) {
+    const n = attrNum(cols, 'w:num')
+    if (n !== undefined) out.cols = n
+    const sp = attrNum(cols, 'w:space')
+    if (sp !== undefined) out.colGap = sp
+  }
+  const grid = find(sect, 'w:docGrid')
+  if (grid) {
+    const g: NonNullable<DocxSection['docGrid']> = {}
+    const t = attr(grid, 'w:type')
+    if (t) g.type = t
+    const lp = attrNum(grid, 'w:linePitch')
+    if (lp !== undefined) g.linePitch = lp
+    if (Object.keys(g).length) out.docGrid = g
+  }
+  return Object.keys(out).length ? out : undefined
 }

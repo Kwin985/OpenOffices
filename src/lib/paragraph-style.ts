@@ -1,5 +1,5 @@
 import { Extension, Mark, type CommandProps, type Editor } from '@tiptap/core'
-import { CELL_EDGES, FRAME_ATTR, SHADE_ATTR, TABS_ATTR, bdAttr, edgeAttrs, inlineBorder, parseFramePayload, parseTabsPayload, rgb2hex, shadeAttrs, type CellEdge } from './cell-style'
+import { CELL_EDGES, FRAME_ATTR, PPR_ATTR, SHADE_ATTR, TABS_ATTR, bdAttr, edgeAttrs, inlineBorder, parseFramePayload, parsePprPayload, parseTabsPayload, rgb2hex, shadeAttrs, type CellEdge } from './cell-style'
 
 /**
  * 段落的排版属性：行距、段前段后、底纹与四边边框。
@@ -237,6 +237,17 @@ export const ParagraphStyle = Extension.create({
               },
             ]),
           ),
+          // 段落属性余量（v0.147）：pPr 里那批屏上不兑现的直接属性（snapToGrid/bidi/
+          // autoSpaceDE/autoSpaceDN/adjustRightInd/topLinePunct/suppressLineNumbers/
+          // textAlignment + 两枚自动段距），key=value 载荷随 data-ppr 往返
+          ppr: {
+            default: null as string | null,
+            parseHTML: (el: HTMLElement) => el.getAttribute(PPR_ATTR) || null,
+            renderHTML: (attrs: Record<string, unknown>) => {
+              const raw = typeof attrs.ppr === 'string' ? attrs.ppr : ''
+              return Object.keys(parsePprPayload(raw)).length ? { [PPR_ATTR]: raw } : {}
+            },
+          },
           // 分页四件套（v0.143）：w:pageBreakBefore / keepNext / keepLines / widowControl。
           // 屏上不兑现（Web 流式排版没有分页与孤行控制），只随 data-* 进出保往返。
           // 三态：'1' 开、'0' 关、null 没写——widowControl 的「显式关」是真值

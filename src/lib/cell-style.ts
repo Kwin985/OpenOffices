@@ -362,6 +362,61 @@ export function tblpPayload(kv: TblpPayload): string {
     .join(';')
 }
 
+/* ── 段落属性余量（v0.147）─────────────────────────────────────
+ * w:pPr 里那一批「说了也不改屏上排版」的直接属性：adjustRightInd（编号右边缩进跟随
+ * 自动缩进）、snapToGrid（对齐到文档网格）、topLinePunct（首尾标点压缩）、bidi（段落
+ * 从右往左）、autoSpaceDE/autoSpaceDN（中西文/数字间自动加间距）、suppressLineNumbers
+ * （本段不编号）、textAlignment（行内文字的上下对齐档）。Web 流式排版没有网格、没有
+ * 纸张行、也不做中西文间距，屏上一条都不兑现——与分页四件套同款纪律：只随载荷往返。
+ * 载荷：data-ppr="key=value;..."，键名即 OOXML 属性名（onOff 档存 '1'/'0'，
+ * textAlignment 存枚举原值）。写侧走打包后补丁（包里只有 autoSpaceDN 一枚槽，且它把
+ * onOff 写成裸元素——带不出 w:val 的「显式关」）。 */
+export const PPR_ATTR = 'data-ppr'
+
+export type PprPayload = Record<string, string>
+
+/** onOff 档：w:val 的 '1'/'0'（元素在场而无 val 时按「开」记） */
+export const PPR_ONOFF_KEYS = [
+  'adjustRightInd',
+  'snapToGrid',
+  'topLinePunct',
+  'bidi',
+  'autoSpaceDE',
+  'autoSpaceDN',
+  'suppressLineNumbers',
+  'beforeAutoSpace',
+  'afterAutoSpace',
+] as const
+
+/** 枚举档：textAlignment 的 top/center/bottom/baseline/auto */
+export const PPR_STR_KEYS = ['textAlignment'] as const
+
+/** data-ppr 载荷 → key/value 表；onOff 键只收 '1'/'0'，脏值整键丢 */
+export function parsePprPayload(raw: string | null | undefined): PprPayload {
+  const out: PprPayload = {}
+  if (!raw) return out
+  const onoff = new Set<string>(PPR_ONOFF_KEYS)
+  for (const item of raw.split(';')) {
+    const i = item.indexOf('=')
+    if (i <= 0) continue
+    const k = item.slice(0, i).trim()
+    const v = item.slice(i + 1).trim()
+    if (!k || !v) continue
+    if (onoff.has(k) && v !== '1' && v !== '0') continue
+    out[k] = v
+  }
+  return out
+}
+
+/** key/value 表 → data-ppr 载荷（与 parsePprPayload 互逆，排序保稳定） */
+export function pprPayload(kv: PprPayload): string {
+  return Object.keys(kv)
+    .sort()
+    .filter((k) => kv[k] !== '')
+    .map((k) => `${k}=${kv[k]}`)
+    .join(';')
+}
+
 /** 点阵：cell 见方的格子里一枚半径 1px 的点（密集档反过来把背景当时点） */
 function dots(fg: string, bg: string, cell: number): string {
   return `radial-gradient(${fg} 1px, ${bg} 1.5px) 0 0/${cell}px ${cell}px`

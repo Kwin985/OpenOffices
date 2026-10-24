@@ -21,6 +21,7 @@ import {
   docxToHtml,
   prosemirrorToDocxBytes,
   pageNumberParts,
+  pageSetupOf,
   resolvePage,
   contentPxOf,
   MM_PX,
@@ -602,6 +603,9 @@ function DocEditor({ tab }: Props) {
                 ...(fid.styles?.length ? { styles: fid.styles } : {}),
                 // 潜在样式（v0.146）：Word 样式库门面账，只往返不屏现
                 ...(fid.latentStyles ? { latentStyles: fid.latentStyles } : {}),
+                // 节属性（v0.147）：读手走 attr 漏斗读的那一遍为准，覆盖 docxToDocMeta
+                // 的正则读数（同一份数两处读迟早分叉，读手这一遍是保真账本认的那条）
+                ...(fid.section ? { page: { ...m.page, ...pageSetupOf(fid.section) } } : {}),
                 ...(fid.comments.length ? { comments: fid.comments } : {}),
               })
               if (fid.comments.length) setCmOpen(true)

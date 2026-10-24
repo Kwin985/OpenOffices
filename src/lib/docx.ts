@@ -44,7 +44,7 @@ import {
   type ITableFloatOptions,
 } from 'docx'
 import { xml2js } from 'xml-js'
-import { borderParts, pxToEighths, pxToPt, parseFramePayload, parseShadePayload, parseTabsPayload, parseTblpPayload, CELL_EDGES, type CellEdge } from './cell-style'
+import { borderParts, pxToEighths, pxToPt, parseFramePayload, parsePprPayload, parseShadePayload, parseTabsPayload, parseTblpPayload, CELL_EDGES, type CellEdge } from './cell-style'
 import { lineToOoxml, type LineRule } from './paragraph-style'
 import { decodeEnt } from './ooxml'
 import { condLookBits } from './table-cond'
@@ -85,9 +85,82 @@ export interface PageSetup {
   w?: number
   h?: number
   margin?: Partial<PageMargin>
+  /** 装订线（v0.147，mm）：w:pgMar/@w:gutter。屏上不排页码边，只随页面设置往返 */
+  gutter?: number
+  /** 页眉/页脚距纸边（v0.147，mm）：w:pgMar/@w:header 与 @w:footer，缺省按上下边距取小 */
+  header?: number
+  footer?: number
+  /** 文档网格（v0.147）：w:docGrid 的档位与行间距（linePitch 缇）。屏上不兑现，只往返 */
+  docGrid?: { type?: string; linePitch?: number }
+  /** 纸张方向（v0.147）：w:pgSz/@w:orient。缺省按宽高比推（宽>高即横版） */
+  orient?: 'portrait' | 'landscape'
   /** 分栏数（1=不分栏）；与 colGap（mm）一起贯穿视图/打印/docx/odt */
   cols?: number
   colGap?: number
+}
+
+/**
+ * 节属性原文（v0.147）：body 末尾 `w:sectPr` 的 pgSz/pgMar/cols/docGrid，单位仍是缇
+ * （与 OOXML 同，不做换算——换算是调用方那一头的事）。
+ *
+ * 这一族原本由 `docxToDocMeta` 用正则读（正则不进 attr 漏斗，保真账本上是盲区：
+ * 读是读了，账上没有）。v0.147 起改由读手（docx-fidelity）走 attr 读、随 `DocxImport`
+ * 出来，调用方折成 `PageSetup` 合并进 meta——同一份数只有一个读数出处
+ */
+export interface DocxSection {
+  w?: number
+  h?: number
+  orient?: 'portrait' | 'landscape'
+  margin?: { top?: number; right?: number; bottom?: number; left?: number; header?: number; footer?: number; gutter?: number }
+  cols?: number
+  colGap?: number
+  docGrid?: { type?: string; linePitch?: number }
+}
+
+/**
+ * 节属性原文（缇）→ PageSetup（mm）。与 `docxToDocMeta` 里那条正则腿同口径（尺寸档
+ * 判定、分栏缺省回落、一位小数），两腿读的是同一份数——那条腿留给不跑读手的导入路径
+ */
+export function pageSetupOf(s: DocxSection): PageSetup {
+  const r1 = (v?: number) => (v === undefined ? undefined : Math.round(v * 10) / 10)
+  const mm = (t?: number) => (t === undefined || !(t > 0) ? undefined : r1(t / MM_TWIPS))
+  const page: PageSetup = {}
+  const pw = mm(s.w)
+  const ph = mm(s.h)
+  if (pw && ph) {
+    const near = (a: number, b: number) => Math.abs(a - b) < 1
+    const size = near(pw, 210) && near(ph, 297) ? 'A4' : near(pw, 215.9) && near(ph, 279.4) ? 'Letter' : 'custom'
+    const margin: Partial<PageMargin> = {}
+    const tm = mm(s.margin?.top)
+    const rm = mm(s.margin?.right)
+    const bm = mm(s.margin?.bottom)
+    const lm = mm(s.margin?.left)
+    if (tm !== undefined) margin.top = tm
+    if (rm !== undefined) margin.right = rm
+    if (bm !== undefined) margin.bottom = bm
+    if (lm !== undefined) margin.left = lm
+    page.size = size
+    if (size === 'custom') {
+      page.w = r1(pw)
+      page.h = r1(ph)
+    }
+    if (Object.keys(margin).length) page.margin = margin
+  }
+  // 方向：Word 的 orient 与宽高比一般同向，两样都说话时以 orient 为准（它是显式声明）
+  if (s.orient) page.orient = s.orient
+  const g = mm(s.margin?.gutter)
+  if (g !== undefined) page.gutter = g
+  const hd = mm(s.margin?.header)
+  if (hd !== undefined) page.header = hd
+  const ft = mm(s.margin?.footer)
+  if (ft !== undefined) page.footer = ft
+  if (s.cols && s.cols > 1) {
+    page.cols = Math.min(4, s.cols)
+    const gap = mm(s.colGap)
+    if (gap && Math.abs(gap - DEFAULT_COL_GAP) > 0.6) page.colGap = gap
+  }
+  if (s.docGrid && Object.keys(s.docGrid).length) page.docGrid = s.docGrid
+  return page
 }
 
 /** 页码呈现格式：仅影响页脚里的页码域写法（默认 cn=第 N 页，与 v0.30~v0.32 文件兼容） */
@@ -135,12 +208,30 @@ export function resolvePage(p?: PageSetup): {
   margin: PageMargin
   cols: number
   colGap: number
+  /** 装订线（mm，v0.147）；没写是 undefined——与「装订线 0」不同，后者不占版心 */
+  gutter?: number
+  /** 页眉/页脚距纸边（mm，v0.147）；没写时写侧按上下边距取小 */
+  header?: number
+  footer?: number
+  orient?: 'portrait' | 'landscape'
+  docGrid?: { type?: string; linePitch?: number }
 } {
   const preset = p?.size === 'Letter' ? PAGE_SIZES_MM.Letter : PAGE_SIZES_MM.A4
   const w = p?.size === 'custom' && p.w ? p.w : preset[0]
   const h = p?.size === 'custom' && p.h ? p.h : preset[1]
   const cols = Math.min(4, Math.max(1, Math.round(p?.cols ?? 1)))
-  return { w, h, margin: { ...DEFAULT_PAGE_MARGIN, ...p?.margin }, cols, colGap: p?.colGap ?? DEFAULT_COL_GAP }
+  return {
+    w,
+    h,
+    margin: { ...DEFAULT_PAGE_MARGIN, ...p?.margin },
+    cols,
+    colGap: p?.colGap ?? DEFAULT_COL_GAP,
+    ...(p?.gutter !== undefined ? { gutter: p.gutter } : {}),
+    ...(p?.header !== undefined ? { header: p.header } : {}),
+    ...(p?.footer !== undefined ? { footer: p.footer } : {}),
+    ...(p?.orient ? { orient: p.orient } : {}),
+    ...(p?.docGrid ? { docGrid: p.docGrid } : {}),
+  }
 }
 
 type ResolvedPage = ReturnType<typeof resolvePage>
@@ -295,6 +386,12 @@ export interface DocxStyleInfo {
      * 落到哪一格按位置算（见 doc-style-css 的 condRules）。空对象等于没开票：不写它那枚 `w:tblStylePr`。
      */
     cond?: Partial<Record<TableCondType, TableCond>>
+    /**
+     * 条件层闸门原文（v0.147）：表样式 `w:tblPr/w:tblLook` 的三枚——`val` 是 Word 存的
+     * 那份四位闸门原值（十六进制串），`noHBand`/`noVBand` 是隔行/隔列带不套的 onOff。
+     * 有它就照抄，没有才由 cond 反推（condLookBits）——反推出来的与原文不一定同
+     */
+    look?: { val?: string; noHBand?: boolean; noVBand?: boolean }
   }
 }
 
@@ -1140,12 +1237,25 @@ function spacingVals(
 }
 
 function spacingOf(node: PMNode): ISpacingProperties | undefined {
-  return spacingVals(
+  const base = spacingVals(
     ownedPx(node.attrs?.lineHeight) ?? null,
     (typeof node.attrs?.lineRule === 'string' ? node.attrs.lineRule : null) as LineRule | null,
     ownedPx(node.attrs?.spaceBefore),
     ownedPx(node.attrs?.spaceAfter),
   )
+  // 两枚「自动段距」（v0.147）：w:spacing/@w:beforeAutospacing 与 @w:afterAutospacing，
+  // 随 data-ppr 载荷来回。包里是布尔槽而 OOXML 是 onOff——包写出的字面是 "true"/"false"
+  // （xsd:boolean 的两种写法都在 ST_OnOff 的值域里，Word 认），语义等价但字面不必同源
+  const ppr = parsePprPayload(typeof node.attrs?.ppr === 'string' ? node.attrs.ppr : null)
+  const flag = (k: string): boolean | undefined => (ppr[k] === '1' ? true : ppr[k] === '0' ? false : undefined)
+  const beforeAuto = flag('beforeAutoSpace')
+  const afterAuto = flag('afterAutoSpace')
+  if (!base && beforeAuto === undefined && afterAuto === undefined) return undefined
+  return {
+    ...(base ?? {}),
+    ...(beforeAuto !== undefined ? { beforeAutoSpacing: beforeAuto } : {}),
+    ...(afterAuto !== undefined ? { afterAutoSpacing: afterAuto } : {}),
+  }
 }
 
 /** 段落的直接格式（命名样式 / 行距段距 / 底纹 / 四边）一次拼好，供 new Paragraph 的参数展开。
@@ -1435,6 +1545,12 @@ interface DocTrack {
   seq: Record<NoteKind, number>
   /** 修订壳的 w:id 计数：Word 只要求文档内不重复，跟批注 id 不同名字空间，从 1 起即可 */
   revId: number
+  /**
+   * 段落属性余量（v0.147）：与 `section.children` 里每个 Paragraph 一一对应、同序。
+   * 包里没有这一族的槽（只有 autoSpaceDN 一枚，且它把 onOff 写成裸元素带不出 w:val），
+   * 导出走打包后补丁——补丁按出现序贴回 `<w:pPr>`，所以这条数组必须与段落同序同长
+   */
+  pprExtras: string[]
 }
 
 type NoteKind = 'footnote' | 'endnote'
@@ -1453,6 +1569,7 @@ function newDocTrack(): DocTrack {
     notes: { footnote: new Map(), endnote: new Map() },
     seq: { footnote: 0, endnote: 0 },
     revId: 1,
+    pprExtras: [],
   }
 }
 
@@ -1656,6 +1773,14 @@ function blocksOf(
   lists: ListRegistry = new ListRegistry(),
 ): (Paragraph | Table | TableOfContents)[] {
   const out: (Paragraph | Table | TableOfContents)[] = []
+  /**
+   * 造段落的同时登记它的属性余量（v0.147）：顺序即 document.xml 里 `<w:p>` 的出现序，
+   * 打包后补丁按这个序贴回去。非段落型（代码块/分页/水平线）按空串登记占住位置
+   */
+  const para = (node: PMNode | undefined, opts: ConstructorParameters<typeof Paragraph>[0]) => {
+    dt.pprExtras.push(pprExtraXml(node))
+    return new Paragraph(opts)
+  }
   for (const node of nodes) {
     if (node.type === 'bulletList' || node.type === 'orderedList') {
       const ordered = node.type === 'orderedList'
@@ -1684,7 +1809,7 @@ function blocksOf(
         const nested = (item.content ?? []).filter((b) => b.type === 'bulletList' || b.type === 'orderedList')
         const main: PMNode = blocks[0] ?? { type: 'paragraph', content: [] }
         out.push(
-          new Paragraph({
+          para(main, {
             children: inlineBlockChildren(main, dt),
             // 有序项必须走真编号：写成「1. 」字面文本时 Word 里既不续号也不重排，
             // 读回来更会把它当成普通段落（编号从此消失）。
@@ -1703,7 +1828,7 @@ function blocksOf(
     if (node.type === 'heading') {
       const level = Number(node.attrs?.level ?? 1)
       out.push(
-        new Paragraph({
+        para(node, {
           children: inlineBlockChildren(node, dt),
           outlineLevel: Math.max(0, Math.min(8, level - 1)),
           indent: indentOf(node),
@@ -1721,7 +1846,7 @@ function blocksOf(
     if (node.type === 'codeBlock') {
       const lines = textOf(node).split('\n')
       out.push(
-        new Paragraph({
+        para(node, {
           children: lines.flatMap((l, i) => [
             ...(i > 0 ? [new TextRun({ text: '', break: 1 })] : []),
             new TextRun({ text: l, font: 'Consolas' }),
@@ -1733,16 +1858,16 @@ function blocksOf(
       continue
     }
     if (node.type === 'horizontalRule') {
-      out.push(new Paragraph({ children: [], thematicBreak: true }))
+      out.push(para(undefined, { children: [], thematicBreak: true }))
       continue
     }
     if (node.type === 'pageBreak') {
-      out.push(new Paragraph({ children: [new PageBreak()] }))
+      out.push(para(undefined, { children: [new PageBreak()] }))
       continue
     }
     if (node.type === 'blockquote') {
       out.push(
-        new Paragraph({
+        para(node, {
           children: inlineBlockChildren(node, dt),
           indent: indentOf(node, 480),
           border: { left: { style: BorderStyle.SINGLE, size: 12, color: '9CA3AF', space: 8 } },
@@ -1848,8 +1973,9 @@ function blocksOf(
                     ...(va === 'top' || va === 'middle' || va === 'bottom'
                       ? { verticalAlign: va === 'middle' ? VerticalAlignTable.CENTER : va === 'top' ? VerticalAlignTable.TOP : VerticalAlignTable.BOTTOM }
                       : {}),
-                    // OOXML 要求 w:tc 里至少一个 w:p（空否则会成损坏件）
-                    children: cellBlocks.length ? cellBlocks : [new Paragraph({ children: [] })],
+                    // OOXML 要求 w:tc 里至少一个 w:p（空否则会成损坏件）。
+                    // 补的这一枚也要占住余量数组的位置（顺序必须与段落出现序一致）
+                    children: cellBlocks.length ? cellBlocks : [para(undefined, { children: [] })],
                   })
                 }),
               })
@@ -1860,7 +1986,7 @@ function blocksOf(
       continue
     }
     out.push(
-      new Paragraph({
+      para(node, {
         children: inlineBlockChildren(node, dt),
         alignment: alignOf(node),
         indent: indentOf(node),
@@ -1890,22 +2016,37 @@ export async function prosemirrorToDocxBytes(json: PMNode, meta?: DocMeta): Prom
   } = { children: blocksOf(json.content ?? [], 0, dt, contentTw, lists) }
   {
     // docx 库按"竖版宽高 + orientation"理解 size（landscape 时自行交换写盘），故传排序后的尺寸
+    // 方向（v0.147）：宽高比与显式 orient 两样都可能说话，显式那一枚为准
+    const landscape = pg.orient === 'landscape' || (pg.orient !== 'portrait' && pg.w > pg.h)
     section.properties = {
       page: {
         size: {
           width: twips(Math.min(pg.w, pg.h)),
           height: twips(Math.max(pg.w, pg.h)),
-          ...(pg.w > pg.h ? { orientation: 'landscape' as const } : {}),
+          ...(landscape ? { orientation: 'landscape' as const } : {}),
         },
         margin: {
           top: twips(pg.margin.top),
           bottom: twips(pg.margin.bottom),
           left: twips(pg.margin.left),
           right: twips(pg.margin.right),
-          header: twips(Math.min(pg.margin.top, 12.7)),
-          footer: twips(Math.min(pg.margin.bottom, 12.7)),
+          // 页眉/页脚距纸边（v0.147）：源文件说了就照抄，没说才按上下边距取小
+          header: twips(pg.header ?? Math.min(pg.margin.top, 12.7)),
+          footer: twips(pg.footer ?? Math.min(pg.margin.bottom, 12.7)),
+          // 装订线（v0.147）：说了才写（0 是真值——Word 里「装订线 0」与没写同源，仍写）
+          ...(pg.gutter !== undefined ? { gutter: twips(pg.gutter) } : {}),
         },
       },
+      // 文档网格（v0.147）：档位与行间距（linePitch 缇）。屏上不兑现，只往返。
+      // 包的 GridType 只认四档枚举，源文件里偶见的自造档照样透传（BuilderElement 不校验）
+      ...(pg.docGrid?.type || pg.docGrid?.linePitch !== undefined
+        ? {
+            grid: {
+              ...(pg.docGrid?.type ? { type: pg.docGrid.type } : {}),
+              ...(pg.docGrid?.linePitch !== undefined ? { linePitch: pg.docGrid.linePitch } : {}),
+            } as { type?: string; linePitch?: number },
+          }
+        : {}),
       // 单栏不写 w:cols（Word 默认即单栏，写出来反而让 diff 变噪）
       ...(pg.cols > 1
         ? { column: { count: pg.cols, space: twips(pg.colGap), equalWidth: true as const, separate: false } }
@@ -2033,11 +2174,13 @@ export async function prosemirrorToDocxBytes(json: PMNode, meta?: DocMeta): Prom
     if (s.customStyle !== undefined && s.kind !== 'table') custom.set(s.id, s.customStyle ? '1' : '0')
   }
   const latent = meta?.latentStyles
+  // 段落属性余量（v0.147）：按出现序贴回各自的 <w:pPr>，与上面两笔同一路数
+  const withPara = await patchParaProps(out, dt.pprExtras)
   if (custom.size || latent) {
-    const patched = await patchStylesXml(out, latent, custom)
+    const patched = await patchStylesXml(withPara, latent, custom)
     return looks.size ? await patchTblLook(patched, looks) : patched
   }
-  return looks.size ? patchTblLook(out, looks) : out
+  return looks.size ? patchTblLook(withPara, looks) : withPara
 }
 
 /**
@@ -2123,22 +2266,188 @@ function latentStylesXml(ls: DocxLatentStyles): string {
  */
 function tblLookOf(s: DocxStyleInfo): string | undefined {
   const c = s.table?.cond
-  if (!c || !Object.keys(c).length) return undefined
+  const lk = s.table?.look
+  if ((!c || !Object.keys(c).length) && !lk) return undefined
   // 四位闸门走 table-cond 的 condLookBits：odt 出口没处存闸门，只能按同一规则再推一次，
-  // 两边共用这一枚函数才不会推出两个结果
-  const look = condLookBits(c)
-  const has = (...ts: TableCondType[]) => ts.some((t) => c[t])
+  // 两边共用这一枚函数才不会推出两个结果。有原文那枚 w:val 时以它为准（v0.147）——
+  // 它才是 Word 自己存的那份，反推只是同一规则的再推一次；ST_ShortHexNumber 的
+  // 低四位依次是 firstRow/lastRow/firstColumn/lastColumn
+  const look = condLookBits(c ?? {})
+  const v = lk?.val ? Number.parseInt(lk.val, 16) : Number.NaN
+  const bits = Number.isFinite(v)
+    ? { firstRow: !!(v & 0x1), lastRow: !!(v & 0x2), firstColumn: !!(v & 0x4), lastColumn: !!(v & 0x8) }
+    : look
+  const has = (...ts: TableCondType[]) => ts.some((t) => c?.[t])
   const bit = (b: boolean) => (b ? '1' : '0')
+  // 两枚 no*Band：原文说了按原文，没说才从条件层反推（有隔行带就套、没有就不套）
+  const nh = lk?.noHBand !== undefined ? lk.noHBand : !has('band1Horz', 'band2Horz')
+  const nv = lk?.noVBand !== undefined ? lk.noVBand : !has('band1Vert', 'band2Vert')
   return (
     `<w:tblLook` +
-    ` w:firstRow="${bit(look.firstRow)}"` +
-    ` w:lastRow="${bit(look.lastRow)}"` +
-    ` w:firstColumn="${bit(look.firstColumn)}"` +
-    ` w:lastColumn="${bit(look.lastColumn)}"` +
-    ` w:noHBand="${bit(!has('band1Horz', 'band2Horz'))}"` +
-    ` w:noVBand="${bit(!has('band1Vert', 'band2Vert'))}"` +
+    (lk?.val ? ` w:val="${lk.val}"` : '') +
+    ` w:firstRow="${bit(bits.firstRow)}"` +
+    ` w:lastRow="${bit(bits.lastRow)}"` +
+    ` w:firstColumn="${bit(bits.firstColumn)}"` +
+    ` w:lastColumn="${bit(bits.lastColumn)}"` +
+    ` w:noHBand="${bit(nh)}"` +
+    ` w:noVBand="${bit(nv)}"` +
     `/>`
   )
+}
+
+/**
+ * 段落属性余量 → 待补的 XML 串（v0.147）。按 CT_PPrBase 的 schema 序排好——`w:pPr`
+ * 是有序序列，乱序写会被 Word 判损坏件（与 latentStyles 插 styles.xml 同一条纪律）。
+ * 九枚里只有 textAlignment 是枚举档，其余是 onOff 的 '1'/'0'。
+ */
+const PPR_WRITE_ORDER = [
+  'suppressLineNumbers',
+  'topLinePunct',
+  'autoSpaceDE',
+  'autoSpaceDN',
+  'bidi',
+  'adjustRightInd',
+  'snapToGrid',
+  'textAlignment',
+] as const
+
+/** `w:pPr` 各子元素的 schema 位次（只列会碰到的；未知元素不参与比较） */
+const PPR_RANK: Record<string, number> = {
+  pStyle: 10,
+  keepNext: 11,
+  keepLines: 12,
+  pageBreakBefore: 13,
+  framePr: 14,
+  widowControl: 15,
+  numPr: 16,
+  suppressLineNumbers: 17,
+  pBdr: 18,
+  shd: 19,
+  tabs: 20,
+  suppressAutoHyphens: 21,
+  kinsoku: 22,
+  wordWrap: 23,
+  overflowPunct: 24,
+  topLinePunct: 25,
+  autoSpaceDE: 26,
+  autoSpaceDN: 27,
+  bidi: 28,
+  adjustRightInd: 29,
+  snapToGrid: 30,
+  spacing: 31,
+  ind: 32,
+  contextualSpacing: 33,
+  mirrorIndents: 34,
+  suppressOverlap: 35,
+  jc: 36,
+  textDirection: 37,
+  textAlignment: 38,
+  textboxTightWrap: 39,
+  outlineLvl: 40,
+  divId: 41,
+  cnfStyle: 42,
+  rPr: 43,
+  sectPr: 44,
+  pPrChange: 45,
+}
+
+/** 段落节点的 data-ppr 载荷 → 余量 XML（没有可补的给空串）。属性值走 xmlAttr 转义 */
+function pprExtraXml(node: PMNode | undefined): string {
+  const raw = typeof node?.attrs?.ppr === 'string' ? node.attrs.ppr : ''
+  const kv = parsePprPayload(raw)
+  const bits: string[] = []
+  for (const k of PPR_WRITE_ORDER) {
+    const v = kv[k]
+    if (v === undefined || v === '') continue
+    bits.push(`<w:${k} w:val="${xmlAttr(v)}"/>`)
+  }
+  return bits.join('')
+}
+
+/**
+ * 给每个 `<w:pPr>` 补段落属性余量（v0.147）：按**出现序**贴——第 i 段贴 `extras[i]`。
+ *
+ * 包对这一族没有槽（只有 autoSpaceDN 一枚，且它把 onOff 写成裸元素，带不出 w:val 的
+ * 「显式关」），与 w:tblLook 同一路数打包后回头补。段落没有 tblStyle 那种天然键，
+ * 只能按序；序会不会错由**计数闸门**兜底：document.xml 里 `<w:p>` 的枚数与走查时
+ * 登记的条目数对不上就整笔放弃（宁可不补，也绝不补到别的段落上）。
+ */
+async function patchParaProps(bytes: Uint8Array, extras: string[]): Promise<Uint8Array> {
+  if (!extras.some((x) => x)) return bytes
+  const { default: JSZip } = await import('jszip')
+  const zip = await JSZip.loadAsync(bytes)
+  const file = zip.file('word/document.xml')
+  if (!file) return bytes
+  const xml = await file.async('string')
+  // 自闭合的 `<w:p/>` 也算一段（空的段、只有分页符的段都可能写成这样）
+  const opens = [...xml.matchAll(/<w:p(?:\s[^>]*)?\/?>/g)]
+  if (opens.length !== extras.length) return bytes
+  let out = ''
+  let cursor = 0
+  let touched = false
+  for (let i = 0; i < opens.length; i++) {
+    const m = opens[i]
+    const start = m.index ?? 0
+    const selfClosed = m[0].endsWith('/>')
+    const closeAt = selfClosed ? -1 : xml.indexOf('</w:p>', start)
+    if (!selfClosed && closeAt < 0) return bytes
+    const stop = selfClosed ? start + m[0].length : closeAt + '</w:p>'.length
+    if (!extras[i]) {
+      out += xml.slice(cursor, stop)
+      cursor = stop
+      continue
+    }
+    out += xml.slice(cursor, start) + pprInsert(xml.slice(start, stop), extras[i])
+    cursor = stop
+    touched = true
+  }
+  if (!touched) return bytes
+  out += xml.slice(cursor)
+  zip.file('word/document.xml', out)
+  const buf = (await zip.generateAsync({ type: 'arraybuffer' })) as ArrayBuffer
+  return new Uint8Array(buf)
+}
+
+/** 一段 `<w:p>…</w:p>` → 补过 `<w:pPr>` 的那一段（没有 pPr 就现开一枚） */
+function pprInsert(chunk: string, extra: string): string {
+  const open = /<w:p(?:\s[^>]*)?\/?>/.exec(chunk)?.[0] ?? '<w:p>'
+  if (open.endsWith('/>')) return `<w:p><w:pPr>${extra}</w:pPr></w:p>`
+  const body = chunk.slice(open.length)
+  const a = body.indexOf('<w:pPr>')
+  if (a < 0) return open + `<w:pPr>${extra}</w:pPr>` + body
+  if (body.startsWith('<w:pPr/>', a)) return open + body.slice(0, a) + `<w:pPr>${extra}</w:pPr>` + body.slice(a + 8)
+  const b = body.indexOf('</w:pPr>', a)
+  if (b < 0) return chunk
+  const inner = body.slice(a + '<w:pPr>'.length, b)
+  return open + body.slice(0, a) + `<w:pPr>${pprOrder(inner, extra)}</w:pPr>` + body.slice(b + '</w:pPr>'.length)
+}
+
+/**
+ * 把余量元素插进既有 `<w:pPr>` 内容：逐枚找第一个 schema 位次更靠后的现有子元素，
+ * 插在它前面；没有更靠后的就追加在末尾。余量自身按位次升序给（`PPR_WRITE_ORDER`），
+ * 于是后插的天然落在先插的之后。
+ */
+function pprOrder(inner: string, extra: string): string {
+  const kids = [...inner.matchAll(/<w:([A-Za-z]+)[\s/>]/g)].map((m) => ({ name: m[1], at: m.index ?? 0 }))
+  const items = [...extra.matchAll(/<w:([A-Za-z]+)[^>]*?>/g)].map((m) => ({ name: m[1], xml: m[0] }))
+  let s = inner
+  let shift = 0
+  for (const it of items) {
+    const r = PPR_RANK[it.name]
+    if (r === undefined) continue
+    let at = -1
+    for (const k of kids) {
+      const kr = PPR_RANK[k.name]
+      if (kr !== undefined && kr > r) {
+        at = k.at
+        break
+      }
+    }
+    const pos = at < 0 ? s.length : at + shift
+    s = s.slice(0, pos) + it.xml + s.slice(pos)
+    shift += it.xml.length
+  }
+  return s
 }
 
 /** 给引用了这些表样式的每一张表补 `<w:tblLook>`：`<w:tblPr>` 的最后一位，插到 `</w:tblPr>` 之前就是了 */
