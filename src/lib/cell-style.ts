@@ -279,6 +279,89 @@ export function tabsPayload(tabs: readonly TabSpec[]): string {
     .join(';')
 }
 
+/* ── 段落浮动框架（v0.145）─────────────────────────────────────
+ * w:pPr/w:framePr 把段落固定在页面某处（Word 的「文字环绕框架」）。Web 流式排版没有页
+ * 定位语义，屏上不兑现，只随 data-frame 载荷往返（参照分页四件套纪律）。
+ * 载荷：`key=value;key=value`，键名即 OOXML 属性名（x/y/xAlign/yAlign/w/h/hRule/
+ * hSpace/vSpace/hAnchor/vAnchor/wrap/anchorLock/dropCap/lines）。
+ * 写侧二选一形态：xAlign/yAlign 优先（alignment 形态），否则 absolute——Word 语义里
+ * x 与 xAlign 互斥，同存是脏数据，读侧照单全读、写侧择一（另 warn 记账）。 */
+export const FRAME_ATTR = 'data-frame'
+
+/** 载荷键 → 是否数值型（其余按字符串原样存） */
+const FRAME_NUMERIC = new Set(['x', 'y', 'w', 'h', 'hSpace', 'vSpace', 'lines'])
+
+/** 读手按此清单分流：数值键走 attrNum（缇），字符串键走 attr（枚举原样） */
+export const FRAME_NUMERIC_KEYS = [...FRAME_NUMERIC] as string[]
+export const FRAME_STR_KEYS = ['xAlign', 'yAlign', 'hRule', 'hAnchor', 'vAnchor', 'wrap', 'anchorLock', 'dropCap'] as string[]
+
+export type FramePayload = Record<string, string>
+
+/** data-frame 载荷 → key/value 表；空串/无值返回 {}。数值键校验为整数，脏值整键丢 */
+export function parseFramePayload(raw: string | null | undefined): FramePayload {
+  const out: FramePayload = {}
+  if (!raw) return out
+  for (const item of raw.split(';')) {
+    const i = item.indexOf('=')
+    if (i <= 0) continue
+    const k = item.slice(0, i).trim()
+    const v = item.slice(i + 1).trim()
+    if (!k || !v) continue
+    if (FRAME_NUMERIC.has(k) && !/^-?\d+$/.test(v)) continue
+    out[k] = v
+  }
+  return out
+}
+
+/** key/value 表 → data-frame 载荷（与 parseFramePayload 互逆，按键名排序保稳定） */
+export function framePayload(kv: FramePayload): string {
+  return Object.keys(kv)
+    .sort()
+    .filter((k) => kv[k] !== '')
+    .map((k) => `${k}=${kv[k]}`)
+    .join(';')
+}
+
+/* ── 表格浮动（v0.145）─────────────────────────────────────────
+ * w:tblPr/w:tblpPr 把表格固定在页面某处（Word 的浮动表）。与 framePr 同款纪律：Web
+ * 没有页定位语义，屏上不兑现，只随 data-tblp 载荷往返。
+ * 载荷键即 OOXML 属性名：tblpX/tblpXSpec/tblpY/vertAnchor/horzAnchor/topFromText/
+ * leftFromText/bottomFromText/rightFromText/overlap（全数值型除枚举档）。
+ * 写侧直接走 docx 包 ITableFloatOptions——键名一一对应（包多一枚 tblpYSpec，
+ * OOXML 没有，不传）。注意包里 verticalAnchor 的类型面是 TableAnchorType
+ * （margin/page/text），而 OOXML 的 vertAnchor 值域含 top/bottom/center/inside/
+ * outside——BuilderElement 透传不校验，值按原样落。 */
+export const TBLP_ATTR = 'data-tblp'
+
+export type TblpPayload = Record<string, string>
+
+const TBLP_NUMERIC = new Set(['tblpX', 'tblpY', 'topFromText', 'leftFromText', 'bottomFromText', 'rightFromText'])
+
+/** data-tblp 载荷 → key/value 表；数值键校验为整数，脏值整键丢 */
+export function parseTblpPayload(raw: string | null | undefined): TblpPayload {
+  const out: TblpPayload = {}
+  if (!raw) return out
+  for (const item of raw.split(';')) {
+    const i = item.indexOf('=')
+    if (i <= 0) continue
+    const k = item.slice(0, i).trim()
+    const v = item.slice(i + 1).trim()
+    if (!k || !v) continue
+    if (TBLP_NUMERIC.has(k) && !/^-?\d+$/.test(v)) continue
+    out[k] = v
+  }
+  return out
+}
+
+/** key/value 表 → data-tblp 载荷（与 parseTblpPayload 互逆，排序保稳定） */
+export function tblpPayload(kv: TblpPayload): string {
+  return Object.keys(kv)
+    .sort()
+    .filter((k) => kv[k] !== '')
+    .map((k) => `${k}=${kv[k]}`)
+    .join(';')
+}
+
 /** 点阵：cell 见方的格子里一枚半径 1px 的点（密集档反过来把背景当时点） */
 function dots(fg: string, bg: string, cell: number): string {
   return `radial-gradient(${fg} 1px, ${bg} 1.5px) 0 0/${cell}px ${cell}px`
@@ -538,6 +621,19 @@ export const CellStyle = Extension.create({
             parseHTML: (el: HTMLElement) => el.getAttribute('data-tstyle'),
             renderHTML: (attrs: Record<string, unknown>) =>
               typeof attrs.tStyle === 'string' && attrs.tStyle ? { 'data-tstyle': attrs.tStyle } : {},
+          },
+          /**
+           * 表格浮动（v0.145）：w:tblpPr 的 key=value 载荷（tblpX/tblpXSpec/tblpY/vertAnchor/
+           * horzAnchor/四 FromText/overlap）。Word 的纸面浮动表，Web 没有页定位语义，
+           * 屏上不兑现——只随 data-tblp 往返（framePr 同款纪律）
+           */
+          tblp: {
+            default: null as string | null,
+            parseHTML: (el: HTMLElement) => el.getAttribute(TBLP_ATTR) || null,
+            renderHTML: (attrs: Record<string, unknown>) => {
+              const raw = typeof attrs.tblp === 'string' ? attrs.tblp : ''
+              return Object.keys(parseTblpPayload(raw)).length ? { [TBLP_ATTR]: raw } : {}
+            },
           },
           /** Word 的 `w:tblInd`：整张表离版心左边距多远 */
           marginLeft: {

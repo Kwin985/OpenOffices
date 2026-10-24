@@ -39,9 +39,11 @@ import {
   VerticalAlignTable,
   WidthType,
   type TabStopDefinition,
+  type IFrameOptions,
+  type ITableFloatOptions,
 } from 'docx'
 import { xml2js } from 'xml-js'
-import { borderParts, pxToEighths, pxToPt, parseShadePayload, parseTabsPayload, CELL_EDGES, type CellEdge } from './cell-style'
+import { borderParts, pxToEighths, pxToPt, parseFramePayload, parseShadePayload, parseTabsPayload, parseTblpPayload, CELL_EDGES, type CellEdge } from './cell-style'
 import { lineToOoxml, type LineRule } from './paragraph-style'
 import { decodeEnt } from './ooxml'
 import { condLookBits } from './table-cond'
@@ -670,6 +672,10 @@ function inlineToChildren(node: PMNode, inherited: Inherited = {}, cs?: CommentT
       const src = (child.attrs?.src as string) ?? ''
       const bytes = src.startsWith('data:') ? dataUriToBytes(src) : null
       if (bytes) {
+        // 替代文本（v0.145）：PM 的 alt 属性 → ImageRun 的 altText.description（docx 包
+        // DocPropertiesOptions 原生槽）。读手那一侧 alt 以 docPr/cNvPr 的 descr 优先、
+        // name 兜底（见 docx-fidelity 的 bitmap）；name 本身不进模型，对象名丢了无害
+        const alt = typeof child.attrs?.alt === 'string' ? child.attrs.alt : ''
         out.push(
           new TextRun({
             children: [
@@ -680,6 +686,7 @@ function inlineToChildren(node: PMNode, inherited: Inherited = {}, cs?: CommentT
                   width: Number(child.attrs?.width) || 320,
                   height: Number(child.attrs?.height) || 240,
                 },
+                ...(alt ? { altText: { name: alt, description: alt } } : {}),
               }),
             ],
           }),
@@ -1071,17 +1078,49 @@ function paraFormatOf(node: PMNode, pstyle?: string | null) {
   // （包的 createTabStopItem 不做单位换算，position 即缇）；leader 的 heavy 档在包的
   // LeaderType 里没有——库外槽照样落成 w:leader="heavy"，TS 那侧断言绕过
   const tabs = tabsOf(node.attrs?.tabs)
+  // 浮动框架（v0.145）：data-frame 载荷 → 包 frame 槽。xAlign/yAlign 优先（alignment
+  // 形态）、否则 absolute——Word 语义里 x 与 xAlign 互斥，同存是脏数据（alignment 优先
+  // 时 x/y 被弃，Word 自己也是这个取舍）；width/height/anchor 包里是必填，源文件缺
+  // w/h 时给 0（Word 对 0 宽框架的解释是自动宽，与「没写」不等但比丢整条框架好）
+  const frame = frameOf(node.attrs?.frame)
   return {
     ...(pstyle ? { style: pstyle } : {}),
     ...(sp ? { spacing: sp } : {}),
     ...(sh ? { shading: sh } : {}),
     ...(bd ? { border: bd } : {}),
     ...(tabs ? { tabStops: tabs } : {}),
+    ...(frame ? { frame } : {}),
     ...(keepNext !== undefined ? { keepNext } : {}),
     ...(keepLines !== undefined ? { keepLines } : {}),
     ...(pageBreakBefore !== undefined ? { pageBreakBefore } : {}),
     ...(widowControl !== undefined ? { widowControl } : {}),
   }
+}
+
+/** data-frame 载荷 → docx 包 frame 选项（IFrameOptions 两形态）；无有效键返回 undefined */
+function frameOf(raw: unknown): IFrameOptions | undefined {
+  const kv = parseFramePayload(typeof raw === 'string' ? raw : null)
+  const num = (k: string): number | undefined => (kv[k] !== undefined ? Number(kv[k]) : undefined)
+  const has = (...ks: string[]) => ks.some((k) => kv[k] !== undefined)
+  if (!has('x', 'y', 'xAlign', 'yAlign', 'w', 'h', 'wrap', 'anchorLock', 'hRule', 'hAnchor', 'vAnchor', 'hSpace', 'vSpace')) return undefined
+  // 纯 absolute 形态要有 x/y 至少一枚；只有对齐/尺寸而无 x/y 时走 absolute 补 0
+  if (kv.x === undefined && kv.y === undefined && !has('xAlign', 'yAlign')) return undefined
+  const alignment = has('xAlign', 'yAlign')
+  const opts: Record<string, unknown> = alignment
+    ? { type: 'alignment', alignment: { x: kv.xAlign ?? 'left', y: kv.yAlign ?? 'top' } }
+    : { type: 'absolute', position: { x: num('x') ?? 0, y: num('y') ?? 0 } }
+  // 必填槽：包里 width/height/anchor 缺了会写出畸形 framePr，源文件没有就给中性值
+  opts.width = num('w') ?? 0
+  opts.height = num('h') ?? 0
+  opts.anchor = { horizontal: kv.hAnchor ?? 'page', vertical: kv.vAnchor ?? 'text' }
+  if (has('hSpace', 'vSpace')) opts.space = { horizontal: num('hSpace') ?? 0, vertical: num('vSpace') ?? 0 }
+  if (kv.hRule) opts.rule = kv.hRule
+  if (kv.wrap) opts.wrap = kv.wrap
+  if (kv.anchorLock !== undefined) opts.anchorLock = kv.anchorLock === '1' || kv.anchorLock === 'true' || kv.anchorLock === 'on'
+  if (kv.dropCap) opts.dropCap = kv.dropCap
+  if (kv.lines !== undefined) opts.lines = Number(kv.lines)
+  // 载荷里的字符串键（xAlign/hAnchor/wrap…）是 OOXML 原值，与包枚举字面一致，直接透传
+  return opts as unknown as IFrameOptions
 }
 
 /** data-tabs 载荷 → docx 包 TabStopDefinition[]（空数组当没有，不写 w:tabs 元素） */
@@ -1095,6 +1134,31 @@ function tabsOf(raw: unknown): TabStopDefinition[] | undefined {
     position: t.pos ?? 0,
     ...(t.leader ? { leader: t.leader } : {}),
   })) as unknown as TabStopDefinition[]
+}
+
+/**
+ * data-tblp 载荷 → docx 包 ITableFloatOptions（v0.145）。键名一一对应：
+ * tblpX→absoluteHorizontalPosition、tblpXSpec→relativeHorizontalPosition、
+ * horzAnchor→horizontalAnchor、vertAnchor→verticalAnchor（原值透传——包里类型面是
+ * TableAnchorType 而 OOXML 值域含 top/bottom/center 等，BuilderElement 不校验）、
+ * tblpY→absoluteVerticalPosition、四 FromText 同名、overlap→overlap。
+ * 空载荷返回 undefined（不写 w:tblpPr）。
+ */
+function tblpFloatOf(raw: unknown): ITableFloatOptions | undefined {
+  const kv = parseTblpPayload(typeof raw === 'string' ? raw : null)
+  if (!Object.keys(kv).length) return undefined
+  const n = (k: string): number | undefined => (kv[k] !== undefined ? Number(kv[k]) : undefined)
+  const opts: Record<string, unknown> = {}
+  if (kv.horzAnchor) opts.horizontalAnchor = kv.horzAnchor
+  if (kv.tblpXSpec) opts.relativeHorizontalPosition = kv.tblpXSpec
+  if (n('tblpX') !== undefined) opts.absoluteHorizontalPosition = n('tblpX')
+  if (kv.vertAnchor) opts.verticalAnchor = kv.vertAnchor
+  if (n('tblpY') !== undefined) opts.absoluteVerticalPosition = n('tblpY')
+  for (const k of ['topFromText', 'leftFromText', 'bottomFromText', 'rightFromText'] as const) {
+    if (n(k) !== undefined) opts[k] = n(k)
+  }
+  if (kv.overlap) opts.overlap = kv.overlap
+  return opts as unknown as ITableFloatOptions
 }
 
 /** CSS 线型词 → OOXML 线型（导入时已归一到这几个词） */
@@ -1613,6 +1677,13 @@ function blocksOf(
         Math.max(1, Math.round(px * PX_TWIP)),
       )
       const totalTw = gridTw.reduce((s, w) => s + w, 0)
+      // 表格浮动（v0.145）：data-tblp 载荷 → ITableFloatOptions，键名一一对应
+      // （tblpX→absoluteHorizontalPosition、tblpXSpec→relativeHorizontalPosition、
+      // horzAnchor→horizontalAnchor、四 FromText 同名、overlap→overlap 子元素）。
+      // 包里 verticalAnchor 类型面是 TableAnchorType（margin/page/text），而 OOXML 的
+      // vertAnchor 值域含 top/bottom/center/inside/outside——BuilderElement 透传不校验，
+      // 原值落；类型面按库外槽断言绕过
+      const tblp = tblpFloatOf(node.attrs?.tblp)
       out.push(
         new Table({
           // 表样式引用（v0.114）：表身上这枚 data-tstyle 就是 w:tblStyle，
@@ -1626,6 +1697,7 @@ function blocksOf(
           ...(num(node.attrs?.marginLeft) > 0
             ? { indent: { size: Math.round(num(node.attrs?.marginLeft) * PX_TWIP), type: WidthType.DXA } }
             : {}),
+          ...(tblp ? { float: tblp } : {}),
           rows: rows.map((r, ri) => {
               // 逐格的 w:tcW 吃掉它跨的那几枚网格列；网格游标按 shape 给的真格子起始列走，
               // 被上面竖跨压掉的那几枚列不能省（不省就会把整行往左错一枚，键进去的账落错格子）

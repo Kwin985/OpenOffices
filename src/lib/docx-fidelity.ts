@@ -50,7 +50,7 @@ import { all, allDesc, attr, attrL, attrNum, els, find, findDesc, findL, local, 
 import { FieldEngine, fieldLabel, parseInstr, recomputable } from './docx-fields'
 import { embedHtml, inlineFlatten, unwrapEmbed, type EmbedHtml } from './ole'
 import { chartToHtml, smartArtToHtml } from './ooxml-graphics'
-import { CELL_EDGES, CSS_BORDER_STYLE, TAB_LEADERS, bdSpaceAttrs, eighthsToPx, ptToPx, rgb2hex, shadeCss, tabsPayload, type CellEdge, type TabSpec } from './cell-style'
+import { CELL_EDGES, CSS_BORDER_STYLE, FRAME_NUMERIC_KEYS, FRAME_STR_KEYS, TAB_LEADERS, bdSpaceAttrs, eighthsToPx, framePayload, ptToPx, rgb2hex, shadeCss, tblpPayload, tabsPayload, type CellEdge, type FramePayload, type TabSpec, type TblpPayload } from './cell-style'
 import { ooxmlLine } from './paragraph-style'
 import {
   asTableCondType,
@@ -330,6 +330,49 @@ function readTabsPayload(pPr: XEl | undefined): string {
   return tabsPayload(specs)
 }
 
+/**
+ * 浮动框架（v0.145）：pPr/w:framePr 的十二枚属性 → `key=value;...` 载荷。
+ * x/y/w/h/hSpace/vSpace 走 attrNum（缇），xAlign/yAlign/hRule/hAnchor/vAnchor/wrap/
+ * anchorLock 走 attr（字符串枚举），dropCap/lines 顺带。屏上不兑现（Web 没有页定位），
+ * 只保往返。数值键读不到数（属性在场但非整数）时整键丢——那一枚当没写。
+ */
+function readFramePayload(pPr: XEl | undefined): string {
+  const fp = pPr ? find(pPr, 'w:framePr') : undefined
+  if (!fp) return ''
+  const kv: FramePayload = {}
+  for (const k of FRAME_NUMERIC_KEYS) {
+    const n = attrNum(fp, `w:${k}`)
+    if (n !== undefined) kv[k] = String(n)
+  }
+  for (const k of FRAME_STR_KEYS) {
+    const v = attr(fp, `w:${k}`)
+    if (v) kv[k] = v
+  }
+  return framePayload(kv)
+}
+
+/**
+ * 表格浮动（v0.145）：tblPr/w:tblpPr 的十枚属性 → `key=value;...` 载荷。
+ * **注意 tblpPr 的属性无命名空间前缀**（tblpX/tblpXSpec/vertAnchor…，ECMA-376 CT_TblPPr），
+ * 与 framePr 的 w:x 那族不同——枚举档一律走 attrL（按 local name 取，无前缀的才命中），
+ * 数值档走 attrNum（内部自带 attrL fallback，两种前缀形态都吃）。
+ * 屏上不兑现（Web 没有页定位），只保往返——与 readFramePayload 同款纪律。
+ */
+function readTblpPayload(tblPr: XEl | undefined): string {
+  const tp = tblPr ? find(tblPr, 'w:tblpPr') : undefined
+  if (!tp) return ''
+  const kv: TblpPayload = {}
+  for (const k of ['tblpX', 'tblpY', 'topFromText', 'leftFromText', 'bottomFromText', 'rightFromText']) {
+    const n = attrNum(tp, k)
+    if (n !== undefined) kv[k] = String(n)
+  }
+  for (const k of ['tblpXSpec', 'vertAnchor', 'horzAnchor', 'overlap']) {
+    const v = attrL(tp, k)
+    if (v) kv[k] = v
+  }
+  return tblpPayload(kv)
+}
+
 /** 属性级合并：同名后者压前者，后写层没写的属性留前写层那一枚；槽见 PPR_ATTR_SLOTS */
 function mergeAttrAttrs(base: Record<string, string>, add: Record<string, string>, slots: AttrSlot[]): Record<string, string> {
   const out: Record<string, string> = {}
@@ -401,10 +444,12 @@ interface LvlDef {
 
 interface Numbering {
   byId: Map<string, Map<number, LvlDef>>
+  /** abstractNumId → multiLevelType（v0.145 读账：hybridMultilevel/multilevel/singleLevel） */
+  multiLevels: Map<string, string>
 }
 
 function readNumbering(xml: string, theme?: ThemeFonts): Numbering {
-  const out: Numbering = { byId: new Map() }
+  const out: Numbering = { byId: new Map(), multiLevels: new Map() }
   if (!xml) return out
   const num = find(parseXml(xml), 'w:numbering')
   if (!num) return out
@@ -414,6 +459,11 @@ function readNumbering(xml: string, theme?: ThemeFonts): Numbering {
   for (const a of all(num, 'w:abstractNum')) {
     const id = attr(a, 'w:abstractNumId')
     if (!id) continue
+    // multiLevelType（v0.145）：编号定义的身份属性——它描述的是「这份定义是否设计成
+    // 多级联动」，而我们的模型把编号定义塌成逐段各自的档位（ListRegistry 只按段引用
+    // 重建定义），这个身份带不回来。读入记账，由 docxToHtmlFidelity 统一 warn
+    const mlt = attr(a, 'w:multiLevelType')
+    if (mlt) out.multiLevels.set(id, mlt)
     const levels = new Map<number, LvlDef>()
     for (const l of all(a, 'w:lvl')) {
       levels.set(Number(attr(l, 'w:ilvl') ?? '0'), {
@@ -1134,6 +1184,17 @@ class Fidelity {
     this.warnings.set(msg, (this.warnings.get(msg) ?? 0) + 1)
   }
 
+  /**
+   * 编号定义的多级身份记账（v0.145）：multiLevelType 描述「这份定义是否设计成多级联动」，
+   * 而模型把编号定义塌成逐段档位（ListRegistry 按段引用重建），身份带不回来。
+   * 每种类型一条（去重后由 warn 的 Map 自然合并计数）
+   */
+  noteNumberingIdentity(types: Iterable<string>) {
+    for (const t of new Set(types)) {
+      this.warn(`编号定义的多级类型 w:multiLevelType=${t} 未保留（编号按逐段档位重建，定义身份不带回）`)
+    }
+  }
+
   /** 出口形态：按首次出现顺序，重复的写成「文案×N」 */
   warningList(): string[] {
     return [...this.warnings].map(([m, n]) => (n > 1 ? `${m}×${n}` : m))
@@ -1380,8 +1441,11 @@ class Fidelity {
     // 跳对齐，Word 之外没有这套档位表），只随 data-tabs 载荷往返。样式链合并后的
     // effPPr 上读——样式层声明的制表位与段内直接声明同权（后者追加在后）
     const tabsAttr = readTabsPayload(effPPr)
+    // 浮动框架（v0.145）：w:framePr 的 key=value 载荷。Word 的纸面框架定位，Web 流式
+    // 排版没有页这一层，屏上不兑现——只随 data-frame 往返
+    const frameAttr = readFramePayload(effPPr)
     const body = this.layout(
-      `${tag}${shadeAttr ? ` data-shade="${shadeAttr}"` : ''}${tabsAttr ? ` data-tabs="${tabsAttr}"` : ''}${flags.join('')}`,
+      `${tag}${shadeAttr ? ` data-shade="${shadeAttr}"` : ''}${tabsAttr ? ` data-tabs="${tabsAttr}"` : ''}${frameAttr ? ` data-frame="${frameAttr}"` : ''}${flags.join('')}`,
       style,
       pieces,
     )
@@ -2244,9 +2308,18 @@ class Fidelity {
       if (!w && sw) w = Math.round(Number(sw[1]) * PT_PX)
       if (!h && sh) h = Math.round(Number(sh[1]) * PT_PX)
     }
-    const name = attr(findDesc(el, 'docPr'), 'name') ?? ''
+    // docPr（wp 画布级）与 cNvPr（pic 图形级）都带 name/descr。Word 语义里 descr 才是
+    // 替代文本（读屏软件念的那段），name 只是对象名——v0.145 起 alt 以 descr 优先、
+    // 无 descr 时回落 name 保旧观感（老文件的 alt 一直装的 name，不能一夜间全空）。
+    // 两处都查问（不用 ?? 短路——右支不求值会让 cNvPr 那半永远不进探针账）
+    const docPr = findDesc(el, 'docPr')
+    const cNvPr = findDesc(el, 'cNvPr')
+    const name = attr(docPr, 'name') ?? attr(cNvPr, 'name') ?? ''
+    const descrDocPr = attr(docPr, 'descr')
+    const descrCNvPr = attr(cNvPr, 'descr')
+    const alt = descrDocPr || descrCNvPr || name
     const size = `${w ? ` width="${w}"` : ''}${h ? ` height="${h}"` : ''}`
-    return `<img src="data:${mime};base64,${b64}"${size}${name ? ` alt="${esc(name)}"` : ''}>`
+    return `<img src="data:${mime};base64,${b64}"${size}${alt ? ` alt="${esc(alt)}"` : ''}>`
   }
 
   private mediaOf(path: string): Promise<string | null> {
@@ -2393,7 +2466,10 @@ class Fidelity {
     // 内联样式（`styleId` 那五层合并的输出），挂标签多的是"改一处全表跟着变"的能力
     const owner = styleId && this.book.byId.has(styleId) && !SUBSTITUTED_TABLE_STYLES.has(styleId) ? styleId : ''
     const ownerAttr = owner ? ` data-tstyle="${escAttr(owner)}"` : ''
-    let s = `<table${tblStyle ? ` style="${tblStyle}"` : ''}${ownerAttr}>`
+    // 表格浮动（v0.145）：w:tblpPr 的 key=value 载荷。Word 的纸面浮动表，Web 没有页定位
+    // 语义，屏上不兑现——只随 data-tblp 往返（framePr 同款纪律）
+    const tblpAttr = readTblpPayload(tblPr)
+    let s = `<table${tblStyle ? ` style="${tblStyle}"` : ''}${ownerAttr}${tblpAttr ? ` data-tblp="${tblpAttr}"` : ''}>`
     for (let ri = 0; ri < plan.length; ri++) {
       const trPr = find(rows[ri], 'w:trPr')
       // 表头由 w:trPr/w:tblHeader 决定，不限首行（Word 里可以声明第 2 行起重复表头）
@@ -3151,13 +3227,12 @@ export async function docxToHtmlFidelity(bytes: Uint8Array, depth = 0): Promise<
   const theme = readTheme(themeXml)
   // 主题色（v0.142）：与字体同读一份 theme1.xml，clrScheme 住 fontScheme 旁边
   const themeColors = readThemeColors(themeXml)
-  const f = new Fidelity(
-    readStyles(await read('word/styles.xml'), theme),
-    readNumbering(await read('word/numbering.xml'), theme),
-    depth,
-    theme,
-    themeColors,
-  )
+  const numbering = readNumbering(await read('word/numbering.xml'), theme)
+  const f = new Fidelity(readStyles(await read('word/styles.xml'), theme), numbering, depth, theme, themeColors)
+  // 编号定义的多级身份（v0.145）：multiLevelType 描述「这份定义是否设计成多级联动」，
+  // 而模型把编号定义塌成逐段档位（ListRegistry 按段引用重建），这个身份带不回来——
+  // 每种类型记一条（不逐实例刷屏）
+  f.noteNumberingIdentity(numbering.multiLevels.values())
   f.load(zip)
   f.setRels(await read('word/_rels/document.xml.rels'))
   f.setNotes(await read('word/footnotes.xml'), await read('word/endnotes.xml'))

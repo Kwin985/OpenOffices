@@ -1,5 +1,5 @@
 import { Extension, Mark, type CommandProps, type Editor } from '@tiptap/core'
-import { CELL_EDGES, SHADE_ATTR, TABS_ATTR, bdAttr, edgeAttrs, inlineBorder, parseTabsPayload, rgb2hex, shadeAttrs, type CellEdge } from './cell-style'
+import { CELL_EDGES, FRAME_ATTR, SHADE_ATTR, TABS_ATTR, bdAttr, edgeAttrs, inlineBorder, parseFramePayload, parseTabsPayload, rgb2hex, shadeAttrs, type CellEdge } from './cell-style'
 
 /**
  * 段落的排版属性：行距、段前段后、底纹与四边边框。
@@ -209,6 +209,16 @@ export const ParagraphStyle = Extension.create({
             renderHTML: (attrs: Record<string, unknown>) => {
               const raw = typeof attrs.tabs === 'string' ? attrs.tabs : ''
               return parseTabsPayload(raw).length ? { [TABS_ATTR]: raw } : {}
+            },
+          },
+          // 浮动框架（v0.145）：w:pPr/w:framePr 的 key=value 载荷。Web 无页定位语义，
+          // 屏上不兑现，只随 data-frame 往返（分页四件套同款纪律）
+          frame: {
+            default: null as string | null,
+            parseHTML: (el: HTMLElement) => el.getAttribute(FRAME_ATTR) || null,
+            renderHTML: (attrs: Record<string, unknown>) => {
+              const raw = typeof attrs.frame === 'string' ? attrs.frame : ''
+              return Object.keys(parseFramePayload(raw)).length ? { [FRAME_ATTR]: raw } : {}
             },
           },
           ...Object.fromEntries(CELL_EDGES.map((edge) => [bdAttr(edge), borderAttr(edge)])),

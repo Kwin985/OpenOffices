@@ -58,6 +58,13 @@ const NOISE = /^(rsid[A-Za-z]*|paraId|textId)$/
 // 应当看不到哪些」可以事先写死。MUST_SEE 是读手真会按名查问的，MUST_NOT_SEE 是我故意放进去、
 // 而读手（按源码现状）确实一寸都不查的——两边都断言才叫量具，只断一边等于自说自话。
 const W = 'http://schemas.openxmlformats.org/wordprocessingml/2006/main'
+// v0.145：图片（docPr/cNvPr/blip）与浮动族的命名空间
+const WP = 'http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing'
+const A = 'http://schemas.openxmlformats.org/drawingml/2006/main'
+const PIC = 'http://schemas.openxmlformats.org/drawingml/2006/picture'
+const R = 'http://schemas.openxmlformats.org/officeDocument/2006/relationships'
+// 1x1 透明 PNG（图片段的关系与媒体目标）
+const PNG_B64 = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg=='
 // v0.142：clrScheme 与 fontScheme 并列。dk1/lt1 写成 sysClr（真件里 windowText/window
 // 的常驻形态，lastClr 兜底）——合成语料那侧全用 srgbClr（宇宙里没有 sysClr|val），
 // 这一分支只有夹具走，两边合起来才把 readThemeColors 的两条路都盖到。
@@ -95,7 +102,8 @@ const FIXTURE_STYLES =
 const FIXTURE_NUMBERING =
   `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>` +
   `<w:numbering xmlns:w="${W}">` +
-  `<w:abstractNum w:abstractNumId="0">` +
+  // v0.145：multiLevelType——编号定义的身份属性（读+warn 记账，不进 PM 模型）
+  `<w:abstractNum w:abstractNumId="0" w:multiLevelType="hybridMultilevel">` +
   `<w:lvl w:ilvl="0"><w:start w:val="1"/><w:numFmt w:val="bullet"/><w:lvlText w:val="·"/><w:lvlJc w:val="left"/></w:lvl>` +
   `<w:lvl w:ilvl="1"><w:start w:val="1"/><w:numFmt w:val="lowerLetter"/><w:lvlText w:val="%2."/><w:lvlJc w:val="center"/></w:lvl>` +
   `</w:abstractNum>` +
@@ -105,7 +113,8 @@ const FIXTURE_NUMBERING =
 
 const FIXTURE_DOC =
   `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>` +
-  `<w:document xmlns:w="${W}"><w:body>` +
+  // v0.145：图片与浮动族要 wp/a/pic/r 四个命名空间（docPr/cNvPr/blip）
+  `<w:document xmlns:w="${W}" xmlns:wp="${WP}" xmlns:a="${A}" xmlns:pic="${PIC}" xmlns:r="${R}"><w:body>` +
   `<w:p w:rsidR="00A1" w:rsidRDefault="00A2" w:rsidP="00B3">` +
   `<w:pPr><w:pStyle w:val="ReportHead"/>` +
   `<w:spacing w:before="120" w:after="240" w:line="360" w:lineRule="auto" w:beforeAutospacing="0" w:afterAutospacing="0"/>` +
@@ -139,6 +148,29 @@ const FIXTURE_DOC =
   `<w:tab w:val="right" w:pos="5760" w:leader="middleDot"/>` +
   `<w:tab w:val="clear" w:pos="720"/></w:tabs></w:pPr>` +
   `<w:r><w:t>制表位</w:t></w:r></w:p>` +
+  // v0.145：图片的替代文本——docPr@descr（画布级）与 pic:cNvPr@descr（图形级）两处都读，
+  // descr 优先、name 兜底。r:embed 指向 selftest zip 里的 media/image1.png
+  `<w:p><w:r><w:drawing>` +
+  `<wp:inline distT="0" distB="0" distL="0" distR="0"><wp:extent cx="914400" cy="914400"/>` +
+  `<wp:docPr id="1" name="图片 1" descr="画布级替代文本"/>` +
+  `<a:graphic><a:graphicData uri="${PIC}">` +
+  `<pic:pic><pic:nvPicPr><pic:cNvPr id="1" name="cNv 名" descr="图形级替代文本"/><pic:cNvPicPr/></pic:nvPicPr>` +
+  `<pic:blipFill><a:blip r:embed="rId1"/><a:stretch><a:fillRect/></a:stretch></pic:blipFill>` +
+  `<pic:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="914400" cy="914400"/></a:xfrm>` +
+  `<a:prstGeom prst="rect"><a:avLst/></a:prstGeom></pic:spPr></pic:pic>` +
+  `</a:graphicData></a:graphic></wp:inline></w:drawing></w:r></w:p>` +
+  // v0.145：段落浮动框架——absolute 形态（x/y 在场，无 xAlign/yAlign），十二枚全上账
+  `<w:p><w:pPr><w:framePr w:x="720" w:y="1440" w:w="2880" w:h="720" w:hRule="exact"` +
+  ` w:hSpace="12" w:vSpace="24" w:hAnchor="page" w:vAnchor="text" w:wrap="around" w:anchorLock="1"/></w:pPr>` +
+  `<w:r><w:t>浮动框架段</w:t></w:r></w:p>` +
+  // v0.145：浮动表——tblpPr 十枚（属性无前缀）。tblpPr 在 tblPr 里排 tblStyle 之后
+  `<w:tbl><w:tblPr><w:tblStyle w:val="TableGrid"/>` +
+  `<w:tblpPr tblpX="10" tblpXSpec="absolute" tblpY="10" vertAnchor="top" horzAnchor="page"` +
+  ` topFromText="0" leftFromText="108" bottomFromText="0" rightFromText="108" overlap="never"/>` +
+  `<w:tblW w:w="5000" w:type="dxa"/></w:tblPr>` +
+  `<w:tblGrid><w:gridCol w:w="5000"/></w:tblGrid>` +
+  `<w:tr><w:tc><w:tcPr><w:tcW w:w="5000" w:type="dxa"/></w:tcPr>` +
+  `<w:p><w:r><w:t>浮动表格</w:t></w:r></w:p></w:tc></w:tr></w:tbl>` +
   `<w:sectPr><w:pgSz w:w="11906" w:h="16838" w:orient="portrait"/>` +
   `<w:pgMar w:top="1440" w:right="1800" w:bottom="1440" w:left="1800" w:header="851" w:footer="992" w:gutter="0"/></w:sectPr>` +
   `</w:body></w:document>`
@@ -211,6 +243,34 @@ const MUST_SEE = [
   'tab|val',
   'tab|pos',
   'tab|leader',
+  // v0.145：替代文本（docPr 画布级 + pic:cNvPr 图形级，descr 优先 name 兜底）、
+  // 浮动框架十二枚（framePr 的属性带 w: 前缀，与 tblpPr 的无前缀不同）、
+  // 表格浮动十枚（tblpPr 属性**无前缀**，ECMA-376 CT_TblPPr——attrL 按 local name 才命中）、
+  // 编号定义身份（探针键是「元素名|属性名」——multiLevelType 挂在 abstractNum 上）
+  'docPr|descr',
+  'cNvPr|descr',
+  'framePr|x',
+  'framePr|y',
+  'framePr|w',
+  'framePr|h',
+  'framePr|hRule',
+  'framePr|hSpace',
+  'framePr|vSpace',
+  'framePr|hAnchor',
+  'framePr|vAnchor',
+  'framePr|wrap',
+  'framePr|anchorLock',
+  'tblpPr|tblpX',
+  'tblpPr|tblpXSpec',
+  'tblpPr|tblpY',
+  'tblpPr|vertAnchor',
+  'tblpPr|horzAnchor',
+  'tblpPr|topFromText',
+  'tblpPr|leftFromText',
+  'tblpPr|bottomFromText',
+  'tblpPr|rightFromText',
+  'tblpPr|overlap',
+  'abstractNum|multiLevelType',
 ]
 // 我放进夹具而读手一寸不查的：beforeAutospacing / afterAutospacing 在源码里没有查问处；
 // t 的 xml:space 是**裁定不查**——escText 无条件保留空白（连续空格第二个起换 nbsp），
@@ -394,6 +454,15 @@ async function runSelftest(reader) {
   zip.file('word/styles.xml', FIXTURE_STYLES)
   zip.file('word/theme/theme1.xml', FIXTURE_THEME)
   zip.file('word/numbering.xml', FIXTURE_NUMBERING)
+  // v0.145：图片段的关系与媒体目标（docPr/cNvPr 的 descr 靠这条链读出来）
+  zip.file(
+    'word/_rels/document.xml.rels',
+    `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>` +
+      `<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">` +
+      `<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="media/image1.png"/>` +
+      `</Relationships>`,
+  )
+  zip.file('word/media/image1.png', Buffer.from(PNG_B64, 'base64'))
   const bytes = new Uint8Array(await zip.generateAsync({ type: 'arraybuffer', compression: 'STORE' }))
   seen.clear()
   const out = await reader.docxToHtmlFidelity(bytes)
