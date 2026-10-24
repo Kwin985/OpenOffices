@@ -450,6 +450,58 @@ export function pprPayload(kv: PprPayload): string {
     .join(';')
 }
 
+/* ── 图片容器壳（v0.148）─────────────────────────────────────
+ * 一张位图在 OOXML 里不是「一个 <img>」而是三层壳：wp:inline/wp:anchor（画布定位）、
+ * wp:docPr + pic:cNvPr（对象名与替代文本）、pic:spPr/a:xfrm + a:prstGeom（图形框）。
+ * 这三层里除尺寸外的属性屏上一条都不兑现（Web 流式排版没有文字环绕、没有对象名、
+ * 图片框恒为矩形），但换个编辑器打开时它们决定「图贴在哪个锚上、能不能被选中改形」。
+ * 载荷：data-img="key=value;..."，EMU 档存整数原值（EMU→px 那一道只在 width/height
+ * 上做过，这里要的是能原样写回去的数），onOff 档存 '1'/'0'。
+ * 写侧走打包后补丁：包把整层壳都发出来了，只是值全部硬编码（dist*=0、effectExtent
+ * 四边=0、graphicFrameLocks/picLocks 恒 1、cNvPr 的 name 干脆是空串），补丁按块改值。
+ *
+ * 键名（EMU 档）：distT/distB/distL/distR（wp:inline 四边避让）、eeL/eeT/eeR/eeB
+ * （wp:effectExtent 四边）、offX/offY/extCx/extCy（a:xfrm 的 a:off/a:ext）、
+ * spX/spY（wp:simplePos）、docPrId/cNvPrId（两处对象序号）。
+ * 字符串档：cNvPrName、prst、posH、posV；onOff 档：gfl、pic（两枚 locks）。 */
+export const IMG_ATTR = 'data-img'
+
+export type ImgPayload = Record<string, string>
+
+/** onOff 档：graphicFrameLocks / picLocks 的 noChangeAspect */
+export const IMG_ONOFF_KEYS = ['gfl', 'pic'] as const
+
+/** 载荷分号分隔，字符串档的值里带 ';' 或 '=' 会撕裂载荷——那就不记（整键丢） */
+function imgValOk(v: string): boolean {
+  return v !== '' && !v.includes(';') && !v.includes('=')
+}
+
+/** data-img 载荷 → key/value 表；onOff 键只收 '1'/'0'，字符串键不带分隔符，脏值整键丢 */
+export function parseImgPayload(raw: string | null | undefined): ImgPayload {
+  const out: ImgPayload = {}
+  if (!raw) return out
+  const onoff = new Set<string>(IMG_ONOFF_KEYS)
+  for (const item of raw.split(';')) {
+    const i = item.indexOf('=')
+    if (i <= 0) continue
+    const k = item.slice(0, i).trim()
+    const v = item.slice(i + 1).trim()
+    if (!k || !imgValOk(v)) continue
+    if (onoff.has(k) && v !== '1' && v !== '0') continue
+    out[k] = v
+  }
+  return out
+}
+
+/** key/value 表 → data-img 载荷（与 parseImgPayload 互逆，排序保稳定） */
+export function imgPayload(kv: ImgPayload): string {
+  return Object.keys(kv)
+    .sort()
+    .filter((k) => imgValOk(kv[k]))
+    .map((k) => `${k}=${kv[k]}`)
+    .join(';')
+}
+
 /** 点阵：cell 见方的格子里一枚半径 1px 的点（密集档反过来把背景当时点） */
 function dots(fg: string, bg: string, cell: number): string {
   return `radial-gradient(${fg} 1px, ${bg} 1.5px) 0 0/${cell}px ${cell}px`

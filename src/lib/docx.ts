@@ -44,7 +44,7 @@ import {
   type ITableFloatOptions,
 } from 'docx'
 import { xml2js } from 'xml-js'
-import { borderParts, pxToEighths, pxToPt, parseFramePayload, parsePprPayload, parseShadePayload, parseTabsPayload, parseTblpPayload, parseTlookPayload, CELL_EDGES, type CellEdge } from './cell-style'
+import { borderParts, pxToEighths, pxToPt, parseFramePayload, parseImgPayload, parsePprPayload, parseShadePayload, parseTabsPayload, parseTblpPayload, parseTlookPayload, CELL_EDGES, type CellEdge } from './cell-style'
 import { lineToOoxml, type LineRule } from './paragraph-style'
 import { decodeEnt } from './ooxml'
 import { condLookBits } from './table-cond'
@@ -817,6 +817,9 @@ function childToRuns(child: PMNode, inherited: Inherited, cs?: CommentTrack, dt?
         // DocPropertiesOptions 原生槽）。读手那一侧 alt 以 docPr/cNvPr 的 descr 优先、
         // name 兜底（见 docx-fidelity 的 bitmap）；name 本身不进模型，对象名丢了无害
         const alt = typeof child.attrs?.alt === 'string' ? child.attrs.alt : ''
+        // 容器壳（v0.148）：一枚 ImageRun 正对一个 `<w:drawing>`，登记顺序即出现序。
+        // 只有真发得出位图的这一支才登记（另一支退化成 `[图片: src]` 字面，没有壳）
+        dt?.imgExtras.push(typeof child.attrs?.img === 'string' ? child.attrs.img : '')
         out.push(
           new TextRun({
             children: [
@@ -1556,6 +1559,12 @@ interface DocTrack {
    * 表上那一枚压过样式推出来的那一枚，同样走打包后补丁按出现序贴回 `<w:tblPr>`
    */
   tblLooks: string[]
+  /**
+   * 图片容器壳（v0.148）：与 document.xml 里每个 `<w:drawing>` 一一对应、同序。
+   * 包把整层壳都发出来了，只是值全部硬编码（dist*=0、effectExtent 四边=0、两枚
+   * locks 恒 1、pic:cNvPr 的 name 是空串），所以也走打包后补丁——按出现序逐块改值
+   */
+  imgExtras: string[]
 }
 
 type NoteKind = 'footnote' | 'endnote'
@@ -1576,6 +1585,7 @@ function newDocTrack(): DocTrack {
     revId: 1,
     pprExtras: [],
     tblLooks: [],
+    imgExtras: [],
   }
 }
 
@@ -2184,13 +2194,15 @@ export async function prosemirrorToDocxBytes(json: PMNode, meta?: DocMeta): Prom
   const latent = meta?.latentStyles
   // 段落属性余量（v0.147）：按出现序贴回各自的 <w:pPr>，与上面两笔同一路数
   const withPara = await patchParaProps(out, dt.pprExtras)
+  // 图片容器壳（v0.148）：按 <w:drawing> 出现序逐块改值（包发得出壳，只是值硬编码）
+  const withImg = await patchImgXml(withPara, dt.imgExtras)
   // 表闸门两张表都要补：样式推出来的（looks）与表自己带的（dt.tblLooks）
   const needTbl = looks.size || dt.tblLooks.some((x) => x)
   if (custom.size || latent) {
-    const patched = await patchStylesXml(withPara, latent, custom)
+    const patched = await patchStylesXml(withImg, latent, custom)
     return needTbl ? await patchTblLook(patched, looks, dt.tblLooks) : patched
   }
-  return needTbl ? patchTblLook(withPara, looks, dt.tblLooks) : withPara
+  return needTbl ? patchTblLook(withImg, looks, dt.tblLooks) : withImg
 }
 
 /**
@@ -2502,6 +2514,104 @@ async function patchTblLook(bytes: Uint8Array, looks: Map<string, string>, own: 
   })
   if (!touched) return bytes
   zip.file('word/document.xml', patched)
+  const buf = (await zip.generateAsync({ type: 'arraybuffer' })) as ArrayBuffer
+  return new Uint8Array(buf)
+}
+
+/** 在一枚开标签（含自闭合）上改/加属性：已有同名属性就地换值，没有就追加在 `>` 之前 */
+function tagWithAttrs(tag: string, kv: Record<string, string>): string {
+  let out = tag
+  for (const k of Object.keys(kv)) {
+    const v = kv[k]
+    if (!v) continue
+    const re = new RegExp(`(\\s${k}=)"[^"]*"`)
+    if (re.test(out)) {
+      out = out.replace(re, `$1"${v}"`)
+      continue
+    }
+    const m = /^(.*?)(\/?)>$/.exec(out)
+    if (!m) continue
+    out = `${m[1]} ${k}="${v}"${m[2]}>`
+  }
+  return out
+}
+
+/** 块内按标签名改属性：只改第一枚（一个 w:drawing 里各层壳都只有一枚） */
+function retag(chunk: string, tag: string, kv: Record<string, string>): string {
+  const re = new RegExp(`<${tag}(?:\\s[^>]*)?/?>`)
+  const m = re.exec(chunk)
+  if (!m) return chunk
+  return chunk.slice(0, m.index) + tagWithAttrs(m[0], kv) + chunk.slice(m.index + m[0].length)
+}
+
+/**
+ * 图片容器壳（v0.148）：包把 wp:inline / effectExtent / docPr / cNvPr / 两枚 locks /
+ * prstGeom / xfrm 的 off+ext 全都发出来了，只是值硬编码（dist*=0、effectExtent 四边=0、
+ * locks 恒 1、cNvPr 的 name 干脆是空串）。所以这一族不像段落余量那样要插元素——
+ * 按 `<w:drawing>` 出现序逐块**改值**即可。计数闸门同款：块数与登记条数对不上整笔放弃。
+ * 浮动锚点四枚（simplePos / positionH / positionV）不在此列：写侧只发内嵌图，
+ * 那一层壳出不来，读了也写不回（审计里记为只读一半）。
+ */
+async function patchImgXml(bytes: Uint8Array, shells: string[]): Promise<Uint8Array> {
+  if (!shells.some((x) => x)) return bytes
+  const { default: JSZip } = await import('jszip')
+  const zip = await JSZip.loadAsync(bytes)
+  const file = zip.file('word/document.xml')
+  if (!file) return bytes
+  const xml = await file.async('string')
+  const blocks = [...xml.matchAll(/<w:drawing>[\s\S]*?<\/w:drawing>/g)]
+  if (blocks.length !== shells.length) return bytes
+  let out = ''
+  let cursor = 0
+  let touched = false
+  for (let i = 0; i < blocks.length; i++) {
+    const m = blocks[i]
+    const start = m.index ?? 0
+    const stop = start + m[0].length
+    const kv = parseImgPayload(shells[i])
+    if (!Object.keys(kv).length) {
+      out += xml.slice(cursor, stop)
+      cursor = stop
+      continue
+    }
+    let chunk = m[0]
+    // wp:inline / wp:anchor 的四边避让
+    const box: Record<string, string> = {}
+    for (const k of ['distT', 'distB', 'distL', 'distR']) if (kv[k] !== undefined) box[k] = kv[k]
+    if (Object.keys(box).length) {
+      chunk = retag(chunk, 'wp:inline', box)
+      chunk = retag(chunk, 'wp:anchor', box)
+    }
+    // wp:effectExtent 四边（载荷键 eeL/eeT/eeR/eeB，回写成 l/t/r/b）
+    const ee: Record<string, string> = {}
+    for (const [k, n] of [['eeL', 'l'], ['eeT', 't'], ['eeR', 'r'], ['eeB', 'b']] as const) {
+      if (kv[k] !== undefined) ee[n] = kv[k]
+    }
+    if (Object.keys(ee).length) chunk = retag(chunk, 'wp:effectExtent', ee)
+    if (kv.docPrId !== undefined) chunk = retag(chunk, 'wp:docPr', { id: kv.docPrId })
+    const nv: Record<string, string> = {}
+    if (kv.cNvPrId !== undefined) nv.id = kv.cNvPrId
+    if (kv.cNvPrName !== undefined) nv.name = kv.cNvPrName
+    if (Object.keys(nv).length) chunk = retag(chunk, 'pic:cNvPr', nv)
+    if (kv.gfl !== undefined) chunk = retag(chunk, 'a:graphicFrameLocks', { noChangeAspect: kv.gfl })
+    if (kv.pic !== undefined) chunk = retag(chunk, 'a:picLocks', { noChangeAspect: kv.pic })
+    if (kv.prst !== undefined) chunk = retag(chunk, 'a:prstGeom', { prst: kv.prst })
+    // a:xfrm 的 a:off / a:ext（图形框自身的原点与尺寸）
+    const off: Record<string, string> = {}
+    if (kv.offX !== undefined) off.x = kv.offX
+    if (kv.offY !== undefined) off.y = kv.offY
+    if (Object.keys(off).length) chunk = retag(chunk, 'a:off', off)
+    const ext: Record<string, string> = {}
+    if (kv.extCx !== undefined) ext.cx = kv.extCx
+    if (kv.extCy !== undefined) ext.cy = kv.extCy
+    if (Object.keys(ext).length) chunk = retag(chunk, 'a:ext', ext)
+    out += xml.slice(cursor, start) + chunk
+    cursor = stop
+    touched = true
+  }
+  if (!touched) return bytes
+  out += xml.slice(cursor)
+  zip.file('word/document.xml', out)
   const buf = (await zip.generateAsync({ type: 'arraybuffer' })) as ArrayBuffer
   return new Uint8Array(buf)
 }

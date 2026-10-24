@@ -50,7 +50,7 @@ import { all, allDesc, attr, attrL, attrNum, els, find, findDesc, findL, local, 
 import { FieldEngine, fieldLabel, parseInstr, recomputable } from './docx-fields'
 import { embedHtml, inlineFlatten, unwrapEmbed, type EmbedHtml } from './ole'
 import { chartToHtml, smartArtToHtml } from './ooxml-graphics'
-import { CELL_EDGES, CSS_BORDER_STYLE, FRAME_NUMERIC_KEYS, FRAME_STR_KEYS, PPR_ATTR, PPR_ONOFF_KEYS, PPR_STR_KEYS, TAB_LEADERS, TLOOK_ATTR, bdSpaceAttrs, eighthsToPx, framePayload, pprPayload, ptToPx, rgb2hex, shadeCss, tblpPayload, tabsPayload, tlookPayload, type CellEdge, type FramePayload, type PprPayload, type TabSpec, type TblpPayload } from './cell-style'
+import { CELL_EDGES, CSS_BORDER_STYLE, FRAME_NUMERIC_KEYS, FRAME_STR_KEYS, IMG_ATTR, PPR_ATTR, PPR_ONOFF_KEYS, PPR_STR_KEYS, TAB_LEADERS, TLOOK_ATTR, bdSpaceAttrs, eighthsToPx, framePayload, imgPayload, pprPayload, ptToPx, rgb2hex, shadeCss, tblpPayload, tabsPayload, tlookPayload, type CellEdge, type FramePayload, type ImgPayload, type PprPayload, type TabSpec, type TblpPayload } from './cell-style'
 import { ooxmlLine } from './paragraph-style'
 import {
   asTableCondType,
@@ -537,6 +537,79 @@ function readPprPayload(pPr: XEl | undefined): string {
     if (v) kv[k] = v
   }
   return pprPayload(kv)
+}
+
+/**
+ * 图片容器壳（v0.148）：一个 w:drawing 里除位图字节与尺寸外那一层壳——wp:inline/
+ * wp:anchor 的四边避让与锚点、wp:effectExtent 四边、两处对象序号与对象名、两枚
+ * locks、a:prstGeom 的档位、a:xfrm 的 a:off/a:ext。屏上一条都不兑现（Web 流式排版
+ * 没有文字环绕与对象名，图片框恒矩形），但换编辑器打开时它决定图贴在哪个锚上。
+ * 全部走 findDesc 深搜：壳各层的层级是固定的，深搜找同名元素不会认错（一个
+ * w:drawing 里只有一枚 wp:inline、一枚 pic:pic）。EMU 档存整数原值——width/height
+ * 那一道 EMU→px 只在尺寸上做过，这里要的是能原样写回去的数。
+ */
+function readImgPayload(el: XEl): string {
+  const kv: ImgPayload = {}
+  // wp:inline（内嵌）/ wp:anchor（浮动）各有四边避让；两者同名元素不同名，各查各的
+  const inline = findDesc(el, 'inline')
+  const anchor = findDesc(el, 'anchor')
+  const box = inline ?? anchor
+  if (box) {
+    for (const k of ['distT', 'distB', 'distL', 'distR']) {
+      const v = attrNum(box, k)
+      if (v !== undefined) kv[k] = String(v)
+    }
+  }
+  // wp:effectExtent：四边（Word 用它算阴影/发光占的溢出区，屏上不兑现）
+  const ee = findDesc(el, 'effectExtent')
+  if (ee) {
+    for (const [k, n] of [['eeL', 'l'], ['eeT', 't'], ['eeR', 'r'], ['eeB', 'b']] as const) {
+      const v = attrNum(ee, n)
+      if (v !== undefined) kv[k] = String(v)
+    }
+  }
+  // wp:docPr（画布级）与 pic:cNvPr（图形级）各有 id/name；name 那边读手已用 descr 优先
+  // 取过 alt，这里收的是对象名本身。两处 id 都是整数、都只查一次（不用 ?? 短路——
+  // 右支不求值会让后一枚永远不进探针账）
+  const docPrId = attrNum(findDesc(el, 'docPr'), 'id')
+  if (docPrId !== undefined) kv.docPrId = String(docPrId)
+  const cNvPr = findDesc(el, 'cNvPr')
+  const cNvPrId = attrNum(cNvPr, 'id')
+  if (cNvPrId !== undefined) kv.cNvPrId = String(cNvPrId)
+  const cNvPrName = attr(cNvPr, 'name')
+  if (cNvPrName) kv.cNvPrName = cNvPrName
+  // 两枚 locks：锁纵横比。onOff 三态（元素在场无 val 按「开」）
+  const gfl = onOff(attrL(findDesc(el, 'graphicFrameLocks'), 'noChangeAspect'))
+  if (gfl !== undefined) kv.gfl = gfl ? '1' : '0'
+  const picLock = onOff(attrL(findDesc(el, 'picLocks'), 'noChangeAspect'))
+  if (picLock !== undefined) kv.pic = picLock ? '1' : '0'
+  // a:prstGeom：图片的图形框恒 rect，换了档位的（裁剪成异形）照收原值
+  const prst = attr(findDesc(el, 'prstGeom'), 'prst')
+  if (prst) kv.prst = prst
+  // wp:anchor 的定位：simplePos（绝对坐标）与 positionH/V（相对哪个基准）
+  const sp = findDesc(el, 'simplePos')
+  if (sp) {
+    const x = attrNum(sp, 'x')
+    const y = attrNum(sp, 'y')
+    if (x !== undefined) kv.spX = String(x)
+    if (y !== undefined) kv.spY = String(y)
+  }
+  for (const [k, n] of [['posH', 'positionH'], ['posV', 'positionV']] as const) {
+    const v = attr(findDesc(el, n), 'relativeFrom')
+    if (v) kv[k] = v
+  }
+  // a:xfrm 的 a:off / a:ext：图形框自身的原点与尺寸（与 wp:extent 不同一枚元素，
+  // 图片的两者同值，但换编辑器打开时只认 xfrm 那一枚）
+  const xfrm = findDesc(el, 'xfrm')
+  if (xfrm) {
+    const off = find(xfrm, 'off') ?? findDesc(xfrm, 'off')
+    const ext = find(xfrm, 'ext') ?? findDesc(xfrm, 'ext')
+    for (const [k, src, n] of [['offX', off, 'x'], ['offY', off, 'y'], ['extCx', ext, 'cx'], ['extCy', ext, 'cy']] as const) {
+      const v = attrNum(src, n)
+      if (v !== undefined) kv[k] = String(v)
+    }
+  }
+  return imgPayload(kv)
 }
 
 /** 属性级合并：同名后者压前者，后写层没写的属性留前写层那一枚；槽见 PPR_ATTR_SLOTS */
@@ -2572,7 +2645,9 @@ class Fidelity {
     const descrCNvPr = attr(cNvPr, 'descr')
     const alt = descrDocPr || descrCNvPr || name
     const size = `${w ? ` width="${w}"` : ''}${h ? ` height="${h}"` : ''}`
-    return `<img src="data:${mime};base64,${b64}"${size}${alt ? ` alt="${esc(alt)}"` : ''}>`
+    // 容器壳（v0.148）：位图出得来才有壳可挂——解不开字节时那张图本来就没进文档
+    const shell = readImgPayload(el)
+    return `<img src="data:${mime};base64,${b64}"${size}${alt ? ` alt="${esc(alt)}"` : ''}${shell ? ` ${IMG_ATTR}="${esc(shell)}"` : ''}>`
   }
 
   private mediaOf(path: string): Promise<string | null> {

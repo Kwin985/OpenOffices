@@ -159,6 +159,15 @@ const ImgExt = Image.extend({
   addAttributes() {
     return {
       ...this.parent?.(),
+      // 图片容器壳（v0.148）：wp:inline/wp:anchor 的避让与锚点、effectExtent 四边、
+      // 两处对象序号与对象名、两枚 locks、prstGeom 档位、xfrm 的 off/ext。屏上一条都不
+      // 兑现，只随 data-img 载荷往返（与 data-ppr/data-tlook 同一套纪律）
+      img: {
+        default: null,
+        parseHTML: (el: HTMLElement) => el.getAttribute('data-img') || null,
+        renderHTML: (attrs: { img?: string | null }) =>
+          typeof attrs.img === 'string' && attrs.img ? { 'data-img': attrs.img } : {},
+      },
       align: {
         default: null,
         parseHTML: (el: HTMLElement) =>
