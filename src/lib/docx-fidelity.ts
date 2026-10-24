@@ -250,10 +250,16 @@ interface StyleInfo {
  */
 
 /** onOff 属性值 → 三态布尔；认不出的值（空串/怪串）按没说话处理 */
+/**
+ * onOff 三态：值不在值域里（含「元素在场而属性缺省」）一律 undefined，
+ * 好让「显式关」与「没写」分得开（v0.146 起 latentStyles 那族就靠这个分档）。
+ * 值域是 CT_OnOff（1/0/true/false/on/off）与 VML 的 ST_TrueFalse（t/f/true/false）
+ * 的并集——两者不重叠，VML 那一支（v0.149）跟着一起收
+ */
 function onOff(v: string | undefined): boolean | undefined {
   const s = (v ?? '').toLowerCase()
-  if (s === '1' || s === 'true' || s === 'on') return true
-  if (s === '0' || s === 'false' || s === 'off') return false
+  if (s === '1' || s === 'true' || s === 'on' || s === 't') return true
+  if (s === '0' || s === 'false' || s === 'off' || s === 'f') return false
   return undefined
 }
 
@@ -608,6 +614,82 @@ function readImgPayload(el: XEl): string {
       const v = attrNum(src, n)
       if (v !== undefined) kv[k] = String(v)
     }
+  }
+  // a:picLocks 的箭头锁（v0.149）：与纵横比锁同一枚元素，包两个属性都发，都能写回
+  const arrow = onOff(attr(findDesc(el, 'picLocks'), 'noChangeArrowheads'))
+  if (arrow !== undefined) kv.picArrow = arrow ? '1' : '0'
+  // pic:spPr 的 bwMode（黑白模式档位）。spPr 可能套两层（pic:spPr 里再嵌一枚
+  // a:spPr，VML↔DrawingML 互转的老文件里常见），全查一遍取第一枚说得上话的
+  for (const sp of allDesc(el, 'spPr')) {
+    const v = attr(sp, 'bwMode')
+    if (v && kv.bwMode === undefined) kv.bwMode = v
+  }
+  // wp:anchor 六枚闸门（v0.149）：allowOverlap / behindDoc / layoutInCell / locked /
+  // relativeHeight / simplePos。与 dist 四边同一枚元素，但只有浮动图才有——写侧只发
+  // 内嵌图（包没有 wp:anchor 的槽），这一组只读不写（与 simplePos/positionH/V 同款）
+  const anchorEl = findDesc(el, 'anchor')
+  if (anchorEl) {
+    for (const [k, n] of [
+      ['anOver', 'allowOverlap'],
+      ['anBehind', 'behindDoc'],
+      ['anCell', 'layoutInCell'],
+      ['anLocked', 'locked'],
+      ['anRelH', 'relativeHeight'],
+      ['anSimple', 'simplePos'],
+    ] as const) {
+      const v = onOff(attr(anchorEl, n))
+      if (v !== undefined) kv[k] = v ? '1' : '0'
+    }
+  }
+  // ── VML 壳（v0.149）：w:pict 那一支。位图字节在 v:imagedata 里，其余壳属性屏上
+  //    一条都不兑现；写侧只发 DrawingML 内嵌图，这一族读得回、写不出（记账边界）──
+  const shape = findDesc(el, 'shape')
+  if (shape) {
+    for (const [k, n, isOn] of [
+      ['shId', 'id', false],
+      ['shSpid', 'spid', false],
+      ['shSpt', 'spt', false],
+      ['shType', 'type', false],
+      ['shCoord', 'coordsize', false],
+      ['shFill', 'filled', true],
+      ['shStroke', 'stroked', true],
+    ] as const) {
+      // VML 属性常带 o: 前缀（o:title、o:lock 之类），一律按 local name 取
+      if (isOn) {
+        const v = onOff(attrL(shape, n))
+        if (v !== undefined) kv[k] = v ? '1' : '0'
+      } else {
+        const v = attrL(shape, n)
+        if (v) kv[k] = v
+      }
+    }
+    // gfxdata（7 字面）**裁定不收**：Word 缓存的图元字节（base64），能有几 KB，
+    // 挂进 HTML 属性性价比极差，且写侧根本写不回去——与 t|space 同款裁定
+  }
+  const lock = findDesc(el, 'lock')
+  if (lock) {
+    const asp = onOff(attrL(lock, 'aspectratio'))
+    if (asp !== undefined) kv.lkAspect = asp ? '1' : '0'
+    const ext = attrL(lock, 'ext')
+    if (ext) kv.lkExt = ext
+  }
+  const idTitle = attrL(findDesc(el, 'imagedata'), 'title')
+  if (idTitle) kv.idTitle = idTitle
+  const vFill = findDesc(el, 'fill')
+  if (vFill) {
+    const on = onOff(attrL(vFill, 'on'))
+    if (on !== undefined) kv.fOn = on ? '1' : '0'
+    const fs = attrL(vFill, 'focussize')
+    if (fs) kv.fFocus = fs
+  }
+  const vStroke = findDesc(el, 'stroke')
+  if (vStroke) {
+    const on = onOff(attrL(vStroke, 'on'))
+    if (on !== undefined) kv.sOn = on ? '1' : '0'
+    const join = attrL(vStroke, 'joinstyle')
+    if (join) kv.sJoin = join
+    const wt = attrL(vStroke, 'weight')
+    if (wt) kv.sWeight = wt
   }
   return imgPayload(kv)
 }

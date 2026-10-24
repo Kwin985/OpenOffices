@@ -2594,7 +2594,13 @@ async function patchImgXml(bytes: Uint8Array, shells: string[]): Promise<Uint8Ar
     if (kv.cNvPrName !== undefined) nv.name = kv.cNvPrName
     if (Object.keys(nv).length) chunk = retag(chunk, 'pic:cNvPr', nv)
     if (kv.gfl !== undefined) chunk = retag(chunk, 'a:graphicFrameLocks', { noChangeAspect: kv.gfl })
-    if (kv.pic !== undefined) chunk = retag(chunk, 'a:picLocks', { noChangeAspect: kv.pic })
+    // a:picLocks 的纵横比锁与箭头锁（v0.149）：同一枚元素两个属性，各补各的
+    const pl: Record<string, string> = {}
+    if (kv.pic !== undefined) pl.noChangeAspect = kv.pic
+    if (kv.picArrow !== undefined) pl.noChangeArrowheads = kv.picArrow
+    if (Object.keys(pl).length) chunk = retag(chunk, 'a:picLocks', pl)
+    // pic:spPr 的黑白模式档位（v0.149）：包恒写 auto，说了才改
+    if (kv.bwMode !== undefined) chunk = retag(chunk, 'pic:spPr', { bwMode: kv.bwMode })
     if (kv.prst !== undefined) chunk = retag(chunk, 'a:prstGeom', { prst: kv.prst })
     // a:xfrm 的 a:off / a:ext（图形框自身的原点与尺寸）
     const off: Record<string, string> = {}

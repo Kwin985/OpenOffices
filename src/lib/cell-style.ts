@@ -463,13 +463,36 @@ export function pprPayload(kv: PprPayload): string {
  * 键名（EMU 档）：distT/distB/distL/distR（wp:inline 四边避让）、eeL/eeT/eeR/eeB
  * （wp:effectExtent 四边）、offX/offY/extCx/extCy（a:xfrm 的 a:off/a:ext）、
  * spX/spY（wp:simplePos）、docPrId/cNvPrId（两处对象序号）。
- * 字符串档：cNvPrName、prst、posH、posV；onOff 档：gfl、pic（两枚 locks）。 */
+ * 字符串档：cNvPrName、prst、posH、posV、bwMode（pic:spPr）。
+ * onOff 档：gfl、pic（两枚 locks 的 noChangeAspect）、picArrow（a:picLocks 的
+ * noChangeArrowheads）、anOver/anBehind/anCell/anLocked/anRelH/anSimple（wp:anchor 六枚闸门）。
+ * VML 壳（v0.149，只读不写——写侧只发 DrawingML 内嵌图，w:pict 那一支出不来）：
+ * 字符串档 shId/shSpid/shSpt/shType/shCoord（v:shape）、lkExt（o:lock）、idTitle
+ * （v:imagedata）、fFocus（v:fill 焦点尺寸）、sJoin/sWeight（v:stroke 连接与粗细）；
+ * onOff 档 shFill/shStroke（v:shape 的 filled/stroked）、lkAspect（o:lock 的
+ * aspectratio）、fOn（v:fill）、sOn（v:stroke）——VML 走 ST_TrueFalse（t/f），
+ * 与 CT_OnOff（1/0）值域不重叠，读手一并收、载荷里统一存 1/0。 */
 export const IMG_ATTR = 'data-img'
 
 export type ImgPayload = Record<string, string>
 
-/** onOff 档：graphicFrameLocks / picLocks 的 noChangeAspect */
-export const IMG_ONOFF_KEYS = ['gfl', 'pic'] as const
+/** onOff 档：两枚 locks、a:picLocks 的箭头锁、wp:anchor 六枚闸门、VML 的五枚 t/f */
+export const IMG_ONOFF_KEYS = [
+  'gfl',
+  'pic',
+  'picArrow',
+  'anOver',
+  'anBehind',
+  'anCell',
+  'anLocked',
+  'anRelH',
+  'anSimple',
+  'shFill',
+  'shStroke',
+  'lkAspect',
+  'fOn',
+  'sOn',
+] as const
 
 /** 载荷分号分隔，字符串档的值里带 ';' 或 '=' 会撕裂载荷——那就不记（整键丢） */
 function imgValOk(v: string): boolean {
