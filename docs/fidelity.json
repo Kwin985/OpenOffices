@@ -36,12 +36,12 @@
     "meaningfulOccurrences": 23761
   },
   "coverage": {
-    "byPair": 0.25806451612903225,
-    "byOccurrence": 0.7620470518917554,
-    "consultedPairs": 176,
-    "consultedOccurrences": 18107,
-    "neverConsultedPairs": 506,
-    "neverConsultedOccurrences": 5654
+    "byPair": 0.2932551319648094,
+    "byOccurrence": 0.7635200538697866,
+    "consultedPairs": 200,
+    "consultedOccurrences": 18142,
+    "neverConsultedPairs": 482,
+    "neverConsultedOccurrences": 5619
   },
   "consulted": [
     [
@@ -525,8 +525,16 @@
       8
     ],
     [
+      "docPr|descr",
+      7
+    ],
+    [
       "strike|val",
       7
+    ],
+    [
+      "cNvPr|descr",
+      6
     ],
     [
       "left|themeColor",
@@ -685,6 +693,58 @@
       1
     ],
     [
+      "framePr|anchorLock",
+      1
+    ],
+    [
+      "framePr|h",
+      1
+    ],
+    [
+      "framePr|hAnchor",
+      1
+    ],
+    [
+      "framePr|hRule",
+      1
+    ],
+    [
+      "framePr|hSpace",
+      1
+    ],
+    [
+      "framePr|vAnchor",
+      1
+    ],
+    [
+      "framePr|vSpace",
+      1
+    ],
+    [
+      "framePr|w",
+      1
+    ],
+    [
+      "framePr|wrap",
+      1
+    ],
+    [
+      "framePr|x",
+      1
+    ],
+    [
+      "framePr|xAlign",
+      1
+    ],
+    [
+      "framePr|y",
+      1
+    ],
+    [
+      "framePr|yAlign",
+      1
+    ],
+    [
       "hyperlink|id",
       1
     ],
@@ -730,6 +790,42 @@
     ],
     [
       "smallCaps|val",
+      1
+    ],
+    [
+      "tblpPr|bottomFromText",
+      1
+    ],
+    [
+      "tblpPr|horzAnchor",
+      1
+    ],
+    [
+      "tblpPr|leftFromText",
+      1
+    ],
+    [
+      "tblpPr|rightFromText",
+      1
+    ],
+    [
+      "tblpPr|tblpX",
+      1
+    ],
+    [
+      "tblpPr|tblpXSpec",
+      1
+    ],
+    [
+      "tblpPr|tblpY",
+      1
+    ],
+    [
+      "tblpPr|topFromText",
+      1
+    ],
+    [
+      "tblpPr|vertAnchor",
       1
     ],
     [
@@ -1051,10 +1147,6 @@
       8
     ],
     [
-      "docPr|descr",
-      7
-    ],
-    [
       "positionH|relativeFrom",
       7
     ],
@@ -1124,10 +1216,6 @@
     ],
     [
       "anchor|simplePos",
-      6
-    ],
-    [
-      "cNvPr|descr",
       6
     ],
     [
@@ -1816,58 +1904,6 @@
     ],
     [
       "formProt|val",
-      1
-    ],
-    [
-      "framePr|anchorLock",
-      1
-    ],
-    [
-      "framePr|h",
-      1
-    ],
-    [
-      "framePr|hAnchor",
-      1
-    ],
-    [
-      "framePr|hRule",
-      1
-    ],
-    [
-      "framePr|hSpace",
-      1
-    ],
-    [
-      "framePr|vAnchor",
-      1
-    ],
-    [
-      "framePr|vSpace",
-      1
-    ],
-    [
-      "framePr|w",
-      1
-    ],
-    [
-      "framePr|wrap",
-      1
-    ],
-    [
-      "framePr|x",
-      1
-    ],
-    [
-      "framePr|xAlign",
-      1
-    ],
-    [
-      "framePr|y",
-      1
-    ],
-    [
-      "framePr|yAlign",
       1
     ],
     [
@@ -2659,42 +2695,6 @@
       1
     ],
     [
-      "tblpPr|bottomFromText",
-      1
-    ],
-    [
-      "tblpPr|horzAnchor",
-      1
-    ],
-    [
-      "tblpPr|leftFromText",
-      1
-    ],
-    [
-      "tblpPr|rightFromText",
-      1
-    ],
-    [
-      "tblpPr|tblpX",
-      1
-    ],
-    [
-      "tblpPr|tblpXSpec",
-      1
-    ],
-    [
-      "tblpPr|tblpY",
-      1
-    ],
-    [
-      "tblpPr|topFromText",
-      1
-    ],
-    [
-      "tblpPr|vertAnchor",
-      1
-    ],
-    [
       "textbox|inset",
       1
     ],
@@ -2919,12 +2919,12 @@
       60
     ],
     [
-      "cNvPr",
-      58
-    ],
-    [
       "off",
       56
+    ],
+    [
+      "cNvPr",
+      52
     ],
     [
       "adjustRightInd",
@@ -2951,10 +2951,6 @@
       40
     ],
     [
-      "docPr",
-      39
-    ],
-    [
       "snapToGrid",
       36
     ],
@@ -2965,6 +2961,10 @@
     [
       "bookmarkEnd",
       33
+    ],
+    [
+      "docPr",
+      32
     ],
     [
       "stroke",
@@ -3055,10 +3055,6 @@
       13
     ],
     [
-      "framePr",
-      13
-    ],
-    [
       "noWrap",
       13
     ],
@@ -3112,10 +3108,6 @@
     ],
     [
       "nsid",
-      9
-    ],
-    [
-      "tblpPr",
       9
     ],
     [

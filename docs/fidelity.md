@@ -23,10 +23,10 @@ probe injected at 3 points: attr, attrL, reader.__PROBE(再导出)).
 | In scope (7 parts, 5 readable files) | 701 | 31,472 |
 | Word save-session noise | 19 | 7,711 |
 | Meaningful universe | 682 | 23,761 |
-| Consulted | 176 | 18,107 |
-| Never consulted | 506 | 5,654 |
+| Consulted | 200 | 18,142 |
+| Never consulted | 482 | 5,619 |
 
-**Coverage: 25.8% of distinct pairs, 76.2% of meaningful literals.**
+**Coverage: 29.3% of distinct pairs, 76.4% of meaningful literals.**
 
 The corpus held 5 synthetic .docx files (21 KiB); 0 were
 unreadable as archives and are reported by failure class only, never by name.
@@ -102,8 +102,8 @@ run into `docs/fidelity-universe.json` and rebuilt at 1/100 scale by `scripts/ge
 | `proofErr` | 64 |
 | `anchor` | 62 |
 | `ext` | 60 |
-| `cNvPr` | 58 |
 | `off` | 56 |
+| `cNvPr` | 52 |
 | `adjustRightInd` | 48 |
 | `bodyPr` | 44 |
 

@@ -8772,6 +8772,44 @@ Word「缩进」对话框「按字符」那一列写的就是这族（0.01 字�
 - **push 仍没成功**：非交互环境取不到 Windows 凭据（`terminal prompts disabled`），本地领先 origin/main 的提交继续攒着（本轮后 27 个）；凭据恢复后 `git push origin main` 一条命令的事。
 
 
+## 发行说明：v0.145 —— docx 长尾第四轮 D4：替代文本 / 浮动框架 / 表格浮动（24 对上账）
+
+一句立项：D3 顺延清单整包——descr 族 13 字面 + framePr 12 + tblpPr 9 + multiLevelType 读账，**三族全部走 docx 包原生槽**（altText/floating/frame），覆盖率按对 25.8% → **29.3%**（+3.5pp，长尾轮最大涨幅）、按字面 76.2% → **76.4%**（分母 701 对不变，consulted 176 → 200）。裁决与顺延清单见 `docs/docx-fidelity-audit.md` 的 v0.145 追加节。
+
+### 1. 替代文本 descr：docPr 画布级 + cNvPr 图形级
+
+Word 语义里 `descr` 才是替代文本（读屏软件念的那段），`name` 只是对象名——此前 alt 装的一直是 name。读手 bitmap 出口改为 descr 优先、name 兜底（老文件观感不回退），写手 ImageRun `altText.description` ← PM alt。docx 包的 `NonVisualProperties` 固定 `descr:''`——写侧只走 docPr 单边承载，cNvPr@descr 的往返有单边缺口（包的限制，记账）。
+
+### 2. framePr / tblpPr：纸面定位族，屏上不兑现
+
+段落浮动框架与表格浮动都是「页相对定位」，Web 流式排版没有页这一层——与 v0.143 分页四件套同款纪律：`data-frame` / `data-tblp` 载荷只往返。写手两族都走包原生槽：paraFormatOf → `frame`（alignment 形态优先于 absolute，Word 语义里 x 与 xAlign 互斥）；Table → `float`（ITableFloatOptions 键名一一对应，overlap 落 `w:tblOverlap` 子元素）。
+
+### 3. multiLevelType：读 + 记账
+
+编号定义的身份属性（hybridMultilevel 等）描述「这份定义是否设计成多级联动」，而模型把编号定义塌成逐段档位（ListRegistry 按段引用重建），身份带不回来——读入 + warn，不假装。
+
+### 4. 账上的数
+
+| 腿 | 数 |
+|---|---|
+| tsc / vite build | 退出码 0 / ✓（63s） |
+| selftest | 夹具 78 对全上账；73 见全命中 / 5 不见全落空（双向） |
+| docx 主腿（合成语料 5 件） | 分母 701 对 / 31,472 字面；按对 **29.3%**（v0.144：25.8%，+3.5pp）/ 按字面 **76.4%**（76.2%，+0.2pp）；consulted 176 → **200** 对 |
+| 等价腿 | 相同 5 / 不同 0 / 两边同错 0 / 只一边错 0 |
+| 变异腿 | `--mut no-attrL` 27.0% / 68.6%（attrL 漏斗独有 21 对）；`--mut no-attr` 10.0% / 30.8%（attr 漏斗独有 143 对） |
+| pptx selftest 干净腿 | 70.1% / 74.3%（本轮未动 pptx，逐字相同） |
+| 复位 | 变异腿后干净腿复跑，账本 md5 与主腿一致 |
+| 往返（tmp 脚本） | descr 三变体（docPr/cNvPr/回落 name）、framePr 两形态 + 脏数据取舍、tblpPr 十枚逐字段一致 |
+
+### 明确不做的（这一节）
+
+- **表级/条件层边框 space（76 字面）继续顺延**：单元格共用边框，CSS 无对应物，已 warn 记账（连续四轮的账）。
+- **cNvPr@descr 写侧单边缺口不补**：docx 包 NonVisualProperties 固定 descr:''，要补得动写后 XML（ImportedXmlComponent 后处理），收益不抵成本。
+- **framePr/tblpPr 屏上不兑现**：页相对定位在 Web 里没有对应物，强行 absolute 会脱离文档流造成错位——只保往返是更诚实的近似。
+- **lvlPicBulletId / lvlRestart（2 字面）顺延**：编号深层属性，与 multiLevelType 同因。
+- **push 仍没成功**：非交互环境取不到 Windows 凭据（`terminal prompts disabled`），本地领先 origin/main 的提交继续攒着（本轮后 29 个）；凭据恢复后 `git push origin main` 一条命令的事。
+
+
 ## 性能（v0.3）
 
 

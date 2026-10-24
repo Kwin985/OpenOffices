@@ -136,3 +136,35 @@
 | `docPr\|descr` | 7 | 图形替代文本；需改 PM Image 模型 + 写手库外槽（docx 包 ImageRun 无 descr） |
 | `lvlPicBulletId` / `lvlRestart` | 1 / 1 | 图片子弹、层级重启 |
 | `startOverride\|val` 普查实例 | 1 | 宇宙里 1 对实例所在路径读手不走；造语料时补一枚 num/lvlOverride 组合实例可进普查分子 |
+
+---
+
+# v0.145 追加节：D4 轮（替代文本 descr / 浮动框架 framePr / 表格浮动 tblpPr）
+
+代码：`2b17924` → amend `4fc0222`（selftest 抓两枚）。新上账 **24 对**（consulted 176 → 200）：
+按对 25.8% → **29.3%**（+3.5pp，本轮最大涨幅）、按字面 76.2% → **76.4%**（分母 701 对不变）。
+
+| 族 | 新上账对（次数） | 实现要点 |
+|---|---|---|
+| 替代文本 | `docPr\|descr`(7) `cNvPr\|descr`(6) | 读手 bitmap 出口 alt 以 **descr 优先、name 兜底**（Word 语义里 descr 才是替代文本，v0.145 前 alt 装的是 name——读屏软件念的是一枚对象名）；写手 ImageRun `altText.description` ← PM alt。docPr（wp 画布级）与 pic:cNvPr（图形级）两处 descr 都读，**不用 `??` 短路**（右支不求值会让 cNvPr 那半永远不进探针账——selftest 抓的） |
+| 浮动框架 | `framePr\|` 十二枚各 1 | `data-frame` key=value 载荷走 ParagraphStyle frame 属性，屏上不兑现（Web 无页定位，参照分页四件套纪律）；写手 paraFormatOf → docx 包 frame 槽：`x/y`→absolute 形态、`xAlign/yAlign`→alignment 形态、`w/h/rule/space/anchor/wrap/anchorLock` 全原生。包里 `rule` 落 `w:hRule`（vRule 无槽，榜单也没有） |
+| 表格浮动 | `tblpPr\|` 九枚各 1 | `data-tblp` 载荷走 table 扩展 tblp 属性；写手 Table `float`（ITableFloatOptions 键名一一对应，overlap 落 `w:tblOverlap` 子元素而非属性） |
+| 编号身份 | `abstractNum\|multiLevelType`（夹具） | 读入 `Numbering.multiLevels` + `noteNumberingIdentity` warn——编号定义塌成逐段档位（ListRegistry 按段引用重建），定义身份不带回；合成语料无此形态，只有夹具实例 |
+
+**三族全部走 docx 包原生槽**（frame/floating/altText），没有一枚库外拼装——与 v0.144 tab 的 heavy 档不同，这轮的枚举值域包都全。
+
+## 过程中的坑（三枚）
+
+1. **tblpPr 的属性无命名空间前缀**（ECMA-376 CT_TblPPr：`tblpX/tblpXSpec/vertAnchor…`），与 framePr 的 `w:x` 那族正好相反。第一版照 framePr 的写法用 `attr(tp,'w:tblpX')`——数值键因 attrNum 内部有 attrL fallback 侥幸能读，**四个枚举键全丢**（`attr` 无 fallback）。而 attrL 的语义是「按 local name 比 name」：传 `w:tblpX` 反而匹配失败（`local('w:tblpX')='tblpX' !== 'w:tblpX'`），必须传无前缀形。**同一个 tblPr 里，tblStyle/tblW 带 w: 前缀、tblpPr 全无前缀——按元素记前缀形态，别按父元素推断**。
+2. **探针键是「元素名\|属性名」**：multiLevelType 的断言一开始写成 `multiLevelType|val`（想当然按「属性名|值」），实际探针记的是 `abstractNum|multiLevelType`——属性住在哪个元素上，键的左边就是那个元素。写新断言前先看 MUST_SEE 里同族键的形状（`startOverride|val` 的 left 是元素不是属性族）。
+3. **docx 包 NonVisualProperties 的 cNvPr descr 恒空**：`new NonVisualProperties()` 固定 `{id:0, name:'', descr:''}`，ImageRun 的 altText 只写 wp:docPr 那一份。替代文本读侧两处都读、写侧只走 docPr 单边承载——cNvPr@descr 的往返有单边缺口（包的限制，记账）。
+
+## v0.145 顺延清单（D5）
+
+| 对（族） | 次数 | 备注 |
+|---|---|---|
+| 表级/条件层边框 space（tblBorders/insideH/insideV） | 76 | 单元格共用边框，CSS 无对应物，已 warn 记账（连续四轮） |
+| `docPr\|descr` 写侧 cNvPr 单边缺口 | 6 | 包 NonVisualProperties 固定 descr:''；要补得动写后 XML（ImportedXmlComponent），收益不抵 |
+| `lvlPicBulletId` / `lvlRestart` | 1 / 1 | 图片子弹、层级重启——编号深层属性 |
+| `startOverride\|val` 普查实例 | 1 | 宇宙里 1 对实例所在路径读手不走；造语料时补一枚 num/lvlOverride 组合实例 |
+| 杂项长尾（pPr/pgNum 之外的一对对） | — | 榜单已进入个位数区，逐枚成本高于收益；下一轮方向改为「按字面权重扫剩余 neverConsulted」 |
