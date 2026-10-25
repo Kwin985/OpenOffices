@@ -23,10 +23,10 @@ probe injected at 3 points: attr, attrL, reader.__PROBE(再导出)).
 | In scope (7 parts, 5 readable files) | 701 | 31,468 |
 | Word save-session noise | 19 | 7,711 |
 | Meaningful universe | 682 | 23,757 |
-| Consulted | 335 | 22,846 |
-| Never consulted | 347 | 911 |
+| Consulted | 371 | 23,023 |
+| Never consulted | 311 | 734 |
 
-**Coverage: 49.1% of distinct pairs, 96.2% of meaningful literals.**
+**Coverage: 54.4% of distinct pairs, 96.9% of meaningful literals.**
 
 The corpus held 5 synthetic .docx files (22 KiB); 0 were
 unreadable as archives and are reported by failure class only, never by name.
@@ -52,60 +52,60 @@ run into `docs/fidelity-universe.json` and rebuilt at 1/100 scale by `scripts/ge
 | `element|attribute` | literals |
 |---|---:|
 | `t|space` | 348 |
-| `schemeClr|val` | 82 |
 | `instrText|space` | 15 |
 | `noWrap|val` | 13 |
 | `caps|val` | 11 |
 | `shape|gfxdata` | 7 |
-| `bodyPr|anchor` | 5 |
 | `abstractNum|restartNumberingAfterBreak` | 4 |
-| `bodyPr|wrap` | 4 |
-| `effectRef|idx` | 4 |
-| `fillRef|idx` | 4 |
-| `fontRef|idx` | 4 |
-| `lnRef|idx` | 4 |
-| `bodyPr|anchorCtr` | 3 |
-| `bodyPr|bIns` | 3 |
-| `bodyPr|compatLnSpc` | 3 |
-| `bodyPr|lIns` | 3 |
-| `bodyPr|numCol` | 3 |
-| `bodyPr|rIns` | 3 |
-| `bodyPr|rtlCol` | 3 |
-| `bodyPr|tIns` | 3 |
-| `bodyPr|vert` | 3 |
 | `hyperlink|history` | 3 |
-| `lumOff|val` | 3 |
-| `miter|lim` | 3 |
-| `path|connectangles` | 3 |
-| `path|connectlocs` | 3 |
-| `position|val` | 3 |
-| `rect|b` | 3 |
-| `rect|l` | 3 |
+| `bdr|color` | 2 |
+| `bdr|space` | 2 |
+| `bdr|sz` | 2 |
+| `bdr|val` | 2 |
+| `blipFill|rotWithShape` | 2 |
+| `docGrid|charSpace` | 2 |
+| `fill|type` | 2 |
+| `footerReference|id` | 2 |
+| `footerReference|type` | 2 |
+| `gradFill|flip` | 2 |
+| `gradFill|rotWithShape` | 2 |
+| `group|editas` | 2 |
+| `group|gfxdata` | 2 |
+| `group|spt` | 2 |
+| `headerReference|id` | 2 |
+| `headerReference|type` | 2 |
+| `ln|cap` | 2 |
+| `ln|cmpd` | 2 |
+| `shade|val` | 2 |
+| `shape|strokecolor` | 2 |
+| `shape|strokeweight` | 2 |
+| `sizeRelH|relativeFrom` | 2 |
+| `sizeRelV|relativeFrom` | 2 |
 
 ## Which elements the missing literals sit on
 
 | element | never-consulted literals |
 |---|---:|
 | `t` | 348 |
-| `schemeClr` | 82 |
-| `bodyPr` | 44 |
-| `rect` | 24 |
 | `shape` | 19 |
 | `instrText` | 15 |
 | `line` | 15 |
 | `cnfStyle` | 13 |
 | `fill` | 13 |
 | `noWrap` | 13 |
-| `path` | 13 |
 | `reflection` | 13 |
 | `roundrect` | 13 |
 | `shadow` | 13 |
+| `rect` | 12 |
 | `caps` | 11 |
 | `shapetype` | 10 |
-| `stroke` | 10 |
 | `bdr` | 8 |
 | `group` | 7 |
+| `path` | 7 |
 | `xfrm` | 6 |
+| `hyperlink` | 5 |
+| `outerShdw` | 5 |
+| `abstractNum` | 4 |
 
 ## Consulted — the work already paid for
 

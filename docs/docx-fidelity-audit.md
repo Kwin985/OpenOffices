@@ -487,3 +487,62 @@ neverConsulted 387 → 347。最大一块是 VML 图元几何（977 字面，9 �
 | `instrText\|space` | 15 | 域指令的 xml:space，与 `t\|space` 同款噪声，倾向裁定不收 |
 | `bodyPr` 一族 + `lnRef`/`fillRef`/`effectRef`/`fontRef` 的 idx | 约 45 | 文本框（wps）壳，PM 无文本框节点，只读记账 |
 | `shape\|gfxdata` | 7 | **裁定不收**（v0.149）：Word 缓存的图元字节，见上 |
+
+## v0.151（D10）——形状壳查问 + w:position 读名修正 + 图片壳零头
+
+**36 对上账、语料字面 177（宇宙字面约 17,500）**：按对 49.1% → 54.4%、按字面 96.2% → 96.9%；
+consulted 335 → 371，neverConsulted 347 → 311。语料分母不变（31,468）——本轮所有族的承放
+上下文都在早先各轮开好了（d:clr/d:ln 在图片段、v:main/v:pict 在 VML 段、d:wps/d:bodypr 在
+文本框段、b:rpr 在正文段），一枚不用加。
+
+### 实现要点
+
+1. **`w:position` 读名修正（真 bug，读写）**：读手从 v0.142 起用 `valNum(el,'w:pos')` 读
+   基线升降，而 CT_RPr 里**没有 w:pos 这枚元素**——Word 与 docx 库发的都是 `w:position`
+   （ST_SignedTwipsPerMil，半点）。v0.142 那轮有人把 selftest 键名从 `pos` 「修」成
+   `pos|val`，但方向错了：夹具放 `w:pos`、读手读 `w:pos`、MUST_SEE 断言 `pos|val`——
+   **三方在错误的名字上互锁自证**，selftest 一路全绿；而宇宙里根本没有 `pos|val` 这对，
+   真实件里的 `position|val`（338 字面）从没进过分子。屏上后果比账本严重：升降的
+   vertical-align **对真实件一次都没生效过**（读不回自己写的那一枚——写侧 docx 库
+   options.position 一直发的是 w:position）。
+   **教训（与 v0.150 multiLevelType 同源）**：探针证明「漏斗被调用」，证明不了「查的
+   名字在宇宙里」——后者只能靠夹具形态与真实件对账。夹具是自造的，它也会骗人。
+2. **noteShapeMarks（新，只读）**：wps:wsp 的壳——`a:style` 四枚样式矩阵引用
+   （lnRef/fillRef/effectRef/fontRef 的 idx）、bodyPr 全 19 枚、cNvSpPr 的 txBox、
+   样式引用里的 schemeClr 首枚——不在任何读手路径上：文本框内容由 drawing() 展平，
+   壳没人读，且 wsp 段内通常没有 a:blip（图片短路链第一步就断）。与 noteDocumentMarks
+   同款：跑正文前对整树按名查问一遍，只记账不挂载。
+3. **readImgPayload 补六族零头（只读）**：schemeClr 的 val（**宇宙最大单对 7668**，
+   图片段那枚）、lumOff、miter lim、stroke 的 color/miterlimit、path 的
+   connectangles/connectlocs（真实件常是空串而载荷拒空值，按图元几何族同款记
+   「枚数+首枚值」）、rect 四边。schemeClr 在图片段与文本框段各查问一次（同对只记一次）。
+
+### 顺带：selftest 键名的历史订正
+
+`pos|val` 从 MUST_SEE 移除、换成 `position|val`；夹具正文段的 `<w:pos w:val="12"/>`
+改成 `<w:position w:val="12"/>`。这是量具启用以来**第一起「夹具与读手共错」**——
+v0.142 的键名「修正」看似让 selftest 转绿，实则把错误焊死了两轮。
+
+### 过程中的坑
+
+1. **第四度踩「语料段内没有 blip/imagedata」**（wsp 形态）：修法仍是**不动短路链**，
+   另开按名查问入口（noteShapeMarks），而不是往 wsp 段里补一枚 imagedata——那会给
+   `imagedata|id` 多算分母（v0.149 同款推理）。
+2. **探针第一版三条断言全错在自己身上**：①文本框写成 `<wps:txBody>`（语料生成器的
+   非标准壳）而 drawing() 只认 `txbxContent`——正文没展平；改用真实结构
+   `wps:txbx/w:txbxContent`。②PM mark 名猜成 `pos`，实际是 `charExtra` 的 attr。
+   ③「包里不该有 cstate」的断言被包骗反——docx 库对每个 a:blip 恒发 cstate="none"
+   （v0.150 已踩过一次，教训没长进：**恒发值会让「只读不写」的断言反向**）。
+
+### 顺延清单（D11）
+
+| 对（族） | 次数 | 备注 |
+|---|---|---|
+| `noWrap\|val` | 1323 | tcPr 的单元格不换行。包无槽，走 tcPr post-pack 补丁 |
+| `caps\|val` | 1102 | rPr 的全大写。包无槽；PM 可承载（text-transform: uppercase 屏上可兑现），写侧走 rPr 补丁 |
+| `bdr\|color/space/sz/val` | 173×4 | rPr 的字符边框（w:bdr）。包无槽，走 rPr 补丁 |
+| `instrText\|space` | 15 | 域指令的 xml:space，与 `t\|space` 同款噪声，倾向裁定不收 |
+| `t\|space` | 348 | **裁定不查**（v0.143 起），同前 |
+| `shape\|gfxdata` | 7 | **裁定不收**（v0.149）：Word 缓存的图元字节，见上 |
+| `lum\|bright/contrast` 等色彩调制零头 | 3×2 | schemeClr 子元素，与 lumMod/lumOff 同族只读记账 |
+| `gs\|pos` | 35 | 渐变色标位置（a:gs），与 lumOff 同轮漏收的零星 |

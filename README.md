@@ -8946,7 +8946,7 @@ Word 语义里 `descr` 才是替代文本（读屏软件念的那段），`name`
 （`pic:spPr` 里再嵌一枚 `a:spPr`），7 枚 `bwMode` 有 6 枚在嵌套层，`findDesc` 只取第一枚会掉，
 改走 `allDesc` 全查。
 
-- **push 仍没成功**：非交互环境取不到 Windows 凭据（`terminal prompts disabled`），本地领先 origin/main 的提交继续攒着（本轮后 41 个）；凭据恢复后 `git push origin main` 一条命令的事。
+- **push 仍没成功**：非交互环境取不到 Windows 凭据（`terminal prompts disabled`），本地领先 origin/main 的提交继续攒着（本轮后 43 个）；凭据恢复后 `git push origin main` 一条命令的事。
 
 
 ### v0.150（D9）——编号定义账 / 样式身份 / VML 形状余量与图元几何
@@ -8999,6 +8999,46 @@ Word 语义里 `descr` 才是替代文本（读屏软件念的那段），`name`
 挪进自带 imagedata 的 `v:main`。②编号补丁第一版按「第 N 个 abstractNum 接第 N 条 def」——包恒发
 三枚定义（两个内置 + 自定义），枚数从不等，整笔放弃；改指纹匹配后单层自定义列表立刻命中。
 ③`v:group` 承放在 `v:group` 上下文，那段也没有 imagedata——一并挪到 `v:pict`（其 close 自带一枚）。
+
+### v0.151（D10）——形状壳查问 / `w:position` 读名修正 / 图片壳零头
+
+按字面权重扫剩余 neverConsulted：**36 对上账、语料字面 177（宇宙字面约 1.75 万）**，覆盖率
+**按对 49.1% → 54.4%、按字面 96.2% → 96.9%**；consulted 335 → 371 对，neverConsulted 347 → 311。
+
+| 族 | 语料字面 | 往返 |
+|---|---|---|
+| `a:schemeClr` 的 val（主题色槽位名，宇宙 7668——最大单对） | 82 | 只读 |
+| `a:bodyPr` 一族 19 枚（文本框文本盒属性） | 43 | 只读 |
+| `a:lnRef`/`a:fillRef`/`a:effectRef`/`a:fontRef` 的 idx（样式矩阵引用） | 16 | 只读 |
+| `v:rect` 四边（textbox 老式件文字盒） | 12 | 只读 |
+| `a:lumOff` val、`a:miter` lim、`v:stroke` color/miterlimit、`v:path` 连接几何 | 12 | 只读 |
+| `w:position`（rPr 基线升降，读名修正） | 3 | **读写** |
+| `wps:cNvSpPr` 的 txBox | 2 | 只读 |
+
+- **本轮最大单对是个「查了白查」**：`a:schemeClr` 的 val 在宇宙里有 7668 次（fill/line/
+  effect 三处都长这样），但读手从没按名查问过它——屏上不兑现（Web 没有主题色概念），
+  写侧也写不出（包不发 schemeClr），**只读记账**。图片段那枚由 `readImgPayload` 收，
+  文本框段那枚由 `noteShapeMarks` 收（两处都查问，同对只记一次）。
+- **`w:position` 读名修正——又一处「漏斗被调用、名字是错的」**：读手从 v0.142 起读
+  `w:pos`，而 CT_RPr 里**没有这枚元素**——Word 与 docx 库发的都是 `w:position`
+  （ST_SignedTwipsPerMil）。后果不是「少赚 338 字面」：屏上的 vertical-align 升降
+  **对真实件一次都没生效过**（读不回自己写的那一枚），而夹具里放的恰是 `w:pos`、
+  MUST_SEE 断言的是 `pos|val`——夹具与读手在错误的名字上互锁自证，selftest 一路全绿。
+  与 v0.150 的 `multiLevelType` 同款病，病根同源：**探针证明「漏斗被调用」，
+  证明不了「查的名字在宇宙里」**——后者靠夹具形态与真实件对账。
+- **形状壳（wsp）第四形态的同款坑**：文本框的**内容**由 `drawing()` 展平成段落，
+  壳本身不在任何读手路径上，且 wsp 段内通常没有 `a:blip`——图片短路链第一步就断
+  （v0.148 的 `d:inline`、v0.149 的 `v:fill`/`v:stroke`、v0.150 的 `v:path` 之后
+  **第四度**踩「语料段内没有 blip/imagedata」）。修法仍是**不动短路链**：新增
+  `noteShapeMarks`，跑正文前对整树按名查问一遍（与 `noteDocumentMarks` 同款只读记账）。
+- **明确不做**：`caps|val`（1102）/`noWrap|val`（1323）/`bdr` 一族（692）留 D11——
+  三族都要 rPr/tcPr 的 post-pack 补丁（包里没槽），单开一轮做得完；`t|space`、
+  `shape|gfxdata` 维持裁定不收。
+
+**门禁**：tsc 0、build ✓；selftest MUST_SEE **241 枚全命中（净增 35：+36 新对 −1 错名
+`pos|val`）** / MUST_NOT_SEE 1 枚全落空；等价腿 5/5；变异腿有牙（no-attrL 40.8%/83.1%、
+no-attr 25.5%/41.0%）；变异后干净腿复位 md5 与主腿一致；语料分母不变（31,468——本轮
+新族的承放上下文早先各轮已开好，一枚不用加）。
 
 
 ## 性能（v0.3）

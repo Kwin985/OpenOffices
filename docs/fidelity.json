@@ -36,12 +36,12 @@
     "meaningfulOccurrences": 23757
   },
   "coverage": {
-    "byPair": 0.4912023460410557,
-    "byOccurrence": 0.9616534074167614,
-    "consultedPairs": 335,
-    "consultedOccurrences": 22846,
-    "neverConsultedPairs": 347,
-    "neverConsultedOccurrences": 911
+    "byPair": 0.5439882697947214,
+    "byOccurrence": 0.9691038430778297,
+    "consultedPairs": 371,
+    "consultedOccurrences": 23023,
+    "neverConsultedPairs": 311,
+    "neverConsultedOccurrences": 734
   },
   "consulted": [
     [
@@ -259,6 +259,10 @@
     [
       "color|themeColor",
       92
+    ],
+    [
+      "schemeClr|val",
+      82
     ],
     [
       "spacing|before",
@@ -949,6 +953,10 @@
       5
     ],
     [
+      "bodyPr|anchor",
+      5
+    ],
+    [
       "cols|space",
       5
     ],
@@ -1009,6 +1017,10 @@
       5
     ],
     [
+      "bodyPr|wrap",
+      4
+    ],
+    [
       "Choice|Requires",
       4
     ],
@@ -1017,7 +1029,19 @@
       4
     ],
     [
+      "effectRef|idx",
+      4
+    ],
+    [
       "ext|uri",
+      4
+    ],
+    [
+      "fillRef|idx",
+      4
+    ],
+    [
+      "fontRef|idx",
       4
     ],
     [
@@ -1030,6 +1054,10 @@
     ],
     [
       "insideV|themeColor",
+      4
+    ],
+    [
+      "lnRef|idx",
       4
     ],
     [
@@ -1051,6 +1079,42 @@
     [
       "useLocalDpi|val",
       4
+    ],
+    [
+      "bodyPr|anchorCtr",
+      3
+    ],
+    [
+      "bodyPr|bIns",
+      3
+    ],
+    [
+      "bodyPr|compatLnSpc",
+      3
+    ],
+    [
+      "bodyPr|lIns",
+      3
+    ],
+    [
+      "bodyPr|numCol",
+      3
+    ],
+    [
+      "bodyPr|rIns",
+      3
+    ],
+    [
+      "bodyPr|rtlCol",
+      3
+    ],
+    [
+      "bodyPr|tIns",
+      3
+    ],
+    [
+      "bodyPr|vert",
+      3
     ],
     [
       "br|type",
@@ -1117,12 +1181,60 @@
       3
     ],
     [
+      "lumOff|val",
+      3
+    ],
+    [
+      "miter|lim",
+      3
+    ],
+    [
+      "path|connectangles",
+      3
+    ],
+    [
+      "path|connectlocs",
+      3
+    ],
+    [
       "path|h",
       3
     ],
     [
       "path|w",
       3
+    ],
+    [
+      "position|val",
+      3
+    ],
+    [
+      "rect|b",
+      3
+    ],
+    [
+      "rect|l",
+      3
+    ],
+    [
+      "rect|r",
+      3
+    ],
+    [
+      "rect|t",
+      3
+    ],
+    [
+      "stroke|color",
+      3
+    ],
+    [
+      "stroke|miterlimit",
+      3
+    ],
+    [
+      "cNvSpPr|txBox",
+      2
     ],
     [
       "cols|num",
@@ -1170,6 +1282,38 @@
     ],
     [
       "between|val",
+      1
+    ],
+    [
+      "bodyPr|forceAA",
+      1
+    ],
+    [
+      "bodyPr|fromWordArt",
+      1
+    ],
+    [
+      "bodyPr|horzOverflow",
+      1
+    ],
+    [
+      "bodyPr|rot",
+      1
+    ],
+    [
+      "bodyPr|spcCol",
+      1
+    ],
+    [
+      "bodyPr|spcFirstLastPara",
+      1
+    ],
+    [
+      "bodyPr|upright",
+      1
+    ],
+    [
+      "bodyPr|vertOverflow",
       1
     ],
     [
@@ -1391,10 +1535,6 @@
       348
     ],
     [
-      "schemeClr|val",
-      82
-    ],
-    [
       "instrText|space",
       15
     ],
@@ -1411,115 +1551,11 @@
       7
     ],
     [
-      "bodyPr|anchor",
-      5
-    ],
-    [
       "abstractNum|restartNumberingAfterBreak",
       4
     ],
     [
-      "bodyPr|wrap",
-      4
-    ],
-    [
-      "effectRef|idx",
-      4
-    ],
-    [
-      "fillRef|idx",
-      4
-    ],
-    [
-      "fontRef|idx",
-      4
-    ],
-    [
-      "lnRef|idx",
-      4
-    ],
-    [
-      "bodyPr|anchorCtr",
-      3
-    ],
-    [
-      "bodyPr|bIns",
-      3
-    ],
-    [
-      "bodyPr|compatLnSpc",
-      3
-    ],
-    [
-      "bodyPr|lIns",
-      3
-    ],
-    [
-      "bodyPr|numCol",
-      3
-    ],
-    [
-      "bodyPr|rIns",
-      3
-    ],
-    [
-      "bodyPr|rtlCol",
-      3
-    ],
-    [
-      "bodyPr|tIns",
-      3
-    ],
-    [
-      "bodyPr|vert",
-      3
-    ],
-    [
       "hyperlink|history",
-      3
-    ],
-    [
-      "lumOff|val",
-      3
-    ],
-    [
-      "miter|lim",
-      3
-    ],
-    [
-      "path|connectangles",
-      3
-    ],
-    [
-      "path|connectlocs",
-      3
-    ],
-    [
-      "position|val",
-      3
-    ],
-    [
-      "rect|b",
-      3
-    ],
-    [
-      "rect|l",
-      3
-    ],
-    [
-      "rect|r",
-      3
-    ],
-    [
-      "rect|t",
-      3
-    ],
-    [
-      "stroke|color",
-      3
-    ],
-    [
-      "stroke|miterlimit",
       3
     ],
     [
@@ -1540,10 +1576,6 @@
     ],
     [
       "blipFill|rotWithShape",
-      2
-    ],
-    [
-      "cNvSpPr|txBox",
       2
     ],
     [
@@ -1668,38 +1700,6 @@
     ],
     [
       "background|themeShade",
-      1
-    ],
-    [
-      "bodyPr|forceAA",
-      1
-    ],
-    [
-      "bodyPr|fromWordArt",
-      1
-    ],
-    [
-      "bodyPr|horzOverflow",
-      1
-    ],
-    [
-      "bodyPr|rot",
-      1
-    ],
-    [
-      "bodyPr|spcCol",
-      1
-    ],
-    [
-      "bodyPr|spcFirstLastPara",
-      1
-    ],
-    [
-      "bodyPr|upright",
-      1
-    ],
-    [
-      "bodyPr|vertOverflow",
       1
     ],
     [
@@ -2859,18 +2859,6 @@
       348
     ],
     [
-      "schemeClr",
-      82
-    ],
-    [
-      "bodyPr",
-      44
-    ],
-    [
-      "rect",
-      24
-    ],
-    [
       "shape",
       19
     ],
@@ -2895,10 +2883,6 @@
       13
     ],
     [
-      "path",
-      13
-    ],
-    [
       "reflection",
       13
     ],
@@ -2911,6 +2895,10 @@
       13
     ],
     [
+      "rect",
+      12
+    ],
+    [
       "caps",
       11
     ],
@@ -2919,15 +2907,15 @@
       10
     ],
     [
-      "stroke",
-      10
-    ],
-    [
       "bdr",
       8
     ],
     [
       "group",
+      7
+    ],
+    [
+      "path",
       7
     ],
     [
@@ -2951,19 +2939,7 @@
       4
     ],
     [
-      "effectRef",
-      4
-    ],
-    [
-      "fillRef",
-      4
-    ],
-    [
       "fillToRect",
-      4
-    ],
-    [
-      "fontRef",
       4
     ],
     [
@@ -2987,11 +2963,11 @@
       4
     ],
     [
-      "lnRef",
+      "srcRect",
       4
     ],
     [
-      "srcRect",
+      "stroke",
       4
     ],
     [
@@ -3019,19 +2995,7 @@
       3
     ],
     [
-      "lumOff",
-      3
-    ],
-    [
-      "miter",
-      3
-    ],
-    [
       "OLEObject",
-      3
-    ],
-    [
-      "position",
       3
     ],
     [
@@ -3064,10 +3028,6 @@
     ],
     [
       "chOff",
-      2
-    ],
-    [
-      "cNvSpPr",
       2
     ],
     [

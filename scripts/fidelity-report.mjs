@@ -68,6 +68,8 @@ const V = 'urn:schemas-microsoft-com:vml'
 const O = 'urn:schemas-microsoft-com:office:office'
 // v0.150：兼容性族（mc:AlternateContent/mc:Choice）与根上的 mc:Ignorable
 const MC = 'http://schemas.openxmlformats.org/markup-compatibility/2006'
+// v0.151：形状壳（wps:wsp/cNvSpPr/txbx/bodyPr）
+const WPS = 'http://schemas.microsoft.com/office/word/2010/wordprocessingShape'
 // 1x1 透明 PNG（图片段的关系与媒体目标）
 const PNG_B64 = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg=='
 // v0.142：clrScheme 与 fontScheme 并列。dk1/lt1 写成 sysClr（真件里 windowText/window
@@ -142,8 +144,9 @@ const FIXTURE_DOC =
   `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>` +
   // v0.145：图片与浮动族要 wp/a/pic/r 四个命名空间（docPr/cNvPr/blip）
   // v0.150：兼容性族再要一个 mc（AlternateContent/Choice 与根上的 mc:Ignorable）
+  // v0.151：形状壳要 wps（wsp/cNvSpPr/txbx/bodyPr）
   `<w:document xmlns:w="${W}" xmlns:wp="${WP}" xmlns:a="${A}" xmlns:pic="${PIC}" xmlns:r="${R}"` +
-  ` xmlns:v="${V}" xmlns:o="${O}" xmlns:mc="${MC}" mc:Ignorable="w14"><w:body>` +
+  ` xmlns:v="${V}" xmlns:o="${O}" xmlns:mc="${MC}" xmlns:wps="${WPS}" mc:Ignorable="w14"><w:body>` +
   `<w:p w:rsidR="00A1" w:rsidRDefault="00A2" w:rsidP="00B3">` +
   `<w:pPr><w:pStyle w:val="ReportHead"/>` +
   `<w:spacing w:before="120" w:after="240" w:line="360" w:lineRule="auto" w:beforeAutospacing="0" w:afterAutospacing="0"/>` +
@@ -157,7 +160,11 @@ const FIXTURE_DOC =
   `<w:sz w:val="24"/><w:szCs w:val="28"/><w:b w:val="0"/>` +
   // v0.143：复杂文字粗斜与小型大写（iCs/bCs 只往返，smallCaps 屏上走 font-variant-caps）
   `<w:iCs/><w:bCs/><w:smallCaps/>` +
-  `<w:lang w:val="en-US" w:eastAsia="zh-CN"/><w:kern w:val="2"/><w:pos w:val="12"/></w:rPr>` +
+  // v0.151：基线升降的元素名修正——CT_RPr 里没有 w:pos 这枚元素，Word 与 docx 库发的
+  // 都是 w:position（ST_SignedTwipsPerMil）。v0.142 起夹具一直放 w:pos、MUST_SEE 一直
+  // 断言 pos|val——夹具与读手在错误的名字上互锁自证，而宇宙里根本没有这对；position|val
+  // （338 字面）因此从没进过分子，屏上的 vertical-align 升降对真实件一次都没生效
+  `<w:lang w:val="en-US" w:eastAsia="zh-CN"/><w:kern w:val="2"/><w:position w:val="12"/></w:rPr>` +
   `<w:t xml:space="preserve"> 带空白的正文 </w:t></w:r></w:p>` +
   // v0.142：主题色 run（accent1 + tint/shade 双戴）与图案底纹段（pct25 前景 FF0000/背景 FFFFFF）
   `<w:p><w:pPr><w:shd w:val="pct25" w:color="FF0000" w:fill="FFFFFF"/></w:pPr>` +
@@ -200,6 +207,10 @@ const FIXTURE_DOC =
   // v0.150：a:ext 的 uri（扩展点身份）、a:ln 的线宽与 a:lumMod 的亮度调制
   `<a:ext uri="{1234-5678-9ABC-DEF0}"/><a:ln w="9525"><a:solidFill><a:schemeClr val="accent1">` +
   `<a:lumMod val="50000"/></a:schemeClr></a:solidFill></a:ln>` +
+  // v0.151：schemeClr 的槽位名（宇宙最大单对）、a:lumOff 的明度偏移（与 lumMod 同住
+  // schemeClr 里）、a:miter 的斜接限制（a:ln 的子元素）。fill/line 两处引用分开查
+  `<a:ext uri="{1234-5678-9ABC-DEF1}"/><a:ln w="9525"><a:solidFill><a:schemeClr val="accent2">` +
+  `<a:lumMod val="50000"/><a:lumOff val="50000"/></a:schemeClr></a:solidFill><a:miter lim="800000"/></a:ln>` +
   `</pic:spPr></pic:pic>` +
   `</a:graphicData></a:graphic></wp:inline></w:drawing></w:r></w:p>` +
   // v0.148：浮动图（wp:anchor）——simplePos 的绝对坐标与 positionH/V 的基准。
@@ -234,19 +245,46 @@ const FIXTURE_DOC =
   // v0.150：o:useLocalDpi（按本机 DPI 量尺寸）与 o:attr（扩展点名值对）
   `<o:useLocalDpi val="0"/><o:attr name="x" val="y"/>` +
   `<o:lock aspectratio="f" ext="edit"/>` +
-  `<v:fill on="t" focussize="0,0"/><v:stroke on="t" joinstyle="round" weight="1pt"/>` +
+  // v0.151：v:stroke 补描边色与斜接限制两枚（与 on/joinstyle/weight 同元素）
+  `<v:fill on="t" focussize="0,0"/><v:stroke on="t" joinstyle="round" weight="1pt" color="#000080" miterlimit="8"/>` +
   // v0.150：图元几何族——v:path 的盒子（w/h）与两枚顶点（v:pt 的 x/y）、
   // v:gd 的公式与名、v:cxn 的连线角、v:pos 的手柄位置。只读记账：
   // 每族只记「枚数 + 首枚值」，全挂会把 HTML 撑爆
-  `<v:path w="1000" h="1000"><v:pt x="0" y="0"/><v:pt x="10" y="20"/></v:path>` +
+  // v0.151：v:path 再带 connectangles/connectlocs 两枚连接几何（真实件里常是空串）
+  `<v:path w="1000" h="1000" connectangles="" connectlocs="">` +
+  `<v:pt x="0" y="0"/><v:pt x="10" y="20"/></v:path>` +
   `<v:gd fmla="sum 0 0 0" name="x1"/><v:cxn ang="0"/><v:pos x="5" y="6"/>` +
-  `</v:shape></w:pict></w:r></w:p>` +
+  `</v:shape>` +
+  // v0.151：v:rect 四边——textbox 老式件的文字盒（与 v:shape 平级），四边常是 0
+  `<v:rect l="0" t="0" r="0" b="0"/>` +
+  `</w:pict></w:r></w:p>` +
   // v0.150：VML 分组画布——v:group 五枚（id/spid/coordorigin/coordsize/style）。
   // gfxdata（图元字节缓存）**裁定不收**：base64  blob 挂 HTML 属性性价比极差，
   // 且写侧写不回——与 t|space 同款裁定，所以夹具里也不放它
   `<w:p><w:r><w:pict><v:group id="_x0000_s1025" spid="_x0000_s1026" coordorigin="0,0"` +
   ` coordsize="1000,1000" style="position:absolute">` +
   `<v:imagedata r:id="rId1"/></v:group></w:pict></w:r></w:p>` +
+  // v0.151：wps:wsp 形状壳——文本框那一支。段内没有 a:blip，图片短路链够不着，
+  // 只能靠跑正文前的按名查问（noteShapeMarks）上账：a:style 的四枚样式矩阵引用
+  // （lnRef/fillRef/effectRef/fontRef 的 idx，各带一枚 schemeClr）、cNvSpPr 的
+  // txBox，以及 txbx 之后的 bodyPr 全 19 枚文本盒属性（CT_WordprocessingShape 序）
+  `<w:p><w:r><w:drawing><wp:inline><wp:extent cx="914400" cy="914400"/><wp:docPr id="9" name="形状 1"/>` +
+  `<a:graphic><a:graphicData><wps:wsp>` +
+  `<a:style><a:lnRef idx="1"><a:schemeClr val="accent1"/></a:lnRef>` +
+  `<a:fillRef idx="2"><a:schemeClr val="accent2"/></a:fillRef>` +
+  `<a:effectRef idx="0"><a:schemeClr val="accent3"/></a:effectRef>` +
+  `<a:fontRef idx="minor"><a:schemeClr val="lt1"/></a:fontRef></a:style>` +
+  `<wps:cNvSpPr txBox="1"/><wps:spPr><a:xfrm/></wps:spPr>` +
+  `<wps:txbx><w:txbxContent><w:p><w:r><w:t>文本框正文</w:t></w:r></w:p></w:txbxContent></wps:txbx>` +
+  `<wps:bodyPr anchor="ctr" wrap="square" vert="horz" numCol="1" lIns="91440" tIns="45720"` +
+  ` rIns="91440" bIns="91440" anchorCtr="0" rtlCol="0" compatLnSpc="0" upright="0" rot="0"` +
+  ` spcCol="0" spcFirstLastPara="0" forceAA="0" fromWordArt="0" horzOverflow="overflow"` +
+  ` vertOverflow="overflow"/>` +
+  `</wps:wsp></a:graphicData></a:graphic></wp:inline></w:drawing></w:r></w:p>` +
+  // v0.151：rPr 的 w:position——基线升降（半点，正升负降）。读名从 w:pos 修正为
+  // w:position：CT_RPr 里没有 w:pos 这枚元素，Word 与 docx 库发的都是 w:position，
+  // 旧读名让那 338 字面从没进过分子、屏上升降对真实件一次都没生效
+  `<w:p><w:r><w:rPr><w:position w:val="24"/></w:rPr><w:t>升上去的字</w:t></w:r></w:p>` +
   // v0.150：文档级标记三族——proofErr（拼写/语法检查标记，body 直子）、
   // mc:Choice（AlternateContent 的兼容分支）都不在任何读手路径上，块遍历前先查问
   `<w:proofErr w:type="spellStart"/>` +
@@ -342,7 +380,9 @@ const MUST_SEE = [
   'lang|val',
   'lang|eastAsia',
   'kern|val',
-  'pos|val',
+  // v0.151：pos|val 曾在此列——那是 v0.142 起夹具与读手在错误元素名 w:pos 上的互锁
+  // （CT_RPr 无此元素，宇宙里根本没有这对），改成 w:position 的 position|val，见
+  // MUST_SEE 尾部与 D10 审计节
   // v0.142：主题色（clrScheme 的 srgbClr/sysClr 两分支 + w:color 的 themeColor/Tint/Shade）、
   // 图案底纹三件套（val/color/fill）、编号的符面与对齐（lvlText/lvlJc）与起始号改写
   // （lvlOverride/startOverride）。下面每一枚都能在夹具里指出唯一一处 XML。
@@ -560,6 +600,45 @@ const MUST_SEE = [
   'proofErr|type',
   'Choice|Requires',
   'document|Ignorable',
+  // v0.151：形状壳一族（noteShapeMarks 按名查问）+ rPr 的基线升降读名修正
+  'lnRef|idx',
+  'fillRef|idx',
+  'effectRef|idx',
+  'fontRef|idx',
+  'cNvSpPr|txBox',
+  'bodyPr|anchor',
+  'bodyPr|anchorCtr',
+  'bodyPr|bIns',
+  'bodyPr|compatLnSpc',
+  'bodyPr|forceAA',
+  'bodyPr|fromWordArt',
+  'bodyPr|horzOverflow',
+  'bodyPr|lIns',
+  'bodyPr|numCol',
+  'bodyPr|rIns',
+  'bodyPr|rot',
+  'bodyPr|rtlCol',
+  'bodyPr|spcCol',
+  'bodyPr|spcFirstLastPara',
+  'bodyPr|tIns',
+  'bodyPr|upright',
+  'bodyPr|vert',
+  'bodyPr|vertOverflow',
+  'bodyPr|wrap',
+  'position|val',
+  // v0.151：图片壳零头六族（schemeClr 在图片段由 readImgPayload 收、wsp 段由
+  // noteShapeMarks 收——两处都查问，同对只记一次）
+  'schemeClr|val',
+  'lumOff|val',
+  'miter|lim',
+  'stroke|color',
+  'stroke|miterlimit',
+  'path|connectangles',
+  'path|connectlocs',
+  'rect|l',
+  'rect|t',
+  'rect|r',
+  'rect|b',
 ]
 // 我放进夹具而读手一寸不查的：t 的 xml:space 是**裁定不查**——escText 无条件保留空白
 // （连续空格第二个起换 nbsp），强于 preserve 所需，查了也没有第二行代码可写。
