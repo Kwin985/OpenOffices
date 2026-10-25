@@ -23,10 +23,10 @@ probe injected at 3 points: attr, attrL, reader.__PROBE(再导出)).
 | In scope (7 parts, 5 readable files) | 701 | 31,471 |
 | Word save-session noise | 19 | 7,711 |
 | Meaningful universe | 682 | 23,760 |
-| Consulted | 528 | 23,229 |
-| Never consulted | 154 | 531 |
+| Consulted | 561 | 23,262 |
+| Never consulted | 121 | 498 |
 
-**Coverage: 77.4% of distinct pairs, 97.8% of meaningful literals.**
+**Coverage: 82.3% of distinct pairs, 97.9% of meaningful literals.**
 
 The corpus held 5 synthetic .docx files (22 KiB); 0 were
 unreadable as archives and are reported by failure class only, never by name.
@@ -72,15 +72,15 @@ run into `docs/fidelity-universe.json` and rebuilt at 1/100 scale by `scripts/ge
 | `background|themeColor` | 1 |
 | `background|themeShade` | 1 |
 | `calcOnExit|val` | 1 |
-| `cnfStyle|evenHBand` | 1 |
-| `cnfStyle|evenVBand` | 1 |
-| `cnfStyle|firstColumn` | 1 |
-| `cnfStyle|firstRow` | 1 |
-| `cnfStyle|firstRowFirstColumn` | 1 |
-| `cnfStyle|firstRowLastColumn` | 1 |
-| `cnfStyle|lastColumn` | 1 |
-| `cnfStyle|lastRow` | 1 |
-| `cnfStyle|lastRowFirstColumn` | 1 |
+| `cntxtalts|val` | 1 |
+| `col|space` | 1 |
+| `col|w` | 1 |
+| `cols|equalWidth` | 1 |
+| `creationId|id` | 1 |
+| `default|val` | 1 |
+| `em|val` | 1 |
+| `emboss|val` | 1 |
+| `entryMacro|val` | 1 |
 
 ## Which elements the missing literals sit on
 
@@ -88,14 +88,11 @@ run into `docs/fidelity-universe.json` and rebuilt at 1/100 scale by `scripts/ge
 |---|---:|
 | `t` | 348 |
 | `instrText` | 15 |
-| `cnfStyle` | 13 |
 | `reflection` | 13 |
 | `shape` | 7 |
 | `xfrm` | 6 |
 | `outerShdw` | 5 |
-| `comment` | 4 |
 | `gradFill` | 4 |
-| `srcRect` | 4 |
 | `textOutline` | 4 |
 | `background` | 3 |
 | `headEnd` | 3 |
@@ -106,6 +103,9 @@ run into `docs/fidelity-universe.json` and rebuilt at 1/100 scale by `scripts/ge
 | `u` | 3 |
 | `blipFill` | 2 |
 | `col` | 2 |
+| `group` | 2 |
+| `hyperlink` | 2 |
+| `insideH` | 2 |
 
 ## Consulted — the work already paid for
 

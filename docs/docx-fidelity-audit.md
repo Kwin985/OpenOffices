@@ -663,3 +663,54 @@ v:roundrect」而不是假装双向。
 | 批注族（`comment` 四枚、`commentReference\|id`、`comments(Ex)` 根 Ignorable） | 约 100 | 批注元数据，与 comments.xml 那条链同源，可一并扫 |
 | `cnfStyle` 十三枚（条件格式的「哪一行哪一列」开关） | 520 | 一整族一个元素，屏上零兑现（无表样式条件格式），纯只读记账 |
 | `endnotes`/`footnotes` 根 Ignorable | 148 | 与 v0.152 收的 numbering/styles 根 Ignorable 同款，两个部件各补一行 |
+
+## v0.154（D13）——图片源裁剪框 / 表间距 / 隐藏文字 / 批注族改走漏斗
+
+**33 对上账、语料字面 33（宇宙字面 1,452）**；覆盖率**按对 77.4% → 82.3%、按字面
+97.8% → 97.9%**；consulted 528 → 561，neverConsulted 154 → 121。
+
+### 这一轮做了什么
+
+能兑现的三族 + 批注身份：
+
+- **`a:srcRect` 四边**（292）：blipFill 的源裁剪框，千分比（25000 = 25%）→
+  `clip-path: inset()`。与 v0.153 的 VML crop 是**同一件事的两代写法**（老式件用
+  v:imagedata 的 0..1 分数、新式件用千分比整数），同折成 CSS，同时在场时按 VML 那一族。
+  写侧发不出 → 单边通道，探针明写「输出不该有 srcRect」。
+- **`w:tblCellSpacing`**（142）：→ `border-spacing`，且**必须同时切
+  `border-collapse: separate`**（CSS 在 collapse 下忽略 border-spacing，Word 有间距时
+  同样不共享格边）。写侧走 TBLPR 载荷补丁。
+- **`w:vanish`**（88）：隐藏文字 → `visibility: hidden`（**不是 display:none**——Word 的
+  隐藏文字不显示却仍占版面，display:none 会把布局一起改掉）。写侧是包里类型面暴露的
+  原生槽 `IRunOptions.vanish`，与 v0.152 的 allCaps/border 同路数，不走库外断言。
+- **批注族**（97）：从正则搬进 attr 漏斗（见下）。
+
+纯只读记账：`cnfStyle` 十三枚（520，表条件格式落点开关）、脚注尾注两根 Ignorable（148）、
+`smartTag` 两枚（160）、`tblOverlap` 与 `a:spLocks` 两枚（165）。
+
+### 教训
+
+1. **序是认真的，补丁锚点不能共用。** TBLPR 载荷那条补丁原本只有一套「插到第一个已知
+   后续元素之前」的锚点（为 bandSize 写的，bandSize 排在 `w:tblW` **之前**）。把
+   `w:tblCellSpacing` 接进同一串，它就被插到了 tblW 前面——而 CT_TblPrBase 的序里它排在
+   tblW/jc **之后**。探针第一版跑出来 tblPr 长这样，肉眼看着「元素在、值对」，
+   **只有把序摊开对才看得见**。改成两族各自一条登记 + 各自的锚点表。
+2. **自己把自己绕进去一次**：`dt.cellSps` 里存的是**已序列化**的 XML 片段，补丁回调里
+   又拿它去跑了一遍 `tblCellSpacingXmlOf`（那是吃载荷串的）→ 解析出空、整笔静默不发。
+   与 bandMine 的口径不一致是根源（那边存的就是 XML）。教训：**同一个数组里的东西，
+   存的是载荷还是片段，得在一处说死**。
+3. **正则不进漏斗 = 账本盲区，这是第二次了**（第一次是 v0.147 的节属性）。批注的
+   author/date/initials 一直在读、一直在用，可账本上从来没有——因为 `commentRowsOf`
+   是正则。保真路径改用 `readComments`（parseXml + attr），兜底路径不动。
+
+### 顺延清单（D14）
+
+| 对（族） | 宇宙次数 | 备注 |
+|---|---|---|
+| `instrText\|space` | 1524 | 域指令的 xml:space，与 `t\|space` 同款噪声，倾向裁定不收 |
+| `shape\|gfxdata` / `group\|gfxdata` / `roundrect\|gfxdata` / `line\|gfxdata` / `rect\|gfxdata` | 7+163+135+96+75 | **裁定不收**（v0.149）：Word 缓存的图元字节 |
+| `t\|space` | 348 | **裁定不查**（v0.143 起），同前 |
+| DrawingML 线端族（`prstDash\|val`、`tailEnd`/`headEnd` 各三枚、`srcRect` 已收） | 约 900 | 描边端头与箭头，屏上几乎没有对应物（CSS 的 marker-end 只对 SVG 生效），需先定「兑不兑现」再扫 |
+| DrawingML 色彩与几何零头（`insideH`/`insideV` themeShade/themeTint、`alpha`\|val、`alphaOff`/`hueOff`/`satOff`、`prstClr`\|val、`tint`\|val、`xfrm`\|rot、`sizeRelH/V`\|relativeFrom） | 约 500 | 逐对裁决，多数屏上零兑现 |
+| 阴影与三维（`outerShdw` 五枚、`reflection` 十三枚、`props3d` 三枚、`glow`\|rad、`blipFill`/`gradFill` 的 rotWithShape 与 flip） | 约 400 | 屏上零兑现（Web 没有 VML/DrawingML 的阴影与三维模型） |
+| 杂项（`sym` 两枚、`pgNumType`\|start、`legacy` 三枚、`type`\|val、`prstTxWarp`\|prst、`col`\|w、`wAfter` 两枚、`h`/`rot`/`lightRig` 等） | 约 300 | 逐对裁决 |

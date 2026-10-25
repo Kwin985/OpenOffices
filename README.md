@@ -9130,6 +9130,43 @@ neverConsulted 311 → 286。
 全落空；变异腿有牙（no-attrL 42.8%/83.3%、no-attr 46.5%/41.6%）；变异后干净腿复位 md5 与
 主腿一致；语料分母仍 31,471（本轮只动读手，语料未改）。
 
+### v0.154（D13）——图片源裁剪框 / 表间距 / 隐藏文字 / 批注族改走漏斗
+
+按字面权重扫剩余 neverConsulted 的**「能兑现的余量 + 批注身份」**：**33 对上账、语料
+字面 33（宇宙字面 1,452）**，覆盖率**按对 77.4% → 82.3%、按字面 97.8% → 97.9%**；
+consulted 528 → 561 对，neverConsulted 154 → 121。
+
+| 族 | 宇宙字面 | 往返 |
+|---|---|---|
+| `a:srcRect` 四边（blipFill 的源裁剪框，千分比） | 292 | 读侧渲染（写侧无槽） |
+| `w:tblCellSpacing` 的 w 与 type（表级单元格间距） | 142 | **读写**（TBLPR 补丁） |
+| `w:vanish`（隐藏文字） | 88 | **读写**（原生槽） |
+| `w:cnfStyle` 十三枚（表条件格式落点开关） | 520 | 只读 |
+| 批注族（comment 四枚 / commentEx done / 两根 Ignorable / commentReference id） | 97 | 读侧（改走漏斗） |
+| 脚注与尾注两根 `mc:Ignorable` | 148 | 只读 |
+| `w:smartTag` 两枚（智能标记壳） | 160 | 只读 |
+| `w:tblOverlap` + `a:spLocks` 两枚 | 165 | 只读 |
+
+- **隐藏文字用 `visibility: hidden` 而不是 `display: none`**：Word 的隐藏文字不显示却
+  **仍占版面**（行高与分页照算），用 display:none 会把布局一起改掉。写侧是包里类型面
+  暴露的原生槽（`IRunOptions.vanish`），与 v0.152 的 allCaps/border 同路数。
+- **单元格间距必须同时切 `border-collapse: separate`**：CSS 的 border-spacing 在 collapse
+  下被忽略，而 Word 有间距时同样不共享格边。写侧与 bandSize **分居 `w:tblW` 两侧**
+  （CT_TblPrBase 序：bandSize 在前、tblCellSpacing 在后），所以单列一条登记与自己的
+  插入锚点——共用「插到第一个已知后续元素之前」那一套会写出序不对的元素。
+- **`a:srcRect` 是裁剪的两代写法里的新式那一支**：老式件用 `v:imagedata` 的 crop
+  （0..1 的分数），新式件用 `a:srcRect`（千分比整数），两者都折成 `clip-path: inset()`，
+  同时在场时按 VML 那一族。写侧发不出这一枚——**单边通道**，探针里明写「输出不该有
+  srcRect」而不是假装双向。
+- **批注族从正则搬进了 attr 漏斗**：`commentRowsOf` 是正则读的，读是读了但**进不了
+  保真账本**（与 v0.147 之前节属性那一处欠账同一款）。保真路径新建 `readComments` 走
+  parseXml + attr，补出 author/date/initials、两份部件根的 Ignorable 与「已解决」标记；
+  mammoth 兜底路径仍用 `commentRowsOf`。
+
+**门禁**：tsc 0、build ✓；selftest MUST_SEE **432 枚全命中（+35）** / MUST_NOT_SEE 1 枚
+全落空；变异腿有牙（no-attrL 44.1%/83.3%、no-attr 50.1%/41.8%）；变异后干净腿复位 md5 与
+主腿一致；语料分母仍 31,471。
+
 
 ## 性能（v0.3）
 
