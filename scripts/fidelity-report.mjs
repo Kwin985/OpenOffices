@@ -120,6 +120,8 @@ const FIXTURE_STYLES =
   // v0.150：样式身份两枚——Report 带 next（后续段落样式）与 rsid（修订会话号），
   // ReportChar 只带 rsid；Plain 两枚都不带（负形态）
   `<w:style w:type="paragraph" w:customStyle="1" w:styleId="Report"><w:name w:val="report"/>` +
+  // v0.155：样式别名（Word 里给样式起的中文名常挂这儿）
+  `<w:aliases w:val="报告,Report"/>` +
   `<w:basedOn w:val="Normal"/><w:next w:val="ReportHead"/><w:link w:val="ReportChar"/><w:uiPriority w:val="9"/>` +
   `<w:rsid w:val="00A1"/></w:style>` +
   `<w:style w:type="character" w:styleId="ReportChar"><w:name w:val="report char"/>` +
@@ -141,13 +143,23 @@ const FIXTURE_NUMBERING =
   `<w:numbering xmlns:w="${W}" xmlns:mc="${MC}" mc:Ignorable="w14">` +
   `<w:abstractNum w:abstractNumId="0" w:restartNumberingAfterBreak="0">` +
   `<w:nsid w:val="00A1B2C3"/><w:multiLevelType w:val="hybridMultilevel"/><w:tmpl w:val="0A0B0C"/>` +
+  // v0.155：定义挂在哪条样式上（CT_AbstractNum 序：tmpl 之后、numStyleLink/lvl 之前）
+  `<w:styleLink w:val="Report"/>` +
   `<w:lvl w:ilvl="0" w:tentative="1" w:tplc="0409001F">` +
-  `<w:start w:val="1"/><w:numFmt w:val="bullet"/><w:suff w:val="nothing"/><w:lvlText w:val="·"/><w:lvlJc w:val="left"/></w:lvl>` +
+  `<w:start w:val="1"/><w:numFmt w:val="bullet"/><w:suff w:val="nothing"/><w:lvlText w:val="·"/>` +
+  // v0.155：层余量三枚（CT_Lvl 序：lvlRestart 在 numFmt 之后、suff 之前；
+  // lvlPicBulletId 在 lvlText 之后、legacy 之前）
+  `<w:lvlRestart w:val="0"/><w:lvlPicBulletId w:val="7"/>` +
+  `<w:legacy w:legacy="1" w:legacySpace="0" w:legacyIndent="0"/>` +
+  `<w:lvlJc w:val="left"/></w:lvl>` +
   `<w:lvl w:ilvl="1" w:tentative="0" w:tplc="0409001D">` +
   `<w:start w:val="1"/><w:numFmt w:val="lowerLetter"/><w:suff w:val="tab"/><w:lvlText w:val="%2."/><w:lvlJc w:val="center"/></w:lvl>` +
   `</w:abstractNum>` +
   `<w:num w:numId="1" w:durableId="3C7B9A2E"><w:abstractNumId w:val="0"/>` +
   `<w:lvlOverride w:ilvl="0"><w:startOverride w:val="3"/></w:lvlOverride></w:num>` +
+  // v0.155：根级两枚——图片项目符号定义（id 属性）与 Mac 版清理水位
+  `<w:numPicBullet w:numPicBulletId="7"/>` +
+  `<w:numIdMacAtCleanup w:val="0"/>` +
   `</w:numbering>`
 
 const FIXTURE_DOC =
@@ -158,7 +170,10 @@ const FIXTURE_DOC =
   `<w:document xmlns:w="${W}" xmlns:wp="${WP}" xmlns:a="${A}" xmlns:pic="${PIC}" xmlns:r="${R}"` +
   // v0.153：w10 是 w10:wrap（遗留环绕）的命名空间
   ` xmlns:v="${V}" xmlns:o="${O}" xmlns:mc="${MC}" xmlns:wps="${WPS}" xmlns:w10="${W10}"` +
-  ` mc:Ignorable="w14"><w:body>` +
+  ` mc:Ignorable="w14">` +
+  // v0.155：整篇底色（设计 → 页面颜色）——三枚全带：字面色 + 主题槽 + 主题深浅
+  `<w:background w:color="FFE699" w:themeColor="background1" w:themeShade="BF"/>` +
+  `<w:body>` +
   `<w:p w:rsidR="00A1" w:rsidRDefault="00A2" w:rsidP="00B3">` +
   `<w:pPr><w:pStyle w:val="ReportHead"/>` +
   `<w:spacing w:before="120" w:after="240" w:line="360" w:lineRule="auto" w:beforeAutospacing="0" w:afterAutospacing="0"/>` +
@@ -433,7 +448,10 @@ const FIXTURE_DOC =
   `<w:insideV w:val="single" w:sz="4" w:space="3" w:color="000000" w:themeColor="accent1" w:themeTint="99" w:themeShade="BF"/>` +
   `</w:tblBorders></w:tblPr>` +
   `<w:tblGrid><w:gridCol w:w="2500"/><w:gridCol w:w="2500"/></w:tblGrid>` +
-  `<w:tr><w:tc><w:p><w:r><w:t>甲</w:t></w:r></w:p></w:tc>` +
+  // v0.155：行属性余量三枚——gridAfter（这一行末尾空过几格，网格记账用）与
+  // wAfter 的两枚（行末留白的宽与档位）。屏上都不画，只读记账
+  `<w:tr><w:trPr><w:gridAfter w:val="0"/><w:wAfter w:w="120" w:type="dxa"/></w:trPr>` +
+  `<w:tc><w:p><w:r><w:t>甲</w:t></w:r></w:p></w:tc>` +
   `<w:tc><w:p><w:r><w:t>乙</w:t></w:r></w:p></w:tc></w:tr>` +
   `<w:tr><w:tc><w:p><w:r><w:t>丙</w:t></w:r></w:p></w:tc>` +
   `<w:tc><w:p><w:r><w:t>丁</w:t></w:r></w:p></w:tc></w:tr></w:tbl>` +
@@ -444,6 +462,11 @@ const FIXTURE_DOC =
   `<w:adjustRightInd w:val="0"/><w:snapToGrid w:val="1"/><w:topLinePunct w:val="0"/>` +
   `<w:bidi w:val="1"/><w:autoSpaceDE w:val="1"/><w:autoSpaceDN w:val="0"/>` +
   `<w:suppressLineNumbers w:val="1"/><w:textAlignment w:val="center"/>` +
+  // v0.155：禁则三枚（kinsoku/wordWrap/overflowPunct）+ 自动断字总闸 + 文字方向。
+  // CT_PPrBase 序：suppressAutoHyphens → kinsoku → wordWrap → overflowPunct → topLinePunct；
+  // textDirection 在 jc 之后、textAlignment 之前
+  `<w:suppressAutoHyphens w:val="1"/><w:kinsoku w:val="0"/><w:wordWrap w:val="1"/>` +
+  `<w:overflowPunct w:val="0"/><w:textDirection w:val="tbRl"/>` +
   `<w:spacing w:beforeAutospacing="1" w:afterAutospacing="0"/>` +
   `</w:pPr><w:r><w:t>属性余量段</w:t></w:r></w:p>` +
   // v0.147：表自身的条件层闸门——w:tblPr 上那一枚 w:tblLook（与样式里那一枚同名同义，
@@ -451,17 +474,93 @@ const FIXTURE_DOC =
   `<w:tbl><w:tblPr><w:tblLook w:val="01E0" w:noHBand="1" w:noVBand="0"/></w:tblPr>` +
   `<w:tblGrid><w:gridCol w:w="5000"/></w:tblGrid>` +
   `<w:tr><w:tc><w:p><w:r><w:t>闸门表</w:t></w:r></w:p></w:tc></w:tr></w:tbl>` +
+  // v0.155：符号（w:sym）——正文里的**一个字符**（插入 → 符号），char 是十六进制码点、
+  // font 是它所在的字体（Wingdings 一族码位落在私有区，离了字体画不出形状）
+  `<w:p><w:r><w:sym w:font="Wingdings" w:char="F0FC"/></w:r></w:p>` +
+  // v0.155：下划线颜色三枚（字面色 + 主题槽 + 主题深浅）+ 着重号 + OpenType 字形档四枚
+  // + 字形装饰三枚（浮雕/阴文/镂空，屏上不兑现只记账）
+  `<w:p><w:r><w:rPr><w:u w:val="single" w:color="FF0000" w:themeColor="accent1" w:themeTint="99"/>` +
+  `</w:rPr><w:t>带色的下划线</w:t></w:r>` +
+  `<w:r><w:rPr><w:em w:val="dot"/><w:ligatures w:val="standardContextual"/>` +
+  `<w:numForm w:val="oldStyle"/><w:numSpacing w:val="proportional"/><w:cntxtalts/>` +
+  `<w:emboss/><w:imprint/><w:outline/></w:rPr><w:t>字形档</w:t></w:r></w:p>` +
+  // v0.155：链接的悬停提示与打开目标（HTML 的 title/target 正好是这两个含义）
+  `<w:p><w:hyperlink r:id="rId9" w:tooltip="悬停提示" w:tgtFrame="blank">` +
+  `<w:r><w:t>带提示的链</w:t></w:r></w:hyperlink></w:p>` +
+  // v0.155：DrawingML 图形余量一整片——颜色变换（alpha/alphaOff/hueOff/satOff/tint/
+  // prstClr/scrgbClr）、线端（prstDash/headEnd/tailEnd）、效果（outerShdw/glow/
+  // reflection）、三维（lightRig/props3d）、浮动档位（sizeRelH/sizeRelV/wrapSquare）、
+  // 填充开关（blipFill/gradFill 的 rotWithShape 与 flip）、形状锁余下那枚、
+  // 自定义几何的路径数据（a:path@path）。屏上一个都不兑现（Web 没有这些模型）
+  `<w:p><w:r><w:drawing><wp:anchor><wp:extent cx="914400" cy="914400"/>` +
+  `<wp:wrapSquare wrapText="bothSides"/><wp:sizeRelH relativeFrom="page"/>` +
+  `<wp:sizeRelV relativeFrom="margin"/><wp:docPr id="11" name="图形余量"/>` +
+  `<a:graphic><a:graphicData><pic:pic><pic:nvPicPr><pic:cNvPr id="11" name="图形余量"/>` +
+  `<pic:cNvPicPr><a:picLocks noChangeAspect="1"/></pic:cNvPicPr></pic:nvPicPr>` +
+  `<pic:blipFill rotWithShape="1"><a:blip r:embed="rId1"/>` +
+  `<a:gradFill flip="xy" rotWithShape="0"><a:gsLst><a:gs pos="0">` +
+  `<a:scrgbClr r="1000" g="2000" b="3000"><a:alpha val="50000"/><a:alphaOff val="200"/>` +
+  `<a:hueOff val="60000"/><a:satOff val="1000"/><a:tint val="40000"/></a:scrgbClr></a:gs>` +
+  `<a:gs pos="100000"><a:prstClr val="red"><a:lumMod val="80000"/></a:prstClr></a:gs>` +
+  `</a:gsLst></a:gradFill></pic:blipFill>` +
+  // v0.155：a:xfrm 的旋转（六万分之一度）与翻转两枚——这一族**读得进屏上**（CSS transform）
+  `<pic:spPr><a:xfrm rot="5400000" flipH="1" flipV="0"/>` +
+  `<a:custGeom><a:rect l="0" t="0" r="0" b="0"/><a:pathLst>` +
+  `<a:path w="1000" h="1000" path="moveTo(0,0) lnTo(1000,1000)"/></a:pathLst></a:custGeom>` +
+  `<a:ln w="9525"><a:prstDash val="dash"/>` +
+  `<a:headEnd type="triangle" w="med" len="sm"/><a:tailEnd type="arrow" w="lg" len="lg"/></a:ln>` +
+  `<a:effectLst><a:outerShdw algn="tl" blurRad="63500" dir="5400000" dist="38100" rotWithShape="0"/>` +
+  `<a:glow rad="63500"><a:schemeClr val="accent1"/></a:glow>` +
+  `<a:reflection algn="bl" blurRad="6350" dir="5400000" dist="0" endA="1000" endPos="10000"` +
+  ` fadeDir="5400000" kx="0" ky="0" stA="0" stPos="0" sx="100000" sy="100000"/>` +
+  `<a:scene3d><a:camera prst="orthographicFront"><a:lightRig rig="threePt" dir="t"/></a:camera>` +
+  `<a:backdrop><a:sp3d><a:bevelT w="63500" h="25400"/><a:contourClr>` +
+  `<a:schemeClr val="accent2"/></a:contourClr></a:sp3d></a:backdrop></a:scene3d>` +
+  `<a:sp3d contourW="12700" extrusionH="25400" prstMaterial="plastic"/>` +
+  `</a:effectLst><a:spLocks noEditPoints="1"/>` +
+  `</pic:spPr></pic:pic></a:graphicData></a:graphic></wp:anchor></w:drawing></w:r></w:p>` +
+  // v0.155：艺术字变形（a:prstTxWarp）与文字轮廓——形状身上的两支，屏上同样零兑现
+  `<w:p><w:r><w:drawing><wp:inline><wp:extent cx="914400" cy="914400"/>` +
+  `<wp:docPr id="12" name="艺术字"/>` +
+  `<a:graphic><a:graphicData><wps:wsp><wps:cNvSpPr/><wps:spPr><a:xfrm/>` +
+  `<a:prstTxWarp prst="textArchUp"/></wps:spPr>` +
+  `<wps:txbx><w:txbxContent><w:p><w:r><w:t>艺术字</w:t></w:r></w:p></w:txbxContent></wps:txbx>` +
+  `<wps:bodyPr/></wps:wsp></a:graphicData></a:graphic></wp:inline></w:drawing></w:r></w:p>` +
+  // v0.155：表单域（w:fldChar 里的 w:ffData 一族）与域锁。表单域的结果文字照常渲染，
+  // 壳上的名字/启用/退出计算/宏/外观/文本域默认值与上限全族只读记账
+  `<w:p><w:r><w:fldChar w:fldCharType="begin" w:fldLock="1"><w:ffData>` +
+  `<w:name w:val="Text1"/><w:enabled/><w:calcOnExit w:val="1"/><w:entryMacro w:val=""/>` +
+  `<w:appearance w:val="normal"/>` +
+  `<w:textInput><w:default w:val="默认"/><w:maxLength w:val="10"/></w:textInput>` +
+  `</w:ffData></w:fldChar></w:r>` +
+  `<w:r><w:instrText xml:space="preserve"> FORMTEXT </w:instrText></w:r>` +
+  `<w:r><w:fldChar w:fldCharType="separate"/></w:r>` +
+  `<w:r><w:t>表单里的字</w:t></w:r>` +
+  `<w:r><w:fldChar w:fldCharType="end"/></w:r></w:p>` +
+  // v0.155：内容控件的 id（w:sdtPr/w:id）与修订的 id（w:ins/@w:id）——两枚身份都只记账
+  `<w:sdt><w:sdtPr><w:id w:val="42"/></w:sdtPr><w:sdtContent>` +
+  `<w:p><w:r><w:t>控件里的字</w:t></w:r></w:p></w:sdtContent></w:sdt>` +
+  `<w:p><w:ins w:id="7" w:author="张三" w:date="2026-10-26T00:00:00Z">` +
+  `<w:r><w:t>插入的字</w:t></w:r></w:ins></w:p>` +
   // v0.152：页眉页脚引用两族（sectPr 打头的位置——CT_SectPr 序 headerReference/
   // footerReference 排在最前）。只读记账：id 是关系 id 写侧发包自己重编，type
   // （default/first/even）我们只发 default 一档
   `<w:sectPr><w:headerReference w:type="default" r:id="rIdHdr"/><w:footerReference w:type="default" r:id="rIdFtr"/>` +
-  `<w:pgSz w:w="11906" w:h="16838" w:orient="portrait"/>` +
+  // v0.155：节余量七枚——节的起法（type）、纸型档位号（pgSz/@w:code）、页码型别与
+  // 起始值（pgNumType）、逐栏表（cols/@equalWidth 与 col 两枚）、装订线在右（rtlGutter）、
+  // 窗体保护（formProt）。全是「说了也不改屏上排版」的元信息，只读记账
+  `<w:type w:val="continuous"/>` +
+  `<w:pgSz w:w="11906" w:h="16838" w:orient="portrait" w:code="9"/>` +
+  `<w:pgNumType w:fmt="lowerRoman" w:start="3"/>` +
+  `<w:rtlGutter w:val="1"/><w:formProt w:val="1"/>` +
   `<w:pgMar w:top="1440" w:right="1800" w:bottom="1440" w:left="1800" w:header="851" w:footer="992" w:gutter="0"/>` +
   // v0.147：节属性余下两族——分栏（w:cols）与文档网格（w:docGrid）。纸型与页边距
   // 那两枚早就在夹具里（读手原先不读其中的 top/bottom/header/footer/gutter/orient）
   // v0.152：docGrid 再加 charSpace（每字符网格宽度，缇）——与 linePitch 同住一枚
   // 元素上的第三枚，读写（包的 grid.charSpace 是原生槽）
-  `<w:cols w:num="2" w:space="720"/><w:docGrid w:type="lines" w:linePitch="312" w:charSpace="200"/></w:sectPr>` +
+  `<w:cols w:num="2" w:space="720" w:equalWidth="0">` +
+  `<w:col w:w="2000" w:space="400"/><w:col w:w="3000" w:space="400"/></w:cols>` +
+  `<w:docGrid w:type="lines" w:linePitch="312" w:charSpace="200"/></w:sectPr>` +
   `</w:body></w:document>`
 
 // 读手按名查问过的（源码里 spacing / ind / jc / pStyle / rFonts / sz / b / 顶边 都走 attr 或 attrL）
@@ -821,6 +920,42 @@ const MUST_SEE = [
   'cnfStyle|lastRowFirstColumn', 'cnfStyle|lastRowLastColumn',
   'smartTag|element', 'smartTag|uri',
   'tblOverlap|val', 'spLocks|noChangeArrowheads', 'spLocks|noEditPoints',
+  // v0.155：能兑现的六族——符号、整篇底色、下划线色、链接提示、着重号/字形档、图形变换
+  'sym|char', 'sym|font',
+  'background|color', 'background|themeColor', 'background|themeShade',
+  'u|color', 'u|themeColor', 'u|themeTint',
+  'hyperlink|tooltip', 'hyperlink|tgtFrame',
+  'em|val', 'ligatures|val', 'numForm|val', 'numSpacing|val', 'cntxtalts|val',
+  'xfrm|rot', 'xfrm|flipH', 'xfrm|flipV',
+  // v0.155：DrawingML 图形余量一整片（全部只读记账，屏上零兑现）
+  'alpha|val', 'alphaOff|val', 'hueOff|val', 'satOff|val', 'tint|val', 'prstClr|val',
+  'scrgbClr|r', 'scrgbClr|g', 'scrgbClr|b',
+  'prstDash|val', 'headEnd|type', 'headEnd|w', 'headEnd|len',
+  'tailEnd|type', 'tailEnd|w', 'tailEnd|len',
+  'outerShdw|algn', 'outerShdw|blurRad', 'outerShdw|dir', 'outerShdw|dist', 'outerShdw|rotWithShape',
+  'glow|rad',
+  'reflection|algn', 'reflection|blurRad', 'reflection|dir', 'reflection|dist', 'reflection|endA',
+  'reflection|endPos', 'reflection|fadeDir', 'reflection|kx', 'reflection|ky', 'reflection|stA',
+  'reflection|stPos', 'reflection|sx', 'reflection|sy',
+  'lightRig|rig', 'lightRig|dir',
+  'props3d|contourW', 'props3d|extrusionH', 'props3d|prstMaterial',
+  'blipFill|rotWithShape', 'gradFill|flip', 'gradFill|rotWithShape',
+  'sizeRelH|relativeFrom', 'sizeRelV|relativeFrom', 'wrapSquare|wrapText',
+  'prstTxWarp|prst', 'path|path',
+  // v0.155：编号/样式/批注/表单域的余量
+  'styleLink|val', 'numPicBullet|numPicBulletId', 'numIdMacAtCleanup|val',
+  'lvlRestart|val', 'lvlPicBulletId|val',
+  'legacy|legacy', 'legacy|legacySpace', 'legacy|legacyIndent',
+  'aliases|val', 'creationId|id',
+  'fldChar|fldLock', 'calcOnExit|val', 'entryMacro|val', 'appearance|val', 'maxLength|val', 'default|val',
+  'ins|id', 'id|val',
+  // v0.155：节余量七枚 + 段落余量五枚 + 行余量三枚 + 字形装饰三枚 + 表边框主题深浅四枚
+  'type|val', 'pgSz|code', 'pgNumType|fmt', 'pgNumType|start',
+  'cols|equalWidth', 'col|w', 'col|space', 'rtlGutter|val', 'formProt|val',
+  'suppressAutoHyphens|val', 'kinsoku|val', 'wordWrap|val', 'overflowPunct|val', 'textDirection|val',
+  'gridAfter|val', 'wAfter|w', 'wAfter|type',
+  'emboss|val', 'imprint|val', 'outline|val',
+  'insideH|themeShade', 'insideH|themeTint', 'insideV|themeShade', 'insideV|themeTint',
 ]
 // 我放进夹具而读手一寸不查的：t 的 xml:space 是**裁定不查**——escText 无条件保留空白
 // （连续空格第二个起换 nbsp），强于 preserve 所需，查了也没有第二行代码可写。
@@ -1030,6 +1165,8 @@ async function runSelftest(reader) {
     `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>` +
       `<w15:commentsEx xmlns:w15="${W15}" xmlns:mc="${MC}" mc:Ignorable="w15">` +
       `<w15:commentEx w15:paraId="0F1E2D3C" w15:done="1"/>` +
+      // v0.155：创建会话号（w15:creationId/@w15:id）——这条批注是哪一次编辑会话建的
+      `<w15:creationId w15:id="00000001"/>` +
       `</w15:commentsEx>`,
   )
   // v0.154：脚注与尾注部件根上的 mc:Ignorable（v0.152 收的 numbering/styles 那两枚的

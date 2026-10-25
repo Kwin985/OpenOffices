@@ -457,12 +457,21 @@ export const PPR_ONOFF_KEYS = [
   'autoSpaceDE',
   'autoSpaceDN',
   'suppressLineNumbers',
+  // v0.155：自动断字总闸（CT_PPrBase 里排在 suppressLineNumbers 之后、kinsoku 之前）。
+  // 屏上不兑现——CSS 没有断字开关的对应物（hyphens 只管断词，与 Word 的断字算法不是一回事）
+  'suppressAutoHyphens',
   'beforeAutoSpace',
   'afterAutoSpace',
+  // v0.155：禁则三枚——kinsoku（行首行尾禁则）、wordWrap（允许西文在单词内换行）、
+  // overflowPunct（允许标点溢出边界）。三者都只影响 Word 自己的断行判断，屏上不兑现
+  // （CSS 的 line-break/overflow-wrap 只是近似，照搬会改变现有排版），只随载荷往返
+  'kinsoku',
+  'wordWrap',
+  'overflowPunct',
 ] as const
 
-/** 枚举档：textAlignment 的 top/center/bottom/baseline/auto */
-export const PPR_STR_KEYS = ['textAlignment'] as const
+/** 枚举档：textAlignment 的 top/center/bottom/baseline/auto；textDirection 的 tbRl/btLr/… */
+export const PPR_STR_KEYS = ['textAlignment', 'textDirection'] as const
 
 /** data-ppr 载荷 → key/value 表；onOff 键只收 '1'/'0'，脏值整键丢 */
 export function parsePprPayload(raw: string | null | undefined): PprPayload {

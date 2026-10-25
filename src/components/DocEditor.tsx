@@ -617,6 +617,8 @@ function DocEditor({ tab }: Props) {
                 // 节属性（v0.147）：读手走 attr 漏斗读的那一遍为准，覆盖 docxToDocMeta
                 // 的正则读数（同一份数两处读迟早分叉，读手这一遍是保真账本认的那条）
                 ...(fid.section ? { page: { ...m.page, ...pageSetupOf(fid.section) } } : {}),
+                // 文档背景（v0.155）：整篇底色，随 meta 持久化、导出回到 document 根
+                ...(fid.background ? { background: fid.background } : {}),
                 ...(fid.comments.length ? { comments: fid.comments } : {}),
               })
               if (fid.comments.length) setCmOpen(true)

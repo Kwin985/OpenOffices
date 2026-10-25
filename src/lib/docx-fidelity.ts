@@ -93,6 +93,11 @@ export interface DocxImport {
    */
   section?: DocxSection
   /**
+   * 文档背景（v0.155）：`w:background` 三枚（字面色 / 主题槽 / 主题深浅）。
+   * 屏上兑现在外层容器的 background-color，导出回到 document 根——真双向
+   */
+  background?: DocBackground
+  /**
    * 编号定义账（v0.150）：每份 `w:abstractNum` 的 nsid/tmpl/multiLevelType，加逐层的
    * tentative/tplc/suff。屏上一条都不兑现（列表是 ListRegistry 按段重建的），只随 meta
    * 往返——导出时按出现序补丁回 numbering.xml
@@ -246,6 +251,11 @@ interface StyleInfo {
   next?: string
   rsid?: string
   /**
+   * 样式别名（v0.155）：`w:aliases/@w:val`，逗号分隔。Word 里样式的中文名常挂这儿
+   * （id 是英文、面板上显示中文）。屏上零兑现，只随快照往返
+   */
+  aliases?: string
+  /**
    * 条件层的闸门（v0.147）：表样式 `w:tblPr/w:tblLook` 的那三枚属性——`w:val`
    * （Word 存的那份四位闸门原值）、`w:noHBand`/`w:noVBand`（隔行/隔列带不套）。
    * 写侧原本是拿 table.cond 反推的（`condLookBits`），推出来的与原文那枚不一定同；
@@ -337,6 +347,11 @@ function readStyles(xml: string, theme?: ThemeFonts): StyleBook {
     if (nxt) info.next = nxt
     const rsid = val(s, 'w:rsid')
     if (rsid) info.rsid = rsid
+    // 别名（v0.155）：`w:aliases` 是这份样式的「也叫什么」（Word 里给样式起的中文名
+    // 就住这儿，逗号分隔）。屏上不兑现——排版用它靠的是 id，与名字无关；但它随 meta
+    // 往返，丢了 Word 的样式面板里就只剩英文名
+    const ali = val(s, 'w:aliases')
+    if (ali) info.aliases = ali
     // 条件层闸门（v0.147）：表样式 w:tblPr/w:tblLook 的三枚属性。val 是枚举串，
     // noHBand/noVBand 是 onOff——写侧原本拿 table.cond 反推（condLookBits），
     // 带上原文这一枚就照抄，没带才回落到反推
@@ -412,14 +427,17 @@ function styleChain(book: StyleBook, id: string | undefined): StyleInfo[] {
   return out
 }
 
-/** 样式元数据三枚（v0.146）+ 样式身份两枚（v0.150）→ 快照字段；没说的不挂，与旧字节一致 */
-function styleMetaOf(info: StyleInfo): Pick<DocxStyleInfo, 'uiPriority' | 'link' | 'customStyle' | 'next' | 'rsid'> {
+/** 样式元数据三枚（v0.146）+ 样式身份两枚（v0.150）+ 别名（v0.155）→ 快照字段；没说的不挂，与旧字节一致 */
+function styleMetaOf(
+  info: StyleInfo,
+): Pick<DocxStyleInfo, 'uiPriority' | 'link' | 'customStyle' | 'next' | 'rsid' | 'aliases'> {
   return {
     ...(info.uiPriority !== undefined ? { uiPriority: info.uiPriority } : {}),
     ...(info.link ? { link: info.link } : {}),
     ...(info.customStyle !== undefined ? { customStyle: info.customStyle } : {}),
     ...(info.next ? { next: info.next } : {}),
     ...(info.rsid ? { rsid: info.rsid } : {}),
+    ...(info.aliases ? { aliases: info.aliases } : {}),
   }
 }
 
@@ -636,6 +654,29 @@ function imgClipCss(el: XEl): string {
   })
   if (!box.some((v) => v)) return ''
   return `clip-path:inset(${box.map((v) => v ?? 0).join('% ')}%)`
+}
+
+/**
+ * 图形变换 → CSS `transform`（v0.155）：`a:xfrm` 的 rot（**六万分之一度**，Word 的角度
+ * 单位）与 flipH/flipV（水平/垂直翻转，0/1）。CSS 的 rotate 收度、scaleX/scaleY(-1)
+ * 收翻转，两边只差一个换算。三枚都是 0/无值时不发 style（旋转 0 度与不旋转同结果，
+ * 显式写出来只会给每张图挂一句空声明）。
+ *
+ * **单边**：写侧只发 DrawingML 内嵌图，翻转与旋转都写不回——导出去的图是正的。
+ * 与裁剪同款（读得进、写不出），如实记在审计里。
+ */
+function imgTransformCss(el: XEl): string {
+  const xfrm = findDesc(el, 'xfrm')
+  if (!xfrm) return ''
+  const raw = attrL(xfrm, 'rot')
+  const flipH = attrL(xfrm, 'flipH')
+  const flipV = attrL(xfrm, 'flipV')
+  const out: string[] = []
+  const r = raw ? Number(raw) : 0
+  if (Number.isFinite(r) && r !== 0) out.push(`rotate(${Math.round((r / 60000) * 100) / 100}deg)`)
+  if (flipH === '1') out.push('scaleX(-1)')
+  if (flipV === '1') out.push('scaleY(-1)')
+  return out.length ? `transform:${out.join(' ')}` : ''
 }
 
 function cropPct(raw: string | undefined): number | undefined {
@@ -1080,6 +1121,10 @@ function readNumbering(xml: string, theme?: ThemeFonts): Numbering {
     // tmpl 指着模板编号。两枚都是 `<w:x w:val="…"/>` 形态的子元素
     const nsid = val(a, 'w:nsid')
     const tmpl = val(a, 'w:tmpl')
+    // styleLink（v0.155）：这份编号定义挂在哪条样式上（Word 的「列表样式」就是靠它
+    // 让一串编号跟着样式走）。它是 `w:abstractNum` 的子元素，与 styles.xml 里那条
+    // `w:link` 互为反向（那边是「样式链到编号」，这边是「编号链回样式」）
+    const styleLink = val(a, 'w:styleLink')
     const lvls: Record<string, DocxLvlMeta> = {}
     const levels = new Map<number, LvlDef>()
     for (const l of all(a, 'w:lvl')) {
@@ -1099,19 +1144,50 @@ function readNumbering(xml: string, theme?: ThemeFonts): Numbering {
       if (tplc) meta.tplc = tplc
       const suff = val(l, 'w:suff')
       if (suff) meta.suff = suff
+      // 层余量四枚（v0.155）：屏上零兑现（列表由 ListRegistry 按段重建，这些是 Word
+      // 自己的编号排版状态）。前两枚随 numbering.xml 补丁往返，后两枚只读：
+      //   lvlRestart     —— 这一层是否随上一级重新起号（0 = 永不重起）
+      //   lvlPicBulletId —— 这一层用的是第几号图片项目符号（对着根上 numPicBullet 的 id）
+      //   legacy         —— 三枚属性（legacy/legacySpace/legacyIndent），Word 2003 的
+      //                     老式编号缩进补偿；**只读**（三枚同族不同名，写回要做属性组补丁，
+      //                     而它对屏上零后果）
+      //   numForm        —— 编号口径（default/…）。**只读**：它的位次在我们手上没有
+      //                     可靠参考（CT_Lvl 的序里没有它，硬插会被 Word 判损坏件），
+      //                     所以读了记账、不回写——宁可少写一枚，不赌一次乱序。
+      //                     这一枚在 rPr 上还会再问一次（readRPr 拿它出
+      //                     font-variant-numeric），两处问的是同一个对，不重复计数
+      const rst = valNum(l, 'w:lvlRestart')
+      if (rst !== undefined) meta.restart = rst
+      const pic = valNum(l, 'w:lvlPicBulletId')
+      if (pic !== undefined) meta.picBulletId = pic
+      val(l, 'w:numForm')
+      const lg = find(l, 'w:legacy')
+      if (lg) {
+        attr(lg, 'w:legacy')
+        attr(lg, 'w:legacySpace')
+        attr(lg, 'w:legacyIndent')
+      }
       if (Object.keys(meta).length) lvls[String(ilvl)] = meta
     }
-    if (nsid || tmpl || mlt || rna !== undefined || Object.keys(lvls).length)
+    if (nsid || tmpl || mlt || rna !== undefined || styleLink || Object.keys(lvls).length)
       out.defs.push({
         ...(nsid ? { nsid } : {}),
         ...(tmpl ? { tmpl } : {}),
         ...(mlt ? { multiLevelType: mlt } : {}),
         ...(rna !== undefined ? { rna } : {}),
+        ...(styleLink ? { styleLink } : {}),
         fp: numFingerprint(levels),
         levels: lvls,
       })
     abstract.set(id, levels)
   }
+  // 根级两枚（v0.155）：`w:numPicBullet`（图片项目符号的定义，id 属性是
+  // numPicBulletId）与 `w:numIdMacAtCleanup`（Mac 版清理到哪一号的记账）。
+  // **两枚都只读记账**：前者本体是图片字节（与 media 那条链同源，我们的导出不发图片
+  // 项目符号），后者是 Word 自己的清理水位——把它抄回去等于替 Word 编造清理状态
+  for (const npb of all(num, 'w:numPicBullet')) attrL(npb, 'numPicBulletId')
+  const nmac = find(num, 'w:numIdMacAtCleanup')
+  if (nmac) attrL(nmac, 'val')
   for (const n of all(num, 'w:num')) {
     // durableId（v0.152）：`w:num` 身上的持久编号 id（Word 合并文档时按它对账）。
     // 同 rna 的纪律：先于 numId/abstractNumId 那道闸读——语料里那枚只带 durableId。
@@ -1332,11 +1408,18 @@ function themeRefCss(
   // 那枚 themeColor/tint/shade 属性等于没被读过——保真账上它一直挂在 neverConsulted。
   // 查问与解析分开：查问恒做（量具的分子就是这么来的），解析不出来仍回 undefined
   const ref = (attr(el, refAttr) ?? '').trim()
+  // 深浅两枚也**恒查问**（v0.155 修）：旧写法把它们放在三道 return 之后，于是
+  // 「主题没装 / 槽名不认 / 引用为空」三种情形下这两枚属性等于没被读过——表级
+  // insideH/insideV 的 themeShade/themeTint 就这么一直挂在 neverConsulted 里
+  // （同一族里 top/left 那几枚早上了账，因为它们所在的上下文另外有主题可解析）。
+  // 与 ref 本身一样：查问是查问，解析是解析，解析不出来仍回 undefined
+  const shadeRaw = attr(el, shadeAttr)
+  const tintRaw = attr(el, tintAttr)
   if (!theme || !ref) return undefined
   const slot = THEME_COLOR_SLOT[ref.toLowerCase()]
   const base = slot ? theme[slot] : undefined
   if (!base) return undefined
-  return applyTintShade(base, tintShadeOf(attr(el, shadeAttr)), tintShadeOf(attr(el, tintAttr)))
+  return applyTintShade(base, tintShadeOf(shadeRaw), tintShadeOf(tintRaw))
 }
 
 /**
@@ -1450,6 +1533,23 @@ interface RunProps {
    * 其余原样。四枚都没写不挂
    */
   bdr?: { val: string; sz?: string; space?: string; color?: string }
+  /**
+   * w:u 的颜色三枚（v0.155）：字面色 w:color 与主题引用 w:themeColor + w:themeTint/Shade。
+   * 屏上走 CSS text-decoration-color——这是 w:u 身上唯一能兑现的一枚（线型枚举 val 早已收，
+   * 但线型的 CSS 对应物是 border-bottom 那套，读手仍用 text-decoration: underline 表达）。
+   * 主题引用优先，与 w:color 同款主次
+   */
+  uColor?: string
+  /** w:em/@w:val（v0.155）：着重号型别（dot 圈点 / circle 空心圈 / comma 逗号 / underDot）。屏上走 text-emphasis */
+  em?: string
+  /** w:ligatures/@w:val（v0.155）：连字档。屏上走 font-variant-ligatures */
+  lig?: string
+  /** w:numSpacing/@w:val（v0.155）：数字间距档。屏上走 font-variant-numeric */
+  numSpacing?: string
+  /** w:numForm/@w:val（v0.155）：数字形式（lining 等高 / oldStyle 旧式）。同走 font-variant-numeric */
+  numForm?: string
+  /** w:cntxtalts/@w:val（v0.155）：上下文替代字形。屏上走 font-variant-alternates */
+  cntxtalts?: boolean
 }
 
 const NONE: RunProps = {}
@@ -1465,7 +1565,34 @@ function readRPr(el: XEl | undefined, p: RunProps, tc?: ThemeColors): RunProps {
   if (st !== undefined) o.strike = st
   if (on(find(el, 'w:dstrike'))) o.strike = true
   const u = find(el, 'w:u')
-  if (u) o.u = attr(u, 'w:val') !== 'none'
+  if (u) {
+    o.u = attr(u, 'w:val') !== 'none'
+    // v0.155：下划线颜色。三枚都查问（字面色 / 主题槽 / 主题深浅），但只出一个 CSS 值——
+    // 与 w:color 同一条主次：主题引用能解析就用主题，否则落字面。写侧只有字面 color 的槽
+    // （docx 的 underline.color），所以主题解析出来的值回不去——单边，如实记
+    const themed = themeRefCss(tc, u)
+    const uc = (attr(u, 'w:color') ?? '').toLowerCase()
+    if (themed) o.uColor = themed
+    else if (uc && uc !== 'auto') o.uColor = '#' + uc.replace(/^#/, '')
+  }
+  // v0.155：OpenType 字形档位四枚 + 着重号。屏上都有 CSS 对应物（font-variant-* 与
+  // text-emphasis），但都是「浏览器与字体支持才生效」的软兑现：字体没有那张特性表就按默认画。
+  // 挂 CSS 而不是当噪声跳过——声明本身是这些属性的正确含义，只是能否落地取决于字体
+  const em = attr(find(el, 'w:em'), 'w:val')
+  if (em) o.em = em
+  const lig = attr(find(el, 'w:ligatures'), 'w:val')
+  if (lig) o.lig = lig
+  const nsp = attr(find(el, 'w:numSpacing'), 'w:val')
+  if (nsp) o.numSpacing = nsp
+  const nfm = attr(find(el, 'w:numForm'), 'w:val')
+  if (nfm) o.numForm = nfm
+  if (on(find(el, 'w:cntxtalts'))) o.cntxtalts = true
+  // v0.155：字形装饰三枚（浮雕 / 阴文 / 镂空）。CSS 只有半吊子近似（text-shadow 模拟浮雕、
+  // -webkit-text-stroke 模拟镂空，且都不在标准里），做了会画出与 Word 不像的样子——
+  // 屏上不兑现，纯记账
+  on(find(el, 'w:emboss'))
+  on(find(el, 'w:imprint'))
+  on(find(el, 'w:outline'))
   const colorEl = find(el, 'w:color')
   if (colorEl) {
     // 主题引用是主、字面值是兜底（Word 两枚常一起写）；主题解析不了才落字面
@@ -1588,6 +1715,21 @@ function cssOf(p: RunProps): string {
   // 字符边框（v0.152）：w:bdr → CSS border。sz 是八分之一磅、space 是磅，两枚都要换算；
   // 缺 sz 时给 1px（Word 少写这一枚时屏上也得有条线，粗细取最细一档）
   if (p.bdr) bits.push(bdrCss(p.bdr))
+  // v0.155：OpenType 字形档位四枚。都是有 CSS 对应物的软兑现——字体里没有那张特性表就按
+  // 默认画，但声明本身是这些属性的正确含义，比当噪声跳过诚实。枚举值一律走白名单：
+  // 值来自 XML 属性，不认识的档宁可不发，也不让它进 style 串
+  if (p.em) {
+    const e = EMPHASIS[p.em.toLowerCase()]
+    if (e) {
+      bits.push(`text-emphasis: ${e.style}`)
+      if (e.under) bits.push('text-emphasis-position: under right')
+    }
+  }
+  const lig = p.lig ? ligaturesCss(p.lig.toLowerCase()) : ''
+  if (lig) bits.push(`font-variant-ligatures: ${lig}`)
+  const numeric = fontVariantNumeric(p)
+  if (numeric) bits.push(`font-variant-numeric: ${numeric}`)
+  if (p.cntxtalts) bits.push('font-variant-alternates: contextual')
   return bits.join('; ')
 }
 
@@ -1598,6 +1740,40 @@ function bdrCss(b: NonNullable<RunProps['bdr']>): string {
   const w = b.sz !== undefined && Number(b.sz) > 0 ? eighthsToPx(Number(b.sz)) : eighthsToPx(1)
   const c = b.color && b.color.toLowerCase() !== 'auto' ? `#${b.color.replace(/^#/, '').toLowerCase()}` : 'currentColor'
   return `border: ${w}px ${style} ${c}`
+}
+
+/**
+ * w:em 的着重号型别 → CSS text-emphasis（v0.155）。Word 的四档里 comma（逗号）在 CSS
+ * 没有对应形状，用 sesame（芝麻点）顶——两者都是「字旁一个点状记号」，比干脆不发诚实。
+ * underDot 是字**下**点（日文着重号在下方），CSS 的位置要另起一句（不在简写里）
+ */
+const EMPHASIS: Record<string, { style: string; under?: boolean }> = {
+  dot: { style: 'dot' },
+  circle: { style: 'circle' },
+  comma: { style: 'sesame' },
+  underdot: { style: 'dot', under: true },
+}
+
+/** w:ligatures → CSS font-variant-ligatures（v0.155）。枚举是组合值（standardContextual…），按子串拆 */
+function ligaturesCss(v: string): string {
+  if (!v || v === 'none') return 'none'
+  const out: string[] = []
+  if (v.includes('standard')) out.push('common-ligatures')
+  if (v.includes('contextual')) out.push('contextual')
+  if (v.includes('historical')) out.push('historical-ligatures')
+  return out.join(' ')
+}
+
+/** w:numSpacing + w:numForm → CSS font-variant-numeric（两枚同属这一个属性，合成一句） */
+function fontVariantNumeric(p: RunProps): string {
+  const out: string[] = []
+  const sp = (p.numSpacing ?? '').toLowerCase()
+  if (sp === 'proportional') out.push('proportional-nums')
+  else if (sp === 'tabular') out.push('tabular-nums')
+  const fm = (p.numForm ?? '').toLowerCase()
+  if (fm === 'lining') out.push('lining-nums')
+  else if (fm === 'oldstyle') out.push('oldstyle-nums')
+  return out.join(' ')
 }
 
 /** 属性值用的转义：esc 只管 <>&，作者名里出现引号会截断属性，这里一起防 */
@@ -1709,7 +1885,9 @@ function marked(inner: string, p: RunProps): string {
   if (css || extra) s = `<span${css ? ` style="${css}"` : ''}${extra}>${s}</span>`
   if (p.hl) s = `<mark data-color="${p.hl}" style="background-color: ${p.hl}; color: inherit">${s}</mark>`
   if (p.strike) s = `<s>${s}</s>`
-  if (p.u) s = `<u>${s}</u>`
+  // 下划线颜色（v0.155）：**必须落在 <u> 上**——text-decoration-color 不继承，写在内层
+  // span 上只作用于 span 自己的装饰线，而线是 u 元素画的，写那儿等于没写
+  if (p.u) s = p.uColor ? `<u style="text-decoration-color: ${attrEsc(p.uColor)}">${s}</u>` : `<u>${s}</u>`
   if (p.i) s = `<em>${s}</em>`
   if (p.b) s = `<strong>${s}</strong>`
   // 上下标是最外层：Word 把 vertAlign 记在 rPr 里，与粗斜体同级，套在外面读回来不改变含义
@@ -2685,6 +2863,40 @@ class Fidelity {
       }
       case 'fldChar': {
         const k = attr(node, 'w:fldCharType') ?? attr(node, 'w:type')
+        // 域属性两枚（v0.155）：fldLock（这一枚域锁住，不许更新）与 dirty（结果已过期，
+        // 打开时要重算）。两枚都不改我们屏上的样子——域是打开时算一次就固定下来的，
+        // **只读记账**：写侧发包时域一律重建（meta 里没有「哪一枚锁着」这一栏）
+        attr(node, 'w:fldLock')
+        attr(node, 'w:dirty')
+        // 表单域（v0.155）：`w:fldChar/w:ffData` 是 Word 表单控件（文本框/复选框/下拉）
+        // 的配置壳——名字、是否启用、退出时算不算、宏、提示文字、文本域的默认值与长度上限。
+        // 屏上**一个都不兑现**（我们把它当普通域渲染：中间那段结果文字照常显示），写侧
+        // 也不发表单域（导出时域被重建为普通域），所以整族只读记账。真件里这一族不少，
+        // 丢了等于把「这是张可填的表」变成「这是一段文字」，要在审计里说清楚
+        const ff = find(node, 'w:ffData')
+        if (ff) {
+          for (const kid of ['name', 'enabled', 'calcOnExit', 'entryMacro', 'exitMacro', 'helpText', 'statusText', 'appearance']) {
+            const el = find(ff, `w:${kid}`)
+            if (!el) continue
+            // 这几枚的值都在 `w:val` 上（enabled 常写成空元素，val 缺省即开）
+            attr(el, 'w:val')
+          }
+          const ti = find(ff, 'w:textInput')
+          if (ti) {
+            for (const kid of ['default', 'maxLength', 'format']) {
+              const el = find(ti, `w:${kid}`)
+              if (el) attr(el, 'w:val')
+            }
+          }
+          const cb = find(ff, 'w:checkBox')
+          if (cb) {
+            for (const kid of ['size', 'sizeAuto']) attr(cb, `w:${kid}`)
+            for (const kid of ['default', 'checked']) {
+              const el = find(cb, `w:${kid}`)
+              if (el) attr(el, 'w:val')
+            }
+          }
+        }
         if (k === 'begin') {
           st.fld += 1
           st.show = false
@@ -2714,9 +2926,23 @@ class Fidelity {
       case 'noBreakHyphen':
         push(st, '-')
         return
-      case 'sym':
-        this.warn('符号（w:sym）未导入')
+      case 'sym': {
+        // v0.155：符号（w:sym）。此前只 warn 一声就把字丢了——w:sym 是正文里的**一个字符**
+        // （「插入 → 符号」插的就是它），丢了等于文档平白少一个字。char 是十六进制码点，
+        // font 是那一枚符号所在的字体（Wingdings/Webdings 之类，码位常落在 Unicode 私有区，
+        // 只有配上原字体才画得出那个形状，所以 font 必须一起带走）。
+        // 往返是天然的：输出的 span 带 font-family，写手按普通文字发回 w:t + rFonts
+        const char = attr(node, 'w:char')
+        const font = attr(node, 'w:font')
+        const cp = char ? parseInt(char, 16) : NaN
+        if (Number.isFinite(cp) && cp > 0 && cp <= 0x10ffff) {
+          const f = font ? ` style="font-family: ${attrEsc(font)}"` : ''
+          push(st, `<span${f}>&#x${cp.toString(16).toUpperCase()};</span>`)
+        } else {
+          this.warn(`符号（w:sym）缺可用的 char 属性（font=${font ?? '未写'}）`)
+        }
         return
+      }
       case 'footnoteReference':
       case 'endnoteReference': {
         const kind: 'footnote' | 'endnote' = t === 'endnoteReference' ? 'endnote' : 'footnote'
@@ -2814,14 +3040,22 @@ class Fidelity {
         for (const [cid, from] of sub.openAt) st.openAt.set(cid, base + from)
         // 链接里开着没关的书签：区间续到主序列，下标按追加位置换算（同 openAt）
         for (const [id, open] of sub.openBm) st.openBm.set(id, { name: open.name, at: base + open.at })
+        // v0.155：链接的另两枚属性——tooltip（鼠标悬停提示）与 tgtFrame（打开到哪一帧）。
+        // HTML 的 title 与 target 正好是这两个含义，屏上是**真的兑现**（悬停可见、点击跳窗）。
+        // 写侧发不出：docx 的 ExternalHyperlink 只收 link，没有 tooltip/帧目标这两枚——单边
+        const tip = attrL(node, 'tooltip')
+        const frame = attrL(node, 'tgtFrame')
         const href = rel?.external ? rel.target : anchor ? `#${anchor}` : undefined
         if (!href) {
           for (const p of sub.pieces) st.pieces.push(p)
           st.outSeq += sub.pieces.length
           return
         }
+        const aExtra = `${tip ? ` title="${attrEsc(tip)}"` : ''}${frame ? ` target="${attrEsc(frame)}"` : ''}`
         for (const p of sub.pieces)
-          st.pieces.push(p.kind === 'inline' ? { kind: 'inline', html: `<a href="${esc(href)}">${p.html}</a>` } : p)
+          st.pieces.push(
+            p.kind === 'inline' ? { kind: 'inline', html: `<a href="${esc(href)}"${aExtra}>${p.html}</a>` } : p,
+          )
         st.outSeq += sub.pieces.length
         return
       }
@@ -2845,7 +3079,15 @@ class Fidelity {
         return
       }
       // 容器类：原样下钻
-      case 'sdt':
+      case 'sdt': {
+        // 内容控件（v0.155）：`w:sdtPr` 里的 `w:id`（控件唯一号）与 `w:alias`/`w:tag`
+        // 是这一族的身份。屏上不兑现（我们照 sdtContent 下钻，控件壳本身没进模型），
+        // 也不往返——导出时内容控件被摊成普通段落/文字。**只读记账**
+        const pr = find(node, 'w:sdtPr')
+        if (pr) val(pr, 'w:id')
+        await this.children(node, props, st)
+        return
+      }
       case 'sdtContent':
       case 'customXml':
       case 'bdo':
@@ -2872,6 +3114,10 @@ class Fidelity {
           author: attr(node, 'w:author') ?? '',
           date: attr(node, 'w:date') ?? '',
         }
+        // 修订身份（v0.155）：`w:id` 是这一枚修订的唯一号（Word 靠它对账「这条改动」）。
+        // **只读记账**：我们往返的是作者与时间，号是 Word 自己的计数——照抄会让两枚
+        // 不同修订撞号，重编又不该由我们决定
+        attr(node, 'w:id')
         await this.children(node, { ...props, rev }, st)
         return
       }
@@ -3143,7 +3389,10 @@ class Fidelity {
     // 没有这组属性，混着读一次就是在账本上记四枚「读手问过 blip 要 crop」的假对——
     // 与 noteVmlShellMarks 只在 w:pict 里扫是同一个道理
     const clip = imgClipCss(el)
-    return `<img src="data:${mime};base64,${b64}"${size}${clip ? ` style="${clip}"` : ''}${alt ? ` alt="${esc(alt)}"` : ''}${shell ? ` ${IMG_ATTR}="${esc(shell)}"` : ''}>`
+    // 图形变换（v0.155）：旋转与翻转，与裁剪同挂一张图的 style
+    const tf = imgTransformCss(el)
+    const style = [clip, tf].filter(Boolean).join(';')
+    return `<img src="data:${mime};base64,${b64}"${size}${style ? ` style="${style}"` : ''}${alt ? ` alt="${esc(alt)}"` : ''}${shell ? ` ${IMG_ATTR}="${esc(shell)}"` : ''}>`
   }
 
   private mediaOf(path: string): Promise<string | null> {
@@ -3343,6 +3592,19 @@ class Fidelity {
         if ((attr(th, 'w:hRule') ?? 'atLeast').toLowerCase() === 'exact')
           this.warn('固定行高（exact）按最小行高读入，超高内容不再裁剪')
         trStyle = `height: ${px2(thv * TWIP_PX)}px`
+      }
+      // v0.155：行属性余量三枚——gridAfter（这一行末尾空过几格）与 wAfter（行末留白，
+      // w 是缇、type 是档位）。三枚都不改屏上：gridAfter 是网格记账用的补白格（我们按
+      // 网格列还原合并，补白格在 HTML 里本来就不画），行末留白是 Word 排版期的余量。
+      // 纯只读记账——写侧发不出（包没有这两枚元素的槽）
+      if (trPr) {
+        const ga = find(trPr, 'w:gridAfter')
+        if (ga) attr(ga, 'w:val')
+        const wa = find(trPr, 'w:wAfter')
+        if (wa) {
+          attr(wa, 'w:w')
+          attr(wa, 'w:type')
+        }
       }
       // 条件行高（v0.117）：行上没直接写 w:trHeight 时才认条件层（direct > 条件）
       if (thv === undefined) {
@@ -4133,6 +4395,12 @@ function readComments(commentsXml: string, extXml: string): DocComment[] {
         const d = onOff(attrL(ex, 'done'))
         if (pid && d) done.add(pid.toUpperCase())
       }
+      // 创建会话号（v0.155）：`w15:creationId/@w15:id`，这条批注是哪一次编辑会话建的
+      // （Word 靠它把同一次回复串里的批注认成一串）。**只读记账**：comments.xml 那条链
+      // 我们只按 id/作者/时间/正文重建，这一枚是 Word 的会话账，写回去等于替它编会话号。
+      // 位置不稳定——既见过它是 commentEx 的子元素，也见过与 commentEx 平级摆
+      // （`cx:b0` 那一枚就是平级），所以按整树查问，两种形态都收
+      for (const cid of allDesc(ext, 'creationId')) attrL(cid, 'id')
     }
   }
   for (const c of all(root, 'w:comment')) {
@@ -4353,6 +4621,64 @@ function noteCnfStyleMarks(doc: XEl | undefined): void {
   }
 }
 
+/**
+ * DrawingML 图形余量（v0.155）：`w:drawing` 里那一整片读手没有路径的属性——
+ * 颜色变换（alpha/alphaOff/hueOff/satOff/tint/prstClr/scrgbClr）、线端与箭头
+ * （prstDash/headEnd/tailEnd）、效果（outerShdw/glow/reflection）、三维（lightRig/props3d）、
+ * 填充与图形框的开关（blipFill/gradFill 的 rotWithShape 与 flip）、浮动定位的档位
+ * （sizeRelH/sizeRelV/wrapSquare）、文字轮廓与艺术字变形（textOutline/prstTxWarp）、
+ * 形状锁剩下的一枚（spLocks|noEditPoints）。
+ *
+ * **全部屏上零兑现**：Web 没有 DrawingML 的阴影/反射/三维模型/箭头端头，颜色变换要
+ * 在色彩管理里做（浏览器不认），艺术字变形与文字轮廓也不在 CSS 里。写侧同样发不出
+ * （包只发它认得的那几枚图形属性）。所以这一族与 noteVmlShellMarks 同格：按名查问、
+ * 只读记账，不假装在屏上兑现了什么。
+ *
+ * 只在 `w:drawing` 子树里扫：这些 local name 有别家同名的（w: 命名空间里也有 tint、
+ * VML 的 v:stroke 上有同名的 headEnd/tailEnd），整树扫会把别家那一支记成自己的账。
+ */
+const DRAWING_SHELL_ATTRS: Record<string, readonly string[]> = {
+  alpha: ['val'],
+  alphaOff: ['val'],
+  hueOff: ['val'],
+  satOff: ['val'],
+  tint: ['val'],
+  prstClr: ['val'],
+  scrgbClr: ['r', 'g', 'b'],
+  prstDash: ['val'],
+  headEnd: ['type', 'w', 'len'],
+  tailEnd: ['type', 'w', 'len'],
+  outerShdw: ['algn', 'blurRad', 'dir', 'dist', 'rotWithShape'],
+  glow: ['rad'],
+  reflection: ['algn', 'blurRad', 'dir', 'dist', 'endA', 'endPos', 'fadeDir', 'kx', 'ky', 'stA', 'stPos', 'sx', 'sy'],
+  lightRig: ['dir', 'rig'],
+  props3d: ['contourW', 'extrusionH', 'prstMaterial'],
+  blipFill: ['rotWithShape'],
+  gradFill: ['flip', 'rotWithShape'],
+  sizeRelH: ['relativeFrom'],
+  sizeRelV: ['relativeFrom'],
+  wrapSquare: ['wrapText'],
+  textOutline: ['algn', 'cap', 'cmpd', 'w'],
+  prstTxWarp: ['prst'],
+  spLocks: ['noEditPoints'],
+  // 自定义几何的路径数据（v0.155）：`a:custGeom/a:pathLst/a:path@path`——一条
+  // moveTo/lnTo/cubicBezTo 串起来的路径命令。**注意别与 VML 那枚撞**：VML 的
+  // 路径数据挂在形状自己的 `path` 属性上（shape|path，v0.153 已收），`v:path`
+  // 元素身上没有它。这里问的是 DrawingML 那一支，只在 w:drawing 子树里扫
+  path: ['path'],
+}
+
+function noteDrawingMarks(doc: XEl | undefined): void {
+  if (!doc) return
+  for (const drawing of allDesc(doc, 'drawing')) {
+    for (const tag of Object.keys(DRAWING_SHELL_ATTRS)) {
+      for (const el of allDesc(drawing, tag)) {
+        for (const n of DRAWING_SHELL_ATTRS[tag]) attrL(el, n)
+      }
+    }
+  }
+}
+
 /** bodyPr（CT_TextBodyProperties）的属性面——noteShapeMarks 的查问清单 */
 const BODYPR_ATTRS = [
   'anchor', 'anchorCtr', 'bIns', 'compatLnSpc', 'forceAA', 'fromWordArt',
@@ -4395,22 +4721,66 @@ export async function docxToHtmlFidelity(bytes: Uint8Array, depth = 0): Promise<
   noteVmlShellMarks(parseXml(documentXml))
   // 表条件格式十三枚（v0.154）：w:cnfStyle 在 tblPr 与 tcPr 里都住，整树扫一遍
   noteCnfStyleMarks(parseXml(documentXml))
+  // DrawingML 图形余量（v0.155）：w:drawing 里那一整片（颜色变换/线端/效果/三维/浮动档位）。
+  // 与 VML 壳同款：读手没有路径，跑正文前在 w:drawing 子树里按名查问
+  noteDrawingMarks(parseXml(documentXml))
   const { html, blocks } = await f.run(documentXml)
+  // 文档背景（v0.155）：屏上是整篇的底色，包在正文外层给出去——底色属于画布不属段落，
+  // 塞进任何一段的 style 都会在选中/复制时跟着文字走，含义就变了
+  const bg = docBackgroundOf(parseXml(documentXml), themeColors)
+  const html2 = bg?.css ? `<div style="background-color: ${attrEsc(bg.css)}">${html}</div>` : html
   // 节属性（v0.147）：body 末尾 sectPr 走 attr 漏斗读一遍。这一族原本是 docxToDocMeta
   // 用正则读的（正则不进漏斗，保真账本上是盲区——读是读了，账上没有）；改由读手读、
   // 随 DocxImport 出来后调用方折成 PageSetup，同一份数只有一个读数出处
   const section = sectionOf(parseXml(documentXml))
   return {
-    html,
+    html: html2,
     comments: f.comments,
     blocks,
     warnings: f.warningList(),
     styles: f.styleList(),
     ...(f.latentStyles ? { latentStyles: f.latentStyles } : {}),
     ...(section ? { section } : {}),
+    ...(bg ? { background: bg } : {}),
     // 编号定义账（v0.150）：只有真说了话的定义才出去（空件与旧 meta 保持字节一致）
     ...(numbering.defs.length ? { numbering: { defs: numbering.defs } } : {}),
   }
+}
+
+/**
+ * 文档背景（v0.155）：`w:document/w:background` 三枚——整篇的底色。Word 里「设计 → 页面颜色」
+ * 写在 document.xml 的根上（不在 sectPr 里），是画布的底而不是段落的底。
+ *
+ * 屏上兑现在最外层容器的 background-color；往返两边都是原生槽（docx 的 Document 收
+ * IDocumentBackgroundOptions，四枚属性与本族一一对应），所以这一族是**真双向**。
+ */
+export interface DocBackground {
+  /** 解析出来的 CSS 色（主题引用优先于字面值，与 w:color 同款主次） */
+  css?: string
+  themeColor?: string
+  themeShade?: string
+  themeTint?: string
+}
+
+function docBackgroundOf(doc: XEl | undefined, tc: ThemeColors | undefined): DocBackground | undefined {
+  if (!doc) return undefined
+  // 根是 #doc 壳，真根在下一层——与 sectionOf 同款（findDesc 深找）
+  const bg = findDesc(doc, 'w:background')
+  if (!bg) return undefined
+  const out: DocBackground = {}
+  // 查问与解析分开：themeRefCss 会把 themeColor/themeShade/themeTint 三枚都问一遍，
+  // 主题没装（或槽名不认）时解析不出值，但那三枚属性仍算读过
+  const themed = themeRefCss(tc, bg)
+  const c = (attr(bg, 'w:color') ?? '').toLowerCase()
+  if (themed) out.css = themed
+  else if (c && c !== 'auto') out.css = '#' + c.replace(/^#/, '')
+  const thc = attr(bg, 'w:themeColor')
+  if (thc) out.themeColor = thc
+  const ths = attr(bg, 'w:themeShade')
+  if (ths) out.themeShade = ths
+  const tht = attr(bg, 'w:themeTint')
+  if (tht) out.themeTint = tht
+  return out.css || out.themeColor ? out : undefined
 }
 
 /**
@@ -4462,6 +4832,34 @@ function sectionOf(doc: XEl | undefined): DocxSection | undefined {
     if (cs !== undefined) g.charSpace = cs
     if (Object.keys(g).length) out.docGrid = g
   }
+  // v0.155：节属性余量七枚——全是「说了也不改屏上排版」的元信息，屏上零兑现，
+  // 写侧也没有对应槽（包只发纸型/页边距/分栏数这几枚），纯只读记账：
+  //   type        —— 这一节从哪儿起（nextPage 另起一页 / continuous 接着排 / evenPage …）
+  //   pgSz|code   —— 纸型的打印机档位号（Word 记住「用户选的是 A4 那一格」用的）
+  //   pgNumType   —— 页码型别与起始值（我们没有分页视图，页码是域算的）
+  //   cols|equalWidth / col|w|space —— 逐栏不等宽的分栏表（我们只支持等宽 N 栏）
+  //   rtlGutter   —— 装订线落在右侧（从右往左书写的件）
+  //   formProt    —— 这一节受窗体保护（只填表单域，其余不可改）
+  const ty = find(sect, 'w:type')
+  if (ty) attr(ty, 'w:val')
+  if (pg) attr(pg, 'w:code')
+  const pgn = find(sect, 'w:pgNumType')
+  if (pgn) {
+    attr(pgn, 'w:fmt')
+    attr(pgn, 'w:start')
+  }
+  if (cols) {
+    attr(cols, 'w:equalWidth')
+    // 逐栏：w:cols 的 w:col 子们（不等宽分栏才有；等宽时 Word 不写这些子）
+    for (const c of all(cols, 'w:col')) {
+      attr(c, 'w:w')
+      attr(c, 'w:space')
+    }
+  }
+  const rg = find(sect, 'w:rtlGutter')
+  if (rg) attr(rg, 'w:val')
+  const fp = find(sect, 'w:formProt')
+  if (fp) attr(fp, 'w:val')
   // 页眉页脚引用（v0.152）：sectPr 上的 headerReference/footerReference 两族。
   // **只读记账**：id 是关系 id（r:id），写侧发包时自己重新编——照抄会把关系指到
   // 别人身上；type（default/first/even）我们只发 default 一档，first/even 读回来也没处写

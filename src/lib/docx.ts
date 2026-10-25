@@ -350,6 +350,11 @@ export interface DocxStyleInfo {
    */
   next?: string
   rsid?: string
+  /**
+   * 样式的别名（v0.155）：`w:aliases/@w:val`，逗号分隔的「也叫什么」。Word 的中文名
+   * 常挂在这里（样式 id 是英文、面板上显示中文）。屏上不兑现、随补丁往返：丢了只剩英文名
+   */
+  aliases?: string
   run: {
     font?: string
     sizePx?: number
@@ -425,6 +430,18 @@ export interface DocxLsdException {
  * Word 样式库的门面账（哪些内建样式露面、排第几档），与正文排版无关，屏上不兑现。
  * docx 包没有这一族的槽，导出走打包后补丁（patchLatentStyles，与 w:tblLook 同路数）
  */
+/**
+ * 文档背景（v0.155）：与读手侧 DocBackground 同构（写手不反向依赖 docx-fidelity，
+ * 故在此另立一份——与 DocxLatentStyles 同一格）
+ */
+export interface DocBackground {
+  /** 解析出来的 CSS 色；没有主题槽时它就是回写的字面值（去掉 # 转大写） */
+  css?: string
+  themeColor?: string
+  themeShade?: string
+  themeTint?: string
+}
+
 export interface DocxLatentStyles {
   count?: number
   defLockedState?: boolean
@@ -446,6 +463,17 @@ export interface DocxLvlMeta {
   tentative?: boolean
   tplc?: string
   suff?: string
+  /**
+   * 这一层是否随上一级重新起号（v0.155）：`w:lvlRestart/@w:val`，0 表示永不重起。
+   * 屏上零兑现（编号串由 ListRegistry 按段重建），随 numbering.xml 补丁往返
+   */
+  restart?: number
+  /**
+   * 图片项目符号的编号（v0.155）：`w:lvlPicBulletId/@w:val`，指着 numbering 根上
+   * `w:numPicBullet/@w:numPicBulletId`。**只回写这一枚引用**——图片本体在
+   * numPicBullet 里（我们不发图片项目符号），引用留着不指空是给 Word 看的
+   */
+  picBulletId?: number
 }
 
 /**
@@ -464,6 +492,12 @@ export interface DocxAbstractNumMeta {
    * patchOneAbstractNum 按 local name 设回开标签（包常写 w15: 同名属性，前缀不认）
    */
   rna?: boolean
+  /**
+   * 这份定义挂在哪条样式上（v0.155）：`w:abstractNum/w:styleLink/@w:val`。它是 styles.xml
+   * 里 `w:link` 的反向（那边「样式链到编号」，这边「编号链回样式」）。屏上不兑现，
+   * 随补丁往返——CT_AbstractNum 的序排在 styleLink 之前的是 tmpl/name，之后是 numStyleLink
+   */
+  styleLink?: string
   /**
    * 内容指纹（v0.150）：按 ilvl 序的 `numFmt|lvlText` 序列。包的编号 id 是自己发的
    * （与原文未必同号），贴回时就靠这份指纹把「原文那一条定义」在包里认出来——
@@ -510,6 +544,13 @@ export interface DocMeta {
    * 屏上不兑现，随 meta 持久化、导出时补丁回 numbering.xml；ODT 没有这一族，odt 导入不设置
    */
   numbering?: DocxNumbering
+  /**
+   * 文档背景（v0.155）：`w:document/w:background` 三枚——整篇的底色（Word「页面颜色」）。
+   * 屏上兑现在外层容器的 background-color；导出是包的原生槽 IDocumentBackgroundOptions，
+   * 四枚属性一一对应，所以这一族**真双向**（与 numbering/latentStyles 那两族不同：
+   * 它们要 post-pack 补丁，这一族不用）
+   */
+  background?: DocBackground
 }
 
 export async function docxToHtml(bytes: Uint8Array): Promise<string> {
@@ -2278,6 +2319,20 @@ export async function prosemirrorToDocxBytes(json: PMNode, meta?: DocMeta): Prom
     creator: 'OpenOffices',
     title: 'OpenOffices 文档',
     features: { updateFields: true },
+    // 文档背景（v0.155）：整篇底色。有主题槽就按主题回（与源件同一种引用方式），
+    // 没有主题槽才发解析出来的字面 hex——反过来会把「跟着主题变」写成「钉死一个色」
+    ...(meta?.background
+      ? {
+          background: {
+            ...(meta.background.themeColor ? { themeColor: meta.background.themeColor } : {}),
+            ...(meta.background.themeShade ? { themeShade: meta.background.themeShade } : {}),
+            ...(meta.background.themeTint ? { themeTint: meta.background.themeTint } : {}),
+            ...(!meta.background.themeColor && meta.background.css
+              ? { color: meta.background.css.replace(/^#/, '').toUpperCase() }
+              : {}),
+          },
+        }
+      : {}),
     ...noteParts('footnote'),
     ...noteParts('endnote'),
     ...(anchored.length
@@ -2323,12 +2378,13 @@ export async function prosemirrorToDocxBytes(json: PMNode, meta?: DocMeta): Prom
   // 这里只补段落/字符两桶。
   // v0.150：同一路数再带上样式身份两枚——next（后续段落样式）与 rsid（修订会话号），
   // 一样是包不发的槽，按 styleId 逐枚补
-  const props = new Map<string, { custom?: string; next?: string; rsid?: string }>()
+  const props = new Map<string, { custom?: string; next?: string; rsid?: string; aliases?: string }>()
   for (const s of meta?.styles ?? []) {
-    const p: { custom?: string; next?: string; rsid?: string } = {}
+    const p: { custom?: string; next?: string; rsid?: string; aliases?: string } = {}
     if (s.customStyle !== undefined && s.kind !== 'table') p.custom = s.customStyle ? '1' : '0'
     if (s.next) p.next = s.next
     if (s.rsid) p.rsid = s.rsid
+    if (s.aliases) p.aliases = s.aliases
     if (Object.keys(p).length) props.set(s.id, p)
   }
   const latent = meta?.latentStyles
@@ -2368,7 +2424,7 @@ export async function prosemirrorToDocxBytes(json: PMNode, meta?: DocMeta): Prom
 async function patchStylesXml(
   bytes: Uint8Array,
   latent: DocxLatentStyles | undefined,
-  props: Map<string, { custom?: string; next?: string; rsid?: string }>,
+  props: Map<string, { custom?: string; next?: string; rsid?: string; aliases?: string }>,
 ): Promise<Uint8Array> {
   const { default: JSZip } = await import('jszip')
   const zip = await JSZip.loadAsync(bytes)
@@ -2385,6 +2441,10 @@ async function patchStylesXml(
       let out = all
       if (p.custom !== undefined) {
         out = out.replace(/^<w:style\b[^>]*>/, (tag) => tag.replace(/>$/, ` w:customStyle="${p.custom}">`))
+      }
+      // aliases（v0.155）：CT_Style 序上紧跟 name（name → **aliases** → basedOn → next）
+      if (p.aliases !== undefined && !/<w:aliases\b/.test(out)) {
+        out = insertStyleKid(out, `<w:aliases w:val="${xmlAttr(p.aliases)}"/>`, ['name'])
       }
       // next：CT_Style 序上跟在 name/aliases/basedOn 之后、link 之前
       if (p.next !== undefined && !/<w:next\b/.test(out)) {
@@ -2603,6 +2663,7 @@ function patchOneAbstractNum(block: string, d: DocxAbstractNumMeta): string {
     ['nsid', d.nsid],
     ['multiLevelType', d.multiLevelType],
     ['tmpl', d.tmpl],
+    ['styleLink', d.styleLink],
   ] as [string, string | undefined][]) {
     if (v === undefined) continue
     if (new RegExp(`<[\\w:]*${el}\\b`).test(out)) {
@@ -2629,17 +2690,36 @@ function patchOneAbstractNum(block: string, d: DocxAbstractNumMeta): string {
     let inner = lvl.slice(tagEnd)
     if (m.tentative !== undefined) tag = setTagAttr(tag, 'w:tentative', m.tentative ? '1' : '0')
     if (m.tplc !== undefined) tag = setTagAttr(tag, 'w:tplc', xmlAttr(m.tplc))
+    // 层子元素按 CT_Lvl 的序插（v0.155）：start → numFmt → **lvlRestart** → pStyle →
+    // isLgl → suff → lvlText → **lvlPicBulletId** → legacy → lvlJc → pPr → rPr。
+    // 锚点表写的是「schema 序里排在自己之后的第一个在场元素」——与自己之前的东西无关，
+    // 所以三枚可以各自独立成表（不像表级那一族要分居 tblW 两侧，见 v0.154 那次教训）
+    const insertKid = (frag: string, anchors: string[]): void => {
+      const at2 = firstIndexOf(inner, anchors)
+      inner = at2 >= 0 ? inner.slice(0, at2) + frag + inner.slice(at2) : inner.replace('</w:lvl>', `${frag}</w:lvl>`)
+    }
+    if (m.restart !== undefined) {
+      if (/<[\w:]*lvlRestart\b/.test(inner)) {
+        inner = inner.replace(/(<[\w:]*lvlRestart\b[^>]*?\sw:val=")[^"]*(")/, `$1${m.restart}$2`)
+      } else {
+        insertKid(`<w:lvlRestart w:val="${m.restart}"/>`, [
+          'pStyle', 'isLgl', 'suff', 'lvlText', 'lvlPicBulletId', 'legacy', 'lvlJc', 'pPr', 'rPr',
+        ])
+      }
+    }
+    if (m.picBulletId !== undefined) {
+      if (/<[\w:]*lvlPicBulletId\b/.test(inner)) {
+        inner = inner.replace(/(<[\w:]*lvlPicBulletId\b[^>]*?\sw:val=")[^"]*(")/, `$1${m.picBulletId}$2`)
+      } else {
+        insertKid(`<w:lvlPicBulletId w:val="${m.picBulletId}"/>`, ['legacy', 'lvlJc', 'pPr', 'rPr'])
+      }
+    }
     if (m.suff !== undefined) {
       if (/<[\w:]*suff\b/.test(inner)) {
         inner = inner.replace(/(<[\w:]*suff\b[^>]*?\sw:val=")[^"]*(")/, `$1${xmlAttr(m.suff)}$2`)
       } else {
         // CT_Lvl 序：suff 在 lvlText 之前
-        const anchor = firstIndexOf(inner, ['lvlText', 'lvlPicBulletId', 'legacy', 'lvlJc', 'pPr', 'rPr'])
-        const frag = `<w:suff w:val="${xmlAttr(m.suff)}"/>`
-        inner =
-          anchor >= 0
-            ? inner.slice(0, anchor) + frag + inner.slice(anchor)
-            : inner.replace('</w:lvl>', `${frag}</w:lvl>`)
+        insertKid(`<w:suff w:val="${xmlAttr(m.suff)}"/>`, ['lvlText', 'lvlPicBulletId', 'legacy', 'lvlJc', 'pPr', 'rPr'])
       }
     }
     out = out.slice(0, at) + tag + inner + out.slice(end + closeLen)
@@ -2693,12 +2773,21 @@ function tblLookOf(s: DocxStyleInfo): string | undefined {
  */
 const PPR_WRITE_ORDER = [
   'suppressLineNumbers',
+  // 自动断字总闸（v0.155）：CT_PPrBase 里排在 suppressLineNumbers 之后、kinsoku 之前
+  'suppressAutoHyphens',
+  // v0.155：禁则三枚与文字方向。CT_PPrBase 里 kinsoku/wordWrap/overflowPunct 三枚
+  // 排在 topLinePunct **之前**、suppressAutoHyphens 之后；textDirection 排在 jc 之后
+  'kinsoku',
+  'wordWrap',
+  'overflowPunct',
   'topLinePunct',
   'autoSpaceDE',
   'autoSpaceDN',
   'bidi',
   'adjustRightInd',
   'snapToGrid',
+  // 文字方向（v0.155）：CT_PPrBase 里排在 jc 之后、textAlignment 之前
+  'textDirection',
   'textAlignment',
 ] as const
 

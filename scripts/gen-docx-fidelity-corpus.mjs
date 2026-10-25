@@ -180,6 +180,16 @@ const CTX = {
   'd:xfrm': { f: '03-drawings', part: 'document', open: `${PIC_PRE}<a:xfrm rot="0" flipH="0" flipV="0">`, close: `</a:xfrm>${PIC_POST}` },
   'd:clr': { f: '03-drawings', part: 'document', open: `${PIC_PRE}<a:solidFill><a:schemeClr val="accent1">`, close: `</a:schemeClr></a:solidFill>${PIC_POST}` },
   'd:clr2': { f: '03-drawings', part: 'document', open: `${PIC_PRE}<a:solidFill>`, close: `</a:solidFill>${PIC_POST}` },
+  // v0.155：自定义几何的路径表（a:custGeom/a:pathLst）——`a:path@path` 是路径命令串。
+  // 早先这对摆在 v:main（VML 的 v:path 元素）里，而 v:path 身上根本没有 path 属性
+  // （VML 的路径数据挂在形状自己的 path 上），等于在错的对象上问：读手在 w:drawing
+  // 子树里问 a:path，语料却在 w:pict 里放 v:path，永远问不到一起
+  'd:custgeom': {
+    f: '03-drawings',
+    part: 'document',
+    open: `${PIC_PRE}<a:custGeom><a:rect l="0" t="0" r="0" b="0"/><a:pathLst><a:path w="1000" h="1000">`,
+    close: `</a:path></a:pathLst></a:custGeom>${PIC_POST}`,
+  },
   'd:gs': { f: '03-drawings', part: 'document', open: `${PIC_PRE}<a:gradFill flip="none" rotWithShape="0"><a:gsLst>`, close: `</a:gsLst></a:gradFill>${PIC_POST}` },
   'd:ln': { f: '03-drawings', part: 'document', open: `${PIC_PRE}<a:ln w="9525" cap="flat" cmpd="sng">`, close: `</a:ln>${PIC_POST}` },
   'd:fx': { f: '03-drawings', part: 'document', open: `${PIC_PRE}<a:effectLst>`, close: `</a:effectLst>${PIC_POST}` },
@@ -312,7 +322,7 @@ const ORDER = {
   '00-base': ['d0:tbl'],
   '01-body': ['b0', 'b:rpr', 'b:ppr', 'b:run', 'b:numpr', 'b:pbdr', 'b:tabs', 'b:omml', 'b:para'],
   '02-tables': ['t:sect', 't:cols-kids', 't:cols', 't:tblPr', 't:borders', 't:cellmar', 't:grid', 't:tr', 't:trPr', 't:tcPr', 't:tcborders', 't:tcmar', 't:b0'],
-  '03-drawings': ['d:inline', 'd:wp', 'd:anchor-kids', 'd:pic', 'd:xfrm', 'd:clr', 'd:clr2', 'd:gs', 'd:ln', 'd:fx', 'd:scene', 'd:wps', 'd:bodypr'],
+  '03-drawings': ['d:inline', 'd:wp', 'd:anchor-kids', 'd:pic', 'd:xfrm', 'd:clr', 'd:clr2', 'd:gs', 'd:ln', 'd:fx', 'd:scene', 'd:wps', 'd:bodypr', 'd:custgeom'],
   '04-vml': ['v:pict', 'v:shape-attr', 'v:main', 'v:fill', 'v:stroke', 'v:formulas', 'v:handles', 'v:group', 'v:object', 'v:object-run', 'v:ffdata', 'v:textinput'],
   styles: ['s:latent', 's:style-attrs', 's:style-kids', 's:style-rpr'],
   numbering: ['n:b0', 'n:abstract-attrs', 'n:abstract-kids', 'n:lvl-attrs', 'n:lvl-kids', 'n:lvl-rpr', 'n:num-attrs', 'n:num-kids', 'n:lvloverride-kids'],
@@ -591,7 +601,12 @@ const PLACE = {
   // d:inline 与 v:fill/v:stroke 都栽在「段内没有 blip/imagedata」上）。
   // v:main 的 open 自带一枚 imagedata，把两族放进去才走得到读手。**教训**：
   // 新增「骑 img」的属性族，先确认承放上下文的短路链通不通，再谈读手怎么读。
-  path: [{ c: 'v:main', p: P.v, bare: true, av: { arrowok: 't', connectangles: '', connectlocs: '', connecttype: 'segments', extrusionok: 'f', fillok: 't', gradientshapeok: 't', h: '1000', path: 'm0,0 l100,0 e', textboxrect: '0,0,1000,1000', w: '1000' } }],
+  // v0.155：path@path 挪进 d:custgeom（见该上下文注）。VML 那一支另有自己的条目
+  // （arrowok/connectangles/…），族名相同、属性不同族
+  path: [
+    { c: 'v:main', p: P.v, bare: true, av: { arrowok: 't', connectangles: '', connectlocs: '', connecttype: 'segments', extrusionok: 'f', fillok: 't', gradientshapeok: 't', h: '1000', textboxrect: '0,0,1000,1000', w: '1000' } },
+    { c: 'd:custgeom', p: P.a, bare: true, av: { path: 'moveTo(0,0) lnTo(1000,1000)' } },
+  ],
   f: [{ c: 'v:formulas', p: P.v, bare: true, av: { eqn: 'sum 0 0 0' } }],
   h: [{ c: 'v:handles', p: P.v, bare: true, av: { position: '0,0', xrange: '0,1000', yrange: '0,1000' } }],
   pt: [{ c: 'v:main', p: P.v, bare: true, av: { x: '0', y: '0' } }],
@@ -638,7 +653,10 @@ const PLACE = {
   multiLevelType: [{ c: 'n:abstract-kids', av: { val: 'hybridMultilevel' } }],
   tmpl: [{ c: 'n:abstract-kids', av: { val: '0409001D' } }],
   styleLink: [{ c: 'n:abstract-kids', av: { val: 'a' } }],
-  numForm: [{ c: 'n:abstract-kids', av: { val: 'default' } }],
+  // v0.155：numForm 从 abstractNum 子搬到 **rPr**——它管的是「数字用哪种字形排」
+  // （oldStyle/lining），屏上兑现在 font-variant-numeric，只在运行属性上说得通。
+  // 读手在两处都问（rPr 与 numbering lvl），这一族真实位次我们没拿到可靠参考
+  numForm: [{ c: 'b:rpr', av: { val: 'oldStyle' } }],
   numIdMacAtCleanup: [{ c: 'n:b0', av: { val: '0' } }],
   numPicBullet: [{ c: 'n:b0', av: { numPicBulletId: '0' } }],
   start: [{ c: 'n:lvl-kids', av: { val: '1' } }],
@@ -659,7 +677,9 @@ const PLACE = {
   creationId: [{ c: 'cx:b0', p: P.w15, ap: { id: 'w15:' }, av: { id: '00000001' } }],
   // w:suppressAutoHyphens 本属 settings.xml（不在普查七部件之列），旧账 14 次；
   // 读手零路径 ⇒ 只为分母齐全，放 document.xml 正文流占位（结构位置不 schema 合法，量具语料专用）
-  suppressAutoHyphens: [{ c: 'b0', av: { val: '1' } }],
+  // v0.155：suppressAutoHyphens 是 CT_PPrBase 的成员（自动断字总闸），
+  // 先前摆在正文流直子上——读手的段落属性那条路永远走不到它。挪进 b:ppr
+  suppressAutoHyphens: [{ c: 'b:ppr', av: { val: '1' } }],
 }
 
 // 非自闭合 / 前缀特殊的承放（pair → { c, item? }；无 item 的由部件根或包裹处提供）
@@ -684,8 +704,10 @@ const SPECIAL = {
   'bookmarkStart|name': { c: 'b:para', item: '<w:bookmarkStart w:name="_Toc1"/>' },
   'bookmarkEnd|id': { c: 'b:para', item: '<w:bookmarkEnd w:id="1"/>' },
   'proofErr|type': { c: 'b0', item: '<w:proofErr w:type="spellStart"/>' },
-  'smartTag|element': { c: 'b0', item: '<w:smartTag w:element="address"><w:r><w:t>文</w:t></w:r></w:smartTag>' },
-  'smartTag|uri': { c: 'b0', item: '<w:smartTag w:uri="urn:schemas-microsoft-com:office:smarttags"><w:r><w:t>文</w:t></w:r></w:smartTag>' },
+  // v0.155：smartTag 从正文流直子挪进段内——它是**包住若干 run** 的 inline 壳，
+  // 块层分发碰不到它（与 v0.146 书签三对同一个坑）
+  'smartTag|element': { c: 'b:para', item: '<w:smartTag w:element="address"><w:r><w:t>文</w:t></w:r></w:smartTag>' },
+  'smartTag|uri': { c: 'b:para', item: '<w:smartTag w:uri="urn:schemas-microsoft-com:office:smarttags"><w:r><w:t>文</w:t></w:r></w:smartTag>' },
   'commentRangeStart|id': { c: 'b0', item: '<w:p><w:commentRangeStart w:id="1"/><w:r><w:t>文</w:t></w:r></w:p>' },
   'commentRangeEnd|id': { c: 'b0', item: '<w:p><w:r><w:t>文</w:t></w:r><w:commentRangeEnd w:id="1"/></w:p>' },
   'commentReference|id': { c: 'b0', item: '<w:p><w:r><w:commentReference w:id="1"/></w:r></w:p>' },
