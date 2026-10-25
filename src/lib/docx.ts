@@ -44,7 +44,7 @@ import {
   type ITableFloatOptions,
 } from 'docx'
 import { xml2js } from 'xml-js'
-import { borderParts, pxToEighths, pxToPt, parseFramePayload, parseImgPayload, parsePprPayload, parseShadePayload, parseTabsPayload, parseTblpPayload, parseTlookPayload, CELL_EDGES, type CellEdge } from './cell-style'
+import { borderParts, pxToEighths, pxToPt, parseFramePayload, parseImgPayload, parsePprPayload, parseShadePayload, parseTabsPayload, parseTblpPayload, parseTblPrPayload, parseTlookPayload, CELL_EDGES, type CellEdge } from './cell-style'
 import { lineToOoxml, type LineRule } from './paragraph-style'
 import { decodeEnt } from './ooxml'
 import { condLookBits } from './table-cond'
@@ -90,8 +90,9 @@ export interface PageSetup {
   /** 页眉/页脚距纸边（v0.147，mm）：w:pgMar/@w:header 与 @w:footer，缺省按上下边距取小 */
   header?: number
   footer?: number
-  /** 文档网格（v0.147）：w:docGrid 的档位与行间距（linePitch 缇）。屏上不兑现，只往返 */
-  docGrid?: { type?: string; linePitch?: number }
+  /** 文档网格（v0.147）：w:docGrid 的档位与行间距（linePitch 缇）。屏上不兑现，只往返。
+   *  v0.152 补 charSpace（每字符网格宽度，缇）——与 linePitch 同住 w:docGrid 上的第三枚 */
+  docGrid?: { type?: string; linePitch?: number; charSpace?: number }
   /** 纸张方向（v0.147）：w:pgSz/@w:orient。缺省按宽高比推（宽>高即横版） */
   orient?: 'portrait' | 'landscape'
   /** 分栏数（1=不分栏）；与 colGap（mm）一起贯穿视图/打印/docx/odt */
@@ -114,7 +115,7 @@ export interface DocxSection {
   margin?: { top?: number; right?: number; bottom?: number; left?: number; header?: number; footer?: number; gutter?: number }
   cols?: number
   colGap?: number
-  docGrid?: { type?: string; linePitch?: number }
+  docGrid?: { type?: string; linePitch?: number; charSpace?: number }
 }
 
 /**
@@ -214,7 +215,7 @@ export function resolvePage(p?: PageSetup): {
   header?: number
   footer?: number
   orient?: 'portrait' | 'landscape'
-  docGrid?: { type?: string; linePitch?: number }
+  docGrid?: { type?: string; linePitch?: number; charSpace?: number }
 } {
   const preset = p?.size === 'Letter' ? PAGE_SIZES_MM.Letter : PAGE_SIZES_MM.A4
   const w = p?.size === 'custom' && p.w ? p.w : preset[0]
@@ -455,6 +456,12 @@ export interface DocxAbstractNumMeta {
   nsid?: string
   tmpl?: string
   multiLevelType?: string
+  /**
+   * 分页后重新编号总闸（v0.152）：`w:abstractNum/@w:restartNumberingAfterBreak`——
+   * 与上面三枚子元素相反，这一枚是开标签上的**属性**（onOff）。写侧由
+   * patchOneAbstractNum 按 local name 设回开标签（包常写 w15: 同名属性，前缀不认）
+   */
+  rna?: boolean
   /**
    * 内容指纹（v0.150）：按 ilvl 序的 `numFmt|lvlText` 序列。包的编号 id 是自己发的
    * （与原文未必同号），贴回时就靠这份指纹把「原文那一条定义」在包里认出来——
@@ -1581,6 +1588,11 @@ function withCharExtra<T extends object>(opts: T, child: PMNode): T {
   const ics = str('ics')
   const bcs = str('bcs')
   const sc = str('smallcaps')
+  // v0.152：全大写与字符边框。两枚都是**类型面全暴露**的原生槽（IRunOptions.allCaps
+  // 与 IRunOptions.border，dist/index.d.ts:1660 与 :1674）——库里实现着、类型也写着，
+  // 不走库外断言（与上面 szcs/lang 那一族不同）
+  const caps = str('caps')
+  const bdr = str('bdr')
   const extra: Record<string, unknown> = {}
   if (szcs !== undefined && szcs > 0) extra.sizeComplexScript = szcs
   if (lang || langEa || langBidi)
@@ -1591,7 +1603,36 @@ function withCharExtra<T extends object>(opts: T, child: PMNode): T {
   if (ics) extra.italicsComplexScript = true
   if (bcs) extra.boldComplexScript = true
   if (sc) extra.smallCaps = true
+  if (caps) extra.allCaps = true
+  // 字符边框（v0.152）：w:bdr 四枚 → 包的 IRunOptions.border。val 是线型枚举、
+  // sz 是八分之一磅、space 是磅、color 是 hex；缺的枚不给（包自己有默认）。
+  // **type 面是 BorderStyle 枚举**（SINGLE/DOTTED/…），而 OOXML 的 val 是小写串
+  // （single/dotted/…）——BuilderElement 透传不校验，但枚举映射更稳：
+  // 只映射 CSS_BORDER_STYLE 认得的档，认不得的按 single
+  if (bdr) {
+    const [val = '', sz = '', space = '', color = ''] = bdr.split(';')
+    const style = BDR_LINE[(val || 'single').toLowerCase()] ?? BorderStyle.SINGLE
+    extra.border = {
+      style,
+      ...(/^\d+$/.test(sz) && Number(sz) > 0 ? { size: Number(sz) } : {}),
+      // space 收 0：显式 0 与缺省同结果，但源件写了就原样往返（sz 不行——零宽边框
+      // 不是合法档，缺了按包的默认走）
+      ...(/^\d+$/.test(space) ? { space: Number(space) } : {}),
+      ...(color && color.toLowerCase() !== 'auto' ? { color: color.replace(/^#/, '').toUpperCase() } : {}),
+    }
+  }
   return Object.keys(extra).length ? ({ ...opts, ...extra } as unknown as T) : opts
+}
+
+/** w:bdr/@w:val → 包的 BorderStyle（OOXML 十六档里包有同名枚举的这几档；
+ * dashLargeGap 一族包里没有对应成员，落到默认 single） */
+const BDR_LINE: Record<string, (typeof BorderStyle)[keyof typeof BorderStyle]> = {
+  single: BorderStyle.SINGLE,
+  dotted: BorderStyle.DOTTED,
+  dashed: BorderStyle.DASHED,
+  double: BorderStyle.DOUBLE,
+  dotdash: BorderStyle.DOT_DASH,
+  dashsmallgap: BorderStyle.DASH_SMALL_GAP,
 }
 
 interface DocTrack {
@@ -1614,6 +1655,17 @@ interface DocTrack {
    * 表上那一枚压过样式推出来的那一枚，同样走打包后补丁按出现序贴回 `<w:tblPr>`
    */
   tblLooks: string[]
+  /**
+   * 表级条件格式尺寸（v0.152）：与 tblLooks 同序同长——同一枚 `<w:tblPr>` 上要补的
+   * 两枚 bandSize 元素（包里没有槽），与 tblLook 共用一次解压/重压
+   */
+  tblPrs: string[]
+  /**
+   * 单元格不换行（v0.152）：与 document.xml 里每个 `<w:tc>` 一一对应、同序（含嵌套
+   * 表内的格——两族各自按自己的元素出现序对位，互不干扰）。包里没有 noWrap 的槽，
+   * 走打包后补丁按 `<w:tc>` 出现序插 `<w:noWrap/>`（计数闸门同 pprExtras）
+   */
+  cellExtras: string[]
   /**
    * 图片容器壳（v0.148）：与 document.xml 里每个 `<w:drawing>` 一一对应、同序。
    * 包把整层壳都发出来了，只是值全部硬编码（dist*=0、effectExtent 四边=0、两枚
@@ -1640,6 +1692,8 @@ function newDocTrack(): DocTrack {
     revId: 1,
     pprExtras: [],
     tblLooks: [],
+    tblPrs: [],
+    cellExtras: [],
     imgExtras: [],
   }
 }
@@ -1980,6 +2034,9 @@ function blocksOf(
       const tblp = tblpFloatOf(node.attrs?.tblp)
       // 表自身的闸门（v0.147）：与段落余量同理，按出现序登记，打包后贴回 <w:tblPr>
       dt.tblLooks.push(tlookXmlOf(node.attrs?.tlook))
+      // 表级条件格式尺寸（v0.152）：两枚 bandSize 与 tblLook 同住 tblPr、同序登记，
+      // 共用 patchTblLook 那一次解压/重压
+      dt.tblPrs.push(tblPrXmlOf(node.attrs?.tblPr))
       out.push(
         new Table({
           // 表样式引用（v0.114）：表身上这枚 data-tstyle 就是 w:tblStyle，
@@ -2009,6 +2066,10 @@ function blocksOf(
                 ...(r.content ?? []).some((c) => c.type === 'tableHeader') ? { tableHeader: true } : {},
                 ...(rh > 0 ? { height: { value: Math.round(rh * PX_TWIP), rule: HeightRule.ATLEAST } } : {}),
                 children: (r.content ?? []).map((cell) => {
+                  // 单元格不换行（v0.152）：登记必须赶在本格内容之前——嵌套表的内层格
+                  // 在 blocksOf 里先入账，而 XML 里外层 <w:tc>（连它的 tcPr）排在
+                  // 内层表前面。数组序 = <w:tc> 出现序，补丁按这个序对位
+                  dt.cellExtras.push(noWrapXmlOf(cell.attrs?.noWrap))
                   // TipTap 合并语义 colspan/rowspan → gridSpan + vMerge（docx 库内部展开 restart/continue）
                   const cs = colspanOf(cell)
                   const rs = rowspanOf(cell)
@@ -2112,12 +2173,14 @@ export async function prosemirrorToDocxBytes(json: PMNode, meta?: DocMeta): Prom
       },
       // 文档网格（v0.147）：档位与行间距（linePitch 缇）。屏上不兑现，只往返。
       // 包的 GridType 只认四档枚举，源文件里偶见的自造档照样透传（BuilderElement 不校验）
-      ...(pg.docGrid?.type || pg.docGrid?.linePitch !== undefined
+      // v0.152：charSpace（每字符网格宽度，缇）——与 linePitch 同住 w:docGrid 上的第三枚
+      ...(pg.docGrid?.type || pg.docGrid?.linePitch !== undefined || pg.docGrid?.charSpace !== undefined
         ? {
             grid: {
               ...(pg.docGrid?.type ? { type: pg.docGrid.type } : {}),
               ...(pg.docGrid?.linePitch !== undefined ? { linePitch: pg.docGrid.linePitch } : {}),
-            } as { type?: string; linePitch?: number },
+              ...(pg.docGrid?.charSpace !== undefined ? { charSpace: pg.docGrid.charSpace } : {}),
+            } as { type?: string; linePitch?: number; charSpace?: number },
           }
         : {}),
       // 单栏不写 w:cols（Word 默认即单栏，写出来反而让 diff 变噪）
@@ -2259,16 +2322,19 @@ export async function prosemirrorToDocxBytes(json: PMNode, meta?: DocMeta): Prom
   const withPara = await patchParaProps(out, dt.pprExtras)
   // 图片容器壳（v0.148）：按 <w:drawing> 出现序逐块改值（包发得出壳，只是值硬编码）
   const withImg = await patchImgXml(withPara, dt.imgExtras)
-  // 表闸门两张表都要补：样式推出来的（looks）与表自己带的（dt.tblLooks）
-  const needTbl = looks.size || dt.tblLooks.some((x) => x)
+  // 表闸门三样都要补：样式推出来的（looks）与表自己带的（dt.tblLooks），
+  // v0.152 起再加表级条件格式尺寸两枚（dt.tblPrs，与 tblLook 同住 tblPr）
+  const needTbl = looks.size || dt.tblLooks.some((x) => x) || dt.tblPrs.some((x) => x)
+  // 单元格不换行（v0.152）：包里没有 noWrap 的槽，按 <w:tc> 出现序插 <w:noWrap/>
+  const withCell = dt.cellExtras.some((x) => x) ? await patchTcPr(withImg, dt.cellExtras) : withImg
   const withStyles = props.size || latent
-    ? await patchStylesXml(withImg, latent, props)
-    : withImg
+    ? await patchStylesXml(withCell, latent, props)
+    : withCell
   if (numDefs.length) {
     const withNum = await patchNumberingXml(withStyles, numDefs)
-    return needTbl ? await patchTblLook(withNum, looks, dt.tblLooks) : withNum
+    return needTbl ? await patchTblLook(withNum, looks, dt.tblLooks, dt.tblPrs) : withNum
   }
-  return needTbl ? patchTblLook(withStyles, looks, dt.tblLooks) : withStyles
+  return needTbl ? patchTblLook(withStyles, looks, dt.tblLooks, dt.tblPrs) : withStyles
 }
 
 /**
@@ -2417,6 +2483,18 @@ function setTagAttr(tag: string, name: string, value: string): string {
   return tag.endsWith('>') ? tag.replace(/>$/, frag) : tag + frag
 }
 
+/** `setTagAttr` 的**保前缀**变体：按 local name 找到那枚就换值不换前缀（w15: 还是 w15:），
+ * 找不到才按调用方给的名追加。用于 restartNumberingAfterBreak——OOXML 里它定义在 w15
+ * 命名空间，Word 与 docx 库发的都是 w15:，替换成 w: 会写出不在 schema 上的属性 */
+function setTagAttrKeepPrefix(tag: string, name: string, value: string): string {
+  const bare = name.includes(':') ? name.slice(name.indexOf(':') + 1) : name
+  const re = new RegExp(`\\s([\\w:]*?)${bare}="[^"]*"`)
+  const m = re.exec(tag)
+  if (m) return tag.replace(re, ` ${m[1]}${bare}="${value}"`)
+  const frag = ` ${name}="${value}"`
+  return tag.endsWith('>') ? tag.replace(/>$/, frag) : tag + frag
+}
+
 /**
  * 编号定义账（v0.150）：nsid/tmpl/multiLevelType 与逐层 tentative/tplc/suff 贴回
  * numbering.xml。包的编号 id 是自己发的（ListRegistry 按段引用重建，numId/abstractNumId
@@ -2487,6 +2565,19 @@ function numLvlSeqOf(block: string): string[] {
 
 function patchOneAbstractNum(block: string, d: DocxAbstractNumMeta): string {
   let out = block
+  // 分页后重新编号总闸（v0.152）：开标签上的属性（与下面三枚子元素正相反的一枚）。
+  // **保留原前缀**——OOXML 里 restartNumberingAfterBreak 定义在 w15 命名空间
+  // （CT_AbstractNum 的扩展属性），Word 与 docx 库发的都是 w15:，照 w: 全名替换会
+  // 写出一枚不在 schema 上的属性（判损坏件风险）。包里对所有定义恒发这一枚，
+  // 故实际走的都是「按 local name 认出来、换值不换前缀」这条路径
+  if (d.rna !== undefined) {
+    const openEnd = out.indexOf('>')
+    if (openEnd > 0) {
+      out =
+        setTagAttrKeepPrefix(out.slice(0, openEnd), 'w15:restartNumberingAfterBreak', d.rna ? '1' : '0') +
+        out.slice(openEnd)
+    }
+  }
   // 三枚身份属性：CT_AbstractNum 序 nsid → multiLevelType → tmpl → name → …
   // 前缀一律不认（w: 只是最常见那个，w15: 同族也放过）。插入锚点取「schema 序里排
   // 在自己之后的第一个在场元素」——包可能自带 multiLevelType（docx 库对所有定义都发），
@@ -2749,35 +2840,143 @@ function tlookXmlOf(raw: unknown): string {
 }
 
 /**
+ * 单元格不换行载荷 → `<w:noWrap/>`（v0.152）。'1' 才发（「显式关」与「没写」在
+ * Word 里同结果，读侧只存 true）——空串那一格由 patchTcPr 原样跳过
+ */
+function noWrapXmlOf(raw: unknown): string {
+  return raw === '1' || raw === 1 ? '<w:noWrap/>' : ''
+}
+
+/**
+ * 表级条件格式尺寸载荷 → 两枚元素 XML（v0.152）。CT_TblPrBase 的序：
+ * tblStyleRowBandSize 排在 tblStyleColBandSize 之前（都在 tblpPr 之后、tblW 之前）。
+ * 一枚都没说给空串（那一格交给包的默认——它两枚都不发）
+ */
+function tblPrXmlOf(raw: unknown): string {
+  const kv = parseTblPrPayload(typeof raw === 'string' ? raw : null)
+  const parts: string[] = []
+  if (kv.rowBand) parts.push(`<w:tblStyleRowBandSize w:val="${kv.rowBand}"/>`)
+  if (kv.colBand) parts.push(`<w:tblStyleColBandSize w:val="${kv.colBand}"/>`)
+  return parts.join('')
+}
+
+/**
  * 给表格补 `<w:tblLook>`：一是引用了带条件层样式的表（按 styleId 查 `looks`，老路数），
  * 二是表**自己**带闸门的那一张（按出现序查 `own`，v0.147）——后者压过前者。
  * 两路都走同一处补丁：贴 `<w:tblPr>` 的末位（已有 w:tblLook 就整枚替换）。
  * 出现序的那一路由**计数闸门**兜底：`<w:tblPr>` 枚数与登记条数对不上就整笔放弃
  */
-async function patchTblLook(bytes: Uint8Array, looks: Map<string, string>, own: string[] = []): Promise<Uint8Array> {
+async function patchTblLook(bytes: Uint8Array, looks: Map<string, string>, own: string[] = [], band: string[] = []): Promise<Uint8Array> {
   const { default: JSZip } = await import('jszip')
   const zip = await JSZip.loadAsync(bytes)
   const file = zip.file('word/document.xml')
   if (!file) return bytes
   const xml = await file.async('string')
-  if (own.length && (xml.match(/<w:tblPr>/g) ?? []).length !== own.length) return bytes
+  // 计数闸门：两族（tblLook 与 bandSize）都按 tblPr 出现序对位，
+  // 长度必须与 tblPr 枚数相等（两族在同一处 push，恒等长；取 max 只是防御）
+  const n = (xml.match(/<w:tblPr>/g) ?? []).length
+  if ((own.length || band.length) && n !== Math.max(own.length, band.length)) return bytes
   let i = 0
   let touched = false
   const patched = xml.replace(/<w:tblPr>([\s\S]*?)<\/w:tblPr>/g, (all: string) => {
     const inner = all.slice('<w:tblPr>'.length, -'</w:tblPr>'.length)
     const mine = own[i] ?? ''
+    const bandMine = band[i] ?? ''
     i++
     const id = /<w:tblStyle w:val="([^"]+)"/.exec(inner)?.[1]
     const look = mine || (id ? looks.get(id) : undefined)
-    if (!look) return all
-    touched = true
-    if (/<w:tblLook[^>]*\/>/.test(inner)) return all.replace(/<w:tblLook[^>]*\/>/, look)
-    return all.replace('</w:tblPr>', `${look}</w:tblPr>`)
+    let out = all
+    if (look) {
+      touched = true
+      out = /<w:tblLook[^>]*\/>/.test(inner) ? out.replace(/<w:tblLook[^>]*\/>/, look) : out.replace('</w:tblPr>', `${look}</w:tblPr>`)
+    }
+    if (bandMine) {
+      touched = true
+      out = insertTblPrKids(out, bandMine)
+    }
+    return out
   })
   if (!touched) return bytes
   zip.file('word/document.xml', patched)
   const buf = (await zip.generateAsync({ type: 'arraybuffer' })) as ArrayBuffer
   return new Uint8Array(buf)
+}
+
+/**
+ * 把 bandSize 两枚元素插进 `<w:tblPr>`：CT_TblPrBase 的序里它们排在 tblW 之前
+ * （tblStyle → tblpPr → tblOverlap → bidiVisual → **tblStyleRowBandSize →
+ * tblStyleColBandSize** → tblW → …）。包里 tblW 恒发（Table 必有宽），所以锚点
+ *  practically 总是 `<w:tblW`；找不着就退到第一个排在它们之后的元素，再不行才追加末尾
+ */
+function insertTblPrKids(all: string, frag: string): string {
+  const AFTER = ['tblW', 'jc', 'tblCellSpacing', 'tblInd', 'tblBorders', 'shd', 'tblLayout', 'tblCellMar', 'tblLook', 'tblCaption', 'tblDescription']
+  const at = firstIndexOf(all, AFTER)
+  if (at >= 0) return all.slice(0, at) + frag + all.slice(at)
+  return all.replace('</w:tblPr>', `${frag}</w:tblPr>`)
+}
+
+/**
+ * 单元格不换行补丁（v0.152）：`<w:noWrap/>` 按 `<w:tc>` 出现序插进各自的 tcPr。
+ *
+ * 包里没有 noWrap 的槽（grep dist 无运行时支持），与段落余量同路数走打包后补丁。
+ * 计数闸门认 `<w:tc>` 开标签——它恒发（每格必有），而 `<w:tcPr>` 不一定（空属性的格
+ * 可能整个不吐），所以按 tc 数对位、缺 tcPr 时现开一枚。注意正则不匹配 `<w:tcPr>`：
+ * `<w:tc` 后面紧跟的 `P` 不是空白/斜杠/`>`，天然排掉。
+ * 嵌套表安全：两族各自按自己的元素出现序对位（cellExtras 的 push 赶在格子内容之前，
+ * 外层 tc 在内层表前面入账，与 XML 序一致）。
+ */
+async function patchTcPr(bytes: Uint8Array, extras: string[]): Promise<Uint8Array> {
+  if (!extras.some((x) => x)) return bytes
+  const { default: JSZip } = await import('jszip')
+  const zip = await JSZip.loadAsync(bytes)
+  const file = zip.file('word/document.xml')
+  if (!file) return bytes
+  const xml = await file.async('string')
+  const opens = [...xml.matchAll(/<w:tc(?:\s[^>]*)?\/?>/g)]
+  if (opens.length !== extras.length) return bytes
+  let out = ''
+  let cursor = 0
+  let touched = false
+  for (let i = 0; i < opens.length; i++) {
+    const m = opens[i]
+    const start = m.index ?? 0
+    const selfClosed = m[0].endsWith('/>')
+    const closeAt = selfClosed ? -1 : xml.indexOf('</w:tc>', start)
+    if (!selfClosed && closeAt < 0) return bytes
+    const stop = selfClosed ? start + m[0].length : closeAt + '</w:tc>'.length
+    if (!extras[i]) {
+      out += xml.slice(cursor, stop)
+      cursor = stop
+      continue
+    }
+    out += xml.slice(cursor, start) + tcPrInsert(xml.slice(start, stop), extras[i])
+    cursor = stop
+    touched = true
+  }
+  if (!touched) return bytes
+  out += xml.slice(cursor)
+  zip.file('word/document.xml', out)
+  const buf = (await zip.generateAsync({ type: 'arraybuffer' })) as ArrayBuffer
+  return new Uint8Array(buf)
+}
+
+/** CT_TcPrBase 里排在 noWrap 之后的元素（锚点表）——按 schema 序插 */
+const TCPR_AFTER_NOWRAP = ['tcMar', 'textDirection', 'tcFitText', 'vAlign', 'hideMark', 'headers']
+
+/** 一枚 `<w:tc>…</w:tc>` → 补过 `<w:tcPr>` 的那一枚（没有 tcPr 就现开一枚） */
+function tcPrInsert(chunk: string, extra: string): string {
+  const open = /<w:tc(?:\s[^>]*)?\/?>/.exec(chunk)?.[0] ?? '<w:tc>'
+  if (open.endsWith('/>')) return `<w:tc><w:tcPr>${extra}</w:tcPr></w:tc>`
+  const body = chunk.slice(open.length)
+  const a = body.indexOf('<w:tcPr>')
+  if (a < 0) return open + `<w:tcPr>${extra}</w:tcPr>` + body
+  if (body.startsWith('<w:tcPr/>', a)) return open + body.slice(0, a) + `<w:tcPr>${extra}</w:tcPr>` + body.slice(a + 8)
+  const b = body.indexOf('</w:tcPr>', a)
+  if (b < 0) return chunk
+  const inner = body.slice(a + '<w:tcPr>'.length, b)
+  const at = firstIndexOf(inner, TCPR_AFTER_NOWRAP)
+  const withKid = at >= 0 ? inner.slice(0, at) + extra + inner.slice(at) : inner + extra
+  return open + body.slice(0, a) + `<w:tcPr>${withKid}</w:tcPr>` + body.slice(b + '</w:tcPr>'.length)
 }
 
 /** 在一枚开标签（含自闭合）上改/加属性：已有同名属性就地换值，没有就追加在 `>` 之前 */

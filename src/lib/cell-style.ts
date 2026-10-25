@@ -395,6 +395,40 @@ export function tlookPayload(kv: Record<string, string>): string {
     .join(';')
 }
 
+/* ── 表级条件格式尺寸（v0.152）────────────────────────────────────
+ * `w:tblPr` 里的 `w:tblStyleRowBandSize` / `w:tblStyleColBandSize`：带状条件格式
+ * （隔行/隔列底纹）作用到第几行/第几列为止——Word 的「镶边行数/镶边列数」。
+ * 屏上不兑现（条件格式的落点不在我们的模型里，只有 tblLook 的闸门在跑），只随载荷往返。
+ * 载荷：data-tblpr="colBand=1;rowBand=1"，键名是 OOXML 元素名的驼峰缩写。
+ * 写侧走打包后补丁（包没有这两枚的槽，与 noWrap 同路数）。 */
+export const TBLPR_ATTR = 'data-tblpr'
+
+export type TblPrPayload = Record<string, string>
+
+/** data-tblpr 载荷 → key/value 表（只认这两枚键；正整数才算数，脏值整键丢） */
+export function parseTblPrPayload(raw: string | null | undefined): TblPrPayload {
+  const out: TblPrPayload = {}
+  if (!raw) return out
+  for (const item of raw.split(';')) {
+    const i = item.indexOf('=')
+    if (i <= 0) continue
+    const k = item.slice(0, i).trim()
+    const v = item.slice(i + 1).trim()
+    if ((k !== 'colBand' && k !== 'rowBand') || !/^\d+$/.test(v)) continue
+    out[k] = v
+  }
+  return out
+}
+
+/** key/value 表 → data-tblpr 载荷（与 parseTblPrPayload 互逆，排序保稳定） */
+export function tblPrPayload(kv: TblPrPayload): string {
+  return Object.keys(kv)
+    .sort()
+    .filter((k) => kv[k] !== '')
+    .map((k) => `${k}=${kv[k]}`)
+    .join(';')
+}
+
 /* ── 段落属性余量（v0.147）─────────────────────────────────────
  * w:pPr 里那一批「说了也不改屏上排版」的直接属性：adjustRightInd（编号右边缩进跟随
  * 自动缩进）、snapToGrid（对齐到文档网格）、topLinePunct（首尾标点压缩）、bidi（段落
@@ -482,7 +516,11 @@ export function pprPayload(kv: PprPayload): string {
  * - 图元几何族只记「枚数 + 首枚值」：shPt（v:pt 的 x/y）、shGd（v:gd 的 fmla/name）、
  *   shCxn（v:cxn 的 ang）、shPos（v:pos 的 x/y）、shBox（v:path 的 w/h）。一条 path 上
  *   几十上百枚 pt 是常事，全挂会把 HTML 撑爆；枚数说明「这个族在这里出现了」，
- *   首枚值说明「它长什么样」，合起来够保真账用 */
+ *   首枚值说明「它长什么样」，合起来够保真账用
+ * v0.152 增（全部只读不写，schemeClr 色彩变换与描边的尾巴）：
+ * - lumBright/lumContrast（a:lum 的亮度/对比度两档）、shadeV（a:shade 的压暗系数——
+ *   注意与段落/单元格底纹的 w:shd 不是一枚，那一族的 val 由 shadeSpec 早读着）、
+ *   gsPos（a:gs 渐变色标位置，只记第一枚）、lnCap/lnCmpd（a:ln 的线端与复合线型） */
 export const IMG_ATTR = 'data-img'
 
 export type ImgPayload = Record<string, string>
@@ -717,6 +755,16 @@ export const CellStyle = Extension.create({
             renderHTML: (attrs: Record<string, unknown>) =>
               attrs.vAlign ? { style: `vertical-align: ${attrs.vAlign}` } : {},
           },
+          // 单元格不换行（v0.152）：w:tcPr/w:noWrap。CSS 的 white-space: nowrap 正是
+          // 这一个——屏上直接兑现（与 vAlign 同属「有现成对应物」的一族）。
+          // 两个来源都认：导入 HTML 上的 data-nowrap 载荷与 style 里的 nowrap
+          // （后者让用户手设的 nowrap 也能落回 w:noWrap）
+          noWrap: {
+            default: null as string | null,
+            parseHTML: (el: HTMLElement) => (el.style.whiteSpace === 'nowrap' || el.getAttribute('data-nowrap') ? '1' : null),
+            renderHTML: (attrs: Record<string, unknown>) =>
+              attrs.noWrap ? { 'data-nowrap': '1', style: 'white-space: nowrap' } : {},
+          },
           // 格边距：docx 的 w:tblCellMar / w:tcMar 落这里（v0.97 起）。0 是真值（Word 的上下边距
           // 常就是 0），判空不用真值判断；mergeAttributes 会把各属性给出的 style 片段串起来，
           // 所以每条属性只写自己的那一边
@@ -820,6 +868,19 @@ export const CellStyle = Extension.create({
             parseHTML: (el: HTMLElement) => el.getAttribute(TLOOK_ATTR) || null,
             renderHTML: (attrs: Record<string, unknown>) =>
               typeof attrs.tlook === 'string' && attrs.tlook ? { [TLOOK_ATTR]: attrs.tlook } : {},
+          },
+          /**
+           * 表级条件格式尺寸（v0.152）：`w:tblPr` 的 `w:tblStyleColBandSize` /
+           * `w:tblStyleRowBandSize`（隔行/隔列底纹作用到第几行/列为止）。屏上不兑现
+           * （条件格式落点不在我们模型里），只随 data-tblpr 往返（tblp/tlook 同款纪律）
+           */
+          tblPr: {
+            default: null as string | null,
+            parseHTML: (el: HTMLElement) => el.getAttribute(TBLPR_ATTR) || null,
+            renderHTML: (attrs: Record<string, unknown>) => {
+              const raw = typeof attrs.tblPr === 'string' ? attrs.tblPr : ''
+              return Object.keys(parseTblPrPayload(raw)).length ? { [TBLPR_ATTR]: raw } : {}
+            },
           },
           /** Word 的 `w:tblInd`：整张表离版心左边距多远 */
           marginLeft: {

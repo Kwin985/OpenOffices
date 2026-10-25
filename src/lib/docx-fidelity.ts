@@ -50,7 +50,7 @@ import { all, allDesc, attr, attrL, attrNum, els, find, findDesc, findL, local, 
 import { FieldEngine, fieldLabel, parseInstr, recomputable } from './docx-fields'
 import { embedHtml, inlineFlatten, unwrapEmbed, type EmbedHtml } from './ole'
 import { chartToHtml, smartArtToHtml } from './ooxml-graphics'
-import { CELL_EDGES, CSS_BORDER_STYLE, FRAME_NUMERIC_KEYS, FRAME_STR_KEYS, IMG_ATTR, PPR_ATTR, PPR_ONOFF_KEYS, PPR_STR_KEYS, TAB_LEADERS, TLOOK_ATTR, bdSpaceAttrs, eighthsToPx, framePayload, imgPayload, pprPayload, ptToPx, rgb2hex, shadeCss, tblpPayload, tabsPayload, tlookPayload, type CellEdge, type FramePayload, type ImgPayload, type PprPayload, type TabSpec, type TblpPayload } from './cell-style'
+import { CELL_EDGES, CSS_BORDER_STYLE, FRAME_NUMERIC_KEYS, FRAME_STR_KEYS, IMG_ATTR, PPR_ATTR, PPR_ONOFF_KEYS, PPR_STR_KEYS, TAB_LEADERS, TBLPR_ATTR, TLOOK_ATTR, bdSpaceAttrs, eighthsToPx, framePayload, imgPayload, pprPayload, ptToPx, rgb2hex, shadeCss, tblpPayload, tblPrPayload, tabsPayload, tlookPayload, type CellEdge, type FramePayload, type ImgPayload, type PprPayload, type TabSpec, type TblpPayload } from './cell-style'
 import { ooxmlLine } from './paragraph-style'
 import {
   asTableCondType,
@@ -296,6 +296,10 @@ function readStyles(xml: string, theme?: ThemeFonts): StyleBook {
   if (!xml) return book
   const styles = find(parseXml(xml), 'w:styles')
   if (!styles) return book
+  // 部件根上的 mc:Ignorable（v0.152）：声明「这一部件里哪些命名空间的扩展可以安全
+  // 忽略」。读手没有任何路径碰它（兼容分支不进分发、根属性没人读），与 document 根上
+  // 那一枚同款：在跑样式前先按名查问一遍，只记账
+  attrL(styles, 'Ignorable')
   // 主题引用先落地成具名字体（v0.138）：Word 的 Normal 样式只写 asciiTheme，不解析就没有字族
   applyThemeFonts(styles, theme)
   // docDefaults 不并入基准运行属性：它是"这份文档的默认字体"，而本应用自带版式默认值；
@@ -537,6 +541,22 @@ function readTlookPayload(tblPr: XEl | undefined): string {
 }
 
 /**
+ * 表级条件格式尺寸（v0.152）：`w:tblPr` 的 `w:tblStyleRowBandSize` /
+ * `w:tblStyleColBandSize` 两枚元素 → `colBand=…;rowBand=…`。屏上不兑现
+ * （隔行/隔列底纹的落点账不在我们模型里），只随 data-tblpr 往返。
+ * 与 tlook 同住 tblPr、同一条补丁路数（写侧没有库槽）
+ */
+function readTblPrPayload(tblPr: XEl | undefined): string {
+  if (!tblPr) return ''
+  const kv: Record<string, string> = {}
+  const col = valNum(tblPr, 'w:tblStyleColBandSize')
+  if (col !== undefined) kv.colBand = String(col)
+  const row = valNum(tblPr, 'w:tblStyleRowBandSize')
+  if (row !== undefined) kv.rowBand = String(row)
+  return tblPrPayload(kv)
+}
+
+/**
  * 段落属性余量（v0.147）：pPr 里那批「说了也不改屏上排版」的直接属性 → `key=value;...`
  * 载荷。七枚 onOff（adjustRightInd/snapToGrid/topLinePunct/bidi/autoSpaceDE/autoSpaceDN/
  * suppressLineNumbers）走 attr 读 w:val 后经 onOff 归一（**元素在场而无 val 按「开」**——
@@ -701,10 +721,40 @@ function readImgPayload(el: XEl): string {
   // a:miter 的斜接限制（v0.151）：描边折角的斜接长度上限，EMU。a:ln 的子元素
   const miterLim = attrL(findDesc(el, 'miter'), 'lim')
   if (miterLim) kv.miterLim = miterLim
+  // a:lum 的亮度/对比度（v0.152）：schemeClr 里的明暗两档（与 lumMod/lumOff 同住），
+  // 两枚属性各查各的——bright 是亮度偏移、contrast 是对比度偏移，百分比
+  {
+    const lum = findDesc(el, 'lum')
+    if (lum) {
+      const br = attrL(lum, 'bright')
+      if (br) kv.lumBright = br
+      const ct = attrL(lum, 'contrast')
+      if (ct) kv.lumContrast = ct
+    }
+  }
+  // a:shade 的阴影档位（v0.152）：schemeClr 的压暗系数（与 lumMod 同族的另一枚）。
+  // 注意与 w:shd（段落/单元格底纹）不是一枚——那一族的 val 早就由 shadeSpec 读着
+  const shadeV = attrL(findDesc(el, 'shade'), 'val')
+  if (shadeV) kv.shadeV = shadeV
+  // a:gs 的色标位置（v0.152）：渐变色标在色带上的位置（千分比）。只记第一枚——
+  // 一条 gradFill 里常有好几枚 gs，位置序列说明渐变形状，全挂撑爆 HTML
+  {
+    const gs = findDesc(el, 'gs')
+    if (gs) {
+      const pos = attrL(gs, 'pos')
+      if (pos) kv.gsPos = pos
+    }
+  }
   // a:ln 的线宽（v0.150）：spPr 下的描边宽度，EMU。全查一遍（与 bwMode 同款）
   for (const l of allDesc(el, 'ln')) {
     const w = attrL(l, 'w')
     if (w && kv.lnW === undefined) kv.lnW = w
+    // a:ln 的线端与复合线型（v0.152）：cap（flat/square/round）与 cmpd（sng/dbl/…）。
+    // 与 w 同住 a:ln 上，同一条循环里顺手查
+    const cap = attrL(l, 'cap')
+    if (cap && kv.lnCap === undefined) kv.lnCap = cap
+    const cmpd = attrL(l, 'cmpd')
+    if (cmpd && kv.lnCmpd === undefined) kv.lnCmpd = cmpd
   }
   // ── VML 壳（v0.149）：w:pict 那一支。位图字节在 v:imagedata 里，其余壳属性屏上
   //    一条都不兑现；写侧只发 DrawingML 内嵌图，这一族读得回、写不出（记账边界）──
@@ -935,10 +985,19 @@ function readNumbering(xml: string, theme?: ThemeFonts): Numbering {
   if (!xml) return out
   const num = find(parseXml(xml), 'w:numbering')
   if (!num) return out
+  // 部件根上的 mc:Ignorable（v0.152）：与 styles 根同款只读记账
+  attrL(num, 'Ignorable')
   // 编号层级的 rPr 同样可能只写主题引用（v0.138），与 styles 同一趟落地
   applyThemeFonts(num, theme)
   const abstract = new Map<string, Map<number, LvlDef>>()
   for (const a of all(num, 'w:abstractNum')) {
+    // restartNumberingAfterBreak（v0.152）：一枚**属性**（与 multiLevelType 那枚子元素
+    // 正相反），Word 的「分页后重新编号」总闸。按 **local name** 收——Word 与 docx 库
+    // 发的都是 w15: 前缀的扩展属性（OOXML 里它定义在 w15 命名空间、不在 w: 上），
+    // 语料里也见过 w: 形态，两种前缀都认。要先于 abstractNumId 那道闸读——语料里
+    // 有一枚不带 id 的裸 `<w:abstractNum w:restartNumberingAfterBreak="0"/>`，
+    // 闸在后面就整枚跳过（与 v0.146 customStyle 先于 styleId 同一条纪律）
+    const rna = onOff(attrL(a, 'restartNumberingAfterBreak'))
     const id = attr(a, 'w:abstractNumId')
     if (!id) continue
     // multiLevelType（v0.145）：编号定义的身份属性——它描述的是「这份定义是否设计成
@@ -974,11 +1033,22 @@ function readNumbering(xml: string, theme?: ThemeFonts): Numbering {
       if (suff) meta.suff = suff
       if (Object.keys(meta).length) lvls[String(ilvl)] = meta
     }
-    if (nsid || tmpl || mlt || Object.keys(lvls).length)
-      out.defs.push({ ...(nsid ? { nsid } : {}), ...(tmpl ? { tmpl } : {}), ...(mlt ? { multiLevelType: mlt } : {}), fp: numFingerprint(levels), levels: lvls })
+    if (nsid || tmpl || mlt || rna !== undefined || Object.keys(lvls).length)
+      out.defs.push({
+        ...(nsid ? { nsid } : {}),
+        ...(tmpl ? { tmpl } : {}),
+        ...(mlt ? { multiLevelType: mlt } : {}),
+        ...(rna !== undefined ? { rna } : {}),
+        fp: numFingerprint(levels),
+        levels: lvls,
+      })
     abstract.set(id, levels)
   }
   for (const n of all(num, 'w:num')) {
+    // durableId（v0.152）：`w:num` 身上的持久编号 id（Word 合并文档时按它对账）。
+    // 同 rna 的纪律：先于 numId/abstractNumId 那道闸读——语料里那枚只带 durableId。
+    // **只读记账**：我们的 ListRegistry 按段引用重建定义，这枚身份带不回来
+    attr(n, 'w:durableId')
     const id = attr(n, 'w:numId')
     const aid = val(n, 'w:abstractNumId')
     if (!id || !aid) continue
@@ -1295,6 +1365,17 @@ interface RunProps {
   bCs?: boolean
   /** w:smallCaps/@w:val：小型大写。屏上走 font-variant-caps（v0.143） */
   smallCaps?: boolean
+  /**
+   * w:caps/@w:val：全大写（v0.152）。屏上走 text-transform: uppercase。
+   * 与 smallCaps 同族同纪律：「关」（val=0）与「没写」往返同结果，只存 true
+   */
+  caps?: boolean
+  /**
+   * w:bdr 四属性（v0.152）：字符边框。val 是线型枚举（single/dotted/…），sz 是
+   * 八分之一磅，space 是磅，color 是 hex。屏上走 CSS border——sz/space 两枚要换算，
+   * 其余原样。四枚都没写不挂
+   */
+  bdr?: { val: string; sz?: string; space?: string; color?: string }
 }
 
 const NONE: RunProps = {}
@@ -1375,6 +1456,20 @@ function readRPr(el: XEl | undefined, p: RunProps, tc?: ThemeColors): RunProps {
   if (bCs) o.bCs = true
   const sc = on(find(el, 'w:smallCaps'))
   if (sc) o.smallCaps = true
+  // 全大写（v0.152）：与 smallCaps 平级的一枚 onOff，Word 的「全部大写」。
+  // 「关」与「没写」同结果，只存 true
+  const cp = on(find(el, 'w:caps'))
+  if (cp) o.caps = true
+  // 字符边框（v0.152）：w:bdr 四属性一组。val 缺省按 single（OOXML 默认线型），
+  // 但一枚都不带时不挂载荷——Word 少写哪一枚就少哪一枚的屏上效果
+  const bdrEl = find(el, 'w:bdr')
+  if (bdrEl) {
+    const bv = attr(bdrEl, 'w:val')
+    const bs = attr(bdrEl, 'w:sz')
+    const bp = attr(bdrEl, 'w:space')
+    const bc = attr(bdrEl, 'w:color')
+    if (bv || bs || bp || bc) o.bdr = { val: bv ?? 'single', ...(bs ? { sz: bs } : {}), ...(bp ? { space: bp } : {}), ...(bc ? { color: bc } : {}) }
+  }
   return o
 }
 
@@ -1409,7 +1504,21 @@ function cssOf(p: RunProps): string {
   else if (p.kern !== undefined) bits.push('font-kerning: normal')
   // w:position 与 vertAlign 同时出现时 Word 按 vertAlign 渲染，故只在没有上下标时才兑现升降
   if (p.va === undefined && p.pos !== undefined) bits.push(`vertical-align: ${px2((p.pos / 2) * PT_PX)}px`)
+  // 全大写（v0.152）：CSS 的 text-transform 正好是这一个（smallCaps 走 font-variant，同类不同族）
+  if (p.caps) bits.push('text-transform: uppercase')
+  // 字符边框（v0.152）：w:bdr → CSS border。sz 是八分之一磅、space 是磅，两枚都要换算；
+  // 缺 sz 时给 1px（Word 少写这一枚时屏上也得有条线，粗细取最细一档）
+  if (p.bdr) bits.push(bdrCss(p.bdr))
   return bits.join('; ')
+}
+
+/** 字符边框载荷 → CSS border 一句（val 枚举到 CSS 线型——cell-style 那份表是单一真源；auto 色不落，用 currentColor） */
+function bdrCss(b: NonNullable<RunProps['bdr']>): string {
+  const style = CSS_BORDER_STYLE[b.val.toLowerCase()] ?? 'solid'
+  // sz 是八分之一磅；缺这一枚时按最细一档（1/8 磅）画——Word 少写也得有条线
+  const w = b.sz !== undefined && Number(b.sz) > 0 ? eighthsToPx(Number(b.sz)) : eighthsToPx(1)
+  const c = b.color && b.color.toLowerCase() !== 'auto' ? `#${b.color.replace(/^#/, '').toLowerCase()}` : 'currentColor'
+  return `border: ${w}px ${style} ${c}`
 }
 
 /** 属性值用的转义：esc 只管 <>&，作者名里出现引号会截断属性，这里一起防 */
@@ -1511,6 +1620,10 @@ function marked(inner: string, p: RunProps): string {
     p.iCs ? ' data-ics="1"' : '',
     p.bCs ? ' data-bcs="1"' : '',
     p.smallCaps ? ' data-smallcaps="1"' : '',
+    // v0.152：全大写与字符边框。caps 屏上已由 cssOf 兑现（text-transform），载荷只为往返；
+    // bdr 的屏上那一半同样在 cssOf（border），载荷带齐四枚（缺的槽留空串）
+    p.caps ? ' data-caps="1"' : '',
+    p.bdr ? ` data-bdr="${p.bdr.val};${p.bdr.sz ?? ''};${p.bdr.space ?? ''};${p.bdr.color ?? ''}"` : '',
   ].join('')
   if (css || extra) s = `<span${css ? ` style="${css}"` : ''}${extra}>${s}</span>`
   if (p.hl) s = `<mark data-color="${p.hl}" style="background-color: ${p.hl}; color: inherit">${s}</mark>`
@@ -2583,6 +2696,9 @@ class Fidelity {
         return
       }
       case 'hyperlink': {
+        // w:history（v0.152）：这一链链接进没进过「历史记录」（Word 的已访问链接账）。
+        // 只读记账——HTML 的 <a> 没有这一位，写侧也无槽
+        attr(node, 'w:history')
         const rid = attrL(node, 'id')
         const rel = rid ? this.rels.get(rid) : undefined
         const anchor = attr(node, 'w:anchor')
@@ -3082,7 +3198,9 @@ class Fidelity {
     // 表自身的闸门（v0.147）：w:tblPr/w:tblLook 三枚。与样式里那一枚同名同义，
     // 但归属不同——这张表自己说的压过样式说的，屏上一概不兑现，只随 data-tlook 往返
     const tlookAttr = readTlookPayload(tblPr)
-    let s = `<table${tblStyle ? ` style="${tblStyle}"` : ''}${ownerAttr}${tblpAttr ? ` data-tblp="${tblpAttr}"` : ''}${tlookAttr ? ` ${TLOOK_ATTR}="${tlookAttr}"` : ''}>`
+    // 表级条件格式尺寸（v0.152）：两枚 bandSize，屏上不兑现只往返
+    const tblprAttr = readTblPrPayload(tblPr)
+    let s = `<table${tblStyle ? ` style="${tblStyle}"` : ''}${ownerAttr}${tblpAttr ? ` data-tblp="${tblpAttr}"` : ''}${tlookAttr ? ` ${TLOOK_ATTR}="${tlookAttr}"` : ''}${tblprAttr ? ` ${TBLPR_ATTR}="${tblprAttr}"` : ''}>`
     for (let ri = 0; ri < plan.length; ri++) {
       const trPr = find(rows[ri], 'w:trPr')
       // 表头由 w:trPr/w:tblHeader 决定，不限首行（Word 里可以声明第 2 行起重复表头）
@@ -3202,6 +3320,9 @@ class Fidelity {
         }, shadingCss(shd, this.themeColors)), mar].filter(Boolean).join('; ')
         if (style) attrs.push(`style="${style}"`)
         if (shadeAttr) attrs.push(`data-shade="${shadeAttr}"`)
+        // 单元格不换行（v0.152）：屏上那一半由 cellStyleCss 的 white-space 兑现，
+        // 这一枚载荷只为写侧认回（白-space 会与用户手设的样式混，不放载荷里认）
+        if (on(find(tcPr, 'w:noWrap'))) attrs.push('data-nowrap="1"')
         for (const [k, v] of Object.entries(bdSpaceAttrs(bdSpace))) attrs.push(`${k}="${v}"`)
         s += `<${tag}${attrs.length ? ' ' + attrs.join(' ') : ''}>${await this.cellBlocks(c.el)}</${tag}>`
       }
@@ -3400,6 +3521,9 @@ function cellStyleCss(
   const va = (val(tcPr, 'w:vAlign') ?? '').toLowerCase()
   const align = va === 'center' ? 'middle' : va === 'top' || va === 'bottom' ? va : ''
   if (align) bits.push(`vertical-align: ${align}`)
+  // 单元格不换行（v0.152）：w:tcPr/w:noWrap。CSS 的 white-space: nowrap 正是这一个——
+  // 屏上直接兑现，与 vAlign 同属「有现成对应物」的一族
+  if (on(find(tcPr, 'w:noWrap'))) bits.push('white-space: nowrap')
   return bits.join('; ')
 }
 
@@ -4002,7 +4126,21 @@ function sectionOf(doc: XEl | undefined): DocxSection | undefined {
     if (t) g.type = t
     const lp = attrNum(grid, 'w:linePitch')
     if (lp !== undefined) g.linePitch = lp
+    // 每字符网格宽度（v0.152）：与 linePitch 同住 w:docGrid 上的第三枚。写侧有库槽
+    // （包的 grid.charSpace），与 linePitch 同路读写
+    const cs = attrNum(grid, 'w:charSpace')
+    if (cs !== undefined) g.charSpace = cs
     if (Object.keys(g).length) out.docGrid = g
+  }
+  // 页眉页脚引用（v0.152）：sectPr 上的 headerReference/footerReference 两族。
+  // **只读记账**：id 是关系 id（r:id），写侧发包时自己重新编——照抄会把关系指到
+  // 别人身上；type（default/first/even）我们只发 default 一档，first/even 读回来也没处写
+  // （PM 没有「首页另版页眉」这个节点，审计里记为只读一半）。与浮动锚点四枚同界
+  for (const tag of ['headerReference', 'footerReference'] as const) {
+    for (const ref of all(sect, `w:${tag}`)) {
+      attrL(ref, 'id')
+      attr(ref, 'w:type')
+    }
   }
   return Object.keys(out).length ? out : undefined
 }

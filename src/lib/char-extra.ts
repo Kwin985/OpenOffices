@@ -1,5 +1,5 @@
 // 复杂文字与语言的十枚字符级槽（v0.138，iCs/bCs/smallCaps 三枚 v0.143 补，
-// langBidi/scale 两枚 v0.146 补）
+// langBidi/scale 两枚 v0.146 补，caps/bdr 两枚 v0.152 补）
 //
 // docx 的 rPr 上有十样东西在 HTML/CSS 里没有现成对应物，但**文件往返不能丢**：
 //   rFonts/@w:cs   复杂文字（阿拉伯/希伯来/泰文）的字族
@@ -13,8 +13,11 @@
 //   w:kern/@w:val  字偶距阈值（0 = 关）——屏上走 font-kerning，同上
 //   w:iCs/@w:bCs   复杂文字的斜体/粗体（只管 cs 字族那一口，与 w:i/w:b 平级）
 //   w:smallCaps    小型大写——屏上走 font-variant，由本 mark 画（v0.143）
+//   w:caps/@w:val  全大写（v0.152）——屏上走 text-transform，同上
+//   w:bdr 四属性   字符边框（v0.152）——屏上走 CSS border，同上；val 是线型、sz 是
+//                  八分之一磅、space 是磅、color 是 hex，四枚一组缺一不可
 // 读侧由 docx-fidelity 发成 span[data-cs|data-hint|data-szcs|data-lang|data-lang-ea|data-lang-bidi|
-// data-scale|data-pos|data-kern|data-ics|data-bcs|data-smallcaps]，这个 mark 接住；
+// data-scale|data-pos|data-kern|data-ics|data-bcs|data-smallcaps|data-caps|data-bdr]，这个 mark 接住；
 // 写侧由 docx.ts 读回 mark 属性落回 rPr。
 //
 // **全都能落盘**，但路径分两种，值得记一笔：cs/hint/szCs/lang/pos/kern 在 docx 库的
@@ -24,11 +27,15 @@
 // 哪天升级 docx 把类型补上，`withCharExtra` 里的 `as unknown as T` 那个断言可以拆掉。
 // iCs/bCs/smallCaps 三枚同理（v0.143）：库里实现着（boldComplexScript / italicComplexScript /
 // smallCaps，dist 产物里逐枚有），类型面同样没暴露，走同一个库外槽。
+// caps/bdr 两枚（v0.152）反而是**类型面全暴露**的（IRunOptions.allCaps 与 IRunOptions.border，
+// dist/index.d.ts:1660 与 :1674）——库里实现着、类型也写着，docx.ts 直接传，不用断言。
 
 import { Mark, mergeAttributes } from '@tiptap/core'
+import { CSS_BORDER_STYLE, eighthsToPx } from './cell-style'
 
 const str = (v: unknown): string | null => (typeof v === 'string' && v ? v : null)
 const num = (v: unknown): number | null => (typeof v === 'number' && Number.isFinite(v) ? v : null)
+const round2 = (n: number): number => Math.round(n * 100) / 100
 
 export const CharExtra = Mark.create({
   name: 'charExtra',
@@ -129,6 +136,33 @@ export const CharExtra = Mark.create({
         parseHTML: (el: HTMLElement) => str(el.getAttribute('data-smallcaps')),
         renderHTML: (attrs: Record<string, unknown>) => (str(attrs.smallcaps) ? { 'data-smallcaps': '1', style: 'font-variant-caps: small-caps' } : {}),
       },
+      // caps（v0.152）：全大写。CSS 的 text-transform: uppercase 正好是这一个，
+      // 屏上直接兑现（smallCaps 同款）。载荷 '1'（开）或 null——与 iCs/bCs 同纪律
+      caps: {
+        default: null as string | null,
+        parseHTML: (el: HTMLElement) => str(el.getAttribute('data-caps')),
+        renderHTML: (attrs: Record<string, unknown>) => (str(attrs.caps) ? { 'data-caps': '1', style: 'text-transform: uppercase' } : {}),
+      },
+      // bdr（v0.152）：字符边框四枚一组（val;sz;space;color，空槽 = 那枚没写）。
+      // 屏上走 CSS border——sz 是八分之一磅、space 是磅，两枚要换算；val 经
+      // cell-style 的 CSS_BORDER_STYLE 映射（那张表是线型的单一真源）。
+      // 导入侧同 pos/kern 的规矩：inline style 过不了 TipParse，CSS 由 mark 自己发
+      bdr: {
+        default: null as string | null,
+        parseHTML: (el: HTMLElement) => str(el.getAttribute('data-bdr')),
+        renderHTML: (attrs: Record<string, unknown>) => {
+          const raw = str(attrs.bdr)
+          if (!raw) return {}
+          const [val = '', sz = '', space = '', color = ''] = raw.split(';')
+          const style = CSS_BORDER_STYLE[(val || 'single').toLowerCase()] ?? 'solid'
+          const w = /^\d+$/.test(sz) && Number(sz) > 0 ? eighthsToPx(Number(sz)) : eighthsToPx(1)
+          const c = color && color.toLowerCase() !== 'auto' ? `#${color.replace(/^#/, '').toLowerCase()}` : 'currentColor'
+          // space 是「边框与文字的距离」（磅）——CSS inline 上只有水平内衬接得住，
+          // 给了才垫（Word 少写这一枚时不垫，与它的默认同结果）
+          const pad = /^\d+$/.test(space) && Number(space) > 0 ? `padding: 0 ${round2(Number(space) * (4 / 3))}px; ` : ''
+          return { 'data-bdr': raw, style: `${pad}border: ${w}px ${style} ${c}` }
+        },
+      },
     }
   },
 
@@ -146,6 +180,8 @@ export const CharExtra = Mark.create({
       { tag: 'span[data-ics]' },
       { tag: 'span[data-bcs]' },
       { tag: 'span[data-smallcaps]' },
+      { tag: 'span[data-caps]' },
+      { tag: 'span[data-bdr]' },
     ]
   },
 
