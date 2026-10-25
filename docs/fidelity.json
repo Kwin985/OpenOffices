@@ -13,7 +13,7 @@
     "files": 5,
     "readable": 5,
     "unreadable": 0,
-    "bytes": 22029,
+    "bytes": 22018,
     "scopeParts": [
       "word/document.xml",
       "word/styles.xml",
@@ -29,19 +29,19 @@
   },
   "totals": {
     "distinctPairs": 701,
-    "occurrences": 31470,
+    "occurrences": 31468,
     "noisePairs": 19,
     "noiseOccurrences": 7711,
     "meaningfulPairs": 682,
-    "meaningfulOccurrences": 23759
+    "meaningfulOccurrences": 23757
   },
   "coverage": {
-    "byPair": 0.43255131964809385,
-    "byOccurrence": 0.9060566522160024,
-    "consultedPairs": 295,
-    "consultedOccurrences": 21527,
-    "neverConsultedPairs": 387,
-    "neverConsultedOccurrences": 2232
+    "byPair": 0.4912023460410557,
+    "byOccurrence": 0.9616534074167614,
+    "consultedPairs": 335,
+    "consultedOccurrences": 22846,
+    "neverConsultedPairs": 347,
+    "neverConsultedOccurrences": 911
   },
   "consulted": [
     [
@@ -123,6 +123,14 @@
     [
       "lang|eastAsia",
       293
+    ],
+    [
+      "pt|x",
+      290
+    ],
+    [
+      "pt|y",
+      290
     ],
     [
       "spacing|val",
@@ -241,6 +249,14 @@
       156
     ],
     [
+      "gd|fmla",
+      131
+    ],
+    [
+      "gd|name",
+      131
+    ],
+    [
       "color|themeColor",
       92
     ],
@@ -285,7 +301,23 @@
       67
     ],
     [
+      "cxn|ang",
+      64
+    ],
+    [
       "ind|right",
+      64
+    ],
+    [
+      "pos|x",
+      64
+    ],
+    [
+      "pos|y",
+      64
+    ],
+    [
+      "proofErr|type",
       64
     ],
     [
@@ -417,6 +449,10 @@
       38
     ],
     [
+      "lvl|tentative",
+      37
+    ],
+    [
       "snapToGrid|val",
       36
     ],
@@ -457,6 +493,10 @@
       32
     ],
     [
+      "lvl|tplc",
+      29
+    ],
+    [
       "blip|embed",
       28
     ],
@@ -475,6 +515,10 @@
     [
       "off|y",
       28
+    ],
+    [
+      "rsid|val",
+      27
     ],
     [
       "cNvPr|id",
@@ -701,6 +745,18 @@
       9
     ],
     [
+      "multiLevelType|val",
+      9
+    ],
+    [
+      "next|val",
+      9
+    ],
+    [
+      "nsid|val",
+      9
+    ],
+    [
       "shape|stroked",
       9
     ],
@@ -717,8 +773,16 @@
       9
     ],
     [
+      "tmpl|val",
+      9
+    ],
+    [
       "top|themeColor",
       9
+    ],
+    [
+      "ln|w",
+      8
     ],
     [
       "shape|coordsize",
@@ -873,7 +937,23 @@
       6
     ],
     [
+      "attr|name",
+      5
+    ],
+    [
+      "attr|val",
+      5
+    ],
+    [
+      "blip|cstate",
+      5
+    ],
+    [
       "cols|space",
+      5
+    ],
+    [
+      "document|Ignorable",
       5
     ],
     [
@@ -917,6 +997,10 @@
       5
     ],
     [
+      "shape|path",
+      5
+    ],
+    [
       "shd|themeFillShade",
       5
     ],
@@ -925,7 +1009,15 @@
       5
     ],
     [
+      "Choice|Requires",
+      4
+    ],
+    [
       "docGrid|linePitch",
+      4
+    ],
+    [
+      "ext|uri",
       4
     ],
     [
@@ -933,11 +1025,31 @@
       4
     ],
     [
+      "insideH|themeColor",
+      4
+    ],
+    [
+      "insideV|themeColor",
+      4
+    ],
+    [
       "lsdException|locked",
       4
     ],
     [
+      "shape|fillcolor",
+      4
+    ],
+    [
+      "suff|val",
+      4
+    ],
+    [
       "tab|leader",
+      4
+    ],
+    [
+      "useLocalDpi|val",
       4
     ],
     [
@@ -973,12 +1085,60 @@
       3
     ],
     [
+      "group|coordorigin",
+      3
+    ],
+    [
+      "group|coordsize",
+      3
+    ],
+    [
+      "group|id",
+      3
+    ],
+    [
+      "group|style",
+      3
+    ],
+    [
       "hyperlink|anchor",
+      3
+    ],
+    [
+      "inline|anchorId",
+      3
+    ],
+    [
+      "inline|editId",
+      3
+    ],
+    [
+      "lumMod|val",
+      3
+    ],
+    [
+      "path|h",
+      3
+    ],
+    [
+      "path|w",
       3
     ],
     [
       "cols|num",
       2
+    ],
+    [
+      "group|spid",
+      2
+    ],
+    [
+      "anchor|anchorId",
+      1
+    ],
+    [
+      "anchor|editId",
+      1
     ],
     [
       "bar|color",
@@ -1231,52 +1391,8 @@
       348
     ],
     [
-      "pt|x",
-      290
-    ],
-    [
-      "pt|y",
-      290
-    ],
-    [
-      "gd|fmla",
-      131
-    ],
-    [
-      "gd|name",
-      131
-    ],
-    [
       "schemeClr|val",
       82
-    ],
-    [
-      "cxn|ang",
-      64
-    ],
-    [
-      "pos|x",
-      64
-    ],
-    [
-      "pos|y",
-      64
-    ],
-    [
-      "proofErr|type",
-      64
-    ],
-    [
-      "lvl|tentative",
-      37
-    ],
-    [
-      "lvl|tplc",
-      29
-    ],
-    [
-      "rsid|val",
-      27
     ],
     [
       "instrText|space",
@@ -1291,51 +1407,11 @@
       11
     ],
     [
-      "multiLevelType|val",
-      9
-    ],
-    [
-      "next|val",
-      9
-    ],
-    [
-      "nsid|val",
-      9
-    ],
-    [
-      "tmpl|val",
-      9
-    ],
-    [
-      "ln|w",
-      8
-    ],
-    [
       "shape|gfxdata",
       7
     ],
     [
-      "attr|name",
-      5
-    ],
-    [
-      "attr|val",
-      5
-    ],
-    [
-      "blip|cstate",
-      5
-    ],
-    [
       "bodyPr|anchor",
-      5
-    ],
-    [
-      "document|Ignorable",
-      5
-    ],
-    [
-      "shape|path",
       5
     ],
     [
@@ -1347,15 +1423,7 @@
       4
     ],
     [
-      "Choice|Requires",
-      4
-    ],
-    [
       "effectRef|idx",
-      4
-    ],
-    [
-      "ext|uri",
       4
     ],
     [
@@ -1367,35 +1435,7 @@
       4
     ],
     [
-      "insideH|themeColor",
-      4
-    ],
-    [
-      "insideV|themeColor",
-      4
-    ],
-    [
       "lnRef|idx",
-      4
-    ],
-    [
-      "path|h",
-      4
-    ],
-    [
-      "path|w",
-      4
-    ],
-    [
-      "shape|fillcolor",
-      4
-    ],
-    [
-      "suff|val",
-      4
-    ],
-    [
-      "useLocalDpi|val",
       4
     ],
     [
@@ -1435,35 +1475,7 @@
       3
     ],
     [
-      "group|coordorigin",
-      3
-    ],
-    [
-      "group|coordsize",
-      3
-    ],
-    [
-      "group|id",
-      3
-    ],
-    [
-      "group|style",
-      3
-    ],
-    [
       "hyperlink|history",
-      3
-    ],
-    [
-      "inline|anchorId",
-      3
-    ],
-    [
-      "inline|editId",
-      3
-    ],
-    [
-      "lumMod|val",
       3
     ],
     [
@@ -1567,10 +1579,6 @@
       2
     ],
     [
-      "group|spid",
-      2
-    ],
-    [
       "group|spt",
       2
     ],
@@ -1644,14 +1652,6 @@
     ],
     [
       "alphaOff|val",
-      1
-    ],
-    [
-      "anchor|anchorId",
-      1
-    ],
-    [
-      "anchor|editId",
       1
     ],
     [
@@ -2855,60 +2855,24 @@
   ],
   "neverConsultedByElement": [
     [
-      "pt",
-      580
-    ],
-    [
       "t",
       348
-    ],
-    [
-      "gd",
-      262
-    ],
-    [
-      "pos",
-      128
     ],
     [
       "schemeClr",
       82
     ],
     [
-      "lvl",
-      66
-    ],
-    [
-      "cxn",
-      64
-    ],
-    [
-      "proofErr",
-      64
-    ],
-    [
       "bodyPr",
       44
-    ],
-    [
-      "shape",
-      28
-    ],
-    [
-      "rsid",
-      27
     ],
     [
       "rect",
       24
     ],
     [
-      "group",
-      21
-    ],
-    [
-      "path",
-      21
+      "shape",
+      19
     ],
     [
       "instrText",
@@ -2931,6 +2895,10 @@
       13
     ],
     [
+      "path",
+      13
+    ],
+    [
       "reflection",
       13
     ],
@@ -2943,16 +2911,8 @@
       13
     ],
     [
-      "ln",
-      12
-    ],
-    [
       "caps",
       11
-    ],
-    [
-      "attr",
-      10
     ],
     [
       "shapetype",
@@ -2963,48 +2923,16 @@
       10
     ],
     [
-      "multiLevelType",
-      9
-    ],
-    [
-      "next",
-      9
-    ],
-    [
-      "nsid",
-      9
-    ],
-    [
-      "tmpl",
-      9
-    ],
-    [
       "bdr",
       8
     ],
     [
-      "inline",
-      6
-    ],
-    [
-      "insideH",
-      6
-    ],
-    [
-      "insideV",
-      6
+      "group",
+      7
     ],
     [
       "xfrm",
       6
-    ],
-    [
-      "blip",
-      5
-    ],
-    [
-      "document",
-      5
     ],
     [
       "hyperlink",
@@ -3019,19 +2947,11 @@
       4
     ],
     [
-      "Choice",
-      4
-    ],
-    [
       "comment",
       4
     ],
     [
       "effectRef",
-      4
-    ],
-    [
-      "ext",
       4
     ],
     [
@@ -3063,6 +2983,10 @@
       4
     ],
     [
+      "ln",
+      4
+    ],
+    [
       "lnRef",
       4
     ],
@@ -3071,15 +2995,7 @@
       4
     ],
     [
-      "suff",
-      4
-    ],
-    [
       "textOutline",
-      4
-    ],
-    [
-      "useLocalDpi",
       4
     ],
     [
@@ -3100,10 +3016,6 @@
     ],
     [
       "legacy",
-      3
-    ],
-    [
-      "lumMod",
       3
     ],
     [
@@ -3143,10 +3055,6 @@
       3
     ],
     [
-      "anchor",
-      2
-    ],
-    [
       "blipFill",
       2
     ],
@@ -3172,6 +3080,14 @@
     ],
     [
       "fillRect",
+      2
+    ],
+    [
+      "insideH",
+      2
+    ],
+    [
+      "insideV",
       2
     ],
     [
@@ -3484,7 +3400,7 @@
     ]
   ],
   "partTotals": {
-    "word/document.xml": 24933,
+    "word/document.xml": 24931,
     "word/styles.xml": 4249,
     "word/numbering.xml": 2265,
     "word/footnotes.xml": 7,
@@ -3506,8 +3422,8 @@
     "scaledLiteralSum": 31321,
     "rawScaledSum": 31085.229999999945,
     "scaleInflationPct": 0.7584631028950239,
-    "actualLiteralSum": 31470,
-    "literalDriftPct": 0.4757191660547333,
+    "actualLiteralSum": 31468,
+    "literalDriftPct": 0.46933367389292435,
     "comparableByPair": true,
     "comparableByOccurrence": false,
     "note": "按对覆盖率与旧账（313 件真件语料）可比；按字面不可比——重建按 count/100 缩放，取整与 max(1,·) 会把稀有对抬起来（见「scaling step itself」那一行），另有少量承重包裹属性（bitmap 链的 r:embed/extent/docPr、numbering 关联的 abstractNumId 等）在包裹处顺带出现；末行是「实测 vs 缩放期望」，与缩放那行基准不同，别混读"

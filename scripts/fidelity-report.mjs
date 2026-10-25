@@ -66,6 +66,8 @@ const R = 'http://schemas.openxmlformats.org/officeDocument/2006/relationships'
 // v0.149：VML 图片壳（w:pict 那一支）要 v/o 两个命名空间
 const V = 'urn:schemas-microsoft-com:vml'
 const O = 'urn:schemas-microsoft-com:office:office'
+// v0.150：兼容性族（mc:AlternateContent/mc:Choice）与根上的 mc:Ignorable
+const MC = 'http://schemas.openxmlformats.org/markup-compatibility/2006'
 // 1x1 透明 PNG（图片段的关系与媒体目标）
 const PNG_B64 = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg=='
 // v0.142：clrScheme 与 fontScheme 并列。dk1/lt1 写成 sysClr（真件里 windowText/window
@@ -106,23 +108,31 @@ const FIXTURE_STYLES =
   `</w:latentStyles>` +
   // v0.146：样式元数据三枚——Report 段落样式带 customStyle=1，link 指配对的 ReportChar，
   // uiPriority=9；ReportChar 是字符样式（link 回指 Report）；Plain 三枚都不带（负形态）
+  // v0.150：样式身份两枚——Report 带 next（后续段落样式）与 rsid（修订会话号），
+  // ReportChar 只带 rsid；Plain 两枚都不带（负形态）
   `<w:style w:type="paragraph" w:customStyle="1" w:styleId="Report"><w:name w:val="report"/>` +
-  `<w:basedOn w:val="Normal"/><w:link w:val="ReportChar"/><w:uiPriority w:val="9"/></w:style>` +
+  `<w:basedOn w:val="Normal"/><w:next w:val="ReportHead"/><w:link w:val="ReportChar"/><w:uiPriority w:val="9"/>` +
+  `<w:rsid w:val="00A1"/></w:style>` +
   `<w:style w:type="character" w:styleId="ReportChar"><w:name w:val="report char"/>` +
-  `<w:basedOn w:val="Normal"/><w:link w:val="Report"/><w:uiPriority w:val="9"/></w:style>` +
+  `<w:basedOn w:val="Normal"/><w:link w:val="Report"/><w:uiPriority w:val="9"/><w:rsid w:val="00B2"/></w:style>` +
   `<w:style w:type="paragraph" w:styleId="Plain"><w:name w:val="plain"/></w:style>` +
   `</w:styles>`
 
 // v0.142：编号部件。numId=1 指 abstractNumId=0：0 层是子弹（·/左对齐），1 层是小写
 // 字母（模板 "%2."/居中对齐）；num 上再挂一枚 startOverride=3——读手要把「这一串从
 // 第 3 号起」读出来（<ol start="3">），lvlOverride|ilvl 与 startOverride|val 两对由此上账。
+// v0.150：定义账六枚——nsid/tmpl 两枚身份（multiLevelType 从属性形态改回**子元素**
+// 形态：v0.145 那版写成 abstractNum 身上的属性，读手查的是一枚不存在的属性，那 9 个
+// 字面从来没进过分子），lvl 上加 tentative/tplc 两枚属性与 suff 一枚子元素
 const FIXTURE_NUMBERING =
   `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>` +
   `<w:numbering xmlns:w="${W}">` +
-  // v0.145：multiLevelType——编号定义的身份属性（读+warn 记账，不进 PM 模型）
-  `<w:abstractNum w:abstractNumId="0" w:multiLevelType="hybridMultilevel">` +
-  `<w:lvl w:ilvl="0"><w:start w:val="1"/><w:numFmt w:val="bullet"/><w:lvlText w:val="·"/><w:lvlJc w:val="left"/></w:lvl>` +
-  `<w:lvl w:ilvl="1"><w:start w:val="1"/><w:numFmt w:val="lowerLetter"/><w:lvlText w:val="%2."/><w:lvlJc w:val="center"/></w:lvl>` +
+  `<w:abstractNum w:abstractNumId="0">` +
+  `<w:nsid w:val="00A1B2C3"/><w:multiLevelType w:val="hybridMultilevel"/><w:tmpl w:val="0A0B0C"/>` +
+  `<w:lvl w:ilvl="0" w:tentative="1" w:tplc="0409001F">` +
+  `<w:start w:val="1"/><w:numFmt w:val="bullet"/><w:suff w:val="nothing"/><w:lvlText w:val="·"/><w:lvlJc w:val="left"/></w:lvl>` +
+  `<w:lvl w:ilvl="1" w:tentative="0" w:tplc="0409001D">` +
+  `<w:start w:val="1"/><w:numFmt w:val="lowerLetter"/><w:suff w:val="tab"/><w:lvlText w:val="%2."/><w:lvlJc w:val="center"/></w:lvl>` +
   `</w:abstractNum>` +
   `<w:num w:numId="1"><w:abstractNumId w:val="0"/>` +
   `<w:lvlOverride w:ilvl="0"><w:startOverride w:val="3"/></w:lvlOverride></w:num>` +
@@ -131,8 +141,9 @@ const FIXTURE_NUMBERING =
 const FIXTURE_DOC =
   `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>` +
   // v0.145：图片与浮动族要 wp/a/pic/r 四个命名空间（docPr/cNvPr/blip）
+  // v0.150：兼容性族再要一个 mc（AlternateContent/Choice 与根上的 mc:Ignorable）
   `<w:document xmlns:w="${W}" xmlns:wp="${WP}" xmlns:a="${A}" xmlns:pic="${PIC}" xmlns:r="${R}"` +
-  ` xmlns:v="${V}" xmlns:o="${O}"><w:body>` +
+  ` xmlns:v="${V}" xmlns:o="${O}" xmlns:mc="${MC}" mc:Ignorable="w14"><w:body>` +
   `<w:p w:rsidR="00A1" w:rsidRDefault="00A2" w:rsidP="00B3">` +
   `<w:pPr><w:pStyle w:val="ReportHead"/>` +
   `<w:spacing w:before="120" w:after="240" w:line="360" w:lineRule="auto" w:beforeAutospacing="0" w:afterAutospacing="0"/>` +
@@ -172,7 +183,9 @@ const FIXTURE_DOC =
   // wp:cNvGraphicFramePr/a:graphicFrameLocks、pic:cNvPicPr/a:picLocks、xfrm 的 off+ext、
   // a:prstGeom 档位（元素序按 CT_Inline / CT_GraphicalObject 的 schema，错序 Word 会报坏件）
   `<w:p><w:r><w:drawing>` +
-  `<wp:inline distT="114300" distB="0" distL="114300" distR="0"><wp:extent cx="914400" cy="914400"/>` +
+  // v0.150：wp:inline 的两个流水号（anchorId/editId）与 a:blip 的 cstate（打印才出图）
+  `<wp:inline distT="114300" distB="0" distL="114300" distR="0" anchorId="00000001" editId="00000002">` +
+  `<wp:extent cx="914400" cy="914400"/>` +
   `<wp:effectExtent l="19050" t="9525" r="0" b="0"/>` +
   `<wp:docPr id="7" name="图片 1" descr="画布级替代文本"/>` +
   `<wp:cNvGraphicFramePr><a:graphicFrameLocks noChangeAspect="1"/></wp:cNvGraphicFramePr>` +
@@ -180,9 +193,14 @@ const FIXTURE_DOC =
   `<pic:pic><pic:nvPicPr><pic:cNvPr id="3" name="cNv 名" descr="图形级替代文本"/>` +
   // v0.149：a:picLocks 的箭头锁（与纵横比锁同一枚元素两个属性）、pic:spPr 的黑白模式
   `<pic:cNvPicPr><a:picLocks noChangeAspect="0" noChangeArrowheads="1"/></pic:cNvPicPr></pic:nvPicPr>` +
-  `<pic:blipFill><a:blip r:embed="rId1"/><a:stretch><a:fillRect/></a:stretch></pic:blipFill>` +
+  // v0.150：blip 的 cstate（「只在打印时出图」那档）
+  `<pic:blipFill><a:blip r:embed="rId1" cstate="print"/><a:stretch><a:fillRect/></a:stretch></pic:blipFill>` +
   `<pic:spPr bwMode="gray"><a:xfrm><a:off x="0" y="0"/><a:ext cx="914400" cy="914400"/></a:xfrm>` +
-  `<a:prstGeom prst="rect"><a:avLst/></a:prstGeom></pic:spPr></pic:pic>` +
+  `<a:prstGeom prst="rect"><a:avLst/></a:prstGeom>` +
+  // v0.150：a:ext 的 uri（扩展点身份）、a:ln 的线宽与 a:lumMod 的亮度调制
+  `<a:ext uri="{1234-5678-9ABC-DEF0}"/><a:ln w="9525"><a:solidFill><a:schemeClr val="accent1">` +
+  `<a:lumMod val="50000"/></a:schemeClr></a:solidFill></a:ln>` +
+  `</pic:spPr></pic:pic>` +
   `</a:graphicData></a:graphic></wp:inline></w:drawing></w:r></w:p>` +
   // v0.148：浮动图（wp:anchor）——simplePos 的绝对坐标与 positionH/V 的基准。
   // 一个 w:drawing 里 inline 与 anchor 二选一，所以另开一段；写侧只发内嵌图，
@@ -209,11 +227,31 @@ const FIXTURE_DOC =
   // v:fill 两枚（on/focussize）、v:stroke 三枚（on/joinstyle/weight）。
   // 元素序按 VML 的规矩：imagedata 打头、其后 lock/fill/stroke/path
   `<w:p><w:r><w:pict><v:shape id="_x0000_s1026" spid="_x0000_s1027" spt="75" type="#_x0000_t75"` +
-  ` coordsize="1000,1000" filled="t" stroked="f" style="width:100pt;height:50pt">` +
+  // v0.150：shape 身上的 path 缓存串与 fillcolor（Word 没装字体时靠 path 画异形）
+  ` coordsize="1000,1000" filled="t" stroked="f" style="width:100pt;height:50pt"` +
+  ` path="m0,0 l100,0 e" fillcolor="#ffc0cb">` +
   `<v:imagedata r:id="rId1" o:title="老式图的标题"/>` +
+  // v0.150：o:useLocalDpi（按本机 DPI 量尺寸）与 o:attr（扩展点名值对）
+  `<o:useLocalDpi val="0"/><o:attr name="x" val="y"/>` +
   `<o:lock aspectratio="f" ext="edit"/>` +
   `<v:fill on="t" focussize="0,0"/><v:stroke on="t" joinstyle="round" weight="1pt"/>` +
+  // v0.150：图元几何族——v:path 的盒子（w/h）与两枚顶点（v:pt 的 x/y）、
+  // v:gd 的公式与名、v:cxn 的连线角、v:pos 的手柄位置。只读记账：
+  // 每族只记「枚数 + 首枚值」，全挂会把 HTML 撑爆
+  `<v:path w="1000" h="1000"><v:pt x="0" y="0"/><v:pt x="10" y="20"/></v:path>` +
+  `<v:gd fmla="sum 0 0 0" name="x1"/><v:cxn ang="0"/><v:pos x="5" y="6"/>` +
   `</v:shape></w:pict></w:r></w:p>` +
+  // v0.150：VML 分组画布——v:group 五枚（id/spid/coordorigin/coordsize/style）。
+  // gfxdata（图元字节缓存）**裁定不收**：base64  blob 挂 HTML 属性性价比极差，
+  // 且写侧写不回——与 t|space 同款裁定，所以夹具里也不放它
+  `<w:p><w:r><w:pict><v:group id="_x0000_s1025" spid="_x0000_s1026" coordorigin="0,0"` +
+  ` coordsize="1000,1000" style="position:absolute">` +
+  `<v:imagedata r:id="rId1"/></v:group></w:pict></w:r></w:p>` +
+  // v0.150：文档级标记三族——proofErr（拼写/语法检查标记，body 直子）、
+  // mc:Choice（AlternateContent 的兼容分支）都不在任何读手路径上，块遍历前先查问
+  `<w:proofErr w:type="spellStart"/>` +
+  `<mc:AlternateContent><mc:Choice Requires="wps"><w:p><w:r><w:t>兼容分支</w:t></w:r></w:p></mc:Choice>` +
+  `<mc:Fallback><w:p><w:r><w:t>兜底分支</w:t></w:r></w:p></mc:Fallback></mc:AlternateContent>` +
   // v0.145：段落浮动框架——absolute 形态（x/y 在场，无 xAlign/yAlign），十二枚全上账
   `<w:p><w:pPr><w:framePr w:x="720" w:y="1440" w:w="2880" w:h="720" w:hRule="exact"` +
   ` w:hSpace="12" w:vSpace="24" w:hAnchor="page" w:vAnchor="text" w:wrap="around" w:anchorLock="1"/></w:pPr>` +
@@ -243,8 +281,12 @@ const FIXTURE_DOC =
   `<w:left w:val="single" w:sz="4" w:space="0" w:color="000000"/>` +
   `<w:bottom w:val="single" w:sz="4" w:space="0" w:color="000000"/>` +
   `<w:right w:val="single" w:sz="4" w:space="0" w:color="000000"/>` +
-  `<w:insideH w:val="single" w:sz="4" w:space="2" w:color="000000"/>` +
-  `<w:insideV w:val="single" w:sz="4" w:space="3" w:color="000000"/>` +
+  // v0.150：insideH/insideV 带 themeColor 一族（主题色引用 + tint/shade）。
+  // 量具的 zip 不带 theme1.xml，主题解析不出来——但引用名的**按名查问**照样要做
+  // （v0.150 起 themeRefCss 把 attr 与「有没有主题」解耦，此前无主题的件这三枚
+  // 一直挂在 neverConsulted 里）
+  `<w:insideH w:val="single" w:sz="4" w:space="2" w:color="000000" w:themeColor="accent1" w:themeTint="99" w:themeShade="BF"/>` +
+  `<w:insideV w:val="single" w:sz="4" w:space="3" w:color="000000" w:themeColor="accent1" w:themeTint="99" w:themeShade="BF"/>` +
   `</w:tblBorders></w:tblPr>` +
   `<w:tblGrid><w:gridCol w:w="2500"/><w:gridCol w:w="2500"/></w:tblGrid>` +
   `<w:tr><w:tc><w:p><w:r><w:t>甲</w:t></w:r></w:p></w:tc>` +
@@ -367,7 +409,9 @@ const MUST_SEE = [
   'tblpPr|bottomFromText',
   'tblpPr|rightFromText',
   'tblpPr|overlap',
-  'abstractNum|multiLevelType',
+  // v0.150 修正：multiLevelType 从「w:abstractNum 身上的属性」改回**子元素**形态
+  // （OOXML 的 CT_AbstractNum 里它就是一枚 <w:multiLevelType w:val>）——旧夹具与旧
+  // 断言记的是 abstractNum|multiLevelType 那对不存在的属性，新对是 multiLevelType|val
   // v0.146 D5：潜在样式族 12 对（w:latentStyles 容器六属性 + w:lsdException 六属性）、
   // 书签三对（bookmarkStart 的 id/name 与 bookmarkEnd 的 id——区间内容包成
   // span[data-oo-bookmark] 由书签 mark 接住）、复杂文字语言（w:lang 的 bidi 只管
@@ -475,6 +519,47 @@ const MUST_SEE = [
   'anchor|simplePos',
   'picLocks|noChangeArrowheads',
   'spPr|bwMode',
+  // v0.150 D9：numbering 六枚（含 multiLevelType 的子元素形态修正）、styles 身份两枚、
+  // DrawingML 零星五枚、VML 形状余量五枚、VML 分组五枚、图元几何九枚、
+  // 表边框主题色两枚、文档级标记三枚
+  'nsid|val',
+  'tmpl|val',
+  'multiLevelType|val',
+  'lvl|tentative',
+  'lvl|tplc',
+  'suff|val',
+  'next|val',
+  'rsid|val',
+  'blip|cstate',
+  'ext|uri',
+  'inline|anchorId',
+  'inline|editId',
+  'lumMod|val',
+  'ln|w',
+  'insideH|themeColor',
+  'insideV|themeColor',
+  'shape|path',
+  'shape|fillcolor',
+  'useLocalDpi|val',
+  'attr|name',
+  'attr|val',
+  'group|id',
+  'group|spid',
+  'group|coordorigin',
+  'group|coordsize',
+  'group|style',
+  'gd|fmla',
+  'gd|name',
+  'pt|x',
+  'pt|y',
+  'cxn|ang',
+  'pos|x',
+  'pos|y',
+  'path|w',
+  'path|h',
+  'proofErr|type',
+  'Choice|Requires',
+  'document|Ignorable',
 ]
 // 我放进夹具而读手一寸不查的：t 的 xml:space 是**裁定不查**——escText 无条件保留空白
 // （连续空格第二个起换 nbsp），强于 preserve 所需，查了也没有第二行代码可写。

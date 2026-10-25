@@ -418,3 +418,72 @@ consulted 272 → 295 对，neverConsulted 410 → 387 对。语料分母 31,473
 | `rsid\|val` / `instrText\|space` | 27 / 15 | 会话痕迹与域指令，逐枚成本高于收益 |
 | `noWrap\|val` / `caps\|val` | 13 / 11 | tcPr 与 rPr 各一枚；包似乎无槽（v0.147 grep 过没找到），要实测后走补丁 |
 | `shape\|gfxdata` | 7 | **裁定不收**（v0.149）：Word 缓存的图元字节，见上 |
+
+## v0.150（D9）——编号定义账 + 样式身份 + VML 形状余量与图元几何
+
+**40 对上账、1,319 字面**：按对 43.3% → 49.1%、按字面 90.6% → 96.2%；consulted 295 → 335，
+neverConsulted 387 → 347。最大一块是 VML 图元几何（977 字面，9 对），其次是 `proofErr`（64）。
+
+### 实现要点
+
+1. **`w:multiLevelType` 的读法是个真 bug**（v0.145 起）：OOXML 的 CT_AbstractNum 里它是
+   一枚**子元素** `<w:multiLevelType w:val="hybridMultilevel"/>`，而读手写的是
+   `attr(a, 'w:multiLevelType')`——在 `w:abstractNum` 身上查一枚不存在的属性。attr 漏斗
+   确实被调用了（所以量具没报错），但查的名字不在宇宙里，那 9 个字面从来没进过分子。
+   改成 `val(a, 'w:multiLevelType')` 后这一对直接上账。**教训：探针证明了「漏斗被调用」，
+   证明不了「查的名字是对的」——后者要靠 selftest 夹具与宇宙对账。**
+2. **编号定义账（6 对，读写）**：nsid/tmpl/multiLevelType 三枚身份 + lvl 上的
+   tentative/tplc 两枚属性与 suff 一枚子元素，按 `w:abstractNum` 出现序汇成
+   `DocxNumbering`（带 fp 指纹）随 meta 走，`patchNumberingXml` 打包后贴回。
+3. **指纹对位（第二轮才做对）**：第一版按「第 N 枚 `<w:abstractNum>` 接第 N 条 def」，
+   跑探针时**一条都没贴上**——包恒发三枚定义（两个内置 bullet/ordered + 一条自定义），
+   枚数从不等，计数闸门整笔放弃。改成按**层内容指纹**（`numFmt|lvlText` 序列的前缀）
+   一对一配，内置两枚内容与原文不同自然配不上，自定义那条一配就中。
+   前缀一律不认：包把 `tentative` 写成 `w15:tentative`，照 `w:` 全名匹配会补出第二枚。
+4. **样式身份两枚（next/rsid，读写）**：`patchStylesXml` 从「两笔」扩成按 styleId 的三笔
+   （custom 属性 / next 子元素 / rsid 子元素）。插入位次按 CT_Style 的 schema 序——
+   `insertStyleKid` 的锚点认**元素结束**而不是闭标签（包写的子元素常是自闭合
+   `<w:name w:val="a"/>`，第一版因此把两枚全插到了 name 前面）。
+5. **图元几何只记「枚数 + 首枚值」**（977 字面，9 对，只读）：`allDesc(shape, tag)` 数枚数，
+   只对首枚 `attrL` 读值。一条 `v:path` 上几十上百枚 `v:pt` 是常事，全挂会把 HTML 撑爆；
+   枚数说明这个族出现了，首枚值说明它长什么样。写侧不写（`w:pict` 无槽，与 VML 壳同界）。
+6. **themeRefCss 解耦「查问」与「解析」**：此前 `if (!theme) return undefined` 挡在
+   `attr(el, 'w:themeColor')` 前面——不带 theme1.xml 的件（语料 02-tables 就是）这三枚
+   一直挂在 neverConsulted。改成先按名查问再谈解析，行为不变（解析不出来仍 undefined）。
+7. **noteDocumentMarks**（3 对，只读）：`proofErr` / `mc:Choice` / 根上的 `mc:Ignorable`
+   不在任何读手路径上（块遍历不碰 proofErr、兼容分支不进分发、根属性没人读），
+   在 `f.run()` 前先按名查问一遍。PM 没有「这里有个拼写错误」这种承载点，只记账。
+
+### 过程中的坑（三枚）
+
+1. **第三度踩「语料段内没有 blip/imagedata」**：`pt` 与 `path` 两族原承放在 `v:path`
+   上下文（`<w:p><w:r><w:pict><v:shape><v:path w h>`），那段里没有 `v:imagedata`，
+   `bitmap()` 第一步就返回 null——六百多字面凭空掉零。前两次是 v0.148 的 `d:inline`
+   （effectExtent 四边）与 v0.149 的 `v:fill`/`v:stroke`。**修法仍是挪进 `v:main`**
+   （它的 open 自带一枚 imagedata），而不是补 imagedata（会给 `imagedata|id` 多算分母）。
+   `v:group` 那一族同病（承放在 `v:group` 上下文），挪到 close 自带 imagedata 的 `v:pict`。
+   **这坑踩第三次了，值得写进生成器的注释里当门规。**
+2. **`setTagAttr` 的追加路径踩了「切片没有结尾 >」**：lvl 那枚 tag 是
+   `out.slice(at, end + closeLen)` 切出来的（不含 `>`），`tag.replace(/>$/, …)` 静默不命中，
+   tentative（走替换分支）贴上而 tplc（走追加分支）整枚丢。改成「有 > 替换、没有就尾接」。
+3. **探针里「包里恒发的值」会骗断言**：断言「blip cstate 只读不写，包里不该有」跑出来是
+   反的——docx 库对每个 `a:blip` 都发 `cstate="none"`。既然包有这一槽，cstate 就从
+   「只读记账」升级成**可写**（`patchImgXml` 里 retag，包恒写 none、说了才改）。
+
+### 顺带：剩余 neverConsulted 的形状
+
+清掉图元几何族与 numbering/styles 之后，剩下的都是零头：`schemeClr|val`（82，需主题色
+模型）、`noWrap|val`（13）/`caps|val`（11，包看着无槽，要实测后走补丁）、
+`instrText|space`（15，与 `t|space` 同款噪声）、`multiLevelType` 之外 numbering 的
+`abstractNum` 余属性、以及 `bodyPr`/`wsp` 一族（文本框，约 45 字面，PM 无文本框节点）。
+
+## v0.150 顺延清单（D10）
+
+| 对（族） | 次数 | 备注 |
+|---|---|---|
+| `t\|space` | 348 | **裁定不查**（v0.143 起），同前 |
+| `schemeClr\|val` | 82 | 主题色引用（fill/line/effect 上都有），需读手深搜 + 主题模型已在 |
+| `noWrap\|val` / `caps\|val` | 13 / 11 | tcPr 与 rPr 各一枚；docx 库的类型面查不到（v0.150 grep 过 dist 无运行时支持），要实测后走补丁 |
+| `instrText\|space` | 15 | 域指令的 xml:space，与 `t\|space` 同款噪声，倾向裁定不收 |
+| `bodyPr` 一族 + `lnRef`/`fillRef`/`effectRef`/`fontRef` 的 idx | 约 45 | 文本框（wps）壳，PM 无文本框节点，只读记账 |
+| `shape\|gfxdata` | 7 | **裁定不收**（v0.149）：Word 缓存的图元字节，见上 |

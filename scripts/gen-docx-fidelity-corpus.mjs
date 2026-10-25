@@ -230,12 +230,6 @@ const CTX = {
     open: '<w:p><w:r><w:pict><v:shape><v:stroke on="t" color="#000080" weight="1pt">',
     close: '</v:stroke></v:shape></w:pict></w:r></w:p>',
   },
-  'v:path': {
-    f: '04-vml',
-    part: 'document',
-    open: '<w:p><w:r><w:pict><v:shape><v:path w="1000" h="1000">',
-    close: '</v:path></v:shape></w:pict></w:r></w:p>',
-  },
   'v:formulas': {
     f: '04-vml',
     part: 'document',
@@ -314,7 +308,7 @@ const ORDER = {
   '01-body': ['b0', 'b:rpr', 'b:ppr', 'b:run', 'b:numpr', 'b:pbdr', 'b:tabs', 'b:omml', 'b:para'],
   '02-tables': ['t:sect', 't:cols-kids', 't:cols', 't:tblPr', 't:borders', 't:cellmar', 't:grid', 't:tr', 't:trPr', 't:tcPr', 't:tcborders', 't:tcmar', 't:b0'],
   '03-drawings': ['d:inline', 'd:wp', 'd:anchor-kids', 'd:pic', 'd:xfrm', 'd:clr', 'd:clr2', 'd:gs', 'd:ln', 'd:fx', 'd:scene', 'd:wps', 'd:bodypr'],
-  '04-vml': ['v:pict', 'v:shape-attr', 'v:main', 'v:fill', 'v:stroke', 'v:path', 'v:formulas', 'v:handles', 'v:group', 'v:object', 'v:object-run', 'v:ffdata', 'v:textinput'],
+  '04-vml': ['v:pict', 'v:shape-attr', 'v:main', 'v:fill', 'v:stroke', 'v:formulas', 'v:handles', 'v:group', 'v:object', 'v:object-run', 'v:ffdata', 'v:textinput'],
   styles: ['s:latent', 's:style-attrs', 's:style-kids', 's:style-rpr'],
   numbering: ['n:b0', 'n:abstract-attrs', 'n:abstract-kids', 'n:lvl-attrs', 'n:lvl-kids', 'n:lvl-rpr', 'n:num-attrs', 'n:num-kids'],
   footnotes: ['fn:footnote-attrs', 'fn:footnote'],
@@ -586,10 +580,16 @@ const PLACE = {
   stroke: [{ c: 'v:main', p: P.v, bare: true, av: { color: '#000080', dashstyle: 'solid', endarrow: 'none', endcap: 'flat', joinstyle: 'round', miterlimit: '8', on: 't', startarrow: 'none', weight: '1pt' } }],
   shadow: [{ c: 'v:main', p: P.v, bare: true, av: { algn: 'tl', blurRad: '0', dir: '2700000', dist: '2pt', kx: '0', ky: '0', offset: '2pt,2pt', on: 't', opacity: '', origin: '', sx: '100000', sy: '100000', val: '' } }],
   textbox: [{ c: 'v:main', p: P.v, bare: true, av: { inset: '0,0,0,0', style: 'mso-fit-shape-to-text:t' } }],
-  path: [{ c: 'v:path', p: P.v, bare: true, av: { arrowok: 't', connectangles: '', connectlocs: '', connecttype: 'segments', extrusionok: 'f', fillok: 't', gradientshapeok: 't', h: '1000', path: 'm0,0 l100,0 e', textboxrect: '0,0,1000,1000', w: '1000' } }],
+  // v0.150：path 与 pt 两族从 v:path 挪进 v:main。v:path 那段（<w:shape><v:path w h>）里
+  // 没有 imagedata——bitmap() 的短路链第一步就断，readImgPayload 整体不被调用，
+  // path|w/h 与 pt|x/y 六百多字面会凭空掉出分子（v0.148/v0.149 两度实测过同款坑：
+  // d:inline 与 v:fill/v:stroke 都栽在「段内没有 blip/imagedata」上）。
+  // v:main 的 open 自带一枚 imagedata，把两族放进去才走得到读手。**教训**：
+  // 新增「骑 img」的属性族，先确认承放上下文的短路链通不通，再谈读手怎么读。
+  path: [{ c: 'v:main', p: P.v, bare: true, av: { arrowok: 't', connectangles: '', connectlocs: '', connecttype: 'segments', extrusionok: 'f', fillok: 't', gradientshapeok: 't', h: '1000', path: 'm0,0 l100,0 e', textboxrect: '0,0,1000,1000', w: '1000' } }],
   f: [{ c: 'v:formulas', p: P.v, bare: true, av: { eqn: 'sum 0 0 0' } }],
   h: [{ c: 'v:handles', p: P.v, bare: true, av: { position: '0,0', xrange: '0,1000', yrange: '0,1000' } }],
-  pt: [{ c: 'v:path', p: P.v, bare: true, av: { x: '0', y: '0' } }],
+  pt: [{ c: 'v:main', p: P.v, bare: true, av: { x: '0', y: '0' } }],
   gd: [{ c: 'v:main', p: P.v, bare: true, av: { fmla: '', name: '' } }],
   lock: [{ c: 'v:main', p: P.v, bare: true, av: { aspectratio: 'f', ext: 'edit', shapetype: 'spt' } }],
   cxnSpLocks: [{ c: 'v:main', p: P.o, bare: true, av: { noChangeShapeType: '0' } }],

@@ -20,13 +20,13 @@ probe injected at 3 points: attr, attrL, reader.__PROBE(再导出)).
 
 | | pairs | attribute literals |
 |---|---:|---:|
-| In scope (7 parts, 5 readable files) | 701 | 31,470 |
+| In scope (7 parts, 5 readable files) | 701 | 31,468 |
 | Word save-session noise | 19 | 7,711 |
-| Meaningful universe | 682 | 23,759 |
-| Consulted | 295 | 21,527 |
-| Never consulted | 387 | 2,232 |
+| Meaningful universe | 682 | 23,757 |
+| Consulted | 335 | 22,846 |
+| Never consulted | 347 | 911 |
 
-**Coverage: 43.3% of distinct pairs, 90.6% of meaningful literals.**
+**Coverage: 49.1% of distinct pairs, 96.2% of meaningful literals.**
 
 The corpus held 5 synthetic .docx files (22 KiB); 0 were
 unreadable as archives and are reported by failure class only, never by name.
@@ -43,7 +43,7 @@ run into `docs/fidelity-universe.json` and rebuilt at 1/100 scale by `scripts/ge
 | universe pairs present in the corpus | 701 / 701 |
 | pairs missing / extra | 0 / 0 |
 | literals: scaling step itself (raw ÷ 100 → rounded, min 1) | 31,085 → 31,321 (+0.76%) |
-| literals: scaled expectation vs actual rebuild | 31,321 vs 31,470 (+0.48%) |
+| literals: scaled expectation vs actual rebuild | 31,321 vs 31,468 (+0.47%) |
 
 **By-pair coverage is comparable with the original run; by-literal coverage is not.** 按对覆盖率与旧账（313 件真件语料）可比；按字面不可比——重建按 count/100 缩放，取整与 max(1,·) 会把稀有对抬起来（见「scaling step itself」那一行），另有少量承重包裹属性（bitmap 链的 r:embed/extent/docPr、numbering 关联的 abstractNumId 等）在包裹处顺带出现；末行是「实测 vs 缩放期望」，与缩放那行基准不同，别混读
 
@@ -52,60 +52,60 @@ run into `docs/fidelity-universe.json` and rebuilt at 1/100 scale by `scripts/ge
 | `element|attribute` | literals |
 |---|---:|
 | `t|space` | 348 |
-| `pt|x` | 290 |
-| `pt|y` | 290 |
-| `gd|fmla` | 131 |
-| `gd|name` | 131 |
 | `schemeClr|val` | 82 |
-| `cxn|ang` | 64 |
-| `pos|x` | 64 |
-| `pos|y` | 64 |
-| `proofErr|type` | 64 |
-| `lvl|tentative` | 37 |
-| `lvl|tplc` | 29 |
-| `rsid|val` | 27 |
 | `instrText|space` | 15 |
 | `noWrap|val` | 13 |
 | `caps|val` | 11 |
-| `multiLevelType|val` | 9 |
-| `next|val` | 9 |
-| `nsid|val` | 9 |
-| `tmpl|val` | 9 |
-| `ln|w` | 8 |
 | `shape|gfxdata` | 7 |
-| `attr|name` | 5 |
-| `attr|val` | 5 |
-| `blip|cstate` | 5 |
 | `bodyPr|anchor` | 5 |
-| `document|Ignorable` | 5 |
-| `shape|path` | 5 |
 | `abstractNum|restartNumberingAfterBreak` | 4 |
 | `bodyPr|wrap` | 4 |
+| `effectRef|idx` | 4 |
+| `fillRef|idx` | 4 |
+| `fontRef|idx` | 4 |
+| `lnRef|idx` | 4 |
+| `bodyPr|anchorCtr` | 3 |
+| `bodyPr|bIns` | 3 |
+| `bodyPr|compatLnSpc` | 3 |
+| `bodyPr|lIns` | 3 |
+| `bodyPr|numCol` | 3 |
+| `bodyPr|rIns` | 3 |
+| `bodyPr|rtlCol` | 3 |
+| `bodyPr|tIns` | 3 |
+| `bodyPr|vert` | 3 |
+| `hyperlink|history` | 3 |
+| `lumOff|val` | 3 |
+| `miter|lim` | 3 |
+| `path|connectangles` | 3 |
+| `path|connectlocs` | 3 |
+| `position|val` | 3 |
+| `rect|b` | 3 |
+| `rect|l` | 3 |
 
 ## Which elements the missing literals sit on
 
 | element | never-consulted literals |
 |---|---:|
-| `pt` | 580 |
 | `t` | 348 |
-| `gd` | 262 |
-| `pos` | 128 |
 | `schemeClr` | 82 |
-| `lvl` | 66 |
-| `cxn` | 64 |
-| `proofErr` | 64 |
 | `bodyPr` | 44 |
-| `shape` | 28 |
-| `rsid` | 27 |
 | `rect` | 24 |
-| `group` | 21 |
-| `path` | 21 |
+| `shape` | 19 |
 | `instrText` | 15 |
 | `line` | 15 |
 | `cnfStyle` | 13 |
 | `fill` | 13 |
 | `noWrap` | 13 |
+| `path` | 13 |
 | `reflection` | 13 |
+| `roundrect` | 13 |
+| `shadow` | 13 |
+| `caps` | 11 |
+| `shapetype` | 10 |
+| `stroke` | 10 |
+| `bdr` | 8 |
+| `group` | 7 |
+| `xfrm` | 6 |
 
 ## Consulted — the work already paid for
 
@@ -131,6 +131,8 @@ run into `docs/fidelity-universe.json` and rebuilt at 1/100 scale by `scripts/ge
 | `rFonts|asciiTheme` | 333 |
 | `rFonts|hAnsiTheme` | 330 |
 | `lang|eastAsia` | 293 |
+| `pt|x` | 290 |
+| `pt|y` | 290 |
 | `spacing|val` | 253 |
 | `spacing|line` | 228 |
 | `spacing|lineRule` | 228 |
@@ -139,8 +141,6 @@ run into `docs/fidelity-universe.json` and rebuilt at 1/100 scale by `scripts/ge
 | `vAlign|val` | 210 |
 | `left|val` | 195 |
 | `bottom|val` | 192 |
-| `ind|firstLineChars` | 191 |
-| `ind|left` | 189 |
 
 ## Caveats, stated before anyone reads them off
 

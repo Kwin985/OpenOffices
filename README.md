@@ -8946,7 +8946,59 @@ Word 语义里 `descr` 才是替代文本（读屏软件念的那段），`name`
 （`pic:spPr` 里再嵌一枚 `a:spPr`），7 枚 `bwMode` 有 6 枚在嵌套层，`findDesc` 只取第一枚会掉，
 改走 `allDesc` 全查。
 
-- **push 仍没成功**：非交互环境取不到 Windows 凭据（`terminal prompts disabled`），本地领先 origin/main 的提交继续攒着（本轮后 39 个）；凭据恢复后 `git push origin main` 一条命令的事。
+- **push 仍没成功**：非交互环境取不到 Windows 凭据（`terminal prompts disabled`），本地领先 origin/main 的提交继续攒着（本轮后 41 个）；凭据恢复后 `git push origin main` 一条命令的事。
+
+
+### v0.150（D9）——编号定义账 / 样式身份 / VML 形状余量与图元几何
+
+按字面权重扫剩余 neverConsulted 的**大块与低成本族**：**40 对上账、1,319 字面**，覆盖率
+**按对 43.3% → 49.1%、按字面 90.6% → 96.2%**；consulted 295 → 335 对，neverConsulted 387 → 347。
+
+| 族 | 字面 | 往返 |
+|---|---|---|
+| VML 图元几何（`v:pt` x/y、`v:gd` fmla/name、`v:cxn` ang、`v:pos` x/y、`v:path` w/h） | 977 | 只读 |
+| `w:proofErr` 的 type（拼写/语法检查标记） | 64 | 只读 |
+| `w:lvl` 的 tentative / tplc | 66 | **读写** |
+| `w:style` 的 rsid | 27 | **读写** |
+| `w:style` 的 next（后续段落样式） | 9 | **读写** |
+| `nsid` / `tmpl` / `multiLevelType`（编号定义身份） | 27 | **读写** |
+| `w:lvl/w:suff` | 4 | **读写** |
+| VML 形状余量（shape 的 path/fillcolor、`o:useLocalDpi`、`o:attr` 一对） | 19 | 只读 |
+| `v:group` 五枚（id / spid / coordorigin / coordsize / style） | 14 | 只读 |
+| DrawingML 零星（`a:blip` cstate、`a:ext` uri、`wp:inline` anchorId/editId、`a:lumMod`、`a:ln` w） | 24 | cstate 读写、余只读 |
+| 表边框 `insideH/insideV` 的 themeColor 一族 | 8 | 只读 |
+| 文档级标记（`document|Ignorable`、`Choice|Requires`） | 9 | 只读 |
+
+- **顺手修一个真 bug**：`w:multiLevelType` 是一枚**子元素**（`<w:multiLevelType w:val>`），
+  v0.145 起读手写的却是 `attr(a,'w:multiLevelType')`——在 `w:abstractNum` 身上查一枚不存在
+  的属性，那 9 个字面从来没进过分子。同轮补上定义身份（nsid/tmpl）与层属性
+  （tentative/tplc/suff），按 `w:abstractNum` 出现序汇成 `DocxNumbering` 随 meta 走。
+- **编号账怎么贴回去**：包的 numId/abstractNumId 是自己发的（与原文未必同号），所以
+  `patchNumberingXml` 按**层内容指纹**（`numFmt|lvlText` 序列的前缀）在包里认「原文那一条」，
+  认不出来就不贴（宁缺毋滥）。前缀一律不认——包把 tentative 写成 `w15:tentative`，
+  照全名匹配会补出第二枚。
+- **图元几何只记「枚数 + 首枚值」**：一条 `v:path` 上几十上百枚 `v:pt` 是常事，全挂会把
+  HTML 撑爆；枚数说明这个族在这里出现了，首枚值说明它长什么样。**只读不写**——写侧只发
+  DrawingML 内嵌图，`w:pict` 那一支出不来（与 VML 壳同一条边界）。
+- **样式身份两枚可写**：`patchStylesXml` 扩成按 styleId 的三笔（custom/next/rsid），
+  next 与 rsid 按 CT_Style 的 schema 序插（乱序写会被 Word 判损坏件）。
+- **themeRefCss 把「按名查问」与「解析」解耦**：此前没带 theme1.xml 的件在这函数里
+  `if (!theme) return` 就出了门，`insideH/insideV` 的 themeColor 一族一直挂在
+  neverConsulted 里——查问与解析是两件事，前者是账本的分子。
+- **明确不做**：`t|space`（348）继续裁定不收（escText 无条件保留空白，强于 preserve
+  所需）；`shape|gfxdata`（7）base64 图元字节不收；`proofErr`/`Choice`/`Ignorable`
+  三族**只读记账**——PM 没有「这里有个拼写错误」这种承载点，读手查问上账、写侧不写。
+
+**门禁**：tsc 0、build ✓；selftest MUST_SEE **206 枚全命中（新增 37）** / MUST_NOT_SEE 1 枚全落空；
+等价腿 5/5；变异腿有牙（no-attrL 40.6%/83.0%、no-attr 20.4%/40.3%）；变异后干净腿复位 md5 与
+主腿一致；语料分母 31,470 → 31,468。
+
+**过程中的坑**：①`pt`/`path` 两族原承放在 `v:path` 上下文——那段（`<w:shape><v:path>`）里没有
+`v:imagedata`，`bitmap()` 在短路链第一步就返回 null，六百多字面凭空掉零（**第三度**踩「语料段内
+没有 blip/imagedata」，前两次是 v0.148 的 `d:inline` 与 v0.149 的 `v:fill`/`v:stroke`）；修法仍是
+挪进自带 imagedata 的 `v:main`。②编号补丁第一版按「第 N 个 abstractNum 接第 N 条 def」——包恒发
+三枚定义（两个内置 + 自定义），枚数从不等，整笔放弃；改指纹匹配后单层自定义列表立刻命中。
+③`v:group` 承放在 `v:group` 上下文，那段也没有 imagedata——一并挪到 `v:pict`（其 close 自带一枚）。
 
 
 ## 性能（v0.3）
