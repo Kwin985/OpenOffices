@@ -91,7 +91,9 @@ const FIXTURE_THEME =
 
 const FIXTURE_STYLES =
   `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>` +
-  `<w:styles xmlns:w="${W}">` +
+  // v0.152：根上的 mc:Ignorable（只读记账——「这个部件里哪些命名空间的扩展可以安全
+  // 忽略」的声明，与 document 根上那一枚同族）
+  `<w:styles xmlns:w="${W}" xmlns:mc="${MC}" mc:Ignorable="w14 w15">` +
   `<w:style w:type="paragraph" w:default="1" w:styleId="Normal">` +
   `<w:name w:val="Normal"/><w:pPr><w:spacing w:line="276" w:lineRule="auto" w:before="0" w:after="0"/>` +
   `<w:ind w:left="0" w:right="0"/></w:pPr>` +
@@ -126,17 +128,20 @@ const FIXTURE_STYLES =
 // v0.150：定义账六枚——nsid/tmpl 两枚身份（multiLevelType 从属性形态改回**子元素**
 // 形态：v0.145 那版写成 abstractNum 身上的属性，读手查的是一枚不存在的属性，那 9 个
 // 字面从来没进过分子），lvl 上加 tentative/tplc 两枚属性与 suff 一枚子元素
+// v0.152：分页后重新编号总闸 restartNumberingAfterBreak（**开标签上的属性**，按 local
+// name 收——Word 与 docx 库发的都是 w15: 前缀，这里放 w: 形态，两种都该认得来）、
+// w:num 上的 durableId（只读记账）、根上的 mc:Ignorable（只读记账）
 const FIXTURE_NUMBERING =
   `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>` +
-  `<w:numbering xmlns:w="${W}">` +
-  `<w:abstractNum w:abstractNumId="0">` +
+  `<w:numbering xmlns:w="${W}" xmlns:mc="${MC}" mc:Ignorable="w14">` +
+  `<w:abstractNum w:abstractNumId="0" w:restartNumberingAfterBreak="0">` +
   `<w:nsid w:val="00A1B2C3"/><w:multiLevelType w:val="hybridMultilevel"/><w:tmpl w:val="0A0B0C"/>` +
   `<w:lvl w:ilvl="0" w:tentative="1" w:tplc="0409001F">` +
   `<w:start w:val="1"/><w:numFmt w:val="bullet"/><w:suff w:val="nothing"/><w:lvlText w:val="·"/><w:lvlJc w:val="left"/></w:lvl>` +
   `<w:lvl w:ilvl="1" w:tentative="0" w:tplc="0409001D">` +
   `<w:start w:val="1"/><w:numFmt w:val="lowerLetter"/><w:suff w:val="tab"/><w:lvlText w:val="%2."/><w:lvlJc w:val="center"/></w:lvl>` +
   `</w:abstractNum>` +
-  `<w:num w:numId="1"><w:abstractNumId w:val="0"/>` +
+  `<w:num w:numId="1" w:durableId="3C7B9A2E"><w:abstractNumId w:val="0"/>` +
   `<w:lvlOverride w:ilvl="0"><w:startOverride w:val="3"/></w:lvlOverride></w:num>` +
   `</w:numbering>`
 
@@ -164,7 +169,11 @@ const FIXTURE_DOC =
   // 都是 w:position（ST_SignedTwipsPerMil）。v0.142 起夹具一直放 w:pos、MUST_SEE 一直
   // 断言 pos|val——夹具与读手在错误的名字上互锁自证，而宇宙里根本没有这对；position|val
   // （338 字面）因此从没进过分子，屏上的 vertical-align 升降对真实件一次都没生效
-  `<w:lang w:val="en-US" w:eastAsia="zh-CN"/><w:kern w:val="2"/><w:position w:val="12"/></w:rPr>` +
+  `<w:lang w:val="en-US" w:eastAsia="zh-CN"/><w:kern w:val="2"/><w:position w:val="12"/>` +
+  // v0.152：全大写（caps，屏上 text-transform: uppercase）与字符边框四枚（bdr，
+  // 屏上 CSS border——sz 是八分之一磅、space 是磅，两枚都要换算）。两枚都是包有
+  // 原生槽的读写属性（IRunOptions.allCaps / IRunOptions.border）
+  `<w:caps w:val="true"/><w:bdr w:val="single" w:sz="8" w:space="0" w:color="FF0000"/></w:rPr>` +
   `<w:t xml:space="preserve"> 带空白的正文 </w:t></w:r></w:p>` +
   // v0.142：主题色 run（accent1 + tint/shade 双戴）与图案底纹段（pct25 前景 FF0000/背景 FFFFFF）
   `<w:p><w:pPr><w:shd w:val="pct25" w:color="FF0000" w:fill="FFFFFF"/></w:pPr>` +
@@ -204,9 +213,17 @@ const FIXTURE_DOC =
   `<pic:blipFill><a:blip r:embed="rId1" cstate="print"/><a:stretch><a:fillRect/></a:stretch></pic:blipFill>` +
   `<pic:spPr bwMode="gray"><a:xfrm><a:off x="0" y="0"/><a:ext cx="914400" cy="914400"/></a:xfrm>` +
   `<a:prstGeom prst="rect"><a:avLst/></a:prstGeom>` +
+  // v0.152：渐变填充的两枚色标（a:gs 的 pos，千分比）——只记第一枚，一条 gradFill 里
+  // 常有好几枚 gs，位置序列说明渐变形状，全挂撑爆 HTML
+  `<a:gradFill><a:gsLst>` +
+  `<a:gs pos="0"><a:srgbClr val="FF0000"/></a:gs>` +
+  `<a:gs pos="100000"><a:srgbClr val="0000FF"/></a:gs>` +
+  `</a:gsLst></a:gradFill>` +
   // v0.150：a:ext 的 uri（扩展点身份）、a:ln 的线宽与 a:lumMod 的亮度调制
-  `<a:ext uri="{1234-5678-9ABC-DEF0}"/><a:ln w="9525"><a:solidFill><a:schemeClr val="accent1">` +
-  `<a:lumMod val="50000"/></a:schemeClr></a:solidFill></a:ln>` +
+  // v0.152：a:ln 再带 cap（线端档）与 cmpd（复合线型）两枚；schemeClr 里再住
+  // a:lum 的 bright/contrast 与 a:shade 的压暗档位（与 lumMod/lumOff 同族）
+  `<a:ext uri="{1234-5678-9ABC-DEF0}"/><a:ln w="9525" cap="flat" cmpd="sng"><a:solidFill><a:schemeClr val="accent1">` +
+  `<a:lumMod val="50000"/><a:lum bright="40000" contrast="60000"/><a:shade val="50000"/></a:schemeClr></a:solidFill></a:ln>` +
   // v0.151：schemeClr 的槽位名（宇宙最大单对）、a:lumOff 的明度偏移（与 lumMod 同住
   // schemeClr 里）、a:miter 的斜接限制（a:ln 的子元素）。fill/line 两处引用分开查
   `<a:ext uri="{1234-5678-9ABC-DEF1}"/><a:ln w="9525"><a:solidFill><a:schemeClr val="accent2">` +
@@ -295,12 +312,15 @@ const FIXTURE_DOC =
   ` w:hSpace="12" w:vSpace="24" w:hAnchor="page" w:vAnchor="text" w:wrap="around" w:anchorLock="1"/></w:pPr>` +
   `<w:r><w:t>浮动框架段</w:t></w:r></w:p>` +
   // v0.145：浮动表——tblpPr 十枚（属性无前缀）。tblpPr 在 tblPr 里排 tblStyle 之后
+  // v0.152：表级条件格式尺寸两枚（bandSize，排在 tblpPr 之后 tblW 之前——CT_TblPrBase 序）
   `<w:tbl><w:tblPr><w:tblStyle w:val="TableGrid"/>` +
   `<w:tblpPr tblpX="10" tblpXSpec="absolute" tblpY="10" vertAnchor="top" horzAnchor="page"` +
   ` topFromText="0" leftFromText="108" bottomFromText="0" rightFromText="108" overlap="never"/>` +
+  `<w:tblStyleRowBandSize w:val="1"/><w:tblStyleColBandSize w:val="2"/>` +
   `<w:tblW w:w="5000" w:type="dxa"/></w:tblPr>` +
   `<w:tblGrid><w:gridCol w:w="5000"/></w:tblGrid>` +
-  `<w:tr><w:tc><w:tcPr><w:tcW w:w="5000" w:type="dxa"/></w:tcPr>` +
+  // v0.152：单元格不换行（w:tcPr/w:noWrap，排在 tcW 之后——CT_TcPr 序）
+  `<w:tr><w:tc><w:tcPr><w:tcW w:w="5000" w:type="dxa"/><w:noWrap/></w:tcPr>` +
   `<w:p><w:r><w:t>浮动表格</w:t></w:r></w:p></w:tc></w:tr></w:tbl>` +
   // v0.146：书签区间——单段一枚（起终点夹住 run）+ 跨段一枚（本段开、下一段关，
   // 段末续挂每段各包一枚 span）。空书签（起终点相邻）不产 span，是记账内的已知边界
@@ -311,6 +331,9 @@ const FIXTURE_DOC =
   // w:w 是百分比（元素名叫 w、属性叫 val）
   `<w:p><w:r><w:rPr><w:lang w:val="en-US" w:eastAsia="zh-CN" w:bidi="ar-SA"/><w:w w:val="150"/></w:rPr>` +
   `<w:t>复杂文字</w:t></w:r></w:p>` +
+  // v0.152：hyperlink 的 w:history——这一链链接进没进过「历史记录」（Word 的已访问
+  // 链接账）。只读记账：r:id 写侧发包自己重编，这枚身份带不回来
+  `<w:p><w:hyperlink r:id="rId9" w:history="1"><w:r><w:t>进过历史的链</w:t></w:r></w:hyperlink></w:p>` +
   // v0.146：表级边框 space——两行两列六边都带边框，space 只写在 top=1 / insideH=2 /
   // insideV=3 三枚上（分摊口径：外层四边贴外圈格、insideH/insideV 贴相邻两格，
   // 仅当该边边框真回落到表级时才挂——格内无 tcBorders，六边全回落）
@@ -345,11 +368,17 @@ const FIXTURE_DOC =
   `<w:tbl><w:tblPr><w:tblLook w:val="01E0" w:noHBand="1" w:noVBand="0"/></w:tblPr>` +
   `<w:tblGrid><w:gridCol w:w="5000"/></w:tblGrid>` +
   `<w:tr><w:tc><w:p><w:r><w:t>闸门表</w:t></w:r></w:p></w:tc></w:tr></w:tbl>` +
-  `<w:sectPr><w:pgSz w:w="11906" w:h="16838" w:orient="portrait"/>` +
+  // v0.152：页眉页脚引用两族（sectPr 打头的位置——CT_SectPr 序 headerReference/
+  // footerReference 排在最前）。只读记账：id 是关系 id 写侧发包自己重编，type
+  // （default/first/even）我们只发 default 一档
+  `<w:sectPr><w:headerReference w:type="default" r:id="rIdHdr"/><w:footerReference w:type="default" r:id="rIdFtr"/>` +
+  `<w:pgSz w:w="11906" w:h="16838" w:orient="portrait"/>` +
   `<w:pgMar w:top="1440" w:right="1800" w:bottom="1440" w:left="1800" w:header="851" w:footer="992" w:gutter="0"/>` +
   // v0.147：节属性余下两族——分栏（w:cols）与文档网格（w:docGrid）。纸型与页边距
   // 那两枚早就在夹具里（读手原先不读其中的 top/bottom/header/footer/gutter/orient）
-  `<w:cols w:num="2" w:space="720"/><w:docGrid w:type="lines" w:linePitch="312"/></w:sectPr>` +
+  // v0.152：docGrid 再加 charSpace（每字符网格宽度，缇）——与 linePitch 同住一枚
+  // 元素上的第三枚，读写（包的 grid.charSpace 是原生槽）
+  `<w:cols w:num="2" w:space="720"/><w:docGrid w:type="lines" w:linePitch="312" w:charSpace="200"/></w:sectPr>` +
   `</w:body></w:document>`
 
 // 读手按名查问过的（源码里 spacing / ind / jc / pStyle / rFonts / sz / b / 顶边 都走 attr 或 attrL）
@@ -639,6 +668,31 @@ const MUST_SEE = [
   'rect|t',
   'rect|r',
   'rect|b',
+  // v0.152：字符/单元格/编号/节级读写族 + DrawingML 色彩零头
+  'caps|val',
+  'bdr|val',
+  'bdr|sz',
+  'bdr|space',
+  'bdr|color',
+  'noWrap|val',
+  'tblStyleRowBandSize|val',
+  'tblStyleColBandSize|val',
+  'abstractNum|restartNumberingAfterBreak',
+  'num|durableId',
+  'numbering|Ignorable',
+  'styles|Ignorable',
+  'headerReference|id',
+  'headerReference|type',
+  'footerReference|id',
+  'footerReference|type',
+  'docGrid|charSpace',
+  'hyperlink|history',
+  'lum|bright',
+  'lum|contrast',
+  'shade|val',
+  'gs|pos',
+  'ln|cap',
+  'ln|cmpd',
 ]
 // 我放进夹具而读手一寸不查的：t 的 xml:space 是**裁定不查**——escText 无条件保留空白
 // （连续空格第二个起换 nbsp），强于 preserve 所需，查了也没有第二行代码可写。
@@ -820,11 +874,15 @@ async function runSelftest(reader) {
   zip.file('word/theme/theme1.xml', FIXTURE_THEME)
   zip.file('word/numbering.xml', FIXTURE_NUMBERING)
   // v0.145：图片段的关系与媒体目标（docPr/cNvPr 的 descr 靠这条链读出来）
+  // v0.152：hyperlink 的 rId9 与页眉页脚引用的 rIdHdr/rIdFtr（读手只按名查问不解析）
   zip.file(
     'word/_rels/document.xml.rels',
     `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>` +
       `<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">` +
       `<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="media/image1.png"/>` +
+      `<Relationship Id="rId9" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/hyperlink" Target="https://example.com" TargetMode="External"/>` +
+      `<Relationship Id="rIdHdr" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/header" Target="header1.xml"/>` +
+      `<Relationship Id="rIdFtr" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/footer" Target="footer1.xml"/>` +
       `</Relationships>`,
   )
   zip.file('word/media/image1.png', Buffer.from(PNG_B64, 'base64'))

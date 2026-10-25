@@ -8946,7 +8946,7 @@ Word 语义里 `descr` 才是替代文本（读屏软件念的那段），`name`
 （`pic:spPr` 里再嵌一枚 `a:spPr`），7 枚 `bwMode` 有 6 枚在嵌套层，`findDesc` 只取第一枚会掉，
 改走 `allDesc` 全查。
 
-- **push 仍没成功**：非交互环境取不到 Windows 凭据（`terminal prompts disabled`），本地领先 origin/main 的提交继续攒着（本轮后 43 个）；凭据恢复后 `git push origin main` 一条命令的事。
+- **push 仍没成功**：非交互环境取不到 Windows 凭据（`terminal prompts disabled`），本地领先 origin/main 的提交继续攒着（本轮后 45 个）；凭据恢复后 `git push origin main` 一条命令的事。
 
 
 ### v0.150（D9）——编号定义账 / 样式身份 / VML 形状余量与图元几何
@@ -9039,6 +9039,51 @@ Word 语义里 `descr` 才是替代文本（读屏软件念的那段），`name`
 `pos|val`）** / MUST_NOT_SEE 1 枚全落空；等价腿 5/5；变异腿有牙（no-attrL 40.8%/83.1%、
 no-attr 25.5%/41.0%）；变异后干净腿复位 md5 与主腿一致；语料分母不变（31,468——本轮
 新族的承放上下文早先各轮已开好，一枚不用加）。
+
+### v0.152（D11）——字符/单元格/编号/节级读写族 + DrawingML 色彩零头
+
+按字面权重扫剩余 neverConsulted 的**补丁族专题**：**25 对上账、语料字面 66（宇宙字面
+6,199）**，覆盖率**按对 54.4% → 58.1%、按字面 96.9% → 97.2%**；consulted 371 → 396 对，
+neverConsulted 311 → 286。
+
+| 族 | 语料字面 | 往返 |
+|---|---|---|
+| `w:caps` + `w:bdr` 四枚（全大写与字符边框） | 19 | **读写**（原生槽） |
+| `w:tcPr/w:noWrap`（单元格不换行） | 13 | **读写**（patchTcPr） |
+| `w:abstractNum/@restartNumberingAfterBreak` | 4 | **读写**（保前缀补丁） |
+| `w:tblStyleColBandSize`/`w:tblStyleRowBandSize`（表级条件格式尺寸） | 4 | **读写**（补丁） |
+| `w:docGrid/@w:charSpace`（每字符网格宽度） | 2 | **读写**（原生槽） |
+| headerReference/footerReference 的 id/type | 8 | 只读 |
+| `w:num/@w:durableId` + styles/numbering 根 `mc:Ignorable` | 3 | 只读 |
+| `w:hyperlink/@w:history` | 3 | 只读 |
+| `a:ln` cap/cmpd、`a:shade` val、`a:gs` pos、`a:lum` bright/contrast | 9 | 只读 |
+| `w:num/w:lvlOverride/w:startOverride`（语料结构修正） | 1 | **读写**（v0.142 起） |
+
+- **caps/bdr 是两枚「类型面全暴露」的原生槽**（`IRunOptions.allCaps` 与
+  `IRunOptions.border`）——包里实现着、类型也写着，与 ics/bcs/smallCaps 那批「实现着
+  但类型没暴露」的库外槽不同，这次走的是正规军。caps 屏上兑现 `text-transform:
+  uppercase`，bdr 屏上兑现 CSS border（sz 是八分之一磅、space 是磅，两枚都要换算；
+  space 收 0——显式 0 与缺省同结果，但源件写了就原样往返）。
+- **noWrap 与 bandSize 走 post-pack**：包里两族都没槽。`patchTcPr` 按 `<w:tc>` 出现序插
+  `<w:noWrap/>`（计数闸门同 pprExtras）；两枚 bandSize 与 tblLook 同住 tblPr、扩了
+  `patchTblLook` 一次解压/重压办三族。
+- **`restartNumberingAfterBreak` 是一枚 w15 扩展属性**：OOXML 里它定义在 w15 命名空间
+  （CT_AbstractNum 的扩展属性），Word 与 docx 库发的都是 `w15:` 前缀——读手按 **local
+  name** 收（w:/w15: 两种形态都认），写手**保留原前缀**换值（照 w: 全名替换会写出一枚
+  不在 schema 上的属性，判损坏件风险）。探针第一版断言写成子元素形态，被包的真实输出
+  纠正——这枚属性包里对所有定义恒发。
+- **语料结构修正一对**：`startOverride|val` 从 v0.142 起读手就写着
+  （`w:num/w:lvlOverride/w:startOverride`），但语料把它与 lvlOverride **平级**摆——
+  读手在 lvlOverride 里找它，平级那枚永远找不到，86 字面一直挂 NC。挪进正确的嵌套
+  上下文（`n:lvloverride-kids`，w:num 里带 abstractNumId 让读手那道闸够得着）后直接
+  上账，读手代码一行没动。
+- **明确不做**：`instrText|space`（1524）与 `t|space` 同款域指令噪声，倾向裁定不收；
+  VML 形状壳全族余量（roundrect/textbox/group/path 一族约 2,000 字面）留 D12——纯只读
+  记账、机械但量大，单开一轮。
+
+**门禁**：tsc 0、build ✓；selftest MUST_SEE **265 枚全命中（+24）** / MUST_NOT_SEE 1 枚
+全落空；等价腿 5/5；变异腿有牙（no-attrL 42.8%/83.3%、no-attr 27.1%/41.1%）；变异后干净腿
+复位 md5 与主腿一致；语料分母 31,468 → 31,471（+3：新开的 lvlOverride 嵌套上下文块）。
 
 
 ## 性能（v0.3）

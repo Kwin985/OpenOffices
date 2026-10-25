@@ -20,13 +20,13 @@ probe injected at 3 points: attr, attrL, reader.__PROBE(再导出)).
 
 | | pairs | attribute literals |
 |---|---:|---:|
-| In scope (7 parts, 5 readable files) | 701 | 31,468 |
+| In scope (7 parts, 5 readable files) | 701 | 31,471 |
 | Word save-session noise | 19 | 7,711 |
-| Meaningful universe | 682 | 23,757 |
-| Consulted | 371 | 23,023 |
-| Never consulted | 311 | 734 |
+| Meaningful universe | 682 | 23,760 |
+| Consulted | 396 | 23,092 |
+| Never consulted | 286 | 668 |
 
-**Coverage: 54.4% of distinct pairs, 96.9% of meaningful literals.**
+**Coverage: 58.1% of distinct pairs, 97.2% of meaningful literals.**
 
 The corpus held 5 synthetic .docx files (22 KiB); 0 were
 unreadable as archives and are reported by failure class only, never by name.
@@ -43,7 +43,7 @@ run into `docs/fidelity-universe.json` and rebuilt at 1/100 scale by `scripts/ge
 | universe pairs present in the corpus | 701 / 701 |
 | pairs missing / extra | 0 / 0 |
 | literals: scaling step itself (raw ÷ 100 → rounded, min 1) | 31,085 → 31,321 (+0.76%) |
-| literals: scaled expectation vs actual rebuild | 31,321 vs 31,468 (+0.47%) |
+| literals: scaled expectation vs actual rebuild | 31,321 vs 31,471 (+0.48%) |
 
 **By-pair coverage is comparable with the original run; by-literal coverage is not.** 按对覆盖率与旧账（313 件真件语料）可比；按字面不可比——重建按 count/100 缩放，取整与 max(1,·) 会把稀有对抬起来（见「scaling step itself」那一行），另有少量承重包裹属性（bitmap 链的 r:embed/extent/docPr、numbering 关联的 abstractNumId 等）在包裹处顺带出现；末行是「实测 vs 缩放期望」，与缩放那行基准不同，别混读
 
@@ -53,34 +53,34 @@ run into `docs/fidelity-universe.json` and rebuilt at 1/100 scale by `scripts/ge
 |---|---:|
 | `t|space` | 348 |
 | `instrText|space` | 15 |
-| `noWrap|val` | 13 |
-| `caps|val` | 11 |
 | `shape|gfxdata` | 7 |
-| `abstractNum|restartNumberingAfterBreak` | 4 |
-| `hyperlink|history` | 3 |
-| `bdr|color` | 2 |
-| `bdr|space` | 2 |
-| `bdr|sz` | 2 |
-| `bdr|val` | 2 |
 | `blipFill|rotWithShape` | 2 |
-| `docGrid|charSpace` | 2 |
 | `fill|type` | 2 |
-| `footerReference|id` | 2 |
-| `footerReference|type` | 2 |
 | `gradFill|flip` | 2 |
 | `gradFill|rotWithShape` | 2 |
 | `group|editas` | 2 |
 | `group|gfxdata` | 2 |
 | `group|spt` | 2 |
-| `headerReference|id` | 2 |
-| `headerReference|type` | 2 |
-| `ln|cap` | 2 |
-| `ln|cmpd` | 2 |
-| `shade|val` | 2 |
 | `shape|strokecolor` | 2 |
 | `shape|strokeweight` | 2 |
 | `sizeRelH|relativeFrom` | 2 |
 | `sizeRelV|relativeFrom` | 2 |
+| `wrapSquare|wrapText` | 2 |
+| `xfrm|flipH` | 2 |
+| `xfrm|flipV` | 2 |
+| `xfrm|rot` | 2 |
+| `aliases|val` | 1 |
+| `alpha|val` | 1 |
+| `alphaOff|val` | 1 |
+| `appearance|val` | 1 |
+| `background|color` | 1 |
+| `background|themeColor` | 1 |
+| `background|themeShade` | 1 |
+| `calcOnExit|val` | 1 |
+| `chExt|cx` | 1 |
+| `chExt|cy` | 1 |
+| `chOff|x` | 1 |
+| `chOff|y` | 1 |
 
 ## Which elements the missing literals sit on
 
@@ -92,20 +92,20 @@ run into `docs/fidelity-universe.json` and rebuilt at 1/100 scale by `scripts/ge
 | `line` | 15 |
 | `cnfStyle` | 13 |
 | `fill` | 13 |
-| `noWrap` | 13 |
 | `reflection` | 13 |
 | `roundrect` | 13 |
 | `shadow` | 13 |
 | `rect` | 12 |
-| `caps` | 11 |
 | `shapetype` | 10 |
-| `bdr` | 8 |
 | `group` | 7 |
 | `path` | 7 |
 | `xfrm` | 6 |
-| `hyperlink` | 5 |
 | `outerShdw` | 5 |
-| `abstractNum` | 4 |
+| `comment` | 4 |
+| `fillToRect` | 4 |
+| `gradFill` | 4 |
+| `imagedata` | 4 |
+| `srcRect` | 4 |
 
 ## Consulted — the work already paid for
 

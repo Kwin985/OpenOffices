@@ -13,7 +13,7 @@
     "files": 5,
     "readable": 5,
     "unreadable": 0,
-    "bytes": 22018,
+    "bytes": 22068,
     "scopeParts": [
       "word/document.xml",
       "word/styles.xml",
@@ -29,19 +29,19 @@
   },
   "totals": {
     "distinctPairs": 701,
-    "occurrences": 31468,
+    "occurrences": 31471,
     "noisePairs": 19,
     "noiseOccurrences": 7711,
     "meaningfulPairs": 682,
-    "meaningfulOccurrences": 23757
+    "meaningfulOccurrences": 23760
   },
   "coverage": {
-    "byPair": 0.5439882697947214,
-    "byOccurrence": 0.9691038430778297,
-    "consultedPairs": 371,
-    "consultedOccurrences": 23023,
-    "neverConsultedPairs": 311,
-    "neverConsultedOccurrences": 734
+    "byPair": 0.5806451612903226,
+    "byOccurrence": 0.9718855218855219,
+    "consultedPairs": 396,
+    "consultedOccurrences": 23092,
+    "neverConsultedPairs": 286,
+    "neverConsultedOccurrences": 668
   },
   "consulted": [
     [
@@ -657,6 +657,10 @@
       13
     ],
     [
+      "noWrap|val",
+      13
+    ],
+    [
       "pageBreakBefore|val",
       13
     ],
@@ -693,11 +697,19 @@
       11
     ],
     [
+      "caps|val",
+      11
+    ],
+    [
       "fill|on",
       11
     ],
     [
       "imagedata|title",
+      11
+    ],
+    [
+      "num|numId",
       11
     ],
     [
@@ -713,15 +725,15 @@
       11
     ],
     [
+      "abstractNumId|val",
+      10
+    ],
+    [
       "fill|focussize",
       10
     ],
     [
       "keepLines|val",
-      10
-    ],
-    [
-      "num|numId",
       10
     ],
     [
@@ -739,10 +751,6 @@
     [
       "vMerge|val",
       10
-    ],
-    [
-      "abstractNumId|val",
-      9
     ],
     [
       "bottom|themeColor",
@@ -1017,6 +1025,10 @@
       5
     ],
     [
+      "abstractNum|restartNumberingAfterBreak",
+      4
+    ],
+    [
       "bodyPr|wrap",
       4
     ],
@@ -1169,6 +1181,10 @@
       3
     ],
     [
+      "hyperlink|history",
+      3
+    ],
+    [
       "inline|anchorId",
       3
     ],
@@ -1233,6 +1249,22 @@
       3
     ],
     [
+      "bdr|color",
+      2
+    ],
+    [
+      "bdr|space",
+      2
+    ],
+    [
+      "bdr|sz",
+      2
+    ],
+    [
+      "bdr|val",
+      2
+    ],
+    [
       "cNvSpPr|txBox",
       2
     ],
@@ -1241,7 +1273,51 @@
       2
     ],
     [
+      "docGrid|charSpace",
+      2
+    ],
+    [
+      "footerReference|id",
+      2
+    ],
+    [
+      "footerReference|type",
+      2
+    ],
+    [
       "group|spid",
+      2
+    ],
+    [
+      "headerReference|id",
+      2
+    ],
+    [
+      "headerReference|type",
+      2
+    ],
+    [
+      "ln|cap",
+      2
+    ],
+    [
+      "ln|cmpd",
+      2
+    ],
+    [
+      "lvlOverride|ilvl",
+      2
+    ],
+    [
+      "shade|val",
+      2
+    ],
+    [
+      "tblStyleColBandSize|val",
+      2
+    ],
+    [
+      "tblStyleRowBandSize|val",
       2
     ],
     [
@@ -1401,6 +1477,10 @@
       1
     ],
     [
+      "gs|pos",
+      1
+    ],
+    [
       "hyperlink|id",
       1
     ],
@@ -1445,7 +1525,19 @@
       1
     ],
     [
-      "lvlOverride|ilvl",
+      "lum|bright",
+      1
+    ],
+    [
+      "lum|contrast",
+      1
+    ],
+    [
+      "num|durableId",
+      1
+    ],
+    [
+      "numbering|Ignorable",
       1
     ],
     [
@@ -1474,6 +1566,14 @@
     ],
     [
       "smallCaps|val",
+      1
+    ],
+    [
+      "startOverride|val",
+      1
+    ],
+    [
+      "styles|Ignorable",
       1
     ],
     [
@@ -1539,59 +1639,15 @@
       15
     ],
     [
-      "noWrap|val",
-      13
-    ],
-    [
-      "caps|val",
-      11
-    ],
-    [
       "shape|gfxdata",
       7
-    ],
-    [
-      "abstractNum|restartNumberingAfterBreak",
-      4
-    ],
-    [
-      "hyperlink|history",
-      3
-    ],
-    [
-      "bdr|color",
-      2
-    ],
-    [
-      "bdr|space",
-      2
-    ],
-    [
-      "bdr|sz",
-      2
-    ],
-    [
-      "bdr|val",
-      2
     ],
     [
       "blipFill|rotWithShape",
       2
     ],
     [
-      "docGrid|charSpace",
-      2
-    ],
-    [
       "fill|type",
-      2
-    ],
-    [
-      "footerReference|id",
-      2
-    ],
-    [
-      "footerReference|type",
       2
     ],
     [
@@ -1615,26 +1671,6 @@
       2
     ],
     [
-      "headerReference|id",
-      2
-    ],
-    [
-      "headerReference|type",
-      2
-    ],
-    [
-      "ln|cap",
-      2
-    ],
-    [
-      "ln|cmpd",
-      2
-    ],
-    [
-      "shade|val",
-      2
-    ],
-    [
       "shape|strokecolor",
       2
     ],
@@ -1648,14 +1684,6 @@
     ],
     [
       "sizeRelV|relativeFrom",
-      2
-    ],
-    [
-      "tblStyleColBandSize|val",
-      2
-    ],
-    [
-      "tblStyleRowBandSize|val",
       2
     ],
     [
@@ -1947,10 +1975,6 @@
       1
     ],
     [
-      "gs|pos",
-      1
-    ],
-    [
       "h|position",
       1
     ],
@@ -2135,14 +2159,6 @@
       1
     ],
     [
-      "lum|bright",
-      1
-    ],
-    [
-      "lum|contrast",
-      1
-    ],
-    [
       "lvlPicBulletId|val",
       1
     ],
@@ -2152,14 +2168,6 @@
     ],
     [
       "maxLength|val",
-      1
-    ],
-    [
-      "num|durableId",
-      1
-    ],
-    [
-      "numbering|Ignorable",
       1
     ],
     [
@@ -2631,10 +2639,6 @@
       1
     ],
     [
-      "startOverride|val",
-      1
-    ],
-    [
       "stroke|dashstyle",
       1
     ],
@@ -2652,10 +2656,6 @@
     ],
     [
       "styleLink|val",
-      1
-    ],
-    [
-      "styles|Ignorable",
       1
     ],
     [
@@ -2879,10 +2879,6 @@
       13
     ],
     [
-      "noWrap",
-      13
-    ],
-    [
       "reflection",
       13
     ],
@@ -2899,16 +2895,8 @@
       12
     ],
     [
-      "caps",
-      11
-    ],
-    [
       "shapetype",
       10
-    ],
-    [
-      "bdr",
-      8
     ],
     [
       "group",
@@ -2923,16 +2911,8 @@
       6
     ],
     [
-      "hyperlink",
-      5
-    ],
-    [
       "outerShdw",
       5
-    ],
-    [
-      "abstractNum",
-      4
     ],
     [
       "comment",
@@ -2943,23 +2923,11 @@
       4
     ],
     [
-      "footerReference",
-      4
-    ],
-    [
       "gradFill",
       4
     ],
     [
-      "headerReference",
-      4
-    ],
-    [
       "imagedata",
-      4
-    ],
-    [
-      "ln",
       4
     ],
     [
@@ -3035,11 +3003,11 @@
       2
     ],
     [
-      "docGrid",
+      "fillRect",
       2
     ],
     [
-      "fillRect",
+      "hyperlink",
       2
     ],
     [
@@ -3059,19 +3027,11 @@
       2
     ],
     [
-      "lum",
-      2
-    ],
-    [
       "object",
       2
     ],
     [
       "pgNumType",
-      2
-    ],
-    [
-      "shade",
       2
     ],
     [
@@ -3096,14 +3056,6 @@
     ],
     [
       "tblCellSpacing",
-      2
-    ],
-    [
-      "tblStyleColBandSize",
-      2
-    ],
-    [
-      "tblStyleRowBandSize",
       2
     ],
     [
@@ -3215,10 +3167,6 @@
       1
     ],
     [
-      "gs",
-      1
-    ],
-    [
       "hiddenLine",
       1
     ],
@@ -3260,14 +3208,6 @@
     ],
     [
       "maxLength",
-      1
-    ],
-    [
-      "num",
-      1
-    ],
-    [
-      "numbering",
       1
     ],
     [
@@ -3319,15 +3259,7 @@
       1
     ],
     [
-      "startOverride",
-      1
-    ],
-    [
       "styleLink",
-      1
-    ],
-    [
-      "styles",
       1
     ],
     [
@@ -3362,7 +3294,7 @@
   "partTotals": {
     "word/document.xml": 24931,
     "word/styles.xml": 4249,
-    "word/numbering.xml": 2265,
+    "word/numbering.xml": 2268,
     "word/footnotes.xml": 7,
     "word/endnotes.xml": 7,
     "word/comments.xml": 5,
@@ -3382,8 +3314,8 @@
     "scaledLiteralSum": 31321,
     "rawScaledSum": 31085.229999999945,
     "scaleInflationPct": 0.7584631028950239,
-    "actualLiteralSum": 31468,
-    "literalDriftPct": 0.46933367389292435,
+    "actualLiteralSum": 31471,
+    "literalDriftPct": 0.47891191213562667,
     "comparableByPair": true,
     "comparableByOccurrence": false,
     "note": "按对覆盖率与旧账（313 件真件语料）可比；按字面不可比——重建按 count/100 缩放，取整与 max(1,·) 会把稀有对抬起来（见「scaling step itself」那一行），另有少量承重包裹属性（bitmap 链的 r:embed/extent/docPr、numbering 关联的 abstractNumId 等）在包裹处顺带出现；末行是「实测 vs 缩放期望」，与缩放那行基准不同，别混读"

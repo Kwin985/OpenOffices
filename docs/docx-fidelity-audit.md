@@ -546,3 +546,65 @@ v0.142 的键名「修正」看似让 selftest 转绿，实则把错误焊死了
 | `shape\|gfxdata` | 7 | **裁定不收**（v0.149）：Word 缓存的图元字节，见上 |
 | `lum\|bright/contrast` 等色彩调制零头 | 3×2 | schemeClr 子元素，与 lumMod/lumOff 同族只读记账 |
 | `gs\|pos` | 35 | 渐变色标位置（a:gs），与 lumOff 同轮漏收的零星 |
+
+## v0.152（D11）——字符/单元格/编号/节级读写族 + DrawingML 色彩零头
+
+**25 对上账、语料字面 66（宇宙字面 6,199）**：按对 54.4% → 58.1%、按字面 96.9% → 97.2%；
+consulted 371 → 396，neverConsulted 311 → 286。语料分母 31,468 → 31,471（+3：新开的
+lvlOverride 嵌套上下文块）。本轮是 D10 顺延清单里点名的「补丁族专题」：caps/bdr/noWrap/
+bandSize 四族包里没槽或半槽，全部落地。
+
+### 实现要点
+
+1. **caps/bdr 走原生槽（读写）**：两枚都是**类型面全暴露**的（IRunOptions.allCaps 与
+   IRunOptions.border，dist/index.d.ts 逐枚在）——与 ics/bcs/smallCaps 那批「实现着但
+   类型没暴露」的库外槽不同。caps 屏上 text-transform: uppercase，bdr 屏上 CSS border
+   （sz 八分之一磅、space 磅都要换算；space 收 0——显式 0 与缺省同结果但源件写了就
+   原样往返，sz 不行——零宽边框不是合法档）。
+2. **noWrap 与 bandSize 走 post-pack（读写）**：包里两族都没槽。`patchTcPr` 按 `<w:tc>`
+   出现序插 `<w:noWrap/>`（计数闸门同 pprExtras：枚数对不上整笔放弃）；两枚 bandSize 与
+   tblLook 同住 tblPr，扩了 `patchTblLook` 一次解压/重压办三族（tblLook + 两枚
+   bandSize，各自按 tblPr 出现序对位）。
+3. **restartNumberingAfterBreak 是 w15 扩展属性（读写，本轮最曲折的一枚）**：
+   - 读手按 **local name** 收（`attrL`）——OOXML 里它定义在 w15 命名空间
+     （CT_AbstractNum 的扩展属性），Word 与 docx 库发的都是 `w15:` 前缀，语料里另有
+     w: 形态，两种都认。
+   - 写手**保留原前缀**换值（新增 `setTagAttrKeepPrefix`）——照 w: 全名替换会写出一枚
+     不在 schema 上的属性（判损坏件风险）。探针第一版把断言写成子元素形态
+     （`<w:restartNumberingAfterBreak w:val/>`），被包的真实输出纠正：docx 库对每个
+     abstractNum 恒发这枚属性，且是开标签上的属性不是子元素。
+   - **v0.150 的 tentative/tplc 不受影响**：那两枚在 w 命名空间的 schema 里有正经
+     定义（CT_Lvl 的属性），替换成 w: 形态是合法的；restartNumberingAfterBreak 在
+     w: 里没有定义，才需要保前缀。同一个 setTagAttr 两种命运，分界在 schema。
+4. **headerReference/footerReference 只读记账**：id 是关系 id（写侧发包自己重编——照抄
+   会把关系指到别人身上），type 我们只发 default 一档（first/even 读回来也没处写，
+   PM 没有「首页另版页眉」这个节点）。与浮动锚点四枚同界。
+5. **语料结构修正白捡一对**：`startOverride|val` 从 v0.142 起读手就写着
+   （`w:num/w:lvlOverride/w:startOverride`），但语料把它与 lvlOverride **平级**摆——
+   读手在 lvlOverride 里找它，平级那枚永远找不到，86 字面一直挂 NC。挪进正确的嵌套
+   上下文后直接上账，读手代码一行没动。**教训：neverConsulted 不全是「读手没查」，
+   也可能是「查问路径对但语料结构假」**——与 v0.150 的 multiLevelType（读手查错名字）
+   正好一对镜像。
+
+### 过程中的坑
+
+1. **探针第一版三条断言错在「属性 vs 子元素」上**：restartNumberingAfterBreak 我按
+   「CT_AbstractNum 的三枚身份都是子元素（nsid/multiLevelType/tmpl）」的思维定势写了
+   子元素断言，实际它是开标签上的**属性**（且 w15: 前缀）。查包的真实输出才纠正。
+   **v0.150 刚踩过 multiLevelType 的反面（以为属性其实是子元素），这轮踩了同族硬币的
+   另一面——思维定势比无知更难防。**
+2. **bdr 的 space=0 被自己的条件吞了**：写手 `/^\d+$/.test(space) && Number(space) > 0`
+   把显式 0 筛掉——包里 createBorderElement 对 undefined 才不写，0 是写的。探针断言
+   four-in-one 才发现少一枚。sz 保持 >0（零宽边框非法），space 收 0。
+3. **README 锚点事故差点第三度重演**：插 v0.152 节时第一次 Edit 把 `## 性能（v0.3）`
+   当锚点但新内容里也含它——改成「v0.151 节尾整段原样吐回 + 新节 + 锚点」的写法，
+   diff 验证纯新增 45 行才罢休。
+
+### 顺延清单（D12）
+
+| 对（族） | 宇宙次数 | 备注 |
+|---|---|---|
+| `instrText\|space` | 1524 | 域指令的 xml:space，与 `t\|space` 同款噪声，倾向裁定不收 |
+| VML 形状壳余量（roundrect/textbox/group/path/shapetype 一族） | 约 2,000 | 纯只读记账、机械但量大——v:shape 七枚之外的老式形状各族，单开一轮扫完 |
+| `t\|space` | 348 | **裁定不查**（v0.143 起），同前 |
+| `shape\|gfxdata` / `group\|gfxdata` / `roundrect\|gfxdata` | 7+163+135 | **裁定不收**（v0.149）：Word 缓存的图元字节 |

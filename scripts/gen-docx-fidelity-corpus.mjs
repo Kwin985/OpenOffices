@@ -288,6 +288,11 @@ const PART_CTX = {
   'n:lvl-rpr': { f: '00-base', part: 'numbering', open: '<w:abstractNum w:abstractNumId="0"><w:lvl w:ilvl="0"><w:rPr>', close: '</w:rPr></w:lvl></w:abstractNum>' },
   'n:num-attrs': { f: '00-base', part: 'numbering', open: '', close: '' },
   'n:num-kids': { f: '00-base', part: 'numbering', open: '<w:num w:numId="1">', close: '</w:num>' },
+  // startOverride 的**正确**承放（v0.152 修）：schema 里它是 w:lvlOverride 的子元素，
+  // 旧版把它与 lvlOverride 平级摆——读手的 num 循环在 lvlOverride 里找 startOverride
+  // （`w:num/w:lvlOverride/w:startOverride`），平级那枚永远找不到，这对一直挂 NC。
+  // w:num 里必须带 abstractNumId：读手那道闸（`if (!id || !aid) continue`）在它后面
+  'n:lvloverride-kids': { f: '00-base', part: 'numbering', open: '<w:num w:numId="1"><w:abstractNumId w:val="0"/><w:lvlOverride w:ilvl="0">', close: '</w:lvlOverride></w:num>' },
   'fn:root': { f: '00-base', part: 'footnotes', root: true, open: `<w:footnotes xmlns:w="${NS.w}" xmlns:mc="${NS.mc}" mc:Ignorable="w14">`, close: '</w:footnotes>' },
   'fn:footnote-attrs': { f: '00-base', part: 'footnotes', open: '', close: '' },
   'fn:footnote': { f: '00-base', part: 'footnotes', open: '<w:footnote w:id="1">', close: '</w:footnote>' },
@@ -310,7 +315,7 @@ const ORDER = {
   '03-drawings': ['d:inline', 'd:wp', 'd:anchor-kids', 'd:pic', 'd:xfrm', 'd:clr', 'd:clr2', 'd:gs', 'd:ln', 'd:fx', 'd:scene', 'd:wps', 'd:bodypr'],
   '04-vml': ['v:pict', 'v:shape-attr', 'v:main', 'v:fill', 'v:stroke', 'v:formulas', 'v:handles', 'v:group', 'v:object', 'v:object-run', 'v:ffdata', 'v:textinput'],
   styles: ['s:latent', 's:style-attrs', 's:style-kids', 's:style-rpr'],
-  numbering: ['n:b0', 'n:abstract-attrs', 'n:abstract-kids', 'n:lvl-attrs', 'n:lvl-kids', 'n:lvl-rpr', 'n:num-attrs', 'n:num-kids'],
+  numbering: ['n:b0', 'n:abstract-attrs', 'n:abstract-kids', 'n:lvl-attrs', 'n:lvl-kids', 'n:lvl-rpr', 'n:num-attrs', 'n:num-kids', 'n:lvloverride-kids'],
   footnotes: ['fn:footnote-attrs', 'fn:footnote'],
   endnotes: ['en:endnote-attrs', 'en:endnote'],
   comments: ['cm:comment-attrs', 'cm:comment'],
@@ -646,7 +651,7 @@ const PLACE = {
   suff: [{ c: 'n:lvl-kids', av: { val: 'nothing' } }],
   abstractNumId: [{ c: 'n:num-kids', av: { val: '0' } }],
   lvlOverride: [{ c: 'n:num-kids', av: { ilvl: '0' } }],
-  startOverride: [{ c: 'n:num-kids', av: { val: '1' } }],
+  startOverride: [{ c: 'n:lvloverride-kids', av: { val: '1' } }],
   // ── 脚注/尾注/批注（00-base，各自部件）──
   // commentsExtended 的根只声明 w15/mc，属性也带 w15: 前缀（真实格式如此），
   // 早先默认 w: 前缀会打出未声明前缀，整个部件解析失败
