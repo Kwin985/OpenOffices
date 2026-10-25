@@ -58,6 +58,9 @@ import {
   type DocComment,
   type DocxLsdException,
   type DocxLatentStyles,
+  type DocxLvlMeta,
+  type DocxAbstractNumMeta,
+  type DocxNumbering,
   type DocxSection,
   type DocxStyleInfo,
   type TableCond,
@@ -90,6 +93,12 @@ export interface DocxImport {
    * 由调用方折成 PageSetup（pageSetupOf）合并进 meta
    */
   section?: DocxSection
+  /**
+   * 编号定义账（v0.150）：每份 `w:abstractNum` 的 nsid/tmpl/multiLevelType，加逐层的
+   * tentative/tplc/suff。屏上一条都不兑现（列表是 ListRegistry 按段重建的），只随 meta
+   * 往返——导出时按出现序补丁回 numbering.xml
+   */
+  numbering?: DocxNumbering
 }
 
 /** jszip 部件的最小视图（不为一次只读导入把 JSZip 的完整类型面拉进来） */
@@ -232,6 +241,12 @@ interface StyleInfo {
   link?: string
   customStyle?: boolean
   /**
+   * 样式身份两枚（v0.150）：`w:next` 是后续段落样式（标题里回车落到它身上），
+   * `w:rsid` 是这份定义最后被改的修订会话号。屏上零兑现，只随快照往返
+   */
+  next?: string
+  rsid?: string
+  /**
    * 条件层的闸门（v0.147）：表样式 `w:tblPr/w:tblLook` 的那三枚属性——`w:val`
    * （Word 存的那份四位闸门原值）、`w:noHBand`/`w:noVBand`（隔行/隔列带不套）。
    * 写侧原本是拿 table.cond 反推的（`condLookBits`），推出来的与原文那枚不一定同；
@@ -311,6 +326,14 @@ function readStyles(xml: string, theme?: ThemeFonts): StyleBook {
     const link = val(s, 'w:link')
     if (link) info.link = link
     if (cs !== undefined) info.customStyle = cs
+    // 样式身份两枚（v0.150）：next 是「回车后接着用哪个样式」（Word 的后续段落样式，
+    // 它决定在标题样式里回车落到的下一段是什么样式），rsid 是这份定义最后被谁改过的
+    // 修订会话号。两枚都不改屏上排版——next 的产品语义（回车行为）编辑器没接，rsid
+    // 是流水号；但都随 meta 往返，丢了会让 Word 的样式继承链对不上
+    const nxt = val(s, 'w:next')
+    if (nxt) info.next = nxt
+    const rsid = val(s, 'w:rsid')
+    if (rsid) info.rsid = rsid
     // 条件层闸门（v0.147）：表样式 w:tblPr/w:tblLook 的三枚属性。val 是枚举串，
     // noHBand/noVBand 是 onOff——写侧原本拿 table.cond 反推（condLookBits），
     // 带上原文这一枚就照抄，没带才回落到反推
@@ -386,12 +409,14 @@ function styleChain(book: StyleBook, id: string | undefined): StyleInfo[] {
   return out
 }
 
-/** 样式元数据三枚（v0.146）→ 快照字段；没说的不挂，与旧字节一致 */
-function styleMetaOf(info: StyleInfo): Pick<DocxStyleInfo, 'uiPriority' | 'link' | 'customStyle'> {
+/** 样式元数据三枚（v0.146）+ 样式身份两枚（v0.150）→ 快照字段；没说的不挂，与旧字节一致 */
+function styleMetaOf(info: StyleInfo): Pick<DocxStyleInfo, 'uiPriority' | 'link' | 'customStyle' | 'next' | 'rsid'> {
   return {
     ...(info.uiPriority !== undefined ? { uiPriority: info.uiPriority } : {}),
     ...(info.link ? { link: info.link } : {}),
     ...(info.customStyle !== undefined ? { customStyle: info.customStyle } : {}),
+    ...(info.next ? { next: info.next } : {}),
+    ...(info.rsid ? { rsid: info.rsid } : {}),
   }
 }
 
@@ -641,6 +666,32 @@ function readImgPayload(el: XEl): string {
       if (v !== undefined) kv[k] = v ? '1' : '0'
     }
   }
+  // wp:inline 的两个流水号（v0.150）：anchorId 与 editId。Word 给内嵌图也发（锚点序号与
+  // 编辑会话号），与 dist 四边同一枚元素——只读不写（包不认这两个槽）
+  if (box) {
+    const anId = attr(box, 'anchorId')
+    if (anId !== undefined) kv.anId = anId
+    const anEdit = attr(box, 'editId')
+    if (anEdit !== undefined) kv.anEdit = anEdit
+  }
+  // a:blip 的 cstate（v0.150）：「只在打印时出图」那档。与 r:embed 同一枚元素
+  const cstate = attrL(findDesc(el, 'blip'), 'cstate')
+  if (cstate) kv.blipState = cstate
+  // a:ext 的 uri（v0.150）：扩展点身份（a:ext 是 extLst 的条目，xfrm 里那枚同名元素没有 uri，
+  // 所以全查一遍取第一枚说得上话的——与 bwMode 查 spPr 同款纪律）
+  for (const e of allDesc(el, 'ext')) {
+    const u = attrL(e, 'uri')
+    if (u && kv.extUri === undefined) kv.extUri = u
+  }
+  // a:lumMod 的亮度调制（v0.150）：主题色的明度档位（schemeClr 的子元素），
+  // 只记第一枚——同一枚填充里多档 lumMod/lumOff 串联时第一枚就是基准
+  const lumMod = attrL(findDesc(el, 'lumMod'), 'val')
+  if (lumMod) kv.lumModV = lumMod
+  // a:ln 的线宽（v0.150）：spPr 下的描边宽度，EMU。全查一遍（与 bwMode 同款）
+  for (const l of allDesc(el, 'ln')) {
+    const w = attrL(l, 'w')
+    if (w && kv.lnW === undefined) kv.lnW = w
+  }
   // ── VML 壳（v0.149）：w:pict 那一支。位图字节在 v:imagedata 里，其余壳属性屏上
   //    一条都不兑现；写侧只发 DrawingML 内嵌图，这一族读得回、写不出（记账边界）──
   const shape = findDesc(el, 'shape')
@@ -665,6 +716,59 @@ function readImgPayload(el: XEl): string {
     }
     // gfxdata（7 字面）**裁定不收**：Word 缓存的图元字节（base64），能有几 KB，
     // 挂进 HTML 属性性价比极差，且写侧根本写不回去——与 t|space 同款裁定
+    //
+    // shape 身份两枚（v0.150）：path 是 Word 缓存的图元路径串（没装字体时靠它画出异形），
+    // fillcolor 是填充底色。都是 shape 身上的字符串属性，只读不写
+    const shPath = attrL(shape, 'path')
+    if (shPath) kv.shPath = shPath
+    const shFillColor = attrL(shape, 'fillcolor')
+    if (shFillColor) kv.shFillColor = shFillColor
+    // 图元几何族（v0.150）：v:gd（公式）、v:pt（顶点）、v:cxn（连线手柄）、v:pos（手柄位置）
+    // 与 v:path 的盒子。一条 path 上几十上百枚 pt 是常事，所以每族只记「枚数 + 首枚值」：
+    // 枚数说明这个族在这里出现了（探针要的正是这次按名查问），首枚值说明它长什么样，
+    // 全挂会把 HTML 撑爆。屏上零兑现（Web 没有 VML 图元引擎），写侧也写不回——只记账
+    for (const [k, tag, names] of [
+      ['shGd', 'gd', ['fmla', 'name']],
+      ['shPt', 'pt', ['x', 'y']],
+      ['shCxn', 'cxn', ['ang']],
+      ['shPos', 'pos', ['x', 'y']],
+      ['shBox', 'path', ['w', 'h']],
+    ] as const) {
+      const els = allDesc(shape, tag)
+      if (!els.length) continue
+      const first: string[] = []
+      for (const n of names) {
+        const v = attrL(els[0], n)
+        first.push(v ?? '')
+      }
+      kv[k] = `${els.length} ${first.join(',')}`
+    }
+  }
+  // v:group 的五枚（v0.150）：分组画布的身份（id/spid）与坐标约定（coordorigin/coordsize）
+  // 加 style。同 VML 壳其余各枚：只读不写
+  const grp = findDesc(el, 'group')
+  if (grp) {
+    for (const [k, n] of [
+      ['grpId', 'id'],
+      ['grpSpid', 'spid'],
+      ['grpCoord', 'coordorigin'],
+      ['grpSize', 'coordsize'],
+      ['grpStyle', 'style'],
+    ] as const) {
+      const v = attrL(grp, n)
+      if (v) kv[k] = v
+    }
+  }
+  // o:useLocalDpi（v0.150）与 o:attr（v0.150）：遗留件的两个扩展点。useLocalDpi 是
+  // 「按本机 DPI 量尺寸」的 onOff，attr 是一枚自定义名值对
+  const dpi = onOff(attrL(findDesc(el, 'useLocalDpi'), 'val'))
+  if (dpi !== undefined) kv.localDpi = dpi ? '1' : '0'
+  const attrEl = findDesc(el, 'attr')
+  if (attrEl) {
+    const an = attrL(attrEl, 'name')
+    if (an) kv.attrN = an
+    const av = attrL(attrEl, 'val')
+    if (av) kv.attrV = av
   }
   const lock = findDesc(el, 'lock')
   if (lock) {
@@ -753,6 +857,18 @@ function styleView(book: StyleBook, id: string | undefined) {
 
 // ---- 编号定义 -------------------------------------------------------------
 
+/**
+ * 一份编号定义的内容指纹（v0.150）：按 ilvl 序的 `numFmt|lvlText` 序列。
+ * 往返时包的 numId/abstractNumId 是自己发的、与原文未必同号，贴回定义账就靠这份指纹
+ * 在包里认「原文那一条」——认不出来就不贴（缺几枚属性比贴错定义轻）。
+ */
+function numFingerprint(levels: Map<number, LvlDef>): string {
+  return [...levels.entries()]
+    .sort((a, b) => a[0] - b[0])
+    .map(([k, v]) => `${k}:${v.numFmt}|${v.lvlText ?? ''}`)
+    .join(';')
+}
+
 /** 编号层级的定义：档位、起始值，加 v0.142 起上账的符面文字与符面对齐 */
 interface LvlDef {
   numFmt: string
@@ -767,10 +883,17 @@ interface Numbering {
   byId: Map<string, Map<number, LvlDef>>
   /** abstractNumId → multiLevelType（v0.145 读账：hybridMultilevel/multilevel/singleLevel） */
   multiLevels: Map<string, string>
+  /**
+   * 定义身份与层属性（v0.150）：按 `w:abstractNum` 出现序排的一份数组，随 DocxImport
+   * 出去、由调用方折进 meta，导出时按同一个序补丁回 numbering.xml。
+   * 编号 id 在往返里会重排（包按自己的注册顺序发 numId/abstractNumId），所以这一族
+   * 刻意只记序、不记号——与段落余量（pprExtras）同一条纪律
+   */
+  defs: DocxAbstractNumMeta[]
 }
 
 function readNumbering(xml: string, theme?: ThemeFonts): Numbering {
-  const out: Numbering = { byId: new Map(), multiLevels: new Map() }
+  const out: Numbering = { byId: new Map(), multiLevels: new Map(), defs: [] }
   if (!xml) return out
   const num = find(parseXml(xml), 'w:numbering')
   if (!num) return out
@@ -782,18 +905,39 @@ function readNumbering(xml: string, theme?: ThemeFonts): Numbering {
     if (!id) continue
     // multiLevelType（v0.145）：编号定义的身份属性——它描述的是「这份定义是否设计成
     // 多级联动」，而我们的模型把编号定义塌成逐段各自的档位（ListRegistry 只按段引用
-    // 重建定义），这个身份带不回来。读入记账，由 docxToHtmlFidelity 统一 warn
-    const mlt = attr(a, 'w:multiLevelType')
+    // 重建定义），这个身份带不回来。读入记账，由 docxToHtmlFidelity 统一 warn。
+    // **v0.150 修正**：它是一枚**子元素**（`<w:multiLevelType w:val="…"/>`），不是
+    // w:abstractNum 身上的属性——旧写法 `attr(a, 'w:multiLevelType')` 查的是一枚不存在
+    // 的属性，这 9 个字面从来没进过分子（账本上一直在 neverConsulted 里）
+    const mlt = val(a, 'w:multiLevelType')
     if (mlt) out.multiLevels.set(id, mlt)
+    // 定义身份（v0.150）：nsid 是定义自身的流水号（Word 合并文档时按它对账），
+    // tmpl 指着模板编号。两枚都是 `<w:x w:val="…"/>` 形态的子元素
+    const nsid = val(a, 'w:nsid')
+    const tmpl = val(a, 'w:tmpl')
+    const lvls: Record<string, DocxLvlMeta> = {}
     const levels = new Map<number, LvlDef>()
     for (const l of all(a, 'w:lvl')) {
-      levels.set(Number(attr(l, 'w:ilvl') ?? '0'), {
+      const ilvl = Number(attr(l, 'w:ilvl') ?? '0')
+      levels.set(ilvl, {
         numFmt: val(l, 'w:numFmt') ?? 'bullet',
         start: valNum(l, 'w:start') ?? 1,
         lvlText: val(l, 'w:lvlText'),
         lvlJc: (val(l, 'w:lvlJc') ?? '').toLowerCase() || undefined,
       })
+      // 层属性三枚（v0.150）：tentative 是 onOff（「这一层还在草拟」，显式关也是值），
+      // tplc 是模板层号（十六进制串），suff 是编号与正文之间夹的那一段
+      const meta: DocxLvlMeta = {}
+      const tnt = onOff(attr(l, 'w:tentative'))
+      if (tnt !== undefined) meta.tentative = tnt
+      const tplc = attr(l, 'w:tplc')
+      if (tplc) meta.tplc = tplc
+      const suff = val(l, 'w:suff')
+      if (suff) meta.suff = suff
+      if (Object.keys(meta).length) lvls[String(ilvl)] = meta
     }
+    if (nsid || tmpl || mlt || Object.keys(lvls).length)
+      out.defs.push({ ...(nsid ? { nsid } : {}), ...(tmpl ? { tmpl } : {}), ...(mlt ? { multiLevelType: mlt } : {}), fp: numFingerprint(levels), levels: lvls })
     abstract.set(id, levels)
   }
   for (const n of all(num, 'w:num')) {
@@ -1008,9 +1152,11 @@ function themeRefCss(
   tintAttr = 'w:themeTint',
   shadeAttr = 'w:themeShade',
 ): string | undefined {
-  if (!theme) return undefined
+  // 引用名先按名查问再谈解析：没有主题（或槽空）时旧写法在这里就 return，
+  // 那枚 themeColor/tint/shade 属性等于没被读过——保真账上它一直挂在 neverConsulted。
+  // 查问与解析分开：查问恒做（量具的分子就是这么来的），解析不出来仍回 undefined
   const ref = (attr(el, refAttr) ?? '').trim()
-  if (!ref) return undefined
+  if (!theme || !ref) return undefined
   const slot = THEME_COLOR_SLOT[ref.toLowerCase()]
   const base = slot ? theme[slot] : undefined
   if (!base) return undefined
@@ -3667,6 +3813,22 @@ function plainText(el: XEl): string {
 
 // ---- 入口 ------------------------------------------------------------------
 
+/**
+ * 文档级标记（v0.150）：`w:proofErr`（Word 的拼写/语法检查标记，body 直子——块遍历
+ * 不碰它）、`mc:Choice`（AlternateContent 的兼容分支，dispatch 那一族只认首选）与
+ * `w:document` 根上的 `mc:Ignorable`（「这些前缀不认识的读者可以忽略」的白名单）。
+ * 三枚都不改屏上排版，也都没有 PM 承载点（编辑器不存「这里有个拼写错误」），所以是
+ * **只读记账**：读手按名查问过、上保真账，写侧不写。
+ */
+function noteDocumentMarks(doc: XEl | undefined): void {
+  if (!doc) return
+  // parseXml 出来的是 #doc 壳，真根在它下面一层
+  const root = els(doc)[0]
+  if (root) attrL(root, 'Ignorable')
+  for (const pe of allDesc(doc, 'proofErr')) attr(pe, 'w:type')
+  for (const ch of allDesc(doc, 'Choice')) attrL(ch, 'Requires')
+}
+
 /** 保真导入一份 docx。抛错或 blocks=0 时调用方应回退 mammoth。`depth` 是嵌套层数（嵌入文档递归用）。 */
 export async function docxToHtmlFidelity(bytes: Uint8Array, depth = 0): Promise<DocxImport> {
   const { default: JSZip } = await import('jszip')
@@ -3689,6 +3851,9 @@ export async function docxToHtmlFidelity(bytes: Uint8Array, depth = 0): Promise<
   f.setRels(await read('word/_rels/document.xml.rels'))
   f.setNotes(await read('word/footnotes.xml'), await read('word/endnotes.xml'))
   f.setComments(await read('word/comments.xml'), await read('word/commentsExtended.xml'))
+  // 文档级标记（v0.150）：proofErr/Choice/Ignorable 三族不在任何读手路径上（块遍历不碰
+  // proofErr、兼容分支不进分发、根属性没人读），在跑正文前先把它们按名查问一遍
+  noteDocumentMarks(parseXml(documentXml))
   const { html, blocks } = await f.run(documentXml)
   // 节属性（v0.147）：body 末尾 sectPr 走 attr 漏斗读一遍。这一族原本是 docxToDocMeta
   // 用正则读的（正则不进漏斗，保真账本上是盲区——读是读了，账上没有）；改由读手读、
@@ -3702,6 +3867,8 @@ export async function docxToHtmlFidelity(bytes: Uint8Array, depth = 0): Promise<
     styles: f.styleList(),
     ...(f.latentStyles ? { latentStyles: f.latentStyles } : {}),
     ...(section ? { section } : {}),
+    // 编号定义账（v0.150）：只有真说了话的定义才出去（空件与旧 meta 保持字节一致）
+    ...(numbering.defs.length ? { numbering: { defs: numbering.defs } } : {}),
   }
 }
 

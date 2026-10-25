@@ -339,6 +339,14 @@ export interface DocxStyleInfo {
   uiPriority?: number
   link?: string
   customStyle?: boolean
+  /**
+   * 样式身份两枚（v0.150）：`w:next/@w:val` 是「回车后接着用哪个样式」（Word 里
+   * 「样式→后续段落样式」那一项），`w:rsid/@w:val` 是这份样式定义最后被谁改过（
+   * 修订会话号）。两枚都不改屏上排版；rsid 是流水号、屏上零语义，但它在真件里的
+   * 字面量不小，且丢了会让 Word 的「合并文档」对不上账，所以照收照写
+   */
+  next?: string
+  rsid?: string
   run: {
     font?: string
     sizePx?: number
@@ -424,6 +432,48 @@ export interface DocxLatentStyles {
   exceptions: DocxLsdException[]
 }
 
+/**
+ * 编号定义一层的账（v0.150）：`w:numbering/w:abstractNum/w:lvl` 上的三枚。
+ * `tentative` 是「这一层还在草拟」（Word 用它标记模板里没定稿的层，onOff），
+ * `tplc` 是模板层号（十六进制串，与模板里的层对位），`suff` 是编号与正文之间
+ * 夹的那一段（tab/space/nothing，`w:suff/@w:val`）。
+ * 三枚都不改屏上编号——屏上那串是 ListRegistry 按段重建的，与定义层不是同一棵树
+ */
+export interface DocxLvlMeta {
+  tentative?: boolean
+  tplc?: string
+  suff?: string
+}
+
+/**
+ * 编号定义一份的身份（v0.150）：`nsid` 是定义自身的流水号（Word 靠它认「这两份
+ * 定义是同一份」，合并文档时对账用），`tmpl` 指着模板编号，`multiLevelType` 说
+ * 这份定义是不是设计成多级联动（hybridMultilevel/multilevel/singleLevel）。
+ * 与 DocxLvlMeta 同一条纪律：只往返，屏上不兑现
+ */
+export interface DocxAbstractNumMeta {
+  nsid?: string
+  tmpl?: string
+  multiLevelType?: string
+  /**
+   * 内容指纹（v0.150）：按 ilvl 序的 `numFmt|lvlText` 序列。包的编号 id 是自己发的
+   * （与原文未必同号），贴回时就靠这份指纹把「原文那一条定义」在包里认出来——
+   * 认不出来的不贴（宁缺毋滥），见 patchNumberingXml
+   */
+  fp: string
+  /** ilvl（字符串键，JSON 落地后没有数字键）→ 那一层的三枚 */
+  levels: Record<string, DocxLvlMeta>
+}
+
+/**
+ * 编号定义表（v0.150）：按 `w:abstractNum` 在 numbering.xml 里的出现序排的一份数组。
+ * 出包后由 patchNumberingXml 按同一个序贴回去——包的编号 id 与原文未必同号，
+ * 所以这里刻意不存 numId/abstractNumId，只存序（与段落余量那笔同一路数）
+ */
+export interface DocxNumbering {
+  defs: DocxAbstractNumMeta[]
+}
+
 // 页眉页脚设置 + 批注列表 + 页面设置：随 .odoc meta 存储，导出写入 OOXML
 export interface DocMeta {
   headerText?: string
@@ -446,6 +496,11 @@ export interface DocMeta {
    * 屏上不兑现，只随 meta 持久化、导出时补丁回 styles.xml；ODT 没有这一族，odt 导入不设置
    */
   latentStyles?: DocxLatentStyles
+  /**
+   * 编号定义账（v0.150）：nsid/tmpl/multiLevelType 与逐层的 tentative/tplc/suff。
+   * 屏上不兑现，随 meta 持久化、导出时补丁回 numbering.xml；ODT 没有这一族，odt 导入不设置
+   */
+  numbering?: DocxNumbering
 }
 
 export async function docxToHtml(bytes: Uint8Array): Promise<string> {
@@ -2186,36 +2241,52 @@ export async function prosemirrorToDocxBytes(json: PMNode, meta?: DocMeta): Prom
   // 潜在样式与 customStyle（v0.146）：两样包都没有槽（latentStyles 整族没有 API，
   // customStyle 被 StyleForParagraph 丢掉——它只把 type/styleId 交给 StyleAttributes），
   // 与 w:tblLook 同路数打包后回头补；表样式的 customStyle 走 tableStyleXml 原始 XML，
-  // 这里只补段落/字符两桶
-  const custom = new Map<string, string>()
+  // 这里只补段落/字符两桶。
+  // v0.150：同一路数再带上样式身份两枚——next（后续段落样式）与 rsid（修订会话号），
+  // 一样是包不发的槽，按 styleId 逐枚补
+  const props = new Map<string, { custom?: string; next?: string; rsid?: string }>()
   for (const s of meta?.styles ?? []) {
-    if (s.customStyle !== undefined && s.kind !== 'table') custom.set(s.id, s.customStyle ? '1' : '0')
+    const p: { custom?: string; next?: string; rsid?: string } = {}
+    if (s.customStyle !== undefined && s.kind !== 'table') p.custom = s.customStyle ? '1' : '0'
+    if (s.next) p.next = s.next
+    if (s.rsid) p.rsid = s.rsid
+    if (Object.keys(p).length) props.set(s.id, p)
   }
   const latent = meta?.latentStyles
+  // 编号定义账（v0.150）：按 w:abstractNum 出现序贴回 numbering.xml
+  const numDefs = meta?.numbering?.defs ?? []
   // 段落属性余量（v0.147）：按出现序贴回各自的 <w:pPr>，与上面两笔同一路数
   const withPara = await patchParaProps(out, dt.pprExtras)
   // 图片容器壳（v0.148）：按 <w:drawing> 出现序逐块改值（包发得出壳，只是值硬编码）
   const withImg = await patchImgXml(withPara, dt.imgExtras)
   // 表闸门两张表都要补：样式推出来的（looks）与表自己带的（dt.tblLooks）
   const needTbl = looks.size || dt.tblLooks.some((x) => x)
-  if (custom.size || latent) {
-    const patched = await patchStylesXml(withImg, latent, custom)
-    return needTbl ? await patchTblLook(patched, looks, dt.tblLooks) : patched
+  const withStyles = props.size || latent
+    ? await patchStylesXml(withImg, latent, props)
+    : withImg
+  if (numDefs.length) {
+    const withNum = await patchNumberingXml(withStyles, numDefs)
+    return needTbl ? await patchTblLook(withNum, looks, dt.tblLooks) : withNum
   }
-  return needTbl ? patchTblLook(withImg, looks, dt.tblLooks) : withImg
+  return needTbl ? patchTblLook(withStyles, looks, dt.tblLooks) : withStyles
 }
 
 /**
- * styles.xml 的两笔补丁（v0.146）：潜在样式容器 + 段落/字符样式的 `w:customStyle`。
+ * styles.xml 的补丁（v0.146，v0.150 扩）：潜在样式容器 + 段落/字符样式的三笔——
+ * `w:customStyle`（属性）、`w:next` 与 `w:rsid`（子元素）。
  *
  * latentStyles 按 CT_Stylesheet 的序插在 `</w:docDefaults>` 之后、首个 `<w:style ` 之前
  * （docDefaults → latentStyles → style*，乱序会被 Word 判损坏件）；customStyle 是
- * `w:style` 开标签上的 onOff 属性，按 styleId 找到哪枚补哪枚。两笔共用一次解压/重压
+ * `w:style` 开标签上的 onOff 属性，按 styleId 找到哪枚补哪枚。两笔共用一次解压/重压。
+ *
+ * next/rsid 按 CT_Style 的序列插：next 排在 name/aliases/basedOn 之后、link 之前，
+ * rsid 排在 personal* 之后、pPr 之前（乱序同样会被 Word 判损坏件）。两枚都只有
+ * 「子元素不在场」时才插——在场说明别的工具已经写过，按 styleId 对位即可
  */
 async function patchStylesXml(
   bytes: Uint8Array,
   latent: DocxLatentStyles | undefined,
-  custom: Map<string, string>,
+  props: Map<string, { custom?: string; next?: string; rsid?: string }>,
 ): Promise<Uint8Array> {
   const { default: JSZip } = await import('jszip')
   const zip = await JSZip.loadAsync(bytes)
@@ -2223,13 +2294,28 @@ async function patchStylesXml(
   if (!file) return bytes
   let xml = await file.async('string')
   let touched = false
-  if (custom.size) {
-    xml = xml.replace(/<w:style\b[^>]*>/g, (all) => {
+  if (props.size) {
+    xml = xml.replace(/<w:style\b[^>]*>[\s\S]*?<\/w:style>/g, (all) => {
       const id = /w:styleId="([^"]+)"/.exec(all)?.[1]
-      const v = id ? custom.get(id) : undefined
-      if (v === undefined) return all
+      const p = id ? props.get(id) : undefined
+      if (!p) return all
       touched = true
-      return all.replace(/>$/, ` w:customStyle="${v}">`)
+      let out = all
+      if (p.custom !== undefined) {
+        out = out.replace(/^<w:style\b[^>]*>/, (tag) => tag.replace(/>$/, ` w:customStyle="${p.custom}">`))
+      }
+      // next：CT_Style 序上跟在 name/aliases/basedOn 之后、link 之前
+      if (p.next !== undefined && !/<w:next\b/.test(out)) {
+        out = insertStyleKid(out, `<w:next w:val="${xmlAttr(p.next)}"/>`, ['name', 'aliases', 'basedOn'])
+      }
+      // rsid：序上在 personal* 之后、pPr 之前
+      if (p.rsid !== undefined && !/<w:rsid\b/.test(out)) {
+        out = insertStyleKid(out, `<w:rsid w:val="${xmlAttr(p.rsid)}"/>`, [
+          'name', 'aliases', 'basedOn', 'next', 'link', 'autoRedefine', 'hidden', 'uiPriority',
+          'semiHidden', 'unhideWhenUsed', 'qFormat', 'locked', 'personal', 'personalCompose', 'personalReply',
+        ])
+      }
+      return out
     })
   }
   if (latent) {
@@ -2276,6 +2362,182 @@ function latentStylesXml(ls: DocxLatentStyles): string {
       `/>`
   }
   return `<w:latentStyles${parts.length ? ` ${parts.join(' ')}` : ''}>${inner}</w:latentStyles>`
+}
+
+/**
+ * 一枚 `<w:kid …>` 元素（含自闭合那种）结束的下标；-1 = 块里没有这枚。
+ * 名字不认前缀（w:/w15: 都算），属性值里不会有 '>'，所以从开标签往后找第一个就够。
+ */
+function kidEnd(block: string, kid: string): number {
+  const re = new RegExp(`<[\\w:]*${kid}\\b`)
+  const m = re.exec(block)
+  if (!m) return -1
+  const gt = block.indexOf('>', m.index)
+  return gt < 0 ? -1 : gt + 1
+}
+
+/**
+ * 在 `<w:style>` 块里插一枚子元素：插在 after 列表里**最靠后那枚**的元素之后
+ * （列表按 CT_Style 的 schema 序给），一枚前置子元素都没有时插在开标签之后。
+ * next/rsid 两枚的插入位次靠它落到 schema 序上——乱序写会被 Word 判损坏件。
+ * 包写的子元素常是自闭合（`<w:name w:val="a"/>`），所以锚点认元素结束而不是闭标签。
+ */
+function insertStyleKid(block: string, frag: string, after: string[]): string {
+  let at = -1
+  for (const k of after) {
+    const i = kidEnd(block, k)
+    if (i >= 0) at = Math.max(at, i)
+  }
+  if (at < 0) {
+    const m = /^<w:style\b[^>]*>/.exec(block)
+    if (!m) return block
+    at = m[0].length
+  }
+  return block.slice(0, at) + frag + block.slice(at)
+}
+
+/** 块内第一个出现的 `<w:kid…` 的下标（-1 = 一枚都没有） */
+function firstIndexOf(block: string, kids: string[]): number {
+  let at = -1
+  for (const k of kids) {
+    const i = block.indexOf(`<w:${k}`)
+    if (i >= 0 && (at < 0 || i < at)) at = i
+  }
+  return at
+}
+
+/** 在开标签上设一枚属性：先试替换同名（**按 local name**——包里 tentative 写成 w15:tentative，
+ * 前缀与我们的 w: 不同，照全名匹配会补出第二枚），无则追加。调用方给的 tag 可能不含结尾
+ * '>'（lvl 那枚是切片出来的），所以追加走「有 > 替换、没有就尾接」两条路 */
+function setTagAttr(tag: string, name: string, value: string): string {
+  const bare = name.includes(':') ? name.slice(name.indexOf(':') + 1) : name
+  const frag = ` ${name}="${value}"`
+  const re = new RegExp(`\\s[\\w:]*${bare}="[^"]*"`)
+  if (re.test(tag)) return tag.replace(re, frag)
+  return tag.endsWith('>') ? tag.replace(/>$/, frag) : tag + frag
+}
+
+/**
+ * 编号定义账（v0.150）：nsid/tmpl/multiLevelType 与逐层 tentative/tplc/suff 贴回
+ * numbering.xml。包的编号 id 是自己发的（ListRegistry 按段引用重建，numId/abstractNumId
+ * 与原文未必同号），所以对位走**内容指纹**：每条 def 带一份层的 `numFmt|lvlText` 序列
+ * （读手顺手记下），包里逐枚 abstractNum 抽同一份指纹，按 defs 顺序一对一配。指纹
+ * 对不上就跳过那一条（宁可不补，也绝不补到别的定义上）——默认的两枚 bullet/ordered
+ * 定义两边内容不同（包写 ●/○/■，Word 写自己的），本来就不该乱贴。
+ *
+ * 插入位次都按 schema 序：三枚身份属性排在 name/styleLink/numStyleLink/lvl 之前
+ * （nsid → multiLevelType → tmpl）；suff 排在 lvlText 之前。乱序写会被 Word 判损坏件。
+ */
+async function patchNumberingXml(bytes: Uint8Array, defs: DocxAbstractNumMeta[]): Promise<Uint8Array> {
+  const { default: JSZip } = await import('jszip')
+  const zip = await JSZip.loadAsync(bytes)
+  const file = zip.file('word/numbering.xml')
+  if (!file) return bytes
+  const xml = await file.async('string')
+  const blocks = xml.match(/<w:abstractNum\b[^>]*>[\s\S]*?<\/w:abstractNum>/g)
+  if (!blocks || !blocks.length) return bytes
+  // 包内每枚的层序列（按 ilvl 序的 `numFmt|lvlText`）→ 块下标
+  const fps = blocks.map(numLvlSeqOf)
+  const used = new Set<number>()
+  // defs 顺序 → 命中的块下标（-1 = 没配上）
+  const pick: number[] = []
+  for (const d of defs) {
+    // 包的定义层数常比原文多（内置九层 vs 原文两层），所以比的是「原文每一层在包的开头
+    // 都对得上」——前缀匹配而不是全等
+    const want = d.fp.split(';').filter(Boolean)
+    let at = -1
+    for (let i = 0; i < fps.length; i++) {
+      if (used.has(i)) continue
+      const got = fps[i]
+      if (got.length < want.length) continue
+      if (want.every((w, j) => w === got[j])) { at = i; break }
+    }
+    if (at >= 0) used.add(at)
+    pick.push(at)
+  }
+  if (pick.every((x) => x < 0)) return bytes
+  let out = ''
+  let cursor = 0
+  let touched = false
+  for (let i = 0; i < blocks.length; i++) {
+    const at = xml.indexOf(blocks[i], cursor)
+    if (at < 0) return bytes
+    const di = pick.indexOf(i)
+    const patched = di >= 0 ? patchOneAbstractNum(blocks[i], defs[di]) : blocks[i]
+    if (patched !== blocks[i]) touched = true
+    out += xml.slice(cursor, at) + patched
+    cursor = at + blocks[i].length
+  }
+  out += xml.slice(cursor)
+  if (!touched) return bytes
+  zip.file('word/numbering.xml', out)
+  const buf = (await zip.generateAsync({ type: 'arraybuffer' })) as ArrayBuffer
+  return new Uint8Array(buf)
+}
+
+/** 一枚 `<w:abstractNum>` 块 → 层序列：按 ilvl 序的 `ilvl:numFmt|lvlText` */
+function numLvlSeqOf(block: string): string[] {
+  const lvls = [...block.matchAll(/<w:lvl\b[^>]*\b[\w:]*ilvl="(\d+)"[^>]*>([\s\S]*?)<\/w:lvl>/g)]
+  return lvls.map((m) => {
+    const fmt = /<w:numFmt\b[^>]*\sw:val="([^"]*)"/.exec(m[2])?.[1] ?? ''
+    const text = /<w:lvlText\b[^>]*\sw:val="([^"]*)"/.exec(m[2])?.[1] ?? ''
+    return `${m[1]}:${fmt}|${text}`
+  })
+}
+
+function patchOneAbstractNum(block: string, d: DocxAbstractNumMeta): string {
+  let out = block
+  // 三枚身份属性：CT_AbstractNum 序 nsid → multiLevelType → tmpl → name → …
+  // 前缀一律不认（w: 只是最常见那个，w15: 同族也放过）。插入锚点取「schema 序里排
+  // 在自己之后的第一个在场元素」——包可能自带 multiLevelType（docx 库对所有定义都发），
+  // 那时 nsid 要插到它前面而不是后面，否则整块乱序会被 Word 判损坏件
+  const ORDER = ['nsid', 'multiLevelType', 'tmpl', 'name', 'styleLink', 'numStyleLink', 'lvl']
+  for (const [el, v] of [
+    ['nsid', d.nsid],
+    ['multiLevelType', d.multiLevelType],
+    ['tmpl', d.tmpl],
+  ] as [string, string | undefined][]) {
+    if (v === undefined) continue
+    if (new RegExp(`<[\\w:]*${el}\\b`).test(out)) {
+      out = out.replace(new RegExp(`(<[\\w:]*${el}\\b[^>]*?\\sw:val=")[^"]*(")`), `$1${xmlAttr(v)}$2`)
+    } else {
+      const anchor = firstIndexOf(out, ORDER.slice(ORDER.indexOf(el) + 1))
+      const frag = `<w:${el} w:val="${xmlAttr(v)}"/>`
+      out =
+        anchor >= 0
+          ? out.slice(0, anchor) + frag + out.slice(anchor)
+          : out.replace('</w:abstractNum>', `${frag}</w:abstractNum>`)
+    }
+  }
+  // 逐层三枚：tentative/tplc 是 `<w:lvl>` 开标签上的属性，suff 是子元素
+  for (const [ilvl, m] of Object.entries(d.levels)) {
+    const at = out.search(new RegExp(`<w:lvl\\b[^>]*\\b[\\w:]*ilvl="${ilvl}"[^>]*>`))
+    if (at < 0) continue
+    const end = out.indexOf('</w:lvl>', at)
+    if (end < 0) continue
+    const closeLen = '</w:lvl>'.length
+    const lvl = out.slice(at, end + closeLen)
+    const tagEnd = lvl.indexOf('>')
+    let tag = lvl.slice(0, tagEnd)
+    let inner = lvl.slice(tagEnd)
+    if (m.tentative !== undefined) tag = setTagAttr(tag, 'w:tentative', m.tentative ? '1' : '0')
+    if (m.tplc !== undefined) tag = setTagAttr(tag, 'w:tplc', xmlAttr(m.tplc))
+    if (m.suff !== undefined) {
+      if (/<[\w:]*suff\b/.test(inner)) {
+        inner = inner.replace(/(<[\w:]*suff\b[^>]*?\sw:val=")[^"]*(")/, `$1${xmlAttr(m.suff)}$2`)
+      } else {
+        // CT_Lvl 序：suff 在 lvlText 之前
+        const anchor = firstIndexOf(inner, ['lvlText', 'lvlPicBulletId', 'legacy', 'lvlJc', 'pPr', 'rPr'])
+        const frag = `<w:suff w:val="${xmlAttr(m.suff)}"/>`
+        inner =
+          anchor >= 0
+            ? inner.slice(0, anchor) + frag + inner.slice(anchor)
+            : inner.replace('</w:lvl>', `${frag}</w:lvl>`)
+      }
+    }
+    out = out.slice(0, at) + tag + inner + out.slice(end + closeLen)
+  }
+  return out
 }
 
 /**
@@ -2601,6 +2863,8 @@ async function patchImgXml(bytes: Uint8Array, shells: string[]): Promise<Uint8Ar
     if (Object.keys(pl).length) chunk = retag(chunk, 'a:picLocks', pl)
     // pic:spPr 的黑白模式档位（v0.149）：包恒写 auto，说了才改
     if (kv.bwMode !== undefined) chunk = retag(chunk, 'pic:spPr', { bwMode: kv.bwMode })
+    // a:blip 的 cstate（v0.150）：「打印才出图」那档。包恒写 none，说了才改
+    if (kv.blipState !== undefined) chunk = retag(chunk, 'a:blip', { cstate: kv.blipState })
     if (kv.prst !== undefined) chunk = retag(chunk, 'a:prstGeom', { prst: kv.prst })
     // a:xfrm 的 a:off / a:ext（图形框自身的原点与尺寸）
     const off: Record<string, string> = {}

@@ -471,7 +471,18 @@ export function pprPayload(kv: PprPayload): string {
  * （v:imagedata）、fFocus（v:fill 焦点尺寸）、sJoin/sWeight（v:stroke 连接与粗细）；
  * onOff 档 shFill/shStroke（v:shape 的 filled/stroked）、lkAspect（o:lock 的
  * aspectratio）、fOn（v:fill）、sOn（v:stroke）——VML 走 ST_TrueFalse（t/f），
- * 与 CT_OnOff（1/0）值域不重叠，读手一并收、载荷里统一存 1/0。 */
+ * 与 CT_OnOff（1/0）值域不重叠，读手一并收、载荷里统一存 1/0。
+ * v0.150 增（全部只读不写）：
+ * - DrawingML 零星：blipState（a:blip 的 cstate，「打印才出」那档）、extUri（a:ext 的 uri，
+ *   扩展点身份）、lumModV（a:lumMod 的亮度调制）、lnW（a:ln 的线宽，EMU）；
+ * - wp:inline 的 anId/anEdit（anchorId/editId，Word 给内嵌图也发的两个流水号）；
+ * - VML 形状余量与图元几何：shPath/shFillColor（v:shape 身上的 path 缓存与填充底色）、
+ *   localDpi（o:useLocalDpi）、attrN/attrV（o:attr 扩展点一对）、
+ *   grpId/grpSpid/grpCoord/grpSize/grpStyle（v:group 的五枚，分组画布的身份与坐标）；
+ * - 图元几何族只记「枚数 + 首枚值」：shPt（v:pt 的 x/y）、shGd（v:gd 的 fmla/name）、
+ *   shCxn（v:cxn 的 ang）、shPos（v:pos 的 x/y）、shBox（v:path 的 w/h）。一条 path 上
+ *   几十上百枚 pt 是常事，全挂会把 HTML 撑爆；枚数说明「这个族在这里出现了」，
+ *   首枚值说明「它长什么样」，合起来够保真账用 */
 export const IMG_ATTR = 'data-img'
 
 export type ImgPayload = Record<string, string>
