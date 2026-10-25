@@ -70,6 +70,8 @@ const O = 'urn:schemas-microsoft-com:office:office'
 const MC = 'http://schemas.openxmlformats.org/markup-compatibility/2006'
 // v0.151：形状壳（wps:wsp/cNvSpPr/txbx/bodyPr）
 const WPS = 'http://schemas.microsoft.com/office/word/2010/wordprocessingShape'
+// v0.153：遗留环绕 w10:wrap（Word 97-2003 那一套，与 VML 同住 w:pict 里）
+const W10 = 'urn:schemas-microsoft-com:office:word'
 // 1x1 透明 PNG（图片段的关系与媒体目标）
 const PNG_B64 = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg=='
 // v0.142：clrScheme 与 fontScheme 并列。dk1/lt1 写成 sysClr（真件里 windowText/window
@@ -151,7 +153,9 @@ const FIXTURE_DOC =
   // v0.150：兼容性族再要一个 mc（AlternateContent/Choice 与根上的 mc:Ignorable）
   // v0.151：形状壳要 wps（wsp/cNvSpPr/txbx/bodyPr）
   `<w:document xmlns:w="${W}" xmlns:wp="${WP}" xmlns:a="${A}" xmlns:pic="${PIC}" xmlns:r="${R}"` +
-  ` xmlns:v="${V}" xmlns:o="${O}" xmlns:mc="${MC}" xmlns:wps="${WPS}" mc:Ignorable="w14"><w:body>` +
+  // v0.153：w10 是 w10:wrap（遗留环绕）的命名空间
+  ` xmlns:v="${V}" xmlns:o="${O}" xmlns:mc="${MC}" xmlns:wps="${WPS}" xmlns:w10="${W10}"` +
+  ` mc:Ignorable="w14"><w:body>` +
   `<w:p w:rsidR="00A1" w:rsidRDefault="00A2" w:rsidP="00B3">` +
   `<w:pPr><w:pStyle w:val="ReportHead"/>` +
   `<w:spacing w:before="120" w:after="240" w:line="360" w:lineRule="auto" w:beforeAutospacing="0" w:afterAutospacing="0"/>` +
@@ -257,30 +261,79 @@ const FIXTURE_DOC =
   `<w:p><w:r><w:pict><v:shape id="_x0000_s1026" spid="_x0000_s1027" spt="75" type="#_x0000_t75"` +
   // v0.150：shape 身上的 path 缓存串与 fillcolor（Word 没装字体时靠 path 画异形）
   ` coordsize="1000,1000" filled="t" stroked="f" style="width:100pt;height:50pt"` +
-  ` path="m0,0 l100,0 e" fillcolor="#ffc0cb">` +
-  `<v:imagedata r:id="rId1" o:title="老式图的标题"/>` +
+  ` path="m0,0 l100,0 e" fillcolor="#ffc0cb"` +
+  // v0.153：shape 余量十枚——adj（调节值）、alt（替代文本）、bullet（项目符号图形）、
+  // connectortype（连接线类型）、coordorigin（坐标原点）、ole（OLE 对象开关）、
+  // preferrelative（优先相对坐标），加描边的色与宽
+  ` adj="0.5" alt="老式形状" bullet="f" connectortype="straight" coordorigin="0,0"` +
+  ` ole="f" preferrelative="t" anchorId="A0" strokecolor="#00ff00" strokeweight="2pt">` +
+  // v0.153：imagedata 的裁剪四边——这一族是 VML 壳里唯一落到 CSS 的（clip-path:inset）
+  `<v:imagedata r:id="rId1" o:title="老式图的标题" croptop="0.1" cropright="0.2" cropbottom="5%" cropleft="0"/>` +
   // v0.150：o:useLocalDpi（按本机 DPI 量尺寸）与 o:attr（扩展点名值对）
   `<o:useLocalDpi val="0"/><o:attr name="x" val="y"/>` +
-  `<o:lock aspectratio="f" ext="edit"/>` +
+  // v0.153：o:lock 补 shapetype（锁在哪个模板上）
+  `<o:lock aspectratio="f" ext="edit" shapetype="t"/>` +
   // v0.151：v:stroke 补描边色与斜接限制两枚（与 on/joinstyle/weight 同元素）
-  `<v:fill on="t" focussize="0,0"/><v:stroke on="t" joinstyle="round" weight="1pt" color="#000080" miterlimit="8"/>` +
+  // v0.153：再补 dashstyle（虚线样式）、startarrow/endarrow（箭头）、endcap（端帽）
+  `<v:fill on="t" focussize="0,0" type="gradient" color2="#00ff00" colors="0% #fff,100% #000"` +
+  ` ext="view" focus="50%" focusposition="0,0" id="fill1" opacity="0.5" opacity2="1"` +
+  ` recolor="t" rotate="t" title="填充标题"/>` +
+  `<v:stroke on="t" joinstyle="round" weight="1pt" color="#000080" miterlimit="8"` +
+  ` dashstyle="dash" endarrow="block" endcap="round" startarrow="oval"/>` +
+  // v0.153：渐变取景框（v:fillRect 上下、v:fillToRect 四边）与线性渐变角度（v:lin）
+  `<v:fillRect b="0" t="0"/><v:fillToRect b="0" l="0" r="0" t="0"/><v:lin ang="45" scaled="0"/>` +
+  // v0.153：VML 阴影十三枚——没有颜色可挂（CSS 的 box-shadow 要有色），只按名查问
+  `<v:shadow on="t" val="0.5" algn="tl" blurRad="2pt" dir="2700000" dist="3pt" kx="0" ky="0"` +
+  ` offset="2pt,2pt" opacity="0.5" origin="0,0" sx="1" sy="1"/>` +
+  // v0.153：三维旋转与隐藏线宽
+  `<v:rot lat="0" lon="0" rev="0"/><v:hiddenLine w="1pt"/>` +
+  // v0.153：公式与手柄（v:f 的 eqn、v:h 的坐标与活动范围）
+  `<v:formulas><v:f eqn="sum 0 0 0"/></v:formulas>` +
+  `<v:handles><v:h position="0,0" xrange="0,10" yrange="0,10"/></v:handles>` +
+  // v0.153：遗留环绕（w10:wrap 的四枚）与连线锁
+  `<w10:wrap anchorx="margin" anchory="page" side="left" type="square"/>` +
+  `<o:cxnSpLocks noChangeShapeType="1"/>` +
   // v0.150：图元几何族——v:path 的盒子（w/h）与两枚顶点（v:pt 的 x/y）、
   // v:gd 的公式与名、v:cxn 的连线角、v:pos 的手柄位置。只读记账：
   // 每族只记「枚数 + 首枚值」，全挂会把 HTML 撑爆
   // v0.151：v:path 再带 connectangles/connectlocs 两枚连接几何（真实件里常是空串）
-  `<v:path w="1000" h="1000" connectangles="" connectlocs="">` +
+  // v0.153：v:path 余量六枚——五个「这条路径允许哪种变换」的开关与连接点类型
+  `<v:path w="1000" h="1000" connectangles="" connectlocs="" arrowok="t" connecttype="custom"` +
+  ` extrusionok="f" fillok="f" gradientshapeok="t" textboxrect="0,0,10,10">` +
   `<v:pt x="0" y="0"/><v:pt x="10" y="20"/></v:path>` +
   `<v:gd fmla="sum 0 0 0" name="x1"/><v:cxn ang="0"/><v:pos x="5" y="6"/>` +
   `</v:shape>` +
   // v0.151：v:rect 四边——textbox 老式件的文字盒（与 v:shape 平级），四边常是 0
-  `<v:rect l="0" t="0" r="0" b="0"/>` +
+  // v0.153：补余量十一枚（身份、坐标约定、填充描边三件套与 allowincell）
+  `<v:rect l="0" t="0" r="0" b="0" id="rc1" spid="rc2" spt="1" style="width:10pt"` +
+  ` coordsize="1000,1000" fillcolor="#eeeeee" filled="t" strokecolor="#333333" stroked="f"` +
+  ` strokeweight="0.75pt" allowincell="t"/>` +
+  // v0.153：老式形状壳余下的三族——圆角矩形（arcsize 是圆角弧度）、直线（from/to
+  // 两端点）、形状模板（oned 是单手柄开关，path 是可复用图元）。外加文字盒两枚
+  `<v:roundrect id="rr1" spid="rr2" spt="201" style="width:80pt;height:40pt" coordsize="1000,1000"` +
+  ` arcsize="0.1" fillcolor="#ffff00" filled="t" strokecolor="#ff0000" stroked="t"` +
+  ` strokeweight="1pt" anchorId="A1"/>` +
+  `<v:line id="ln1" spid="ln2" spt="20" style="position:absolute" coordsize="1000,1000"` +
+  ` from="0,0" to="100,100" fillcolor="#0000ff" filled="f" strokecolor="#000080" stroked="t"` +
+  ` strokeweight="2pt" allowincell="f" anchorId="A2"/>` +
+  `<v:shapetype id="_x0000_t202" coordsize="21600,21600" o:spt="202" path="m0,0 l0,21600 e"` +
+  ` filled="f" stroked="t" adj="0" anchorId="A3" oned="t" preferrelative="t"/>` +
+  `<v:textbox inset="2pt,2pt,2pt,2pt" style="mso-fit-shape-to-text:t"/>` +
   `</w:pict></w:r></w:p>` +
   // v0.150：VML 分组画布——v:group 五枚（id/spid/coordorigin/coordsize/style）。
   // gfxdata（图元字节缓存）**裁定不收**：base64  blob 挂 HTML 属性性价比极差，
   // 且写侧写不回——与 t|space 同款裁定，所以夹具里也不放它
+  // v0.153：补 editas（编辑时按什么呈现）与 spt，画布坐标另两只（chExt/chOff）
   `<w:p><w:r><w:pict><v:group id="_x0000_s1025" spid="_x0000_s1026" coordorigin="0,0"` +
-  ` coordsize="1000,1000" style="position:absolute">` +
-  `<v:imagedata r:id="rId1"/></v:group></w:pict></w:r></w:p>` +
+  ` coordsize="1000,1000" style="position:absolute" anchorId="A4" editas="canvas" spt="0">` +
+  `<v:imagedata r:id="rId1"/><v:chExt cx="1000" cy="1000"/><v:chOff x="0" y="0"/>` +
+  `</v:group></w:pict></w:r></w:p>` +
+  // v0.153：嵌入对象那一支（w:object + o:OLEObject）——与 w:drawing 平级、不在 w:pict
+  // 下，所以不进 VML 壳那趟扫描，单列两条：dxaOrig/dyaOrig 是原始尺寸（缇），
+  // DrawAspect/ObjectID/ShapeID 是显示方式与两个身份号（ProgID/Type 已由 embed 路径读）
+  `<w:p><w:r><w:object w:dxaOrig="5486" w:dyaOrig="3200">` +
+  `<o:OLEObject DrawAspect="Content" ObjectID="_1" ShapeID="_x0000_s1027"/>` +
+  `</w:object></w:r></w:p>` +
   // v0.151：wps:wsp 形状壳——文本框那一支。段内没有 a:blip，图片短路链够不着，
   // 只能靠跑正文前的按名查问（noteShapeMarks）上账：a:style 的四枚样式矩阵引用
   // （lnRef/fillRef/effectRef/fontRef 的 idx，各带一枚 schemeClr）、cNvSpPr 的
@@ -693,6 +746,36 @@ const MUST_SEE = [
   'gs|pos',
   'ln|cap',
   'ln|cmpd',
+  // v0.153：VML 形状壳余量（w:pict 那一支，只读记账 + 裁剪四边落到 CSS）
+  'roundrect|id', 'roundrect|spid', 'roundrect|spt', 'roundrect|style', 'roundrect|coordsize',
+  'roundrect|arcsize', 'roundrect|fillcolor', 'roundrect|filled', 'roundrect|strokecolor',
+  'roundrect|stroked', 'roundrect|strokeweight', 'roundrect|anchorId',
+  'line|id', 'line|spid', 'line|spt', 'line|style', 'line|coordsize', 'line|from', 'line|to',
+  'line|fillcolor', 'line|filled', 'line|strokecolor', 'line|stroked', 'line|strokeweight',
+  'line|allowincell', 'line|anchorId',
+  'rect|id', 'rect|spid', 'rect|spt', 'rect|style', 'rect|coordsize', 'rect|fillcolor',
+  'rect|filled', 'rect|strokecolor', 'rect|stroked', 'rect|strokeweight', 'rect|allowincell',
+  'shape|adj', 'shape|alt', 'shape|anchorId', 'shape|bullet', 'shape|connectortype',
+  'shape|coordorigin', 'shape|ole', 'shape|preferrelative', 'shape|strokecolor', 'shape|strokeweight',
+  'shapetype|adj', 'shapetype|anchorId', 'shapetype|coordsize', 'shapetype|filled', 'shapetype|id',
+  'shapetype|oned', 'shapetype|path', 'shapetype|preferrelative', 'shapetype|spt', 'shapetype|stroked',
+  'group|anchorId', 'group|editas', 'group|spt',
+  'textbox|inset', 'textbox|style',
+  'path|arrowok', 'path|connecttype', 'path|extrusionok', 'path|fillok', 'path|gradientshapeok',
+  'path|textboxrect',
+  'shadow|algn', 'shadow|blurRad', 'shadow|dir', 'shadow|dist', 'shadow|kx', 'shadow|ky',
+  'shadow|offset', 'shadow|on', 'shadow|opacity', 'shadow|origin', 'shadow|sx', 'shadow|sy',
+  'shadow|val',
+  'fill|color2', 'fill|colors', 'fill|ext', 'fill|focus', 'fill|focusposition', 'fill|id',
+  'fill|opacity', 'fill|opacity2', 'fill|recolor', 'fill|rotate', 'fill|title', 'fill|type',
+  'stroke|dashstyle', 'stroke|endarrow', 'stroke|endcap', 'stroke|startarrow',
+  'imagedata|cropbottom', 'imagedata|cropleft', 'imagedata|cropright', 'imagedata|croptop',
+  'lock|shapetype', 'rot|lat', 'rot|lon', 'rot|rev', 'hiddenLine|w',
+  'fillRect|b', 'fillRect|t', 'fillToRect|b', 'fillToRect|l', 'fillToRect|r', 'fillToRect|t',
+  'lin|ang', 'lin|scaled', 'h|position', 'h|xrange', 'h|yrange',
+  'chExt|cx', 'chExt|cy', 'chOff|x', 'chOff|y', 'f|eqn',
+  'wrap|anchorx', 'wrap|anchory', 'wrap|side', 'wrap|type', 'cxnSpLocks|noChangeShapeType',
+  'object|dxaOrig', 'object|dyaOrig', 'OLEObject|DrawAspect', 'OLEObject|ObjectID', 'OLEObject|ShapeID',
 ]
 // 我放进夹具而读手一寸不查的：t 的 xml:space 是**裁定不查**——escText 无条件保留空白
 // （连续空格第二个起换 nbsp），强于 preserve 所需，查了也没有第二行代码可写。

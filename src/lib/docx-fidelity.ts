@@ -591,6 +591,24 @@ function readPprPayload(pPr: XEl | undefined): string {
 }
 
 /**
+ * VML 裁剪值 → CSS inset 的百分比数（v0.153）。
+ *
+ * VML 的 croptop 之类是 ST_Fraction：0..1 的小数（0.1 = 裁掉 10%），Word 也发 "10%"
+ * 这种带百分号的串。CSS 的 clip-path:inset() 收百分比，两边只差一个「小数还是百分数」
+ * 的换算。认不出来（空串、非数字）返回 undefined，调用方按「这一边没裁」处理。
+ */
+function cropPct(raw: string | undefined): number | undefined {
+  if (!raw) return undefined
+  const s = raw.trim()
+  if (!s) return undefined
+  const isPct = s.endsWith('%')
+  const n = Number(isPct ? s.slice(0, -1) : s)
+  if (!Number.isFinite(n)) return undefined
+  // 小数档按分数换算（1 = 全裁），已是百分号档直接用；两端夹住防 CSS 越界
+  return Math.max(0, Math.min(100, isPct ? n : n <= 1 ? n * 100 : n))
+}
+
+/**
  * 图片容器壳（v0.148）：一个 w:drawing 里除位图字节与尺寸外那一层壳——wp:inline/
  * wp:anchor 的四边避让与锚点、wp:effectExtent 四边、两处对象序号与对象名、两枚
  * locks、a:prstGeom 的档位、a:xfrm 的 a:off/a:ext。屏上一条都不兑现（Web 流式排版
@@ -3035,7 +3053,19 @@ class Fidelity {
     const size = `${w ? ` width="${w}"` : ''}${h ? ` height="${h}"` : ''}`
     // 容器壳（v0.148）：位图出得来才有壳可挂——解不开字节时那张图本来就没进文档
     const shell = readImgPayload(el)
-    return `<img src="data:${mime};base64,${b64}"${size}${alt ? ` alt="${esc(alt)}"` : ''}${shell ? ` ${IMG_ATTR}="${esc(shell)}"` : ''}>`
+    // 裁剪四边（v0.153）：VML 的 v:imagedata 用 croptop/cropright/cropbottom/cropleft
+    // 从各边裁掉一段，CSS 的 clip-path:inset() 有直接对应物——这是老式壳里唯一屏上
+    // 真能兑现的一族（其余壳属性零兑现）。**单边通道**：写侧只发 DrawingML 内嵌图，
+    // 裁剪写不回 docx，所以导出去的图是没裁的——读得进、写不出的又一处，如实记在
+    // 审计文档里，不靠「反正屏上看着对」糊过去
+    const crop = [
+      cropPct(attrL(blip, 'croptop')),
+      cropPct(attrL(blip, 'cropright')),
+      cropPct(attrL(blip, 'cropbottom')),
+      cropPct(attrL(blip, 'cropleft')),
+    ]
+    const clip = crop.some((v) => v) ? ` style="clip-path:inset(${crop.map((v) => v ?? 0).join('% ')}%)"` : ''
+    return `<img src="data:${mime};base64,${b64}"${size}${clip}${alt ? ` alt="${esc(alt)}"` : ''}${shell ? ` ${IMG_ATTR}="${esc(shell)}"` : ''}>`
   }
 
   private mediaOf(path: string): Promise<string | null> {
@@ -4030,6 +4060,108 @@ function noteShapeMarks(doc: XEl | undefined): void {
   if (sc) attrL(sc, 'val')
 }
 
+/**
+ * VML 形状壳余量（v0.153）：`w:pict` 里老式形状各族的属性面——v:shape 那七枚
+ * （v0.149 起的）之外，roundrect / line / rect / shapetype / group / textbox 几个
+ * 老式形状壳，加它们的填充（v:fill）、描边（v:stroke）、阴影（v:shadow）、图元路径
+ * （v:path 的连接开关们）、公式（v:f）、手柄（v:h / v:cxn）、画布（v:chExt / v:chOff）
+ * 与遗留开关（w10:wrap / v:rot / o:cxnSpLocks）这一整片。
+ *
+ * 三条与前几轮一致的边界：
+ * 1. **gfxdata 一律不收**（v0.149 裁定）：Word 缓存的图元字节（base64 blob），挂 HTML
+ *    属性性价比极差，写侧也写不回——roundrect/line/rect/shape/group 五处都不列它。
+ * 2. **纯只读记账**：屏上零兑现（Web 没有 VML 图元引擎，也没有老式形状），写侧只发
+ *    DrawingML，这一族一个属性都回不去。查问它的意义是把「读手认得这枚属性」上账，
+ *    与 noteDocumentMarks / noteShapeMarks 同款。
+ * 3. **按 local name 查**：VML 的 o: / w10: 前缀各家发得不一样（o:lock 与 v:lock 都
+ *    见过），按前缀无关匹配才认得全。
+ */
+const VML_SHELL_ATTRS: Record<string, readonly string[]> = {
+  // 圆角矩形：arcsize 是圆角弧度（VML 的分数串），其余与 v:shape 同族
+  roundrect: ['id', 'spid', 'spt', 'style', 'coordsize', 'arcsize', 'fillcolor', 'filled', 'strokecolor', 'stroked', 'strokeweight', 'anchorId'],
+  // 直线：from/to 是两个端点（「x,y」串），allowincell 是「允许放进表格单元格」
+  line: ['id', 'spid', 'spt', 'style', 'coordsize', 'from', 'to', 'fillcolor', 'filled', 'strokecolor', 'stroked', 'strokeweight', 'allowincell', 'anchorId'],
+  // 矩形（v0.151 已收四边 l/t/r/b，这里补剩下的）
+  rect: ['id', 'spid', 'spt', 'style', 'coordsize', 'fillcolor', 'filled', 'strokecolor', 'stroked', 'strokeweight', 'allowincell'],
+  // 形状（v0.149 已收七枚，这里补 adj/alt/bullet/connectortype/coordorigin/ole 等）
+  shape: ['adj', 'alt', 'anchorId', 'bullet', 'connectortype', 'coordorigin', 'ole', 'preferrelative', 'strokecolor', 'strokeweight'],
+  // 形状模板：<v:shapetype> 是可复用形状的模板，oned 是「单手柄形状」开关
+  shapetype: ['adj', 'anchorId', 'coordsize', 'filled', 'id', 'oned', 'path', 'preferrelative', 'spt', 'stroked'],
+  // 分组画布（v0.150 已收五枚，补 editas 与 spt）
+  group: ['anchorId', 'editas', 'spt'],
+  // 文字盒：inset 是四边内缩，style 常是 mso-fit-shape-to-text 之类
+  textbox: ['inset', 'style'],
+  // 图元路径的连接开关：arrowok/extrusionok/fillok/gradientshapeok/textboxrect 一串
+  // 「这条路径允许哪种变换」，connecttype 是连接点类型
+  path: ['arrowok', 'connecttype', 'extrusionok', 'fillok', 'gradientshapeok', 'textboxrect'],
+  // 阴影：on/val 是开关与强度，dir/dist 是方向与距离，kx/ky/sx/sy 是斜切与缩放，
+  // algn/origin 是原点对齐。VML 阴影与 CSS box-shadow 不同源（这里没有颜色可挂），只记账
+  shadow: ['algn', 'blurRad', 'dir', 'dist', 'kx', 'ky', 'offset', 'on', 'opacity', 'origin', 'sx', 'sy', 'val'],
+  // 填充（v0.149 已收 on/focussize）：type 是填充类型、color2 是渐变第二色、
+  // colors 是渐变色串、rotate 是渐变转角、recolor 是「跟随主题重着色」
+  fill: ['color2', 'colors', 'ext', 'focus', 'focusposition', 'id', 'opacity', 'opacity2', 'recolor', 'rotate', 'title', 'type'],
+  // 描边（v0.149/0.151 已收五枚）：dashstyle 虚线样式、startarrow/endarrow 箭头、endcap 端帽
+  stroke: ['dashstyle', 'endarrow', 'endcap', 'startarrow'],
+  // 图片数据的裁剪四边（v0.149 已收 o:title）——这四个是**唯一会落到 CSS 的一族**，
+  // 由 readImgPayload/bitmap 读出来渲染成 clip-path，这里再按名查问一遍上账
+  imagedata: ['cropbottom', 'cropleft', 'cropright', 'croptop'],
+  // 形状锁（v0.149 已收 aspectratio/ext）：shapetype 是「锁在哪个模板上」
+  lock: ['shapetype'],
+  // 三维旋转（lat/lon/rev 是纬度/经度/绕轴角）
+  rot: ['lat', 'lon', 'rev'],
+  // 隐藏线宽（表格里被隐藏的边框线）
+  hiddenLine: ['w'],
+  // 渐变填充的两种取景框（v:fill 的子元素）
+  fillRect: ['b', 't'],
+  fillToRect: ['b', 'l', 'r', 't'],
+  // 线性渐变的角度与「是否随形缩放」
+  lin: ['ang', 'scaled'],
+  // 手柄：position 是坐标、xrange/yrange 是活动范围
+  h: ['position', 'xrange', 'yrange'],
+  // 画布尺寸与原点（v:group 的子元素，EMU 之外的另一套坐标）
+  chExt: ['cx', 'cy'],
+  chOff: ['x', 'y'],
+  // 公式：<v:formulas><v:f eqn="sum 0 0 0"/></v:formulas>
+  f: ['eqn'],
+  // 遗留环绕（Word 97-2003 的 w10:wrap）：anchorx/anchory 是锚点参照、side 是环绕边
+  wrap: ['anchorx', 'anchory', 'side', 'type'],
+  // 连线锁：不允许改形状类型
+  cxnSpLocks: ['noChangeShapeType'],
+}
+
+/**
+ * VML 壳余量的按名查问（v0.153）。
+ *
+ * 只在 `w:pict` 子树里扫——VML 老式形状只住在这一支里，全局扫会和别处的同 local name
+ * 撞车（比如 OMML 的 m:f 也叫 f， DrawingML 里也有 a:cxnSpLocks）。这一点比多扫几个
+ * 元素重要：**账本记的是「读手在这一支上认得这枚属性」**，撞名记出来的对是假账。
+ *
+ * 同一标签的多枚元素都扫（不取首枚了事）：真实件里一个 pict 常有好几个 v:shape /
+ * v:line，各自带自己的 id/style，只认第一枚等于把其余几枚的属性当不存在。
+ */
+function noteVmlShellMarks(doc: XEl | undefined): void {
+  if (!doc) return
+  for (const pict of allDesc(doc, 'pict')) {
+    for (const tag of Object.keys(VML_SHELL_ATTRS)) {
+      for (const el of allDesc(pict, tag)) {
+        for (const n of VML_SHELL_ATTRS[tag]) attrL(el, n)
+      }
+    }
+  }
+  // 嵌入对象那一支（w:object + o:OLEObject）不在 w:pict 下（与 w:drawing 平级），
+  // 单列两条：dxaOrig/dyaOrig 是原始尺寸（缇），DrawAspect/ObjectID/ShapeID 是
+  // OLE 的显示方式与两个身份号（ProgID/Type 已由 embed 路径读了）
+  for (const el of allDesc(doc, 'object')) {
+    attrL(el, 'dxaOrig')
+    attrL(el, 'dyaOrig')
+  }
+  for (const el of allDesc(doc, 'OLEObject')) {
+    attrL(el, 'DrawAspect')
+    attrL(el, 'ObjectID')
+    attrL(el, 'ShapeID')
+  }
+}
+
 /** bodyPr（CT_TextBodyProperties）的属性面——noteShapeMarks 的查问清单 */
 const BODYPR_ATTRS = [
   'anchor', 'anchorCtr', 'bIns', 'compatLnSpc', 'forceAA', 'fromWordArt',
@@ -4065,6 +4197,11 @@ export async function docxToHtmlFidelity(bytes: Uint8Array, depth = 0): Promise<
   // 形状壳（v0.151）：wsp 文本框的壳（样式矩阵引用/bodyPr/txBox/schemeClr）同上——
   // 段内无 blip，图片短路链够不着，跑正文前按名查问
   noteShapeMarks(parseXml(documentXml))
+  // VML 壳余量（v0.153）：老式形状那一整片（roundrect/line/rect/shapetype/…）与它们的
+  // 填充、描边、阴影、路径、手柄。与 noteShapeMarks 同款——段内可能没有 blip（pict 里
+  // 压根没图时 bitmap() 第一步就返回 null），图片短路链够不着，跑正文前按名查问。
+  // 两份 documentXml 各 parse 一次是浪费，但这两族都在「跑正文前」这一格，与 run() 分开
+  noteVmlShellMarks(parseXml(documentXml))
   const { html, blocks } = await f.run(documentXml)
   // 节属性（v0.147）：body 末尾 sectPr 走 attr 漏斗读一遍。这一族原本是 docxToDocMeta
   // 用正则读的（正则不进漏斗，保真账本上是盲区——读是读了，账上没有）；改由读手读、
