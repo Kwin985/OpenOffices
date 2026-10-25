@@ -23,10 +23,10 @@ probe injected at 3 points: attr, attrL, reader.__PROBE(再导出)).
 | In scope (7 parts, 5 readable files) | 701 | 31,471 |
 | Word save-session noise | 19 | 7,711 |
 | Meaningful universe | 682 | 23,760 |
-| Consulted | 396 | 23,092 |
-| Never consulted | 286 | 668 |
+| Consulted | 528 | 23,229 |
+| Never consulted | 154 | 531 |
 
-**Coverage: 58.1% of distinct pairs, 97.2% of meaningful literals.**
+**Coverage: 77.4% of distinct pairs, 97.8% of meaningful literals.**
 
 The corpus held 5 synthetic .docx files (22 KiB); 0 were
 unreadable as archives and are reported by failure class only, never by name.
@@ -55,14 +55,9 @@ run into `docs/fidelity-universe.json` and rebuilt at 1/100 scale by `scripts/ge
 | `instrText|space` | 15 |
 | `shape|gfxdata` | 7 |
 | `blipFill|rotWithShape` | 2 |
-| `fill|type` | 2 |
 | `gradFill|flip` | 2 |
 | `gradFill|rotWithShape` | 2 |
-| `group|editas` | 2 |
 | `group|gfxdata` | 2 |
-| `group|spt` | 2 |
-| `shape|strokecolor` | 2 |
-| `shape|strokeweight` | 2 |
 | `sizeRelH|relativeFrom` | 2 |
 | `sizeRelV|relativeFrom` | 2 |
 | `wrapSquare|wrapText` | 2 |
@@ -77,35 +72,40 @@ run into `docs/fidelity-universe.json` and rebuilt at 1/100 scale by `scripts/ge
 | `background|themeColor` | 1 |
 | `background|themeShade` | 1 |
 | `calcOnExit|val` | 1 |
-| `chExt|cx` | 1 |
-| `chExt|cy` | 1 |
-| `chOff|x` | 1 |
-| `chOff|y` | 1 |
+| `cnfStyle|evenHBand` | 1 |
+| `cnfStyle|evenVBand` | 1 |
+| `cnfStyle|firstColumn` | 1 |
+| `cnfStyle|firstRow` | 1 |
+| `cnfStyle|firstRowFirstColumn` | 1 |
+| `cnfStyle|firstRowLastColumn` | 1 |
+| `cnfStyle|lastColumn` | 1 |
+| `cnfStyle|lastRow` | 1 |
+| `cnfStyle|lastRowFirstColumn` | 1 |
 
 ## Which elements the missing literals sit on
 
 | element | never-consulted literals |
 |---|---:|
 | `t` | 348 |
-| `shape` | 19 |
 | `instrText` | 15 |
-| `line` | 15 |
 | `cnfStyle` | 13 |
-| `fill` | 13 |
 | `reflection` | 13 |
-| `roundrect` | 13 |
-| `shadow` | 13 |
-| `rect` | 12 |
-| `shapetype` | 10 |
-| `group` | 7 |
-| `path` | 7 |
+| `shape` | 7 |
 | `xfrm` | 6 |
 | `outerShdw` | 5 |
 | `comment` | 4 |
-| `fillToRect` | 4 |
 | `gradFill` | 4 |
-| `imagedata` | 4 |
 | `srcRect` | 4 |
+| `textOutline` | 4 |
+| `background` | 3 |
+| `headEnd` | 3 |
+| `legacy` | 3 |
+| `props3d` | 3 |
+| `scrgbClr` | 3 |
+| `tailEnd` | 3 |
+| `u` | 3 |
+| `blipFill` | 2 |
+| `col` | 2 |
 
 ## Consulted — the work already paid for
 

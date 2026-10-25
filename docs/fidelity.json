@@ -36,12 +36,12 @@
     "meaningfulOccurrences": 23760
   },
   "coverage": {
-    "byPair": 0.5806451612903226,
-    "byOccurrence": 0.9718855218855219,
-    "consultedPairs": 396,
-    "consultedOccurrences": 23092,
-    "neverConsultedPairs": 286,
-    "neverConsultedOccurrences": 668
+    "byPair": 0.7741935483870968,
+    "byOccurrence": 0.9776515151515152,
+    "consultedPairs": 528,
+    "consultedOccurrences": 23229,
+    "neverConsultedPairs": 154,
+    "neverConsultedOccurrences": 531
   },
   "consulted": [
     [
@@ -1277,6 +1277,10 @@
       2
     ],
     [
+      "fill|type",
+      2
+    ],
+    [
       "footerReference|id",
       2
     ],
@@ -1285,7 +1289,15 @@
       2
     ],
     [
+      "group|editas",
+      2
+    ],
+    [
       "group|spid",
+      2
+    ],
+    [
+      "group|spt",
       2
     ],
     [
@@ -1310,6 +1322,14 @@
     ],
     [
       "shade|val",
+      2
+    ],
+    [
+      "shape|strokecolor",
+      2
+    ],
+    [
+      "shape|strokeweight",
       2
     ],
     [
@@ -1401,340 +1421,6 @@
       1
     ],
     [
-      "commentRangeEnd|id",
-      1
-    ],
-    [
-      "commentRangeStart|id",
-      1
-    ],
-    [
-      "docPartGallery|val",
-      1
-    ],
-    [
-      "dstrike|val",
-      1
-    ],
-    [
-      "endChr|val",
-      1
-    ],
-    [
-      "fldSimple|instr",
-      1
-    ],
-    [
-      "framePr|anchorLock",
-      1
-    ],
-    [
-      "framePr|h",
-      1
-    ],
-    [
-      "framePr|hAnchor",
-      1
-    ],
-    [
-      "framePr|hRule",
-      1
-    ],
-    [
-      "framePr|hSpace",
-      1
-    ],
-    [
-      "framePr|vAnchor",
-      1
-    ],
-    [
-      "framePr|vSpace",
-      1
-    ],
-    [
-      "framePr|w",
-      1
-    ],
-    [
-      "framePr|wrap",
-      1
-    ],
-    [
-      "framePr|x",
-      1
-    ],
-    [
-      "framePr|xAlign",
-      1
-    ],
-    [
-      "framePr|y",
-      1
-    ],
-    [
-      "framePr|yAlign",
-      1
-    ],
-    [
-      "gs|pos",
-      1
-    ],
-    [
-      "hyperlink|id",
-      1
-    ],
-    [
-      "ins|author",
-      1
-    ],
-    [
-      "ins|date",
-      1
-    ],
-    [
-      "latentStyles|count",
-      1
-    ],
-    [
-      "latentStyles|defLockedState",
-      1
-    ],
-    [
-      "latentStyles|defQFormat",
-      1
-    ],
-    [
-      "latentStyles|defSemiHidden",
-      1
-    ],
-    [
-      "latentStyles|defUIPriority",
-      1
-    ],
-    [
-      "latentStyles|defUnhideWhenUsed",
-      1
-    ],
-    [
-      "left|themeShade",
-      1
-    ],
-    [
-      "left|themeTint",
-      1
-    ],
-    [
-      "lum|bright",
-      1
-    ],
-    [
-      "lum|contrast",
-      1
-    ],
-    [
-      "num|durableId",
-      1
-    ],
-    [
-      "numbering|Ignorable",
-      1
-    ],
-    [
-      "OLEObject|id",
-      1
-    ],
-    [
-      "OLEObject|ProgID",
-      1
-    ],
-    [
-      "OLEObject|Type",
-      1
-    ],
-    [
-      "pgSz|orient",
-      1
-    ],
-    [
-      "right|themeShade",
-      1
-    ],
-    [
-      "right|themeTint",
-      1
-    ],
-    [
-      "smallCaps|val",
-      1
-    ],
-    [
-      "startOverride|val",
-      1
-    ],
-    [
-      "styles|Ignorable",
-      1
-    ],
-    [
-      "tblpPr|bottomFromText",
-      1
-    ],
-    [
-      "tblpPr|horzAnchor",
-      1
-    ],
-    [
-      "tblpPr|leftFromText",
-      1
-    ],
-    [
-      "tblpPr|rightFromText",
-      1
-    ],
-    [
-      "tblpPr|tblpX",
-      1
-    ],
-    [
-      "tblpPr|tblpXSpec",
-      1
-    ],
-    [
-      "tblpPr|tblpY",
-      1
-    ],
-    [
-      "tblpPr|topFromText",
-      1
-    ],
-    [
-      "tblpPr|vertAnchor",
-      1
-    ],
-    [
-      "tl2br|val",
-      1
-    ],
-    [
-      "top|themeShade",
-      1
-    ],
-    [
-      "top|themeTint",
-      1
-    ],
-    [
-      "tr2bl|val",
-      1
-    ]
-  ],
-  "neverConsulted": [
-    [
-      "t|space",
-      348
-    ],
-    [
-      "instrText|space",
-      15
-    ],
-    [
-      "shape|gfxdata",
-      7
-    ],
-    [
-      "blipFill|rotWithShape",
-      2
-    ],
-    [
-      "fill|type",
-      2
-    ],
-    [
-      "gradFill|flip",
-      2
-    ],
-    [
-      "gradFill|rotWithShape",
-      2
-    ],
-    [
-      "group|editas",
-      2
-    ],
-    [
-      "group|gfxdata",
-      2
-    ],
-    [
-      "group|spt",
-      2
-    ],
-    [
-      "shape|strokecolor",
-      2
-    ],
-    [
-      "shape|strokeweight",
-      2
-    ],
-    [
-      "sizeRelH|relativeFrom",
-      2
-    ],
-    [
-      "sizeRelV|relativeFrom",
-      2
-    ],
-    [
-      "wrapSquare|wrapText",
-      2
-    ],
-    [
-      "xfrm|flipH",
-      2
-    ],
-    [
-      "xfrm|flipV",
-      2
-    ],
-    [
-      "xfrm|rot",
-      2
-    ],
-    [
-      "aliases|val",
-      1
-    ],
-    [
-      "alpha|val",
-      1
-    ],
-    [
-      "alphaOff|val",
-      1
-    ],
-    [
-      "appearance|val",
-      1
-    ],
-    [
-      "background|color",
-      1
-    ],
-    [
-      "background|themeColor",
-      1
-    ],
-    [
-      "background|themeShade",
-      1
-    ],
-    [
-      "calcOnExit|val",
-      1
-    ],
-    [
       "chExt|cx",
       1
     ],
@@ -1751,107 +1437,11 @@
       1
     ],
     [
-      "cnfStyle|evenHBand",
+      "commentRangeEnd|id",
       1
     ],
     [
-      "cnfStyle|evenVBand",
-      1
-    ],
-    [
-      "cnfStyle|firstColumn",
-      1
-    ],
-    [
-      "cnfStyle|firstRow",
-      1
-    ],
-    [
-      "cnfStyle|firstRowFirstColumn",
-      1
-    ],
-    [
-      "cnfStyle|firstRowLastColumn",
-      1
-    ],
-    [
-      "cnfStyle|lastColumn",
-      1
-    ],
-    [
-      "cnfStyle|lastRow",
-      1
-    ],
-    [
-      "cnfStyle|lastRowFirstColumn",
-      1
-    ],
-    [
-      "cnfStyle|lastRowLastColumn",
-      1
-    ],
-    [
-      "cnfStyle|oddHBand",
-      1
-    ],
-    [
-      "cnfStyle|oddVBand",
-      1
-    ],
-    [
-      "cnfStyle|val",
-      1
-    ],
-    [
-      "cntxtalts|val",
-      1
-    ],
-    [
-      "col|space",
-      1
-    ],
-    [
-      "col|w",
-      1
-    ],
-    [
-      "cols|equalWidth",
-      1
-    ],
-    [
-      "comment|author",
-      1
-    ],
-    [
-      "comment|date",
-      1
-    ],
-    [
-      "comment|id",
-      1
-    ],
-    [
-      "comment|initials",
-      1
-    ],
-    [
-      "commentEx|done",
-      1
-    ],
-    [
-      "commentReference|id",
-      1
-    ],
-    [
-      "comments|Ignorable",
-      1
-    ],
-    [
-      "commentsEx|Ignorable",
-      1
-    ],
-    [
-      "creationId|id",
+      "commentRangeStart|id",
       1
     ],
     [
@@ -1859,23 +1449,15 @@
       1
     ],
     [
-      "default|val",
+      "docPartGallery|val",
       1
     ],
     [
-      "em|val",
+      "dstrike|val",
       1
     ],
     [
-      "emboss|val",
-      1
-    ],
-    [
-      "endnotes|Ignorable",
-      1
-    ],
-    [
-      "entryMacro|val",
+      "endChr|val",
       1
     ],
     [
@@ -1951,27 +1533,67 @@
       1
     ],
     [
-      "fldChar|fldLock",
+      "fldSimple|instr",
       1
     ],
     [
-      "footnotes|Ignorable",
+      "framePr|anchorLock",
       1
     ],
     [
-      "formProt|val",
+      "framePr|h",
       1
     ],
     [
-      "glow|rad",
+      "framePr|hAnchor",
       1
     ],
     [
-      "gridAfter|val",
+      "framePr|hRule",
+      1
+    ],
+    [
+      "framePr|hSpace",
+      1
+    ],
+    [
+      "framePr|vAnchor",
+      1
+    ],
+    [
+      "framePr|vSpace",
+      1
+    ],
+    [
+      "framePr|w",
+      1
+    ],
+    [
+      "framePr|wrap",
+      1
+    ],
+    [
+      "framePr|x",
+      1
+    ],
+    [
+      "framePr|xAlign",
+      1
+    ],
+    [
+      "framePr|y",
+      1
+    ],
+    [
+      "framePr|yAlign",
       1
     ],
     [
       "group|anchorId",
+      1
+    ],
+    [
+      "gs|pos",
       1
     ],
     [
@@ -1987,35 +1609,11 @@
       1
     ],
     [
-      "headEnd|len",
-      1
-    ],
-    [
-      "headEnd|type",
-      1
-    ],
-    [
-      "headEnd|w",
-      1
-    ],
-    [
       "hiddenLine|w",
       1
     ],
     [
-      "hueOff|val",
-      1
-    ],
-    [
-      "hyperlink|tgtFrame",
-      1
-    ],
-    [
-      "hyperlink|tooltip",
-      1
-    ],
-    [
-      "id|val",
+      "hyperlink|id",
       1
     ],
     [
@@ -2035,55 +1633,43 @@
       1
     ],
     [
-      "imprint|val",
+      "ins|author",
       1
     ],
     [
-      "ins|id",
+      "ins|date",
       1
     ],
     [
-      "insideH|themeShade",
+      "latentStyles|count",
       1
     ],
     [
-      "insideH|themeTint",
+      "latentStyles|defLockedState",
       1
     ],
     [
-      "insideV|themeShade",
+      "latentStyles|defQFormat",
       1
     ],
     [
-      "insideV|themeTint",
+      "latentStyles|defSemiHidden",
       1
     ],
     [
-      "kinsoku|val",
+      "latentStyles|defUIPriority",
       1
     ],
     [
-      "legacy|legacy",
+      "latentStyles|defUnhideWhenUsed",
       1
     ],
     [
-      "legacy|legacyIndent",
+      "left|themeShade",
       1
     ],
     [
-      "legacy|legacySpace",
-      1
-    ],
-    [
-      "ligatures|val",
-      1
-    ],
-    [
-      "lightRig|dir",
-      1
-    ],
-    [
-      "lightRig|rig",
+      "left|themeTint",
       1
     ],
     [
@@ -2116,10 +1702,6 @@
     ],
     [
       "line|from",
-      1
-    ],
-    [
-      "line|gfxdata",
       1
     ],
     [
@@ -2159,31 +1741,19 @@
       1
     ],
     [
-      "lvlPicBulletId|val",
+      "lum|bright",
       1
     ],
     [
-      "lvlRestart|val",
+      "lum|contrast",
       1
     ],
     [
-      "maxLength|val",
+      "num|durableId",
       1
     ],
     [
-      "numForm|val",
-      1
-    ],
-    [
-      "numIdMacAtCleanup|val",
-      1
-    ],
-    [
-      "numPicBullet|numPicBulletId",
-      1
-    ],
-    [
-      "numSpacing|val",
+      "numbering|Ignorable",
       1
     ],
     [
@@ -2199,7 +1769,15 @@
       1
     ],
     [
+      "OLEObject|id",
+      1
+    ],
+    [
       "OLEObject|ObjectID",
+      1
+    ],
+    [
+      "OLEObject|ProgID",
       1
     ],
     [
@@ -2207,31 +1785,7 @@
       1
     ],
     [
-      "outerShdw|algn",
-      1
-    ],
-    [
-      "outerShdw|blurRad",
-      1
-    ],
-    [
-      "outerShdw|dir",
-      1
-    ],
-    [
-      "outerShdw|dist",
-      1
-    ],
-    [
-      "outerShdw|rotWithShape",
-      1
-    ],
-    [
-      "outline|val",
-      1
-    ],
-    [
-      "overflowPunct|val",
+      "OLEObject|Type",
       1
     ],
     [
@@ -2255,47 +1809,11 @@
       1
     ],
     [
-      "path|path",
-      1
-    ],
-    [
       "path|textboxrect",
       1
     ],
     [
-      "pgNumType|fmt",
-      1
-    ],
-    [
-      "pgNumType|start",
-      1
-    ],
-    [
-      "pgSz|code",
-      1
-    ],
-    [
-      "props3d|contourW",
-      1
-    ],
-    [
-      "props3d|extrusionH",
-      1
-    ],
-    [
-      "props3d|prstMaterial",
-      1
-    ],
-    [
-      "prstClr|val",
-      1
-    ],
-    [
-      "prstDash|val",
-      1
-    ],
-    [
-      "prstTxWarp|prst",
+      "pgSz|orient",
       1
     ],
     [
@@ -2312,10 +1830,6 @@
     ],
     [
       "rect|filled",
-      1
-    ],
-    [
-      "rect|gfxdata",
       1
     ],
     [
@@ -2347,55 +1861,11 @@
       1
     ],
     [
-      "reflection|algn",
+      "right|themeShade",
       1
     ],
     [
-      "reflection|blurRad",
-      1
-    ],
-    [
-      "reflection|dir",
-      1
-    ],
-    [
-      "reflection|dist",
-      1
-    ],
-    [
-      "reflection|endA",
-      1
-    ],
-    [
-      "reflection|endPos",
-      1
-    ],
-    [
-      "reflection|fadeDir",
-      1
-    ],
-    [
-      "reflection|kx",
-      1
-    ],
-    [
-      "reflection|ky",
-      1
-    ],
-    [
-      "reflection|stA",
-      1
-    ],
-    [
-      "reflection|stPos",
-      1
-    ],
-    [
-      "reflection|sx",
-      1
-    ],
-    [
-      "reflection|sy",
+      "right|themeTint",
       1
     ],
     [
@@ -2431,10 +1901,6 @@
       1
     ],
     [
-      "roundrect|gfxdata",
-      1
-    ],
-    [
       "roundrect|id",
       1
     ],
@@ -2460,26 +1926,6 @@
     ],
     [
       "roundrect|style",
-      1
-    ],
-    [
-      "rtlGutter|val",
-      1
-    ],
-    [
-      "satOff|val",
-      1
-    ],
-    [
-      "scrgbClr|b",
-      1
-    ],
-    [
-      "scrgbClr|g",
-      1
-    ],
-    [
-      "scrgbClr|r",
       1
     ],
     [
@@ -2607,6 +2053,600 @@
       1
     ],
     [
+      "smallCaps|val",
+      1
+    ],
+    [
+      "startOverride|val",
+      1
+    ],
+    [
+      "stroke|dashstyle",
+      1
+    ],
+    [
+      "stroke|endarrow",
+      1
+    ],
+    [
+      "stroke|endcap",
+      1
+    ],
+    [
+      "stroke|startarrow",
+      1
+    ],
+    [
+      "styles|Ignorable",
+      1
+    ],
+    [
+      "tblpPr|bottomFromText",
+      1
+    ],
+    [
+      "tblpPr|horzAnchor",
+      1
+    ],
+    [
+      "tblpPr|leftFromText",
+      1
+    ],
+    [
+      "tblpPr|rightFromText",
+      1
+    ],
+    [
+      "tblpPr|tblpX",
+      1
+    ],
+    [
+      "tblpPr|tblpXSpec",
+      1
+    ],
+    [
+      "tblpPr|tblpY",
+      1
+    ],
+    [
+      "tblpPr|topFromText",
+      1
+    ],
+    [
+      "tblpPr|vertAnchor",
+      1
+    ],
+    [
+      "textbox|inset",
+      1
+    ],
+    [
+      "textbox|style",
+      1
+    ],
+    [
+      "tl2br|val",
+      1
+    ],
+    [
+      "top|themeShade",
+      1
+    ],
+    [
+      "top|themeTint",
+      1
+    ],
+    [
+      "tr2bl|val",
+      1
+    ],
+    [
+      "wrap|anchorx",
+      1
+    ],
+    [
+      "wrap|anchory",
+      1
+    ],
+    [
+      "wrap|side",
+      1
+    ],
+    [
+      "wrap|type",
+      1
+    ]
+  ],
+  "neverConsulted": [
+    [
+      "t|space",
+      348
+    ],
+    [
+      "instrText|space",
+      15
+    ],
+    [
+      "shape|gfxdata",
+      7
+    ],
+    [
+      "blipFill|rotWithShape",
+      2
+    ],
+    [
+      "gradFill|flip",
+      2
+    ],
+    [
+      "gradFill|rotWithShape",
+      2
+    ],
+    [
+      "group|gfxdata",
+      2
+    ],
+    [
+      "sizeRelH|relativeFrom",
+      2
+    ],
+    [
+      "sizeRelV|relativeFrom",
+      2
+    ],
+    [
+      "wrapSquare|wrapText",
+      2
+    ],
+    [
+      "xfrm|flipH",
+      2
+    ],
+    [
+      "xfrm|flipV",
+      2
+    ],
+    [
+      "xfrm|rot",
+      2
+    ],
+    [
+      "aliases|val",
+      1
+    ],
+    [
+      "alpha|val",
+      1
+    ],
+    [
+      "alphaOff|val",
+      1
+    ],
+    [
+      "appearance|val",
+      1
+    ],
+    [
+      "background|color",
+      1
+    ],
+    [
+      "background|themeColor",
+      1
+    ],
+    [
+      "background|themeShade",
+      1
+    ],
+    [
+      "calcOnExit|val",
+      1
+    ],
+    [
+      "cnfStyle|evenHBand",
+      1
+    ],
+    [
+      "cnfStyle|evenVBand",
+      1
+    ],
+    [
+      "cnfStyle|firstColumn",
+      1
+    ],
+    [
+      "cnfStyle|firstRow",
+      1
+    ],
+    [
+      "cnfStyle|firstRowFirstColumn",
+      1
+    ],
+    [
+      "cnfStyle|firstRowLastColumn",
+      1
+    ],
+    [
+      "cnfStyle|lastColumn",
+      1
+    ],
+    [
+      "cnfStyle|lastRow",
+      1
+    ],
+    [
+      "cnfStyle|lastRowFirstColumn",
+      1
+    ],
+    [
+      "cnfStyle|lastRowLastColumn",
+      1
+    ],
+    [
+      "cnfStyle|oddHBand",
+      1
+    ],
+    [
+      "cnfStyle|oddVBand",
+      1
+    ],
+    [
+      "cnfStyle|val",
+      1
+    ],
+    [
+      "cntxtalts|val",
+      1
+    ],
+    [
+      "col|space",
+      1
+    ],
+    [
+      "col|w",
+      1
+    ],
+    [
+      "cols|equalWidth",
+      1
+    ],
+    [
+      "comment|author",
+      1
+    ],
+    [
+      "comment|date",
+      1
+    ],
+    [
+      "comment|id",
+      1
+    ],
+    [
+      "comment|initials",
+      1
+    ],
+    [
+      "commentEx|done",
+      1
+    ],
+    [
+      "commentReference|id",
+      1
+    ],
+    [
+      "comments|Ignorable",
+      1
+    ],
+    [
+      "commentsEx|Ignorable",
+      1
+    ],
+    [
+      "creationId|id",
+      1
+    ],
+    [
+      "default|val",
+      1
+    ],
+    [
+      "em|val",
+      1
+    ],
+    [
+      "emboss|val",
+      1
+    ],
+    [
+      "endnotes|Ignorable",
+      1
+    ],
+    [
+      "entryMacro|val",
+      1
+    ],
+    [
+      "fldChar|fldLock",
+      1
+    ],
+    [
+      "footnotes|Ignorable",
+      1
+    ],
+    [
+      "formProt|val",
+      1
+    ],
+    [
+      "glow|rad",
+      1
+    ],
+    [
+      "gridAfter|val",
+      1
+    ],
+    [
+      "headEnd|len",
+      1
+    ],
+    [
+      "headEnd|type",
+      1
+    ],
+    [
+      "headEnd|w",
+      1
+    ],
+    [
+      "hueOff|val",
+      1
+    ],
+    [
+      "hyperlink|tgtFrame",
+      1
+    ],
+    [
+      "hyperlink|tooltip",
+      1
+    ],
+    [
+      "id|val",
+      1
+    ],
+    [
+      "imprint|val",
+      1
+    ],
+    [
+      "ins|id",
+      1
+    ],
+    [
+      "insideH|themeShade",
+      1
+    ],
+    [
+      "insideH|themeTint",
+      1
+    ],
+    [
+      "insideV|themeShade",
+      1
+    ],
+    [
+      "insideV|themeTint",
+      1
+    ],
+    [
+      "kinsoku|val",
+      1
+    ],
+    [
+      "legacy|legacy",
+      1
+    ],
+    [
+      "legacy|legacyIndent",
+      1
+    ],
+    [
+      "legacy|legacySpace",
+      1
+    ],
+    [
+      "ligatures|val",
+      1
+    ],
+    [
+      "lightRig|dir",
+      1
+    ],
+    [
+      "lightRig|rig",
+      1
+    ],
+    [
+      "line|gfxdata",
+      1
+    ],
+    [
+      "lvlPicBulletId|val",
+      1
+    ],
+    [
+      "lvlRestart|val",
+      1
+    ],
+    [
+      "maxLength|val",
+      1
+    ],
+    [
+      "numForm|val",
+      1
+    ],
+    [
+      "numIdMacAtCleanup|val",
+      1
+    ],
+    [
+      "numPicBullet|numPicBulletId",
+      1
+    ],
+    [
+      "numSpacing|val",
+      1
+    ],
+    [
+      "outerShdw|algn",
+      1
+    ],
+    [
+      "outerShdw|blurRad",
+      1
+    ],
+    [
+      "outerShdw|dir",
+      1
+    ],
+    [
+      "outerShdw|dist",
+      1
+    ],
+    [
+      "outerShdw|rotWithShape",
+      1
+    ],
+    [
+      "outline|val",
+      1
+    ],
+    [
+      "overflowPunct|val",
+      1
+    ],
+    [
+      "path|path",
+      1
+    ],
+    [
+      "pgNumType|fmt",
+      1
+    ],
+    [
+      "pgNumType|start",
+      1
+    ],
+    [
+      "pgSz|code",
+      1
+    ],
+    [
+      "props3d|contourW",
+      1
+    ],
+    [
+      "props3d|extrusionH",
+      1
+    ],
+    [
+      "props3d|prstMaterial",
+      1
+    ],
+    [
+      "prstClr|val",
+      1
+    ],
+    [
+      "prstDash|val",
+      1
+    ],
+    [
+      "prstTxWarp|prst",
+      1
+    ],
+    [
+      "rect|gfxdata",
+      1
+    ],
+    [
+      "reflection|algn",
+      1
+    ],
+    [
+      "reflection|blurRad",
+      1
+    ],
+    [
+      "reflection|dir",
+      1
+    ],
+    [
+      "reflection|dist",
+      1
+    ],
+    [
+      "reflection|endA",
+      1
+    ],
+    [
+      "reflection|endPos",
+      1
+    ],
+    [
+      "reflection|fadeDir",
+      1
+    ],
+    [
+      "reflection|kx",
+      1
+    ],
+    [
+      "reflection|ky",
+      1
+    ],
+    [
+      "reflection|stA",
+      1
+    ],
+    [
+      "reflection|stPos",
+      1
+    ],
+    [
+      "reflection|sx",
+      1
+    ],
+    [
+      "reflection|sy",
+      1
+    ],
+    [
+      "roundrect|gfxdata",
+      1
+    ],
+    [
+      "rtlGutter|val",
+      1
+    ],
+    [
+      "satOff|val",
+      1
+    ],
+    [
+      "scrgbClr|b",
+      1
+    ],
+    [
+      "scrgbClr|g",
+      1
+    ],
+    [
+      "scrgbClr|r",
+      1
+    ],
+    [
       "smartTag|element",
       1
     ],
@@ -2636,22 +2676,6 @@
     ],
     [
       "srcRect|t",
-      1
-    ],
-    [
-      "stroke|dashstyle",
-      1
-    ],
-    [
-      "stroke|endarrow",
-      1
-    ],
-    [
-      "stroke|endcap",
-      1
-    ],
-    [
-      "stroke|startarrow",
       1
     ],
     [
@@ -2692,14 +2716,6 @@
     ],
     [
       "tblOverlap|val",
-      1
-    ],
-    [
-      "textbox|inset",
-      1
-    ],
-    [
-      "textbox|style",
       1
     ],
     [
@@ -2756,22 +2772,6 @@
     ],
     [
       "wordWrap|val",
-      1
-    ],
-    [
-      "wrap|anchorx",
-      1
-    ],
-    [
-      "wrap|anchory",
-      1
-    ],
-    [
-      "wrap|side",
-      1
-    ],
-    [
-      "wrap|type",
       1
     ]
   ],
@@ -2859,15 +2859,7 @@
       348
     ],
     [
-      "shape",
-      19
-    ],
-    [
       "instrText",
-      15
-    ],
-    [
-      "line",
       15
     ],
     [
@@ -2875,35 +2867,11 @@
       13
     ],
     [
-      "fill",
-      13
-    ],
-    [
       "reflection",
       13
     ],
     [
-      "roundrect",
-      13
-    ],
-    [
-      "shadow",
-      13
-    ],
-    [
-      "rect",
-      12
-    ],
-    [
-      "shapetype",
-      10
-    ],
-    [
-      "group",
-      7
-    ],
-    [
-      "path",
+      "shape",
       7
     ],
     [
@@ -2919,15 +2887,7 @@
       4
     ],
     [
-      "fillToRect",
-      4
-    ],
-    [
       "gradFill",
-      4
-    ],
-    [
-      "imagedata",
       4
     ],
     [
@@ -2935,23 +2895,11 @@
       4
     ],
     [
-      "stroke",
-      4
-    ],
-    [
       "textOutline",
       4
     ],
     [
-      "wrap",
-      4
-    ],
-    [
       "background",
-      3
-    ],
-    [
-      "h",
       3
     ],
     [
@@ -2963,15 +2911,7 @@
       3
     ],
     [
-      "OLEObject",
-      3
-    ],
-    [
       "props3d",
-      3
-    ],
-    [
-      "rot",
       3
     ],
     [
@@ -2991,19 +2931,11 @@
       2
     ],
     [
-      "chExt",
-      2
-    ],
-    [
-      "chOff",
-      2
-    ],
-    [
       "col",
       2
     ],
     [
-      "fillRect",
+      "group",
       2
     ],
     [
@@ -3020,14 +2952,6 @@
     ],
     [
       "lightRig",
-      2
-    ],
-    [
-      "lin",
-      2
-    ],
-    [
-      "object",
       2
     ],
     [
@@ -3056,10 +2980,6 @@
     ],
     [
       "tblCellSpacing",
-      2
-    ],
-    [
-      "textbox",
       2
     ],
     [
@@ -3119,10 +3039,6 @@
       1
     ],
     [
-      "cxnSpLocks",
-      1
-    ],
-    [
       "default",
       1
     ],
@@ -3143,10 +3059,6 @@
       1
     ],
     [
-      "f",
-      1
-    ],
-    [
       "fldChar",
       1
     ],
@@ -3164,10 +3076,6 @@
     ],
     [
       "gridAfter",
-      1
-    ],
-    [
-      "hiddenLine",
       1
     ],
     [
@@ -3195,7 +3103,7 @@
       1
     ],
     [
-      "lock",
+      "line",
       1
     ],
     [
@@ -3235,6 +3143,10 @@
       1
     ],
     [
+      "path",
+      1
+    ],
+    [
       "pgSz",
       1
     ],
@@ -3248,6 +3160,14 @@
     ],
     [
       "prstTxWarp",
+      1
+    ],
+    [
+      "rect",
+      1
+    ],
+    [
+      "roundrect",
       1
     ],
     [

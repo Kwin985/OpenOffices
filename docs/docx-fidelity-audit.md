@@ -608,3 +608,58 @@ bandSize 四族包里没槽或半槽，全部落地。
 | VML 形状壳余量（roundrect/textbox/group/path/shapetype 一族） | 约 2,000 | 纯只读记账、机械但量大——v:shape 七枚之外的老式形状各族，单开一轮扫完 |
 | `t\|space` | 348 | **裁定不查**（v0.143 起），同前 |
 | `shape\|gfxdata` / `group\|gfxdata` / `roundrect\|gfxdata` | 7+163+135 | **裁定不收**（v0.149）：Word 缓存的图元字节 |
+
+## v0.153（D12）——VML 形状壳余量全族 + 裁剪四边落到 CSS
+
+**132 对上账、语料字面 137（宇宙字面 5,044）**；覆盖率**按对 58.1% → 77.4%、按字面
+97.2% → 97.8%**；consulted 396 → 528，neverConsulted 286 → 154。
+
+### 这一轮做了什么
+
+老式形状（`w:pict`）那一整片：roundrect / line / rect / shapetype / group / textbox
+六个形状壳、它们的填充（`v:fill`）、描边（`v:stroke`）、阴影（`v:shadow`）、图元路径
+（`v:path` 的五个变换开关）、公式（`v:f`）、手柄（`v:h`）、画布坐标（`v:chExt`/`v:chOff`）、
+遗留环绕（`w10:wrap`）与嵌入对象（`w:object` / `o:OLEObject`）。
+
+读手新增 `VML_SHELL_ATTRS` 表与 `noteVmlShellMarks()`，跑正文前按名查问一遍（与
+`noteDocumentMarks` / `noteShapeMarks` 同一格）。三条边界：
+
+1. **只在 `w:pict` 子树里扫。** 全局扫会撞同 local name 的别家元素——OMML 的 `m:f`
+   也叫 f、DrawingML 里也有 `a:cxnSpLocks`。撞名记出来的对是**假账**，宁可少扫。
+2. **同一标签的多枚元素全扫。** 真实件一个 pict 里常有好几个 `v:shape` / `v:line`，
+   各自带自己的 id/style；只认首枚等于把其余几枚的属性当不存在。旧读手是
+   `findDesc(el,'shape')` 取首枚，这块本来就是欠账。
+3. **gfxdata 五处一律不收**（v0.149 裁定延续）：shape/group/roundrect/line/rect 五处的
+   Word 图元字节缓存，1,165 宇宙字面留在 neverConsulted 里不动。
+
+**唯一落到屏上的是裁剪四边**：`v:imagedata` 的 `croptop/cropright/cropbottom/cropleft`
+是 ST_Fraction（0..1 小数，Word 也发 `"5%"` 串），CSS `clip-path: inset()` 有直接对应物，
+换算后挂 `<img>` 的 style，四边全 0 时不发。其余 128 对屏上零兑现、写侧也回不去
+（包只发 DrawingML 内嵌图）——**单边通道**，探针里明写「输出不该有 croptop /
+v:roundrect」而不是假装双向。
+
+### 教训
+
+1. **自己造的假账，自己查出来**：`bitmap()` 的 `blip` 是「a:blip 优先、无则
+   v:imagedata」，而裁剪是 v:imagedata 独有的属性——照原样问一遍，账本上多出四枚
+   「读手问 a:blip 要 cropbottom」的行。宇宙里没这几对，覆盖率一动不动，**只有把
+   consulted 榜单摊开看才看得见**。改成按 local name 认回 VML 那一支。与「只在
+   w:pict 里扫」是同一条原则：**问错对象比不问更坏**，因为它留下一笔看着像成绩的账。
+2. **探针正则是我自己写错的**：断言 `clip-path: inset(` 带空格，产物是
+   `clip-path:inset(`——第一版红在自己身上，不是产品上。改正则后全绿。
+3. **漏 `--synth` 会写出缺一节的账本**：开轮那次干净腿没带 `--synth`，
+   `docs/fidelity.md` 少了整段「Corpus provenance」，与 HEAD 差 41 行。备份到 tmp/
+   后复位，正式腿记得带齐参数。
+
+### 顺延清单（D13）
+
+| 对（族） | 宇宙次数 | 备注 |
+|---|---|---|
+| `instrText\|space` | 1524 | 域指令的 xml:space，与 `t\|space` 同款噪声，倾向裁定不收 |
+| `shape\|gfxdata` / `group\|gfxdata` / `roundrect\|gfxdata` / `line\|gfxdata` / `rect\|gfxdata` | 7+163+135+96+75 | **裁定不收**（v0.149）：Word 缓存的图元字节 |
+| `t\|space` | 348 | **裁定不查**（v0.143 起），同前 |
+| DrawingML 线端族（`prstDash\|val`、`tailEnd`/`headEnd` 各三枚、`srcRect` 四边） | 约 1,000 | 描边端头与裁剪框，屏上有半个对应物（border-style dashed / marker-end），需先定「兑不兑现」再扫 |
+| 表与段落的零头（`tblOverlap\|val`、`vanish\|val`、`smartTag` 两枚、`spLocks\|noEditPoints`、`tblCellSpacing` 两枚） | 约 400 | 杂项，逐对裁决 |
+| 批注族（`comment` 四枚、`commentReference\|id`、`comments(Ex)` 根 Ignorable） | 约 100 | 批注元数据，与 comments.xml 那条链同源，可一并扫 |
+| `cnfStyle` 十三枚（条件格式的「哪一行哪一列」开关） | 520 | 一整族一个元素，屏上零兑现（无表样式条件格式），纯只读记账 |
+| `endnotes`/`footnotes` 根 Ignorable | 148 | 与 v0.152 收的 numbering/styles 根 Ignorable 同款，两个部件各补一行 |

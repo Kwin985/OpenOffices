@@ -9085,6 +9085,51 @@ neverConsulted 311 → 286。
 全落空；等价腿 5/5；变异腿有牙（no-attrL 42.8%/83.3%、no-attr 27.1%/41.1%）；变异后干净腿
 复位 md5 与主腿一致；语料分母 31,468 → 31,471（+3：新开的 lvlOverride 嵌套上下文块）。
 
+### v0.153（D12）——VML 形状壳余量全族 + 裁剪四边落到 CSS
+
+按字面权重扫剩余 neverConsulted 的**老式形状专题**（v0.152 顺延清单里点名的那一族）：
+**132 对上账、语料字面 137（宇宙字面 5,044）**，覆盖率**按对 58.1% → 77.4%、按字面
+97.2% → 97.8%**；consulted 396 → 528 对，neverConsulted 286 → 154。
+
+| 族 | 宇宙字面 | 往返 |
+|---|---|---|
+| `v:roundrect` 十二枚（圆角矩形：arcsize/coordsize/填充描边/身份） | 1,063 | 只读 |
+| `v:line` 十四枚（直线：from/to 两端点、allowincell） | 654 | 只读 |
+| `v:rect` 十一枚（矩形：v0.151 已收四边，补余量） | 620 | 只读 |
+| `v:shape` 十枚（adj/alt/bullet/connectortype/coordorigin/ole 等） | 444 | 只读 |
+| `v:shadow` 十三枚（VML 阴影：dir/dist/kx/sx/algn 等） | 263 | 只读 |
+| `v:fill` 十二枚（type/color2/colors/recolor/rotate 等） | 227 | 只读 |
+| `v:shapetype` 十枚（形状模板：oned/preferrelative/path） | 174 | 只读 |
+| `w10:wrap` 四枚（遗留环绕锚点与边） | 161 | 只读 |
+| `v:path` 六枚（五个变换开关与 connecttype） | 296 | 只读 |
+| `v:stroke` 四枚（dashstyle/endarrow/endcap/startarrow） | 60 | 只读 |
+| `v:group` 三枚（editas/spt/anchorId） | 214 | 只读 |
+| 画布与手柄余量（chExt/chOff/h/f/rot/hiddenLine/lock/cxnSpLocks/textbox 十六枚） | 802 | 只读 |
+| 渐变取景框（fillRect/fillToRect/lin 八枚） | 47 | 只读 |
+| **v:imagedata 裁剪四边** | 8 | **读写（读侧渲染）** |
+| `w:object`/`o:OLEObject` 五枚（原始尺寸与三个身份号） | 11 | 只读 |
+
+- **只有裁剪四边落到了屏上**：VML 的 `croptop/cropright/cropbottom/cropleft` 是
+  ST_Fraction（0..1 的小数，Word 也发 `"5%"` 这种串），CSS 的 `clip-path: inset()` 有直接
+  对应物——换算后挂在 `<img>` 的 style 上，四边全 0 时不发。这是老式壳里唯一能被看见的
+  一族；其余 128 对**屏上零兑现、写侧也回不去**（包只发 DrawingML 内嵌图），是纯只读
+  记账，与 v0.150 的 proofErr、v0.151 的 wsp 壳同款，写在注释与审计里而不是含糊过去。
+- **扫表只在 `w:pict` 子树里走**：VML 老式形状只住这一支，全局扫会撞同 local name 的
+  别家元素（OMML 的 `m:f`、DrawingML 的 `a:cxnSpLocks`）——撞名记出来的对是假账，宁可
+  少扫也不记假账。
+- **同一标签的多枚元素全扫**：真实件一个 pict 里常有好几个 `v:shape`/`v:line`，各自带
+  自己的 id/style，只认首枚等于把其余几枚当不存在。
+- **gfxdata 五处一律不收**（v0.149 裁定的延续）：Word 缓存的图元字节，1,165 宇宙字面
+  留在 neverConsulted 里不动。
+- **一处自检出来的假账**：`bitmap()` 的 `blip` 是「a:blip 优先、无则 v:imagedata」，而
+  裁剪是 v:imagedata 独有的属性——照原样问一遍会在账本上留四枚「读手问 a:blip 要
+  cropbottom」的假名（覆盖率不受影响，但榜单会多四枚没意义的行）。改成按 local name
+  认回 VML 那一支。
+
+**门禁**：tsc 0、build ✓；selftest MUST_SEE **397 枚全命中（+132）** / MUST_NOT_SEE 1 枚
+全落空；变异腿有牙（no-attrL 42.8%/83.3%、no-attr 46.5%/41.6%）；变异后干净腿复位 md5 与
+主腿一致；语料分母仍 31,471（本轮只动读手，语料未改）。
+
 
 ## 性能（v0.3）
 
