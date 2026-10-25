@@ -3058,11 +3058,15 @@ class Fidelity {
     // 真能兑现的一族（其余壳属性零兑现）。**单边通道**：写侧只发 DrawingML 内嵌图，
     // 裁剪写不回 docx，所以导出去的图是没裁的——读得进、写不出的又一处，如实记在
     // 审计文档里，不靠「反正屏上看着对」糊过去
+    // 只在 VML 那一支上读裁剪：crop 四边是 v:imagedata 的属性，a:blip（DrawingML）身上
+    // 没有这组属性，混着读一次就是在账本上记四枚「读手问过 blip 要 crop」的假对——
+    // 与 noteVmlShellMarks 只在 w:pict 里扫是同一个道理
+    const vmlImg = blip && local(blip.name) === 'imagedata' ? blip : undefined
     const crop = [
-      cropPct(attrL(blip, 'croptop')),
-      cropPct(attrL(blip, 'cropright')),
-      cropPct(attrL(blip, 'cropbottom')),
-      cropPct(attrL(blip, 'cropleft')),
+      cropPct(attrL(vmlImg, 'croptop')),
+      cropPct(attrL(vmlImg, 'cropright')),
+      cropPct(attrL(vmlImg, 'cropbottom')),
+      cropPct(attrL(vmlImg, 'cropleft')),
     ]
     const clip = crop.some((v) => v) ? ` style="clip-path:inset(${crop.map((v) => v ?? 0).join('% ')}%)"` : ''
     return `<img src="data:${mime};base64,${b64}"${size}${clip}${alt ? ` alt="${esc(alt)}"` : ''}${shell ? ` ${IMG_ATTR}="${esc(shell)}"` : ''}>`
