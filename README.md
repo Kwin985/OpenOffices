@@ -9168,6 +9168,63 @@ consulted 528 → 561 对，neverConsulted 154 → 121。
 主腿一致；语料分母仍 31,471。
 
 
+### v0.155（D14）——符号出字 / 整篇底色 / 链接提示 / 图形变换 / 表单域与图形余量
+
+这一轮不再是「扫榜补长尾」，而是**把剩下的榜单一次清干净**：**112 对上账、语料字面 121**，
+覆盖率**按对 82.3% → 98.7%、按字面 97.9% → 98.4%**；consulted 561 → 673 对，
+neverConsulted 121 → **9 对**（剩下的全在「明确不做」名单里）。
+
+| 族 | 对数 | 往返 |
+|---|---:|---|
+| DrawingML 图形壳余量（色彩模型 / 虚线 / 箭头 / 光效 / 三维 / 路径 / 文字轮廓） | 52 | 只读 |
+| `w:background` 整篇底色 + `w:u` 下划线色 + `w:sym` 符号 | 8 | **读写**（底色走后置补丁） |
+| 编号定义余量（styleLink / lvlRestart / lvlPicBulletId / numPicBullet / numIdMacAtCleanup / legacy 三枚） | 8 | 半读写 |
+| 段落余量五枚（kinsoku / wordWrap / overflowPunct / suppressAutoHyphens / textDirection） | 5 | **读写** |
+| 表单域 `w:ffData`（appearance / calcOnExit / entryMacro / default / maxLength） | 5 | 只读 |
+| 表条件格式 shade/tint 四枚（insideH / insideV） | 4 | 读侧修 bug |
+| 字符开关五枚（em / ligatures / numSpacing / numForm / cntxtalts） + emboss/imprint/outline | 8 | 读侧兑现/记账 |
+| 节余量七枚（type / pgSz@code / pgNumType 两枚 / cols@equalWidth / rtlGutter / formProt） | 7 | 只读 |
+| `a:xfrm` 三枚（rot / flipH / flipV） | 3 | 读侧兑现 |
+| 表行余量（gridAfter / wAfter 两枚） | 3 | 只读 |
+| `w:hyperlink` 的 tooltip 与 tgtFrame | 2 | **读写** |
+| `w:smartTag` 两枚（块层分发补漏） | 2 | 只读 |
+| 零头七枚（aliases / creationId / fldChar@fldLock / sdt@id / ins@id / styleLink 外的样式面） | 7 | 半读写 |
+
+- **`w:sym` 此前是「读到了，字丢了」**：老路只打一条「符号未导入」的 warn 就 return，
+  符号位上的 Wingdings 字与项目符号整个消失。现在读 `w:char`（十六进制码位）与 `w:font`，
+  产出 `<span style="font-family: Wingdings">&#xF0E0;</span>`。这类「认得出元素名却
+  没落成输出」的洞**账本上看不出来**（它一直是 consulted），只有探针的 MUST_NOT_SEE
+  反向断言抓得住。
+- **整篇底色是文档级，锚点不在 body 里**：`w:background` 在 CT_Document 序里排在
+  `w:body` **之前**，所以后置补丁的插入点是「`<w:body>` 之前」——不是那张「插到第一个
+  已知后续元素之前」的通用表。写侧 color（去 `#`、大写）与 themeColor 二选一。
+- **`themeRefCss` 的 shade/tint 长期没被查问**：两枚属性写在第三道 `return undefined`
+  之后，主题解析不出来时函数提前返回，属性根本没问过——表级 `insideH|themeShade`、
+  `insideV|themeTint` 这四对因此常年挂在 neverConsulted 上。修法是把两枚属性提到三道
+  return **之前**恒查问：查问与解析解耦，解析不出仍然返回 undefined。
+- **DrawingML 的壳属性只在 `w:drawing` 子树里扫**：52 对里有 prstClr/scrgbClr 两种色彩
+  模型、outerShdw/glow/reflection 的光效全族、lightRig 的 rig/dir、props3d 的挤出三枚。
+  全树按 local name 扫会撞上 OMML 的 `m:r`、VML 的 `v:roundrect` 这种同名元素——**问错
+  对象比不问更坏**：账上多一笔看着像成绩的假账，覆盖率一动不动。`props3d` 与 `sp3d`
+  两个 local name **都问**：schema 里叫 `a:sp3d`，存盘写的是 `a:props3d`，宇宙记后者。
+- **`a:xfrm` 折成 CSS transform**：rot 是六万分之一度（除以 60000 得度），flip 后接
+  `scaleX(-1)`，与 v0.153 的 srcRect 裁剪**并进同一个 style**——两个 `clip-path` 各写
+  一遍会互相覆盖。
+- **块级内容控件要单独读 `sdtPr/id`**：`w:sdt` 有两处分发，段落内的走 run 层，把整段或
+  整表包住的走块层 `sequence()`。只补前者，块级控件的 `id|val` 依然问不到——这条是
+  selftest 报出来的，不是想出来的。
+- **`col|w` / `col|space` 留在 neverConsulted，欠的是量具不是产品**：合成语料的块模型
+  不支持「嵌进另一块里的某元素」。要让读手 `find(sect,'w:cols')` 拿到那枚带 `w:col`
+  子元素的 cols，就得把节里其余所有元素也塞进 cols 内部，它们的直接子元素路径全断
+  （试过一次，`cols|num/space/equalWidth` 三对当场掉出分子，遂完整回退）。真件里这两对
+  是读的，已在审计的顺延清单里写明。
+
+**门禁**：tsc 0、build ✓；selftest MUST_SEE **540 枚全命中（+108）** / MUST_NOT_SEE 1 枚
+全落空；变异腿有牙（no-attrL 51.5%/83.5%、no-attr 59.2%/42.1%）；变异后干净腿复位 md5 与
+主腿一致（`d29f097f…` / `fba730a8…`）；语料分母 31,471 → 31,482（新增承重块带来的字面增量）。
+剩余 9 对全在「不收」名单：`t|space`、`instrText|space`、`gfxdata` 五处、`col` 两枚。
+
+
 ## 性能（v0.3）
 
 

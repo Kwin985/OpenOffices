@@ -714,3 +714,81 @@ v:roundrect」而不是假装双向。
 | DrawingML 色彩与几何零头（`insideH`/`insideV` themeShade/themeTint、`alpha`\|val、`alphaOff`/`hueOff`/`satOff`、`prstClr`\|val、`tint`\|val、`xfrm`\|rot、`sizeRelH/V`\|relativeFrom） | 约 500 | 逐对裁决，多数屏上零兑现 |
 | 阴影与三维（`outerShdw` 五枚、`reflection` 十三枚、`props3d` 三枚、`glow`\|rad、`blipFill`/`gradFill` 的 rotWithShape 与 flip） | 约 400 | 屏上零兑现（Web 没有 VML/DrawingML 的阴影与三维模型） |
 | 杂项（`sym` 两枚、`pgNumType`\|start、`legacy` 三枚、`type`\|val、`prstTxWarp`\|prst、`col`\|w、`wAfter` 两枚、`h`/`rot`/`lightRig` 等） | 约 300 | 逐对裁决 |
+
+## v0.155（D14）——符号出字 / 整篇底色 / 链接提示 / 图形变换 / 表单域与图形余量
+
+**112 对上账、语料字面 121**；覆盖率**按对 82.3% → 98.7%、按字面 97.9% → 98.4%**；
+consulted 561 → 673，neverConsulted 121 → **9**。
+
+这一轮把 D14 顺延清单**一次清完**：清单上「逐对裁决」的几百对全部裁决掉，其中能兑现的
+兑现、兑不了的只读记账。剩下的 9 对全在既有裁定「不收」名单里（见文末）。
+
+### 这一轮做了什么
+
+**读侧修掉三个「读到了但没落成输出」的洞**（账本上看不出来，因为一直是 consulted）：
+
+- **`w:sym` 符号丢字**：老路 `case 'sym'` 只打 `this.warn('符号未导入')` 就 return，符号位
+  上的 Wingdings 与项目符号整个消失。改读 `w:char`（十六进制码位）+ `w:font`，产出
+  `<span style="font-family: Wingdings">&#xF0E0;</span>`。抓它的是探针的 MUST_NOT_SEE
+  反向断言，账本永远不会报。
+- **`themeRefCss` 的 shade/tint 从未被查问**：两枚 `attr()` 写在第三道 `return undefined`
+  之后，主题解析不出时函数提前返回。表级 `insideH|themeShade`、`insideV|themeTint` 四对
+  因此常年挂 neverConsulted。修法是把两枚属性提到三道 return **之前**恒查问——**查问与
+  解析解耦**：解析不出仍然返回 undefined，但名字一定被问过。
+- **块级 `w:sdt` 的 `sdtPr/id`**：`w:sdt` 两处分发，段落内的走 run 层、把整段/整表包住的
+  走块层 `sequence()`。只补前者，块级控件的 `id|val` 依然问不到。
+
+**读写两头新增的**：`w:background`（color/themeColor/themeShade，文档级，插入锚点是
+`<w:body>` 之前）、`w:u` 的颜色三枚（→ `text-decoration-color`，**必须挂在 `<u>` 上**，
+该属性不继承）、`w:hyperlink` 的 tooltip/tgtFrame（→ title/target）、段落余量五枚
+（kinsoku/wordWrap/overflowPunct/suppressAutoHyphens/textDirection）、编号定义的
+`styleLink`/`lvlRestart`/`lvlPicBulletId`。
+
+**读侧兑现**：`w:em`/`w:ligatures`/`w:numSpacing`/`w:numForm`/`w:cntxtalts` →
+`text-emphasis` / `font-variant-*`；`a:xfrm` 的 rot（÷60000）+ flipH/flipV → CSS
+`transform`，与 srcRect 的 `clip-path` **并进同一个 style**。
+
+**只读记账（占本轮七成）**：DrawingML 壳余量 52 对（色彩模型 prstClr/scrgbClr、虚线、
+箭头两端、outerShdw/glow/reflection 光效全族、lightRig、props3d 挤出三枚、path、prstTxWarp、
+textOutline、sizeRelH/V、wrapSquare、blipFill/gradFill 的 rotWithShape 与 flip）；
+表单域 `w:ffData` 五枚；节余量七枚；表行 gridAfter/wAfter；`smartTag` 两枚；
+`emboss`/`imprint`/`outline`；`aliases`、`creationId`、`fldChar@fldLock`、`ins@id`。
+
+### 教训
+
+1. **只在子树里扫，不按 local name 全树扫。** DrawingML 与 VML/OMML 有大量同名元素
+   （`m:r`、`v:roundrect`、`a:prstClr` vs `v:prstClr`）。全树扫会在**错误的元素**上留下
+   一笔「查问过」的账：数字好看、宇宙里根本不存在这对，覆盖率一动不动，只有把 consulted
+   榜单摊开才看得见。所以整族只走 `allDesc(doc,'drawing')` 的子树。
+2. **一个元素两个 local name 时两个都问。** universe 记的是 `props3d`，DrawingML schema
+   里写的却是 `a:sp3d`，存盘两种都有。只问 schema 里那个名字，账上就是 0——selftest 报
+   出来才发现的（三枚 `props3d|contourW/extrusionH/prstMaterial` 全红）。
+3. **`w:background` 的锚点不是「第一个已知后续元素之前」，而是「`<w:body>` 之前」。**
+   它是 CT_Document 的直接子元素、排在 body 前面；用通用锚点表会被插进 body 内部，
+   Word 打开直接判损坏。
+4. **生成器的块模型决定了量具的天花板。** 合成语料的上下文是一个个「开标签 + 关标签」的
+   块，**不支持「嵌进另一块里的某元素」**。`w:col` 要出现在 `w:cols` **里面**，而带属性的
+   那枚 `<w:cols>` 又必须留在 sectPr 的直系子级上（不然 `cols|num/space/equalWidth` 三对
+   会掉出分子——试过一次，按对当场从 98.7% 掉到 98.2%）。完整回退，并在生成器里写了注释。
+   **欠的是量具，不是产品**：真件里 `col|w`/`col|space` 是读的。
+
+### 顺延清单（D15）
+
+账上剩 9 对，**全部是既有裁定「不收」**，本轮无新增欠账：
+
+| 对 | 语料字面 | 备注 |
+|---|---:|---|
+| `t\|space` | 348 | **裁定不查**（v0.143 起）：w:t 的 xml:space，纯序列化标记 |
+| `instrText\|space` | 15 | 同上，域指令的 xml:space |
+| `shape\|gfxdata` / `line\|gfxdata` / `rect\|gfxdata` / `roundrect\|gfxdata` / `group\|gfxdata` | 7+1+1+1+2 | **裁定不收**（v0.149）：Word 缓存的图元字节 |
+| `col\|w` / `col\|space` | 1+1 | **量具限制**：生成器块模型不支持嵌入元素（见教训 4）。产品侧已读，真件语料上会自然上账 |
+
+D15 若继续，方向不再是「扫榜」——榜单已经清了。可选的下一步：
+
+- **把 `col|w`/`col|space` 的量具补上**：给生成器加一种「子上下文」能力（块里再开一个
+  命名插槽），这是脚本层的活，与产品无关；补完按对可达 100%。
+- **单边通道清单**：账本记的是「查问过」，不记「写得回」。目前已知单边至少有
+  `a:srcRect`（v0.154）与本轮的 DrawingML 光效/三维/路径全族。要量化得另做往返探针
+  （读→写→再读逐字段比对），这是比覆盖率更硬的一层。
+- **变异腿扩大**：现在只有 `no-attr`/`no-attrL` 两条。可以加 `no-theme`（掐掉
+  themeRefCss）验证主题链那批对的牙齿。

@@ -117,6 +117,11 @@ const CTX = {
   // sectPr 必须排在文件最前：contentTwipsOf() 用 findDesc 找 body 的第一个 sectPr 读
   // pgSz|w 与 pgMar|left/right，空 sectPr 打头会让这三对掉出分子
   't:sect': { f: '02-tables', part: 'document', open: '<w:sectPr w:rsidR="00A1" w:rsidRPr="00A2" w:rsidSect="00000001">', close: '</w:sectPr>' },
+  // cols 与逐栏的 w:col 分住两个 <w:sectPr> 块：读手 find(sect,'w:cols') 只认第一枚
+  // （带属性的那枚），col 子元素在第二枚里——col|w / col|space 两对因此问不到。
+  // v0.155 试过把两者并进同一枚 cols，但那样必须把**节里其余所有元素**（pgSz/pgMar/
+  // docGrid/type/…）也塞进 cols 内部，它们的直接子元素路径全断。生成器的块模型不支持
+  // 「嵌进另一块里的某元素」，所以这两对留在 neverConsulted（见审计的顺延清单）
   't:cols-kids': { f: '02-tables', part: 'document', open: '<w:sectPr><w:cols>', close: '</w:cols></w:sectPr>' },
   't:cols': { f: '02-tables', part: 'document', open: '<w:sectPr>', close: '</w:sectPr>' },
   't:tblPr': { f: '02-tables', part: 'document', open: '<w:tbl><w:tblPr>', close: `</w:tblPr>${TBL_TAIL}` },

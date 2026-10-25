@@ -13,7 +13,7 @@
     "files": 5,
     "readable": 5,
     "unreadable": 0,
-    "bytes": 22068,
+    "bytes": 22117,
     "scopeParts": [
       "word/document.xml",
       "word/styles.xml",
@@ -29,19 +29,19 @@
   },
   "totals": {
     "distinctPairs": 701,
-    "occurrences": 31471,
+    "occurrences": 31482,
     "noisePairs": 19,
     "noiseOccurrences": 7711,
     "meaningfulPairs": 682,
-    "meaningfulOccurrences": 23760
+    "meaningfulOccurrences": 23771
   },
   "coverage": {
-    "byPair": 0.8225806451612904,
-    "byOccurrence": 0.979040404040404,
-    "consultedPairs": 561,
-    "consultedOccurrences": 23262,
-    "neverConsultedPairs": 121,
-    "neverConsultedOccurrences": 498
+    "byPair": 0.9868035190615836,
+    "byOccurrence": 0.984140339068613,
+    "consultedPairs": 673,
+    "consultedOccurrences": 23394,
+    "neverConsultedPairs": 9,
+    "neverConsultedOccurrences": 377
   },
   "consulted": [
     [
@@ -482,27 +482,27 @@
     ],
     [
       "docPr|id",
-      32
+      33
     ],
     [
       "docPr|name",
-      32
+      33
     ],
     [
       "extent|cx",
-      32
+      33
     ],
     [
       "extent|cy",
-      32
+      33
+    ],
+    [
+      "blip|embed",
+      29
     ],
     [
       "lvl|tplc",
       29
-    ],
-    [
-      "blip|embed",
-      28
     ],
     [
       "ext|cx",
@@ -1077,6 +1077,30 @@
       4
     ],
     [
+      "path|h",
+      4
+    ],
+    [
+      "path|w",
+      4
+    ],
+    [
+      "rect|b",
+      4
+    ],
+    [
+      "rect|l",
+      4
+    ],
+    [
+      "rect|r",
+      4
+    ],
+    [
+      "rect|t",
+      4
+    ],
+    [
       "shape|fillcolor",
       4
     ],
@@ -1213,31 +1237,7 @@
       3
     ],
     [
-      "path|h",
-      3
-    ],
-    [
-      "path|w",
-      3
-    ],
-    [
       "position|val",
-      3
-    ],
-    [
-      "rect|b",
-      3
-    ],
-    [
-      "rect|l",
-      3
-    ],
-    [
-      "rect|r",
-      3
-    ],
-    [
-      "rect|t",
       3
     ],
     [
@@ -1265,6 +1265,10 @@
       2
     ],
     [
+      "blipFill|rotWithShape",
+      2
+    ],
+    [
       "cNvSpPr|txBox",
       2
     ],
@@ -1286,6 +1290,14 @@
     ],
     [
       "footerReference|type",
+      2
+    ],
+    [
+      "gradFill|flip",
+      2
+    ],
+    [
+      "gradFill|rotWithShape",
       2
     ],
     [
@@ -1333,6 +1345,14 @@
       2
     ],
     [
+      "sizeRelH|relativeFrom",
+      2
+    ],
+    [
+      "sizeRelV|relativeFrom",
+      2
+    ],
+    [
       "tblStyleColBandSize|val",
       2
     ],
@@ -1341,11 +1361,55 @@
       2
     ],
     [
+      "wrapSquare|wrapText",
+      2
+    ],
+    [
+      "xfrm|flipH",
+      2
+    ],
+    [
+      "xfrm|flipV",
+      2
+    ],
+    [
+      "xfrm|rot",
+      2
+    ],
+    [
+      "aliases|val",
+      1
+    ],
+    [
+      "alpha|val",
+      1
+    ],
+    [
+      "alphaOff|val",
+      1
+    ],
+    [
       "anchor|anchorId",
       1
     ],
     [
       "anchor|editId",
+      1
+    ],
+    [
+      "appearance|val",
+      1
+    ],
+    [
+      "background|color",
+      1
+    ],
+    [
+      "background|themeColor",
+      1
+    ],
+    [
+      "background|themeShade",
       1
     ],
     [
@@ -1421,6 +1485,10 @@
       1
     ],
     [
+      "calcOnExit|val",
+      1
+    ],
+    [
       "chExt|cx",
       1
     ],
@@ -1489,6 +1557,14 @@
       1
     ],
     [
+      "cntxtalts|val",
+      1
+    ],
+    [
+      "cols|equalWidth",
+      1
+    ],
+    [
       "comment|author",
       1
     ],
@@ -1529,7 +1605,15 @@
       1
     ],
     [
+      "creationId|id",
+      1
+    ],
+    [
       "cxnSpLocks|noChangeShapeType",
+      1
+    ],
+    [
+      "default|val",
       1
     ],
     [
@@ -1541,11 +1625,23 @@
       1
     ],
     [
+      "em|val",
+      1
+    ],
+    [
+      "emboss|val",
+      1
+    ],
+    [
       "endChr|val",
       1
     ],
     [
       "endnotes|Ignorable",
+      1
+    ],
+    [
+      "entryMacro|val",
       1
     ],
     [
@@ -1621,11 +1717,19 @@
       1
     ],
     [
+      "fldChar|fldLock",
+      1
+    ],
+    [
       "fldSimple|instr",
       1
     ],
     [
       "footnotes|Ignorable",
+      1
+    ],
+    [
+      "formProt|val",
       1
     ],
     [
@@ -1681,6 +1785,14 @@
       1
     ],
     [
+      "glow|rad",
+      1
+    ],
+    [
+      "gridAfter|val",
+      1
+    ],
+    [
       "group|anchorId",
       1
     ],
@@ -1701,11 +1813,39 @@
       1
     ],
     [
+      "headEnd|len",
+      1
+    ],
+    [
+      "headEnd|type",
+      1
+    ],
+    [
+      "headEnd|w",
+      1
+    ],
+    [
       "hiddenLine|w",
       1
     ],
     [
+      "hueOff|val",
+      1
+    ],
+    [
       "hyperlink|id",
+      1
+    ],
+    [
+      "hyperlink|tgtFrame",
+      1
+    ],
+    [
+      "hyperlink|tooltip",
+      1
+    ],
+    [
+      "id|val",
       1
     ],
     [
@@ -1725,11 +1865,39 @@
       1
     ],
     [
+      "imprint|val",
+      1
+    ],
+    [
       "ins|author",
       1
     ],
     [
       "ins|date",
+      1
+    ],
+    [
+      "ins|id",
+      1
+    ],
+    [
+      "insideH|themeShade",
+      1
+    ],
+    [
+      "insideH|themeTint",
+      1
+    ],
+    [
+      "insideV|themeShade",
+      1
+    ],
+    [
+      "insideV|themeTint",
+      1
+    ],
+    [
+      "kinsoku|val",
       1
     ],
     [
@@ -1762,6 +1930,30 @@
     ],
     [
       "left|themeTint",
+      1
+    ],
+    [
+      "legacy|legacy",
+      1
+    ],
+    [
+      "legacy|legacyIndent",
+      1
+    ],
+    [
+      "legacy|legacySpace",
+      1
+    ],
+    [
+      "ligatures|val",
+      1
+    ],
+    [
+      "lightRig|dir",
+      1
+    ],
+    [
+      "lightRig|rig",
       1
     ],
     [
@@ -1841,11 +2033,39 @@
       1
     ],
     [
+      "lvlPicBulletId|val",
+      1
+    ],
+    [
+      "lvlRestart|val",
+      1
+    ],
+    [
+      "maxLength|val",
+      1
+    ],
+    [
       "num|durableId",
       1
     ],
     [
       "numbering|Ignorable",
+      1
+    ],
+    [
+      "numForm|val",
+      1
+    ],
+    [
+      "numIdMacAtCleanup|val",
+      1
+    ],
+    [
+      "numPicBullet|numPicBulletId",
+      1
+    ],
+    [
+      "numSpacing|val",
       1
     ],
     [
@@ -1881,6 +2101,34 @@
       1
     ],
     [
+      "outerShdw|algn",
+      1
+    ],
+    [
+      "outerShdw|blurRad",
+      1
+    ],
+    [
+      "outerShdw|dir",
+      1
+    ],
+    [
+      "outerShdw|dist",
+      1
+    ],
+    [
+      "outerShdw|rotWithShape",
+      1
+    ],
+    [
+      "outline|val",
+      1
+    ],
+    [
+      "overflowPunct|val",
+      1
+    ],
+    [
       "path|arrowok",
       1
     ],
@@ -1901,11 +2149,51 @@
       1
     ],
     [
+      "path|path",
+      1
+    ],
+    [
       "path|textboxrect",
       1
     ],
     [
+      "pgNumType|fmt",
+      1
+    ],
+    [
+      "pgNumType|start",
+      1
+    ],
+    [
+      "pgSz|code",
+      1
+    ],
+    [
       "pgSz|orient",
+      1
+    ],
+    [
+      "props3d|contourW",
+      1
+    ],
+    [
+      "props3d|extrusionH",
+      1
+    ],
+    [
+      "props3d|prstMaterial",
+      1
+    ],
+    [
+      "prstClr|val",
+      1
+    ],
+    [
+      "prstDash|val",
+      1
+    ],
+    [
+      "prstTxWarp|prst",
       1
     ],
     [
@@ -1950,6 +2238,58 @@
     ],
     [
       "rect|style",
+      1
+    ],
+    [
+      "reflection|algn",
+      1
+    ],
+    [
+      "reflection|blurRad",
+      1
+    ],
+    [
+      "reflection|dir",
+      1
+    ],
+    [
+      "reflection|dist",
+      1
+    ],
+    [
+      "reflection|endA",
+      1
+    ],
+    [
+      "reflection|endPos",
+      1
+    ],
+    [
+      "reflection|fadeDir",
+      1
+    ],
+    [
+      "reflection|kx",
+      1
+    ],
+    [
+      "reflection|ky",
+      1
+    ],
+    [
+      "reflection|stA",
+      1
+    ],
+    [
+      "reflection|stPos",
+      1
+    ],
+    [
+      "reflection|sx",
+      1
+    ],
+    [
+      "reflection|sy",
       1
     ],
     [
@@ -2018,6 +2358,26 @@
     ],
     [
       "roundrect|style",
+      1
+    ],
+    [
+      "rtlGutter|val",
+      1
+    ],
+    [
+      "satOff|val",
+      1
+    ],
+    [
+      "scrgbClr|b",
+      1
+    ],
+    [
+      "scrgbClr|g",
+      1
+    ],
+    [
+      "scrgbClr|r",
       1
     ],
     [
@@ -2149,6 +2509,14 @@
       1
     ],
     [
+      "smartTag|element",
+      1
+    ],
+    [
+      "smartTag|uri",
+      1
+    ],
+    [
       "spLocks|noChangeArrowheads",
       1
     ],
@@ -2193,7 +2561,35 @@
       1
     ],
     [
+      "styleLink|val",
+      1
+    ],
+    [
       "styles|Ignorable",
+      1
+    ],
+    [
+      "suppressAutoHyphens|val",
+      1
+    ],
+    [
+      "sym|char",
+      1
+    ],
+    [
+      "sym|font",
+      1
+    ],
+    [
+      "tailEnd|len",
+      1
+    ],
+    [
+      "tailEnd|type",
+      1
+    ],
+    [
+      "tailEnd|w",
       1
     ],
     [
@@ -2253,6 +2649,30 @@
       1
     ],
     [
+      "textDirection|val",
+      1
+    ],
+    [
+      "textOutline|algn",
+      1
+    ],
+    [
+      "textOutline|cap",
+      1
+    ],
+    [
+      "textOutline|cmpd",
+      1
+    ],
+    [
+      "textOutline|w",
+      1
+    ],
+    [
+      "tint|val",
+      1
+    ],
+    [
       "tl2br|val",
       1
     ],
@@ -2269,7 +2689,35 @@
       1
     ],
     [
+      "type|val",
+      1
+    ],
+    [
+      "u|color",
+      1
+    ],
+    [
+      "u|themeColor",
+      1
+    ],
+    [
+      "u|themeTint",
+      1
+    ],
+    [
       "vanish|val",
+      1
+    ],
+    [
+      "wAfter|type",
+      1
+    ],
+    [
+      "wAfter|w",
+      1
+    ],
+    [
+      "wordWrap|val",
       1
     ],
     [
@@ -2303,80 +2751,8 @@
       7
     ],
     [
-      "blipFill|rotWithShape",
-      2
-    ],
-    [
-      "gradFill|flip",
-      2
-    ],
-    [
-      "gradFill|rotWithShape",
-      2
-    ],
-    [
       "group|gfxdata",
       2
-    ],
-    [
-      "sizeRelH|relativeFrom",
-      2
-    ],
-    [
-      "sizeRelV|relativeFrom",
-      2
-    ],
-    [
-      "wrapSquare|wrapText",
-      2
-    ],
-    [
-      "xfrm|flipH",
-      2
-    ],
-    [
-      "xfrm|flipV",
-      2
-    ],
-    [
-      "xfrm|rot",
-      2
-    ],
-    [
-      "aliases|val",
-      1
-    ],
-    [
-      "alpha|val",
-      1
-    ],
-    [
-      "alphaOff|val",
-      1
-    ],
-    [
-      "appearance|val",
-      1
-    ],
-    [
-      "background|color",
-      1
-    ],
-    [
-      "background|themeColor",
-      1
-    ],
-    [
-      "background|themeShade",
-      1
-    ],
-    [
-      "calcOnExit|val",
-      1
-    ],
-    [
-      "cntxtalts|val",
-      1
     ],
     [
       "col|space",
@@ -2387,223 +2763,7 @@
       1
     ],
     [
-      "cols|equalWidth",
-      1
-    ],
-    [
-      "creationId|id",
-      1
-    ],
-    [
-      "default|val",
-      1
-    ],
-    [
-      "em|val",
-      1
-    ],
-    [
-      "emboss|val",
-      1
-    ],
-    [
-      "entryMacro|val",
-      1
-    ],
-    [
-      "fldChar|fldLock",
-      1
-    ],
-    [
-      "formProt|val",
-      1
-    ],
-    [
-      "glow|rad",
-      1
-    ],
-    [
-      "gridAfter|val",
-      1
-    ],
-    [
-      "headEnd|len",
-      1
-    ],
-    [
-      "headEnd|type",
-      1
-    ],
-    [
-      "headEnd|w",
-      1
-    ],
-    [
-      "hueOff|val",
-      1
-    ],
-    [
-      "hyperlink|tgtFrame",
-      1
-    ],
-    [
-      "hyperlink|tooltip",
-      1
-    ],
-    [
-      "id|val",
-      1
-    ],
-    [
-      "imprint|val",
-      1
-    ],
-    [
-      "ins|id",
-      1
-    ],
-    [
-      "insideH|themeShade",
-      1
-    ],
-    [
-      "insideH|themeTint",
-      1
-    ],
-    [
-      "insideV|themeShade",
-      1
-    ],
-    [
-      "insideV|themeTint",
-      1
-    ],
-    [
-      "kinsoku|val",
-      1
-    ],
-    [
-      "legacy|legacy",
-      1
-    ],
-    [
-      "legacy|legacyIndent",
-      1
-    ],
-    [
-      "legacy|legacySpace",
-      1
-    ],
-    [
-      "ligatures|val",
-      1
-    ],
-    [
-      "lightRig|dir",
-      1
-    ],
-    [
-      "lightRig|rig",
-      1
-    ],
-    [
       "line|gfxdata",
-      1
-    ],
-    [
-      "lvlPicBulletId|val",
-      1
-    ],
-    [
-      "lvlRestart|val",
-      1
-    ],
-    [
-      "maxLength|val",
-      1
-    ],
-    [
-      "numForm|val",
-      1
-    ],
-    [
-      "numIdMacAtCleanup|val",
-      1
-    ],
-    [
-      "numPicBullet|numPicBulletId",
-      1
-    ],
-    [
-      "numSpacing|val",
-      1
-    ],
-    [
-      "outerShdw|algn",
-      1
-    ],
-    [
-      "outerShdw|blurRad",
-      1
-    ],
-    [
-      "outerShdw|dir",
-      1
-    ],
-    [
-      "outerShdw|dist",
-      1
-    ],
-    [
-      "outerShdw|rotWithShape",
-      1
-    ],
-    [
-      "outline|val",
-      1
-    ],
-    [
-      "overflowPunct|val",
-      1
-    ],
-    [
-      "path|path",
-      1
-    ],
-    [
-      "pgNumType|fmt",
-      1
-    ],
-    [
-      "pgNumType|start",
-      1
-    ],
-    [
-      "pgSz|code",
-      1
-    ],
-    [
-      "props3d|contourW",
-      1
-    ],
-    [
-      "props3d|extrusionH",
-      1
-    ],
-    [
-      "props3d|prstMaterial",
-      1
-    ],
-    [
-      "prstClr|val",
-      1
-    ],
-    [
-      "prstDash|val",
-      1
-    ],
-    [
-      "prstTxWarp|prst",
       1
     ],
     [
@@ -2611,167 +2771,7 @@
       1
     ],
     [
-      "reflection|algn",
-      1
-    ],
-    [
-      "reflection|blurRad",
-      1
-    ],
-    [
-      "reflection|dir",
-      1
-    ],
-    [
-      "reflection|dist",
-      1
-    ],
-    [
-      "reflection|endA",
-      1
-    ],
-    [
-      "reflection|endPos",
-      1
-    ],
-    [
-      "reflection|fadeDir",
-      1
-    ],
-    [
-      "reflection|kx",
-      1
-    ],
-    [
-      "reflection|ky",
-      1
-    ],
-    [
-      "reflection|stA",
-      1
-    ],
-    [
-      "reflection|stPos",
-      1
-    ],
-    [
-      "reflection|sx",
-      1
-    ],
-    [
-      "reflection|sy",
-      1
-    ],
-    [
       "roundrect|gfxdata",
-      1
-    ],
-    [
-      "rtlGutter|val",
-      1
-    ],
-    [
-      "satOff|val",
-      1
-    ],
-    [
-      "scrgbClr|b",
-      1
-    ],
-    [
-      "scrgbClr|g",
-      1
-    ],
-    [
-      "scrgbClr|r",
-      1
-    ],
-    [
-      "smartTag|element",
-      1
-    ],
-    [
-      "smartTag|uri",
-      1
-    ],
-    [
-      "styleLink|val",
-      1
-    ],
-    [
-      "suppressAutoHyphens|val",
-      1
-    ],
-    [
-      "sym|char",
-      1
-    ],
-    [
-      "sym|font",
-      1
-    ],
-    [
-      "tailEnd|len",
-      1
-    ],
-    [
-      "tailEnd|type",
-      1
-    ],
-    [
-      "tailEnd|w",
-      1
-    ],
-    [
-      "textDirection|val",
-      1
-    ],
-    [
-      "textOutline|algn",
-      1
-    ],
-    [
-      "textOutline|cap",
-      1
-    ],
-    [
-      "textOutline|cmpd",
-      1
-    ],
-    [
-      "textOutline|w",
-      1
-    ],
-    [
-      "tint|val",
-      1
-    ],
-    [
-      "type|val",
-      1
-    ],
-    [
-      "u|color",
-      1
-    ],
-    [
-      "u|themeColor",
-      1
-    ],
-    [
-      "u|themeTint",
-      1
-    ],
-    [
-      "wAfter|type",
-      1
-    ],
-    [
-      "wAfter|w",
-      1
-    ],
-    [
-      "wordWrap|val",
       1
     ]
   ],
@@ -2863,60 +2863,8 @@
       15
     ],
     [
-      "reflection",
-      13
-    ],
-    [
       "shape",
       7
-    ],
-    [
-      "xfrm",
-      6
-    ],
-    [
-      "outerShdw",
-      5
-    ],
-    [
-      "gradFill",
-      4
-    ],
-    [
-      "textOutline",
-      4
-    ],
-    [
-      "background",
-      3
-    ],
-    [
-      "headEnd",
-      3
-    ],
-    [
-      "legacy",
-      3
-    ],
-    [
-      "props3d",
-      3
-    ],
-    [
-      "scrgbClr",
-      3
-    ],
-    [
-      "tailEnd",
-      3
-    ],
-    [
-      "u",
-      3
-    ],
-    [
-      "blipFill",
-      2
     ],
     [
       "col",
@@ -2927,195 +2875,7 @@
       2
     ],
     [
-      "hyperlink",
-      2
-    ],
-    [
-      "insideH",
-      2
-    ],
-    [
-      "insideV",
-      2
-    ],
-    [
-      "lightRig",
-      2
-    ],
-    [
-      "pgNumType",
-      2
-    ],
-    [
-      "sizeRelH",
-      2
-    ],
-    [
-      "sizeRelV",
-      2
-    ],
-    [
-      "smartTag",
-      2
-    ],
-    [
-      "sym",
-      2
-    ],
-    [
-      "wAfter",
-      2
-    ],
-    [
-      "wrapSquare",
-      2
-    ],
-    [
-      "aliases",
-      1
-    ],
-    [
-      "alpha",
-      1
-    ],
-    [
-      "alphaOff",
-      1
-    ],
-    [
-      "appearance",
-      1
-    ],
-    [
-      "calcOnExit",
-      1
-    ],
-    [
-      "cntxtalts",
-      1
-    ],
-    [
-      "cols",
-      1
-    ],
-    [
-      "creationId",
-      1
-    ],
-    [
-      "default",
-      1
-    ],
-    [
-      "em",
-      1
-    ],
-    [
-      "emboss",
-      1
-    ],
-    [
-      "entryMacro",
-      1
-    ],
-    [
-      "fldChar",
-      1
-    ],
-    [
-      "formProt",
-      1
-    ],
-    [
-      "glow",
-      1
-    ],
-    [
-      "gridAfter",
-      1
-    ],
-    [
-      "hueOff",
-      1
-    ],
-    [
-      "id",
-      1
-    ],
-    [
-      "imprint",
-      1
-    ],
-    [
-      "ins",
-      1
-    ],
-    [
-      "kinsoku",
-      1
-    ],
-    [
-      "ligatures",
-      1
-    ],
-    [
       "line",
-      1
-    ],
-    [
-      "lvlPicBulletId",
-      1
-    ],
-    [
-      "lvlRestart",
-      1
-    ],
-    [
-      "maxLength",
-      1
-    ],
-    [
-      "numForm",
-      1
-    ],
-    [
-      "numIdMacAtCleanup",
-      1
-    ],
-    [
-      "numPicBullet",
-      1
-    ],
-    [
-      "numSpacing",
-      1
-    ],
-    [
-      "outline",
-      1
-    ],
-    [
-      "overflowPunct",
-      1
-    ],
-    [
-      "path",
-      1
-    ],
-    [
-      "pgSz",
-      1
-    ],
-    [
-      "prstClr",
-      1
-    ],
-    [
-      "prstDash",
-      1
-    ],
-    [
-      "prstTxWarp",
       1
     ],
     [
@@ -3125,44 +2885,12 @@
     [
       "roundrect",
       1
-    ],
-    [
-      "rtlGutter",
-      1
-    ],
-    [
-      "satOff",
-      1
-    ],
-    [
-      "styleLink",
-      1
-    ],
-    [
-      "suppressAutoHyphens",
-      1
-    ],
-    [
-      "textDirection",
-      1
-    ],
-    [
-      "tint",
-      1
-    ],
-    [
-      "type",
-      1
-    ],
-    [
-      "wordWrap",
-      1
     ]
   ],
   "partTotals": {
-    "word/document.xml": 24931,
+    "word/document.xml": 24943,
     "word/styles.xml": 4249,
-    "word/numbering.xml": 2268,
+    "word/numbering.xml": 2267,
     "word/footnotes.xml": 7,
     "word/endnotes.xml": 7,
     "word/comments.xml": 5,
@@ -3182,8 +2910,8 @@
     "scaledLiteralSum": 31321,
     "rawScaledSum": 31085.229999999945,
     "scaleInflationPct": 0.7584631028950239,
-    "actualLiteralSum": 31471,
-    "literalDriftPct": 0.47891191213562667,
+    "actualLiteralSum": 31482,
+    "literalDriftPct": 0.5140321190255648,
     "comparableByPair": true,
     "comparableByOccurrence": false,
     "note": "按对覆盖率与旧账（313 件真件语料）可比；按字面不可比——重建按 count/100 缩放，取整与 max(1,·) 会把稀有对抬起来（见「scaling step itself」那一行），另有少量承重包裹属性（bitmap 链的 r:embed/extent/docPr、numbering 关联的 abstractNumId 等）在包裹处顺带出现；末行是「实测 vs 缩放期望」，与缩放那行基准不同，别混读"
