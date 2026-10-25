@@ -72,6 +72,9 @@ const MC = 'http://schemas.openxmlformats.org/markup-compatibility/2006'
 const WPS = 'http://schemas.microsoft.com/office/word/2010/wordprocessingShape'
 // v0.153：遗留环绕 w10:wrap（Word 97-2003 那一套，与 VML 同住 w:pict 里）
 const W10 = 'urn:schemas-microsoft-com:office:word'
+// v0.154：批注两份部件（w14:paraId 与 w15:commentEx）
+const W14 = 'http://schemas.microsoft.com/office/word/2010/wordml'
+const W15 = 'http://schemas.microsoft.com/office/word/2012/wordml'
 // 1x1 透明 PNG（图片段的关系与媒体目标）
 const PNG_B64 = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg=='
 // v0.142：clrScheme 与 fontScheme 并列。dk1/lt1 写成 sysClr（真件里 windowText/window
@@ -249,7 +252,10 @@ const FIXTURE_DOC =
   `<wp:docPr id="8" name="浮动图"/><wp:cNvGraphicFramePr/>` +
   `<a:graphic><a:graphicData uri="${PIC}">` +
   `<pic:pic><pic:nvPicPr><pic:cNvPr id="4" name="浮动图"/><pic:cNvPicPr><a:picLocks noChangeAspect="1"/></pic:cNvPicPr></pic:nvPicPr>` +
-  `<pic:blipFill><a:blip r:embed="rId1"/><a:stretch><a:fillRect/></a:stretch></pic:blipFill>` +
+  // v0.154：a:srcRect——blipFill 的**源裁剪框**（从原图哪一块取像素），四条边是千分比
+  // （25000 = 25%）。与 VML 的 crop 是同一件事的两代写法，屏上都走 clip-path: inset
+  `<pic:blipFill><a:blip r:embed="rId1"/><a:srcRect t="25000" r="0" b="10000" l="5000"/>` +
+  `<a:stretch><a:fillRect/></a:stretch></pic:blipFill>` +
   `<pic:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="914400" cy="914400"/></a:xfrm>` +
   `<a:prstGeom prst="rect"><a:avLst/></a:prstGeom></pic:spPr></pic:pic>` +
   `</a:graphicData></a:graphic></wp:anchor></w:drawing></w:r></w:p>` +
@@ -344,7 +350,10 @@ const FIXTURE_DOC =
   `<a:fillRef idx="2"><a:schemeClr val="accent2"/></a:fillRef>` +
   `<a:effectRef idx="0"><a:schemeClr val="accent3"/></a:effectRef>` +
   `<a:fontRef idx="minor"><a:schemeClr val="lt1"/></a:fontRef></a:style>` +
-  `<wps:cNvSpPr txBox="1"/><wps:spPr><a:xfrm/></wps:spPr>` +
+  // v0.154：a:spLocks 的两把锁（不许改箭头、不许改顶点）——与 a:picLocks 同族两支，
+  // 壳上零兑现（Web 没有「锁定编辑」），只读记账
+  `<wps:cNvSpPr txBox="1"><a:spLocks noChangeArrowheads="1" noEditPoints="1"/></wps:cNvSpPr>` +
+  `<wps:spPr><a:xfrm/></wps:spPr>` +
   `<wps:txbx><w:txbxContent><w:p><w:r><w:t>文本框正文</w:t></w:r></w:p></w:txbxContent></wps:txbx>` +
   `<wps:bodyPr anchor="ctr" wrap="square" vert="horz" numCol="1" lIns="91440" tIns="45720"` +
   ` rIns="91440" bIns="91440" anchorCtr="0" rtlCol="0" compatLnSpc="0" upright="0" rot="0"` +
@@ -355,6 +364,17 @@ const FIXTURE_DOC =
   // w:position：CT_RPr 里没有 w:pos 这枚元素，Word 与 docx 库发的都是 w:position，
   // 旧读名让那 338 字面从没进过分子、屏上升降对真实件一次都没生效
   `<w:p><w:r><w:rPr><w:position w:val="24"/></w:rPr><w:t>升上去的字</w:t></w:r></w:p>` +
+  // v0.154：隐藏文字（w:vanish）。屏上走 visibility: hidden 而不是 display:none——
+  // Word 的隐藏文字不显示却仍占版面，抹掉布局等于改了周围排版。写侧有原生槽（可往返）
+  `<w:p><w:r><w:rPr><w:vanish w:val="1"/></w:rPr><w:t>看不见的字</w:t></w:r></w:p>` +
+  // v0.154：智能标记壳（w:smartTag，Word 2003 那一代的「认出这是个地址/人名」）。
+  // 壳本身不产文字也不改排版（字一个都不少），element 与 uri 是它仅有的两枚信息
+  `<w:p><w:smartTag w:element="address" w:uri="urn:schemas-microsoft-com:office:smarttags">` +
+  `<w:r><w:t>智能标记里的字</w:t></w:r></w:smartTag></w:p>` +
+  // v0.154：批注引用（w:commentReference）。批注区间由 commentRangeStart/End 那对包出来，
+  // 这一枚不产可见文字，但它的 w:id 是「指向哪一条批注」——同一条链上的第三处 id
+  `<w:p><w:commentRangeStart w:id="1"/><w:r><w:t>被批注的字</w:t></w:r><w:commentRangeEnd w:id="1"/>` +
+  `<w:r><w:commentReference w:id="1"/></w:r></w:p>` +
   // v0.150：文档级标记三族——proofErr（拼写/语法检查标记，body 直子）、
   // mc:Choice（AlternateContent 的兼容分支）都不在任何读手路径上，块遍历前先查问
   `<w:proofErr w:type="spellStart"/>` +
@@ -369,8 +389,18 @@ const FIXTURE_DOC =
   `<w:tbl><w:tblPr><w:tblStyle w:val="TableGrid"/>` +
   `<w:tblpPr tblpX="10" tblpXSpec="absolute" tblpY="10" vertAnchor="top" horzAnchor="page"` +
   ` topFromText="0" leftFromText="108" bottomFromText="0" rightFromText="108" overlap="never"/>` +
+  // v0.154：表与浮动对象重叠的许可（tblOverlap 排在 tblpPr 之后、bandSize 之前——
+  // CT_TblPrBase 序：tblStyle → tblpPr → **tblOverlap** → bidiVisual → bandSize → tblW → …）
+  `<w:tblOverlap w:val="never"/>` +
   `<w:tblStyleRowBandSize w:val="1"/><w:tblStyleColBandSize w:val="2"/>` +
-  `<w:tblW w:w="5000" w:type="dxa"/></w:tblPr>` +
+  `<w:tblW w:w="5000" w:type="dxa"/>` +
+  // v0.154：单元格间距（tblCellSpacing，排在 tblW/jc 之后、tblInd 之前）与表条件格式
+  // 落点开关十三枚（cnfStyle，与 tblStyle 同住 tblPr 头一档）
+  `<w:tblCellSpacing w:w="144" w:type="dxa"/>` +
+  `<w:cnfStyle w:val="000000100000" w:firstRow="1" w:lastRow="0" w:firstColumn="1" w:lastColumn="0"` +
+  ` w:oddHBand="1" w:evenHBand="0" w:oddVBand="1" w:evenVBand="0" w:firstRowFirstColumn="1"` +
+  ` w:firstRowLastColumn="0" w:lastRowFirstColumn="0" w:lastRowLastColumn="0"/>` +
+  `</w:tblPr>` +
   `<w:tblGrid><w:gridCol w:w="5000"/></w:tblGrid>` +
   // v0.152：单元格不换行（w:tcPr/w:noWrap，排在 tcW 之后——CT_TcPr 序）
   `<w:tr><w:tc><w:tcPr><w:tcW w:w="5000" w:type="dxa"/><w:noWrap/></w:tcPr>` +
@@ -776,6 +806,21 @@ const MUST_SEE = [
   'chExt|cx', 'chExt|cy', 'chOff|x', 'chOff|y', 'f|eqn',
   'wrap|anchorx', 'wrap|anchory', 'wrap|side', 'wrap|type', 'cxnSpLocks|noChangeShapeType',
   'object|dxaOrig', 'object|dyaOrig', 'OLEObject|DrawAspect', 'OLEObject|ObjectID', 'OLEObject|ShapeID',
+  // v0.154：图片源裁剪框 / 表间距 / 隐藏文字（三族读写或读侧兑现）
+  'srcRect|t', 'srcRect|r', 'srcRect|b', 'srcRect|l',
+  'tblCellSpacing|w', 'tblCellSpacing|type',
+  'vanish|val',
+  // v0.154：批注族（改由读手走 attr 漏斗读，不再是正则盲区）+ 脚注尾注根 Ignorable
+  'comment|id', 'comment|author', 'comment|date', 'comment|initials',
+  'commentEx|done', 'comments|Ignorable', 'commentsEx|Ignorable', 'commentReference|id',
+  'footnotes|Ignorable', 'endnotes|Ignorable',
+  // v0.154：纯只读记账三族——表条件格式落点开关十三枚、智能标记两枚、表重叠许可与形状锁
+  'cnfStyle|val', 'cnfStyle|firstRow', 'cnfStyle|lastRow', 'cnfStyle|firstColumn', 'cnfStyle|lastColumn',
+  'cnfStyle|oddHBand', 'cnfStyle|evenHBand', 'cnfStyle|oddVBand', 'cnfStyle|evenVBand',
+  'cnfStyle|firstRowFirstColumn', 'cnfStyle|firstRowLastColumn',
+  'cnfStyle|lastRowFirstColumn', 'cnfStyle|lastRowLastColumn',
+  'smartTag|element', 'smartTag|uri',
+  'tblOverlap|val', 'spLocks|noChangeArrowheads', 'spLocks|noEditPoints',
 ]
 // 我放进夹具而读手一寸不查的：t 的 xml:space 是**裁定不查**——escText 无条件保留空白
 // （连续空格第二个起换 nbsp），强于 preserve 所需，查了也没有第二行代码可写。
@@ -969,6 +1014,36 @@ async function runSelftest(reader) {
       `</Relationships>`,
   )
   zip.file('word/media/image1.png', Buffer.from(PNG_B64, 'base64'))
+  // v0.154：批注两份部件——w:comment 的四枚（id/author/date/initials）与两份部件根
+  // 上的 mc:Ignorable，外加 commentsExtended 里 w15:commentEx 的 paraId 与 done
+  // （done="1" 的那条批注在模型里标 resolved）。保真路径由读手走 attr 漏斗读
+  zip.file(
+    'word/comments.xml',
+    `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>` +
+      `<w:comments xmlns:w="${W}" xmlns:w14="${W14}" xmlns:mc="${MC}" mc:Ignorable="w14">` +
+      `<w:comment w:id="1" w:author="张三" w:initials="ZS" w:date="2026-10-25T10:00:00Z">` +
+      `<w:p w14:paraId="0F1E2D3C"><w:r><w:t>这条批注</w:t></w:r></w:p></w:comment>` +
+      `</w:comments>`,
+  )
+  zip.file(
+    'word/commentsExtended.xml',
+    `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>` +
+      `<w15:commentsEx xmlns:w15="${W15}" xmlns:mc="${MC}" mc:Ignorable="w15">` +
+      `<w15:commentEx w15:paraId="0F1E2D3C" w15:done="1"/>` +
+      `</w15:commentsEx>`,
+  )
+  // v0.154：脚注与尾注部件根上的 mc:Ignorable（v0.152 收的 numbering/styles 那两枚的
+  // 第三、四处）。两个部件都是空的——这里要的只是根上那一枚属性被按名查问
+  zip.file(
+    'word/footnotes.xml',
+    `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>` +
+      `<w:footnotes xmlns:w="${W}" xmlns:mc="${MC}" mc:Ignorable="w14"></w:footnotes>`,
+  )
+  zip.file(
+    'word/endnotes.xml',
+    `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>` +
+      `<w:endnotes xmlns:w="${W}" xmlns:mc="${MC}" mc:Ignorable="w14"></w:endnotes>`,
+  )
   const bytes = new Uint8Array(await zip.generateAsync({ type: 'arraybuffer', compression: 'STORE' }))
   seen.clear()
   const out = await reader.docxToHtmlFidelity(bytes)

@@ -54,7 +54,6 @@ import { CELL_EDGES, CSS_BORDER_STYLE, FRAME_NUMERIC_KEYS, FRAME_STR_KEYS, IMG_A
 import { ooxmlLine } from './paragraph-style'
 import {
   asTableCondType,
-  commentRowsOf,
   type DocComment,
   type DocxLsdException,
   type DocxLatentStyles,
@@ -553,6 +552,18 @@ function readTblPrPayload(tblPr: XEl | undefined): string {
   if (col !== undefined) kv.colBand = String(col)
   const row = valNum(tblPr, 'w:tblStyleRowBandSize')
   if (row !== undefined) kv.rowBand = String(row)
+  // 单元格间距（v0.154）：w 是缇（dxa 档），type 记原档位（写侧原样发回）。
+  // 同一标签多枚元素按出现序取首个非空——与 table() 里屏上那一半同一口径
+  for (const sp of all(tblPr, 'w:tblCellSpacing')) {
+    if (kv.cellSp === undefined) {
+      const v = attrNum(sp, 'w')
+      if (v !== undefined) kv.cellSp = String(v)
+    }
+    if (!kv.cellSpType) {
+      const t = (attr(sp, 'w:type') ?? '').toLowerCase()
+      if (t) kv.cellSpType = t
+    }
+  }
   return tblPrPayload(kv)
 }
 
@@ -597,6 +608,36 @@ function readPprPayload(pPr: XEl | undefined): string {
  * 这种带百分号的串。CSS 的 clip-path:inset() 收百分比，两边只差一个「小数还是百分数」
  * 的换算。认不出来（空串、非数字）返回 undefined，调用方按「这一边没裁」处理。
  */
+/**
+ * 图片裁剪 → CSS `clip-path: inset()`（v0.154）。
+ *
+ * 两代写法裁的是同一件事：老式件的 `v:imagedata` 用 croptop/right/bottom/left（ST_Fraction，
+ * 0..1 的小数或 `"5%"` 串），新式件的 `a:srcRect` 用 t/r/b/l（ST_Percentage，**千分比**
+ * 整数：25000 = 25%）。序都是 上/右/下/左，与 CSS inset 一致，只差换算。
+ * 两族都在时按 VML 那一族（Word 的兼容落法里老式值才是它真用的那一套）。
+ *
+ * 都在 `w:drawing`/`w:pict` 子树里按元素名深找：crop 只认 `v:imagedata`（a:blip 没有
+ * 这组属性，问了就是假账），srcRect 只认 `a:srcRect`。
+ */
+function imgClipCss(el: XEl): string {
+  const vml = findDesc(el, 'imagedata')
+  const crop = (['croptop', 'cropright', 'cropbottom', 'cropleft'] as const).map((n) => cropPct(attrL(vml, n)))
+  if (crop.some((v) => v)) return `clip-path:inset(${crop.map((v) => v ?? 0).join('% ')}%)`
+  const srs = allDesc(el, 'srcRect')
+  if (!srs.length) return ''
+  const box = (['t', 'r', 'b', 'l'] as const).map((n) => {
+    for (const s of srs) {
+      const raw = attrL(s, n)
+      if (raw === undefined || !raw.trim()) continue
+      const v = Number(raw)
+      if (Number.isFinite(v)) return Math.max(0, Math.min(100, v / 1000))
+    }
+    return undefined
+  })
+  if (!box.some((v) => v)) return ''
+  return `clip-path:inset(${box.map((v) => v ?? 0).join('% ')}%)`
+}
+
 function cropPct(raw: string | undefined): number | undefined {
   if (!raw) return undefined
   const s = raw.trim()
@@ -899,6 +940,15 @@ function readImgPayload(el: XEl): string {
     for (const [k, n] of [['rcT', 't'], ['rcL', 'l'], ['rcB', 'b'], ['rcR', 'r']] as const) {
       const v = attrL(r, n)
       if (v !== undefined && kv[k] === undefined) kv[k] = v
+    }
+  }
+  // a:srcRect（v0.154）：blipFill 的**源裁剪框**——从原图哪一块取像素。四边是千分比
+  // （25000 = 25%），与 VML 的 crop 是同一件事的新式写法。屏上那一半由 imgClipCss 兑现，
+  // 这里存原值只为往返（写侧发不出 a:srcRect，是单边通道——见审计文档）
+  for (const sr of allDesc(el, 'srcRect')) {
+    for (const [k, n] of [['srT', 't'], ['srR', 'r'], ['srB', 'b'], ['srL', 'l']] as const) {
+      const v = attrL(sr, n)
+      if (v !== undefined && v.trim() && kv[k] === undefined) kv[k] = v
     }
   }
   return imgPayload(kv)
@@ -1389,6 +1439,12 @@ interface RunProps {
    */
   caps?: boolean
   /**
+   * w:vanish/@w:val：隐藏文字（v0.154）。屏上走 visibility: hidden——不是 display:none，
+   * 因为 Word 的隐藏文字不显示却仍占版面（行高与分页照算），抹掉布局等于改了周围排版。
+   * 与 caps 同纪律：「关」（val=0）与「没写」往返同结果，只存 true
+   */
+  vanish?: boolean
+  /**
    * w:bdr 四属性（v0.152）：字符边框。val 是线型枚举（single/dotted/…），sz 是
    * 八分之一磅，space 是磅，color 是 hex。屏上走 CSS border——sz/space 两枚要换算，
    * 其余原样。四枚都没写不挂
@@ -1478,6 +1534,9 @@ function readRPr(el: XEl | undefined, p: RunProps, tc?: ThemeColors): RunProps {
   // 「关」与「没写」同结果，只存 true
   const cp = on(find(el, 'w:caps'))
   if (cp) o.caps = true
+  // 隐藏文字（v0.154）：与 caps/smallCaps 平级的一枚 onOff。「关」与「没写」同结果
+  const vn = on(find(el, 'w:vanish'))
+  if (vn) o.vanish = true
   // 字符边框（v0.152）：w:bdr 四属性一组。val 缺省按 single（OOXML 默认线型），
   // 但一枚都不带时不挂载荷——Word 少写哪一枚就少哪一枚的屏上效果
   const bdrEl = find(el, 'w:bdr')
@@ -1524,6 +1583,8 @@ function cssOf(p: RunProps): string {
   if (p.va === undefined && p.pos !== undefined) bits.push(`vertical-align: ${px2((p.pos / 2) * PT_PX)}px`)
   // 全大写（v0.152）：CSS 的 text-transform 正好是这一个（smallCaps 走 font-variant，同类不同族）
   if (p.caps) bits.push('text-transform: uppercase')
+  // 隐藏文字（v0.154）：用 visibility 不用 display——占位得留着，否则整段行距与分页都变了
+  if (p.vanish) bits.push('visibility: hidden')
   // 字符边框（v0.152）：w:bdr → CSS border。sz 是八分之一磅、space 是磅，两枚都要换算；
   // 缺 sz 时给 1px（Word 少写这一枚时屏上也得有条线，粗细取最细一档）
   if (p.bdr) bits.push(bdrCss(p.bdr))
@@ -1641,6 +1702,8 @@ function marked(inner: string, p: RunProps): string {
     // v0.152：全大写与字符边框。caps 屏上已由 cssOf 兑现（text-transform），载荷只为往返；
     // bdr 的屏上那一半同样在 cssOf（border），载荷带齐四枚（缺的槽留空串）
     p.caps ? ' data-caps="1"' : '',
+    // v0.154：隐藏文字。屏上那一半在 cssOf（visibility: hidden），载荷只为往返
+    p.vanish ? ' data-vanish="1"' : '',
     p.bdr ? ` data-bdr="${p.bdr.val};${p.bdr.sz ?? ''};${p.bdr.space ?? ''};${p.bdr.color ?? ''}"` : '',
   ].join('')
   if (css || extra) s = `<span${css ? ` style="${css}"` : ''}${extra}>${s}</span>`
@@ -1908,7 +1971,10 @@ class Fidelity {
   }
 
   setComments(commentsXml: string, extXml: string) {
-    this.comments = commentRowsOf(commentsXml, extXml)
+    // v0.154：保真路径改由读手走 attr 漏斗读（下面 readComments）——docx.ts 那份
+    // commentRowsOf 是正则读的，读是读了但**进不了保真账本**（与 v0.147 之前节属性
+    // 那一处欠账同一款）。兜底（mammoth）路径不进账本，仍用 commentRowsOf
+    this.comments = readComments(commentsXml, extXml)
   }
 
   async run(documentXml: string): Promise<{ html: string; blocks: number }> {
@@ -2562,7 +2628,6 @@ class Fidelity {
       // （w:del / w:moveFrom 不在这里——它们在下面有各自的修订分支）
       case 'pPr':
       case 'proofErr':
-      case 'commentReference':
       case 'lastRenderedPageBreak':
       case 'delInstrText':
       case 'delText':
@@ -2590,6 +2655,13 @@ class Fidelity {
         // 域代码原文本身不显示，但 SEQ/REF 要靠它才知道该现算什么
         const f = st.stack[st.stack.length - 1]
         if (f) f.instr += textOf(node)
+        return
+      }
+      case 'commentReference': {
+        // 批注引用（v0.154）：不产可见文字（批注标记由 commentRangeStart/End 那一对
+        // 区间包出来），但它的 w:id 是「这条引用指向哪一条批注」——与 rangeStart/End
+        // 同一条链上的第三处 id。读手按区间定范围、这一枚只在账上，屏上零兑现
+        attr(node, 'w:id')
         return
       }
       case 'commentRangeStart': {
@@ -2776,11 +2848,20 @@ class Fidelity {
       case 'sdt':
       case 'sdtContent':
       case 'customXml':
-      case 'smartTag':
       case 'bdo':
       case 'dir':
         await this.children(node, props, st)
         return
+      case 'smartTag': {
+        // 智能标记（v0.154）：Word 2003 那一代的「认出这是个地址/人名/日期」的包裹壳，
+        // 现在已废弃——壳本身对排版与文字都没有后果（上面 sdt 那一支同款：原样下钻），
+        // 但 element（认出的是哪一类）与 uri（那一类的命名空间）是它仅有的两枚信息，
+        // 只读记账。字一个都不少：下钻照旧
+        attrL(node, 'element')
+        attrL(node, 'uri')
+        await this.children(node, props, st)
+        return
+      }
       case 'ins':
       case 'del': {
         // 修订壳（v0.100）：插入的文字照常读但带上插入标记，删除的文字从 w:delText 里
@@ -3061,15 +3142,8 @@ class Fidelity {
     // 只在 VML 那一支上读裁剪：crop 四边是 v:imagedata 的属性，a:blip（DrawingML）身上
     // 没有这组属性，混着读一次就是在账本上记四枚「读手问过 blip 要 crop」的假对——
     // 与 noteVmlShellMarks 只在 w:pict 里扫是同一个道理
-    const vmlImg = blip && local(blip.name) === 'imagedata' ? blip : undefined
-    const crop = [
-      cropPct(attrL(vmlImg, 'croptop')),
-      cropPct(attrL(vmlImg, 'cropright')),
-      cropPct(attrL(vmlImg, 'cropbottom')),
-      cropPct(attrL(vmlImg, 'cropleft')),
-    ]
-    const clip = crop.some((v) => v) ? ` style="clip-path:inset(${crop.map((v) => v ?? 0).join('% ')}%)"` : ''
-    return `<img src="data:${mime};base64,${b64}"${size}${clip}${alt ? ` alt="${esc(alt)}"` : ''}${shell ? ` ${IMG_ATTR}="${esc(shell)}"` : ''}>`
+    const clip = imgClipCss(el)
+    return `<img src="data:${mime};base64,${b64}"${size}${clip ? ` style="${clip}"` : ''}${alt ? ` alt="${esc(alt)}"` : ''}${shell ? ` ${IMG_ATTR}="${esc(shell)}"` : ''}>`
   }
 
   private mediaOf(path: string): Promise<string | null> {
@@ -3099,6 +3173,22 @@ class Fidelity {
       const sp = edgeSpacePx(find(tblBordersEl, `w:${edge}`))
       if (sp > 0) tbSpace[edge] = sp
     }
+    // 表级单元格间距（v0.154）：w:tblCellSpacing 的 w:w 与 w:type。CSS 的 border-spacing
+    // 是它的对应物，但**只在 border-collapse: separate 下生效**——表声明了间距就得切到
+    // separate（Word 那边同样是「有间距就不共享格边」）。dxa 档是缇，pct 档的基数是表宽
+    // 而 CSS 的 border-spacing 不收百分比，如实告警、仍走载荷往返。
+    // 同一标签多枚元素都扫：真实件里 type 与 w 同住一枚 w:tblCellSpacing 上，但分着写的
+    // 也见过——按出现序取首个非空，与 v:rect 四边同款
+    let spW: number | undefined
+    let spType = ''
+    for (const sp of all(tblPr, 'w:tblCellSpacing')) {
+      if (spW === undefined) spW = attrNum(sp, 'w')
+      if (!spType) spType = (attr(sp, 'w:type') ?? '').toLowerCase()
+    }
+    if (spW !== undefined && spType && spType !== 'dxa') this.warn(`表单元格间距档位 w:tblCellSpacing/@w:type=${spType} 未保留（CSS 的 border-spacing 不收百分比）`)
+    // 表与浮动对象重叠的许可（v0.154）：Word 用 w:tblOverlap 记「这张表能不能和浮动的
+    // 图叠在一起」。Web 流式排版没有浮动层，屏上零兑现，只按名查问上账
+    attr(find(tblPr, 'w:tblOverlap'), 'w:val')
     const tblInd = tblPr ? attrNum(find(tblPr, 'w:tblInd'), 'w') : undefined
     // w:tblInd/@w:type（v0.144）：dxa（默认）时 w:w 是缇，现状读的就是它；pct 档 w:w 是
     // 百分之五十步长（ST_MeasurementOrPercent），nil 是不缩进、chars 是字符。非 dxa 档
@@ -3220,7 +3310,10 @@ class Fidelity {
     }
     const acctKnown = gridKnown || !!tblTotal
     // 记账完成后才出 HTML：rowspan 要等所有行的 continue 都数完
-    const tblStyle = tblInd ? tableIndentCss(Math.round(tblInd * TWIP_PX)) : ''
+    // 单元格间距的屏上那一半（v0.154）：有间距就必须同时切到 separate——
+    // CSS 的 border-spacing 在 collapse 下被忽略，而 Word 有间距时也不共享格边
+    const spCss = spW !== undefined && spW > 0 && (!spType || spType === 'dxa') ? `border-collapse: separate; border-spacing: ${px2(spW * TWIP_PX)}px` : ''
+    const tblStyle = [tblInd ? tableIndentCss(Math.round(tblInd * TWIP_PX)) : '', spCss].filter(Boolean).join('; ')
     // 表样式身份（v0.114）：样式 id 认得出才挂标签——认不出的 id 我们既没带定义、也没创同名
     // 引用（挂上去就是一枚指向不存在的 w:tblStyle）；表样式的**外观**不受影响，它早已逐格塌进
     // 内联样式（`styleId` 那五层合并的输出），挂标签多的是"改一处全表跟着变"的能力
@@ -3989,6 +4082,10 @@ function noteBodiesOf(
   if (!xml.trim()) return out
   const root = findDesc(parseXml(xml), `w:${tag}s`)
   if (!root) return out
+  // v0.154：部件根上的 mc:Ignorable（与 numbering/styles 两处同款——v0.152 收的那两枚
+  // 的第三、四处）。「这个部件身上声明了哪些可忽略的命名空间」读写两侧都用不上
+  // （我们照单全收、不挑命名空间），但它是这一份件的身份的一部分，只读记账
+  attrL(root, 'Ignorable')
   const label = tag === 'footnote' ? '脚注' : '尾注'
   for (const el of all(root, `w:${tag}`)) {
     const type = (attr(el, 'w:type') ?? '').toLowerCase()
@@ -4005,6 +4102,66 @@ function noteBodiesOf(
     )
   }
   return out
+}
+
+/**
+ * 批注部件（v0.154）：word/comments.xml 的 `w:comment` 四枚（id/author/date/initials）、
+ * word/commentsExtended.xml 的 `w15:commentEx/@w15:done`，加两份部件根上的 mc:Ignorable。
+ *
+ * 原来保真路径与 mammoth 兜底路径共用 `docx.ts` 的 `commentRowsOf`——那是**正则**读的，
+ * 不进 attr 漏斗，于是「批注是谁写的、什么时候写的」在保真账本上是盲区（读是读了、
+ * 账上没有，与 v0.147 之前节属性那一处欠账同一款）。保真路径改走漏斗，兜底路径不动。
+ *
+ * `initials`（作者姓名缩写）与 author 同属批注身份链，目前只随模型带走、UI 不显示——
+ * 写侧也不回写（批注是"另存时原样带回去"的那一类，不是我们生成的）。
+ */
+function readComments(commentsXml: string, extXml: string): DocComment[] {
+  const out: DocComment[] = []
+  if (!commentsXml.trim()) return out
+  const root = findDesc(parseXml(commentsXml), 'w:comments')
+  if (!root) return out
+  attrL(root, 'Ignorable')
+  // 已解决的那几条：commentsExtended 里 done="1" 的 paraId。Word 写 w15: 前缀的属性式，
+  // docx 库写 w15:val 元素式——按 local name 收，两种形态都认
+  const done = new Set<string>()
+  if (extXml.trim()) {
+    const ext = findDesc(parseXml(extXml), 'w:commentsEx')
+    if (ext) {
+      attrL(ext, 'Ignorable')
+      for (const ex of allDesc(ext, 'commentEx')) {
+        const pid = attrL(ex, 'paraId')
+        const d = onOff(attrL(ex, 'done'))
+        if (pid && d) done.add(pid.toUpperCase())
+      }
+    }
+  }
+  for (const c of all(root, 'w:comment')) {
+    const id = Number(attr(c, 'w:id'))
+    if (!Number.isFinite(id)) continue
+    const author = attr(c, 'w:author')
+    const date = attr(c, 'w:date')
+    const initials = attr(c, 'w:initials')
+    // 批注正文：与脚注同口径，段落之间换行
+    const text = all(c, 'w:p').map((p) => plainText(p)).join('\n')
+    // 段落身份（w14:paraId）：把这条批注与 commentsExtended 里那条 done 对上
+    let paraId: string | undefined
+    for (const p of allDesc(c, 'p')) {
+      const v = attrL(p, 'paraId')
+      if (v) {
+        paraId = v
+        break
+      }
+    }
+    out.push({
+      id,
+      text,
+      ...(author ? { author } : {}),
+      ...(date ? { date } : {}),
+      ...(initials ? { initials } : {}),
+      ...(paraId && done.has(paraId.toUpperCase()) ? { resolved: true } : {}),
+    })
+  }
+  return out.sort((a, b) => a.id - b.id)
 }
 
 function plainText(el: XEl): string {
@@ -4062,6 +4219,13 @@ function noteShapeMarks(doc: XEl | undefined): void {
   // （段内有 blip，短路链通），这里补 wsp 段那枚——两处都查问，同对只记一次
   const sc = findDesc(doc, 'schemeClr')
   if (sc) attrL(sc, 'val')
+  // a:spLocks（v0.154）：形状自己的两把锁——不许改箭头、不许改顶点。与 a:picLocks
+  // （图片那一把，readImgPayload 收）是同一族的两支，壳上零兑现（Web 没有"锁定编辑"），
+  // 只读记账
+  for (const el of allDesc(doc, 'spLocks')) {
+    onOff(attrL(el, 'noChangeArrowheads'))
+    onOff(attrL(el, 'noEditPoints'))
+  }
 }
 
 /**
@@ -4166,6 +4330,29 @@ function noteVmlShellMarks(doc: XEl | undefined): void {
   }
 }
 
+/**
+ * 表条件格式的落点开关（v0.154）：`w:cnfStyle` 十三枚——这一格/这一行/这一列算不算
+ * 「首行/末行/奇偶数行/首列/末列/四角」，Word 的表样式靠这十三枚决定套哪一档条件格式。
+ *
+ * 屏上零兑现（我们没有表样式的条件层，tblLook 那道闸门只管样式自己声明的那几档），
+ * 写侧也发不出（包只发它认得的表属性），是纯只读记账。
+ *
+ * 按整树扫而不按 tblPr/tcPr 找：这一枚在真件里两种容器都住（表级 tblPr 与逐格 tcPr），
+ * 而它的 local name 不与别家撞（cnfStyle 只此一处），整树扫不会记假账。
+ */
+const CNF_STYLE_ATTRS = [
+  'val', 'firstRow', 'lastRow', 'firstColumn', 'lastColumn',
+  'oddHBand', 'evenHBand', 'oddVBand', 'evenVBand',
+  'firstRowFirstColumn', 'firstRowLastColumn', 'lastRowFirstColumn', 'lastRowLastColumn',
+] as const
+
+function noteCnfStyleMarks(doc: XEl | undefined): void {
+  if (!doc) return
+  for (const el of allDesc(doc, 'cnfStyle')) {
+    for (const n of CNF_STYLE_ATTRS) attrL(el, n)
+  }
+}
+
 /** bodyPr（CT_TextBodyProperties）的属性面——noteShapeMarks 的查问清单 */
 const BODYPR_ATTRS = [
   'anchor', 'anchorCtr', 'bIns', 'compatLnSpc', 'forceAA', 'fromWordArt',
@@ -4206,6 +4393,8 @@ export async function docxToHtmlFidelity(bytes: Uint8Array, depth = 0): Promise<
   // 压根没图时 bitmap() 第一步就返回 null），图片短路链够不着，跑正文前按名查问。
   // 两份 documentXml 各 parse 一次是浪费，但这两族都在「跑正文前」这一格，与 run() 分开
   noteVmlShellMarks(parseXml(documentXml))
+  // 表条件格式十三枚（v0.154）：w:cnfStyle 在 tblPr 与 tcPr 里都住，整树扫一遍
+  noteCnfStyleMarks(parseXml(documentXml))
   const { html, blocks } = await f.run(documentXml)
   // 节属性（v0.147）：body 末尾 sectPr 走 attr 漏斗读一遍。这一族原本是 docxToDocMeta
   // 用正则读的（正则不进漏斗，保真账本上是盲区——读是读了，账上没有）；改由读手读、

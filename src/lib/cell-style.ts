@@ -414,8 +414,14 @@ export function parseTblPrPayload(raw: string | null | undefined): TblPrPayload 
     if (i <= 0) continue
     const k = item.slice(0, i).trim()
     const v = item.slice(i + 1).trim()
-    if ((k !== 'colBand' && k !== 'rowBand') || !/^\d+$/.test(v)) continue
-    out[k] = v
+    // v0.154：cellSp（w:tblCellSpacing/@w:w，缇）与 cellSpType（dxa/pct/auto 档位名）。
+    // 前者与 bandSize 同款（非负整数），后者是枚举串、不走数字校验
+    if (k === 'colBand' || k === 'rowBand' || k === 'cellSp') {
+      if (!/^\d+$/.test(v)) continue
+      out[k] = v
+    } else if (k === 'cellSpType' && /^[a-z]+$/.test(v)) {
+      out[k] = v
+    }
   }
   return out
 }

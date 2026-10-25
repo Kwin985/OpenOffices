@@ -163,6 +163,14 @@ export const CharExtra = Mark.create({
           return { 'data-bdr': raw, style: `${pad}border: ${w}px ${style} ${c}` }
         },
       },
+      // vanish（v0.154）：隐藏文字。CSS 用 visibility: hidden 而不是 display:none
+      // ——Word 的隐藏文字不显示但**仍占版面**（行高、分页照算），display:none 会把它
+      // 从布局里抹掉，等于改变了周围的排版。载荷 '1'（隐藏）或 null（与 iCs/bCs 同纪律）
+      vanish: {
+        default: null as string | null,
+        parseHTML: (el: HTMLElement) => str(el.getAttribute('data-vanish')),
+        renderHTML: (attrs: Record<string, unknown>) => (str(attrs.vanish) ? { 'data-vanish': '1', style: 'visibility: hidden' } : {}),
+      },
     }
   },
 
@@ -182,6 +190,7 @@ export const CharExtra = Mark.create({
       { tag: 'span[data-smallcaps]' },
       { tag: 'span[data-caps]' },
       { tag: 'span[data-bdr]' },
+      { tag: 'span[data-vanish]' },
     ]
   },
 

@@ -67,6 +67,8 @@ function textValue(node: PMNode): string {
 export interface DocComment {
   id: number
   author?: string
+  /** 作者姓名缩写（w:comment/@w:initials，v0.154）：与 author 同属批注身份链，UI 暂不显示 */
+  initials?: string
   date?: string
   text: string
   resolved?: boolean
@@ -1592,6 +1594,9 @@ function withCharExtra<T extends object>(opts: T, child: PMNode): T {
   // 与 IRunOptions.border，dist/index.d.ts:1660 与 :1674）——库里实现着、类型也写着，
   // 不走库外断言（与上面 szcs/lang 那一族不同）
   const caps = str('caps')
+  // v0.154：隐藏文字。同样是**类型面全暴露**的原生槽（IRunOptions.vanish，
+  // dist/index.d.ts:1679），包里实现着、类型也写着——与 allCaps 同路数，不走库外断言
+  const vanish = str('vanish')
   const bdr = str('bdr')
   const extra: Record<string, unknown> = {}
   if (szcs !== undefined && szcs > 0) extra.sizeComplexScript = szcs
@@ -1604,6 +1609,7 @@ function withCharExtra<T extends object>(opts: T, child: PMNode): T {
   if (bcs) extra.boldComplexScript = true
   if (sc) extra.smallCaps = true
   if (caps) extra.allCaps = true
+  if (vanish) extra.vanish = true
   // 字符边框（v0.152）：w:bdr 四枚 → 包的 IRunOptions.border。val 是线型枚举、
   // sz 是八分之一磅、space 是磅、color 是 hex；缺的枚不给（包自己有默认）。
   // **type 面是 BorderStyle 枚举**（SINGLE/DOTTED/…），而 OOXML 的 val 是小写串
@@ -1661,6 +1667,12 @@ interface DocTrack {
    */
   tblPrs: string[]
   /**
+   * 表级单元格间距（v0.154）：与 tblPrs 同序同长（同一枚 `<w:tblPr>` 的第二笔补丁）。
+   * 之所以不与 tblPrs 合并成一串：两族在 CT_TblPrBase 的序里**分居 tblW 两侧**
+   * （bandSize 在前、tblCellSpacing 在后），必须各自找自己的插入锚点
+   */
+  cellSps: string[]
+  /**
    * 单元格不换行（v0.152）：与 document.xml 里每个 `<w:tc>` 一一对应、同序（含嵌套
    * 表内的格——两族各自按自己的元素出现序对位，互不干扰）。包里没有 noWrap 的槽，
    * 走打包后补丁按 `<w:tc>` 出现序插 `<w:noWrap/>`（计数闸门同 pprExtras）
@@ -1693,6 +1705,7 @@ function newDocTrack(): DocTrack {
     pprExtras: [],
     tblLooks: [],
     tblPrs: [],
+    cellSps: [],
     cellExtras: [],
     imgExtras: [],
   }
@@ -2037,6 +2050,9 @@ function blocksOf(
       // 表级条件格式尺寸（v0.152）：两枚 bandSize 与 tblLook 同住 tblPr、同序登记，
       // 共用 patchTblLook 那一次解压/重压
       dt.tblPrs.push(tblPrXmlOf(node.attrs?.tblPr))
+      // 单元格间距（v0.154）：同一张表的第二笔 tblPr 补丁，插入锚点与 bandSize 不同
+      // （序里排在 tblW 之后），所以单列一条登记，共用那一次解压/重压
+      dt.cellSps.push(tblCellSpacingXmlOf(node.attrs?.tblPr))
       out.push(
         new Table({
           // 表样式引用（v0.114）：表身上这枚 data-tstyle 就是 w:tblStyle，
@@ -2324,7 +2340,7 @@ export async function prosemirrorToDocxBytes(json: PMNode, meta?: DocMeta): Prom
   const withImg = await patchImgXml(withPara, dt.imgExtras)
   // 表闸门三样都要补：样式推出来的（looks）与表自己带的（dt.tblLooks），
   // v0.152 起再加表级条件格式尺寸两枚（dt.tblPrs，与 tblLook 同住 tblPr）
-  const needTbl = looks.size || dt.tblLooks.some((x) => x) || dt.tblPrs.some((x) => x)
+  const needTbl = looks.size || dt.tblLooks.some((x) => x) || dt.tblPrs.some((x) => x) || dt.cellSps.some((x) => x)
   // 单元格不换行（v0.152）：包里没有 noWrap 的槽，按 <w:tc> 出现序插 <w:noWrap/>
   const withCell = dt.cellExtras.some((x) => x) ? await patchTcPr(withImg, dt.cellExtras) : withImg
   const withStyles = props.size || latent
@@ -2332,9 +2348,9 @@ export async function prosemirrorToDocxBytes(json: PMNode, meta?: DocMeta): Prom
     : withCell
   if (numDefs.length) {
     const withNum = await patchNumberingXml(withStyles, numDefs)
-    return needTbl ? await patchTblLook(withNum, looks, dt.tblLooks, dt.tblPrs) : withNum
+    return needTbl ? await patchTblLook(withNum, looks, dt.tblLooks, dt.tblPrs, dt.cellSps) : withNum
   }
-  return needTbl ? patchTblLook(withStyles, looks, dt.tblLooks, dt.tblPrs) : withStyles
+  return needTbl ? patchTblLook(withStyles, looks, dt.tblLooks, dt.tblPrs, dt.cellSps) : withStyles
 }
 
 /**
@@ -2861,12 +2877,38 @@ function tblPrXmlOf(raw: unknown): string {
 }
 
 /**
+ * 单元格间距 → `<w:tblCellSpacing>`（v0.154）。w 是缇（dxa 档），type 原档位发回——
+ * 读侧 pct 档只记账不渲染，写侧照样原样写（那份数是从源件抄下来的，不该在往返里
+ * 被改成 dxa）。
+ *
+ * **与 bandSize 分开发、插在不同的锚点上**：CT_TblPrBase 的序里两枚 bandSize 排在
+ * `w:tblW` **之前**，而 `w:tblCellSpacing` 排在 `w:tblW`、`w:jc` **之后**（tblInd 之前）。
+ * 共用「插到第一个已知后续元素之前」那一套会把间距插到 tblW 前面，写出一枚序不对的
+ * 元素——Word 对 CT_TblPrBase 的序是认真的（判损坏件风险）。
+ */
+function tblCellSpacingXmlOf(raw: unknown): string {
+  const kv = parseTblPrPayload(typeof raw === 'string' ? raw : null)
+  if (kv.cellSp === undefined) return ''
+  const t = kv.cellSpType ? ` w:type="${xmlAttr(kv.cellSpType)}"` : ''
+  return `<w:tblCellSpacing w:w="${kv.cellSp}"${t}/>`
+}
+
+/** `w:tblCellSpacing` 的插入锚点：排在它**之后**的元素（CT_TblPrBase 序里 tblInd 起） */
+const AFTER_CELL_SPACING: string[] = ['tblInd', 'tblBorders', 'shd', 'tblLayout', 'tblCellMar', 'tblLook', 'tblCaption', 'tblDescription']
+
+/**
  * 给表格补 `<w:tblLook>`：一是引用了带条件层样式的表（按 styleId 查 `looks`，老路数），
  * 二是表**自己**带闸门的那一张（按出现序查 `own`，v0.147）——后者压过前者。
  * 两路都走同一处补丁：贴 `<w:tblPr>` 的末位（已有 w:tblLook 就整枚替换）。
  * 出现序的那一路由**计数闸门**兜底：`<w:tblPr>` 枚数与登记条数对不上就整笔放弃
  */
-async function patchTblLook(bytes: Uint8Array, looks: Map<string, string>, own: string[] = [], band: string[] = []): Promise<Uint8Array> {
+async function patchTblLook(
+  bytes: Uint8Array,
+  looks: Map<string, string>,
+  own: string[] = [],
+  band: string[] = [],
+  spacing: string[] = [],
+): Promise<Uint8Array> {
   const { default: JSZip } = await import('jszip')
   const zip = await JSZip.loadAsync(bytes)
   const file = zip.file('word/document.xml')
@@ -2894,6 +2936,12 @@ async function patchTblLook(bytes: Uint8Array, looks: Map<string, string>, own: 
       touched = true
       out = insertTblPrKids(out, bandMine)
     }
+    // 单元格间距（v0.154）：同一张表的第二笔补丁，锚点与 bandSize 不同（排在 tblW 之后）
+    const spFrag = spacing[i - 1] ?? ''
+    if (spFrag) {
+      touched = true
+      out = insertTblPrKids(out, spFrag, AFTER_CELL_SPACING)
+    }
     return out
   })
   if (!touched) return bytes
@@ -2908,8 +2956,9 @@ async function patchTblLook(bytes: Uint8Array, looks: Map<string, string>, own: 
  * tblStyleColBandSize** → tblW → …）。包里 tblW 恒发（Table 必有宽），所以锚点
  *  practically 总是 `<w:tblW`；找不着就退到第一个排在它们之后的元素，再不行才追加末尾
  */
-function insertTblPrKids(all: string, frag: string): string {
-  const AFTER = ['tblW', 'jc', 'tblCellSpacing', 'tblInd', 'tblBorders', 'shd', 'tblLayout', 'tblCellMar', 'tblLook', 'tblCaption', 'tblDescription']
+function insertTblPrKids(all: string, frag: string, after?: string[]): string {
+  // bandSize 那一族排在 tblW 之前（默认锚点）；单元格间距排在 tblW/jc 之后，自带锚点
+  const AFTER = after ?? ['tblW', 'jc', 'tblInd', 'tblBorders', 'shd', 'tblLayout', 'tblCellMar', 'tblLook', 'tblCaption', 'tblDescription']
   const at = firstIndexOf(all, AFTER)
   if (at >= 0) return all.slice(0, at) + frag + all.slice(at)
   return all.replace('</w:tblPr>', `${frag}</w:tblPr>`)
