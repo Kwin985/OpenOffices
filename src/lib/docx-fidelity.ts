@@ -2194,6 +2194,10 @@ class Fidelity {
           this.warn('目录（TOC 内容控件）已跳过，用本应用的「插入目录」重建')
           continue
         }
+        // 控件身份（v0.155）：与段内那一支同一条——块级内容控件也得把 sdtPr/w:id 问一遍
+        // （两种承放都真实存在：整段整表被包起来是块级，包住几个字是段内）
+        const bpr = find(n, 'w:sdtPr')
+        if (bpr) val(bpr, 'w:id')
         const r = await this.sequence(n.children, list, inCell)
         html += r.html
         items += r.items
@@ -4652,6 +4656,11 @@ const DRAWING_SHELL_ATTRS: Record<string, readonly string[]> = {
   glow: ['rad'],
   reflection: ['algn', 'blurRad', 'dir', 'dist', 'endA', 'endPos', 'fadeDir', 'kx', 'ky', 'stA', 'stPos', 'sx', 'sy'],
   lightRig: ['dir', 'rig'],
+  // 三维形状属性：**两个名字都问**。universe 这一族记的是 `props3d`（17 次/枚），
+  // 而 DrawingML 的 schema 里这个元素叫 `a:sp3d`（contourW/extrusionH/prstMaterial
+  // 正好是它的三枚属性）。手上没有能判定谁对谁错的参考，就把两个 local name 都查问：
+  // 问不存在的元素不产生账，问对了才上账——比赌一个名字安全
+  sp3d: ['contourW', 'extrusionH', 'prstMaterial'],
   props3d: ['contourW', 'extrusionH', 'prstMaterial'],
   blipFill: ['rotWithShape'],
   gradFill: ['flip', 'rotWithShape'],

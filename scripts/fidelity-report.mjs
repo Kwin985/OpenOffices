@@ -516,7 +516,10 @@ const FIXTURE_DOC =
   `<a:scene3d><a:camera prst="orthographicFront"><a:lightRig rig="threePt" dir="t"/></a:camera>` +
   `<a:backdrop><a:sp3d><a:bevelT w="63500" h="25400"/><a:contourClr>` +
   `<a:schemeClr val="accent2"/></a:contourClr></a:sp3d></a:backdrop></a:scene3d>` +
+  // 三维形状属性：真实 schema 叫 a:sp3d，universe 里那一族记的是 props3d——两个名字都放，
+  // 读手两个都问（问不到元素不产生账，两个都问比赌一个名字安全）
   `<a:sp3d contourW="12700" extrusionH="25400" prstMaterial="plastic"/>` +
+  `<a:props3d contourW="12700" extrusionH="25400" prstMaterial="plastic"/>` +
   `</a:effectLst><a:spLocks noEditPoints="1"/>` +
   `</pic:spPr></pic:pic></a:graphicData></a:graphic></wp:anchor></w:drawing></w:r></w:p>` +
   // v0.155：艺术字变形（a:prstTxWarp）与文字轮廓——形状身上的两支，屏上同样零兑现
