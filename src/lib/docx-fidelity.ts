@@ -687,6 +687,20 @@ function readImgPayload(el: XEl): string {
   // 只记第一枚——同一枚填充里多档 lumMod/lumOff 串联时第一枚就是基准
   const lumMod = attrL(findDesc(el, 'lumMod'), 'val')
   if (lumMod) kv.lumModV = lumMod
+  // a:lumOff 的明度偏移（v0.151）：与 lumMod 同住 schemeClr 里的明度档位，同款只记第一枚
+  const lumOff = attrL(findDesc(el, 'lumOff'), 'val')
+  if (lumOff) kv.lumOffV = lumOff
+  // a:schemeClr 的主题色槽位（v0.151）：val 是槽位名（accent1/lt1/…），fill/line/effect
+  // 三处的引用都长这样。全查一遍取第一枚说得上话的——与 bwMode 查 spPr 同款纪律。
+  // 这是宇宙里最大的一枚单对（7668 字面）：屏上不兑现（Web 没有主题色概念），
+  // 写侧也写不出（包不发 schemeClr）——只记账
+  for (const sc of allDesc(el, 'schemeClr')) {
+    const v = attrL(sc, 'val')
+    if (v && kv.shClr === undefined) kv.shClr = v
+  }
+  // a:miter 的斜接限制（v0.151）：描边折角的斜接长度上限，EMU。a:ln 的子元素
+  const miterLim = attrL(findDesc(el, 'miter'), 'lim')
+  if (miterLim) kv.miterLim = miterLim
   // a:ln 的线宽（v0.150）：spPr 下的描边宽度，EMU。全查一遍（与 bwMode 同款）
   for (const l of allDesc(el, 'ln')) {
     const w = attrL(l, 'w')
@@ -794,6 +808,30 @@ function readImgPayload(el: XEl): string {
     if (join) kv.sJoin = join
     const wt = attrL(vStroke, 'weight')
     if (wt) kv.sWeight = wt
+    // 描边色与斜接限制（v0.151）：与上三枚同一枚元素，同族补两笔
+    const sc = attrL(vStroke, 'color')
+    if (sc) kv.sColor = sc
+    const sm = attrL(vStroke, 'miterlimit')
+    if (sm) kv.sMiter = sm
+  }
+  // v:path 的连接几何（v0.151）：connectangles 是各顶点的连接角、connectlocs 是连接点
+  // 坐标串。与 w/h 同住 v:path 上（w/h 已由图元几何族记账）。两枚在真实件里常是空串
+  // （=用默认角/默认点），而载荷拒收空值，所以按图元几何族同款记「枚数 + 首枚值」——
+  // 枚数说明这一族在这里出现了（探针要的正是那次按名查问），首枚值说明它长什么样
+  const vPaths = allDesc(el, 'path')
+  if (vPaths.length) {
+    const ca = attrL(vPaths[0], 'connectangles')
+    kv.pathCa = `${vPaths.length} ${ca ?? ''}`
+    const cl = attrL(vPaths[0], 'connectlocs')
+    kv.pathCl = `${vPaths.length} ${cl ?? ''}`
+  }
+  // v:rect 四边（v0.151）：VML 矩形的上下左右（EMU）。textbox 的老式件把文字盒画成
+  // v:rect（与 v:shape 平级），四边常是 0（=贴 shape 的盒子），非 0 时文字盒内缩
+  for (const r of allDesc(el, 'rect')) {
+    for (const [k, n] of [['rcT', 't'], ['rcL', 'l'], ['rcB', 'b'], ['rcR', 'r']] as const) {
+      const v = attrL(r, n)
+      if (v !== undefined && kv[k] === undefined) kv[k] = v
+    }
   }
   return imgPayload(kv)
 }
@@ -1243,7 +1281,13 @@ interface RunProps {
   scale?: number
   /** w:kern/@w:val：小于这个缇数的字对才做字偶距（0 = 关掉） */
   kern?: number
-  /** w:pos/@w:val：基线升降，半点，正升负降（手工调的上下标走这里，不走 vertAlign） */
+  /**
+   * w:position/@w:val：基线升降，半点，正升负降（手工调的上下标走这里，不走 vertAlign）。
+   * v0.151 修正：元素名一直写成 w:pos——CT_RPr 里没有这枚元素，Word 与 docx 库发的都是
+   * w:position（ST_SignedTwipsPerMil）。漏斗确实被调用了（所以量具不报错），但查的名字
+   * 不在宇宙里：那 338 个字面从来没进过分子，而屏上的 vertical-align 升降对真实件
+   * 一次都没生效过（读不回自己写的那一枚）。与 v0.150 的 multiLevelType 同款病
+   */
   pos?: number
   /** w:iCs/@w:val：复杂文字（cs 字族）的斜体。CSS 无对应物，屏上不兑现（v0.143） */
   iCs?: boolean
@@ -1320,7 +1364,7 @@ function readRPr(el: XEl | undefined, p: RunProps, tc?: ThemeColors): RunProps {
   if (scale !== undefined && scale > 0) o.scale = scale
   const kern = valNum(el, 'w:kern')
   if (kern !== undefined && kern >= 0) o.kern = kern
-  const pos = valNum(el, 'w:pos')
+  const pos = valNum(el, 'w:position')
   // 0 是"没升降"而不是"升降 0"，与 w:spacing 那枚字符间距不同口径——那一枚 0 是真值（见上）
   if (pos !== undefined && pos !== 0) o.pos = pos
   // 复杂文字的粗斜与小型大写（v0.143）：与 w:b/w:i 平级的 onOff，只管 cs 字族那一口。
@@ -1363,7 +1407,7 @@ function cssOf(p: RunProps): string {
   // 写了正数等于浏览器的默认行为，也照样显式写出来——闸看"这一层有没有说这枚数"
   if (p.kern === 0) bits.push('font-kerning: none')
   else if (p.kern !== undefined) bits.push('font-kerning: normal')
-  // w:pos 与 vertAlign 同时出现时 Word 按 vertAlign 渲染，故只在没有上下标时才兑现升降
+  // w:position 与 vertAlign 同时出现时 Word 按 vertAlign 渲染，故只在没有上下标时才兑现升降
   if (p.va === undefined && p.pos !== undefined) bits.push(`vertical-align: ${px2((p.pos / 2) * PT_PX)}px`)
   return bits.join('; ')
 }
@@ -3829,6 +3873,46 @@ function noteDocumentMarks(doc: XEl | undefined): void {
   for (const ch of allDesc(doc, 'Choice')) attrL(ch, 'Requires')
 }
 
+/**
+ * 形状壳标记（v0.151）：`wps:wsp`（DrawingML 形状/文本框）那一层壳。
+ *
+ * 文本框的**内容**由 drawing() 展平成段落落进文档流，但壳本身——`a:style` 的四枚样式
+ * 矩阵引用（lnRef/fillRef/effectRef/fontRef 的 idx，各带一枚 schemeClr）、`a:bodyPr`
+ * 的文本盒属性一族、`wps:cNvSpPr` 的 txBox——不在任何读手路径上：wsp 段里通常没有
+ * a:blip，readImgPayload 的 bitmap 短路链第一步就断（v0.148 的 d:inline、v0.149 的
+ * v:fill/stroke、v0.150 的 v:path 三度踩过的那个坑的第四形态）。
+ *
+ * 与 noteDocumentMarks 同款**只读记账**：屏上零兑现（Web 没有文本框与样式矩阵），
+ * 写侧也写不出（包只发 pic:pic 与内嵌图，wps 那一支出不来）。跑正文前按名查问一遍。
+ */
+function noteShapeMarks(doc: XEl | undefined): void {
+  if (!doc) return
+  // 样式矩阵四枚引用：idx 是「用主题样式矩阵第几列」。fontRef 的 idx 是字体槽位名
+  // （minor/major/none），另三枚是整数——查问时不解析，原值上账
+  for (const el of allDesc(doc, 'lnRef')) attrL(el, 'idx')
+  for (const el of allDesc(doc, 'fillRef')) attrL(el, 'idx')
+  for (const el of allDesc(doc, 'effectRef')) attrL(el, 'idx')
+  for (const el of allDesc(doc, 'fontRef')) attrL(el, 'idx')
+  // txBox：这一枚形状是文本框（1）还是纯形状（0）。onOff 三态
+  for (const el of allDesc(doc, 'cNvSpPr')) onOff(attrL(el, 'txBox'))
+  // bodyPr 一族：CT_TextBodyProperties 的全部属性。19 枚全查问（不逐枚判存在——
+  // 每一枚的查问本身就是账本要的那一次按名访问）
+  for (const el of allDesc(doc, 'bodyPr')) {
+    for (const n of BODYPR_ATTRS) attrL(el, n)
+  }
+  // 样式引用里的 schemeClr：val 是主题色槽位名。图片段那枚由 readImgPayload 收
+  // （段内有 blip，短路链通），这里补 wsp 段那枚——两处都查问，同对只记一次
+  const sc = findDesc(doc, 'schemeClr')
+  if (sc) attrL(sc, 'val')
+}
+
+/** bodyPr（CT_TextBodyProperties）的属性面——noteShapeMarks 的查问清单 */
+const BODYPR_ATTRS = [
+  'anchor', 'anchorCtr', 'bIns', 'compatLnSpc', 'forceAA', 'fromWordArt',
+  'horzOverflow', 'lIns', 'numCol', 'rIns', 'rot', 'rtlCol', 'spcCol',
+  'spcFirstLastPara', 'tIns', 'upright', 'vert', 'vertOverflow', 'wrap',
+] as const
+
 /** 保真导入一份 docx。抛错或 blocks=0 时调用方应回退 mammoth。`depth` 是嵌套层数（嵌入文档递归用）。 */
 export async function docxToHtmlFidelity(bytes: Uint8Array, depth = 0): Promise<DocxImport> {
   const { default: JSZip } = await import('jszip')
@@ -3854,6 +3938,9 @@ export async function docxToHtmlFidelity(bytes: Uint8Array, depth = 0): Promise<
   // 文档级标记（v0.150）：proofErr/Choice/Ignorable 三族不在任何读手路径上（块遍历不碰
   // proofErr、兼容分支不进分发、根属性没人读），在跑正文前先把它们按名查问一遍
   noteDocumentMarks(parseXml(documentXml))
+  // 形状壳（v0.151）：wsp 文本框的壳（样式矩阵引用/bodyPr/txBox/schemeClr）同上——
+  // 段内无 blip，图片短路链够不着，跑正文前按名查问
+  noteShapeMarks(parseXml(documentXml))
   const { html, blocks } = await f.run(documentXml)
   // 节属性（v0.147）：body 末尾 sectPr 走 attr 漏斗读一遍。这一族原本是 docxToDocMeta
   // 用正则读的（正则不进漏斗，保真账本上是盲区——读是读了，账上没有）；改由读手读、
