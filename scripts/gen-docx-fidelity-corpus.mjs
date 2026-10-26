@@ -117,13 +117,10 @@ const CTX = {
   // sectPr 必须排在文件最前：contentTwipsOf() 用 findDesc 找 body 的第一个 sectPr 读
   // pgSz|w 与 pgMar|left/right，空 sectPr 打头会让这三对掉出分子
   't:sect': { f: '02-tables', part: 'document', open: '<w:sectPr w:rsidR="00A1" w:rsidRPr="00A2" w:rsidSect="00000001">', close: '</w:sectPr>' },
-  // cols 与逐栏的 w:col 分住两个 <w:sectPr> 块：读手 find(sect,'w:cols') 只认第一枚
-  // （带属性的那枚），col 子元素在第二枚里——col|w / col|space 两对因此问不到。
-  // v0.155 试过把两者并进同一枚 cols，但那样必须把**节里其余所有元素**（pgSz/pgMar/
-  // docGrid/type/…）也塞进 cols 内部，它们的直接子元素路径全断。生成器的块模型不支持
-  // 「嵌进另一块里的某元素」，所以这两对留在 neverConsulted（见审计的顺延清单）
-  't:cols-kids': { f: '02-tables', part: 'document', open: '<w:sectPr><w:cols>', close: '</w:cols></w:sectPr>' },
-  't:cols': { f: '02-tables', part: 'document', open: '<w:sectPr>', close: '</w:sectPr>' },
+  // （v0.156 起）col|w / col|space 不再靠「另开一个装 cols 的块」承放：那种块是**另一枚**
+  // sectPr（open 串不同 ⇒ 另一个 acc 段），而读手 find(body,'w:sectPr') 取的是第一枚，
+  // 里面的 w:col 永远踩不到。改用 spot 的 into 字段嵌进第一枚 w:cols 内部（见 pushInto）。
+  // 死上下文（cols-kids / cols）已删：它们只为那次失败的尝试而存在
   't:tblPr': { f: '02-tables', part: 'document', open: '<w:tbl><w:tblPr>', close: `</w:tblPr>${TBL_TAIL}` },
   't:borders': { f: '02-tables', part: 'document', open: '<w:tbl><w:tblPr><w:tblBorders>', close: `</w:tblBorders></w:tblPr>${TBL_TAIL}` },
   't:cellmar': { f: '02-tables', part: 'document', open: '<w:tbl><w:tblPr><w:tblCellMar>', close: `</w:tblCellMar></w:tblPr>${TBL_TAIL}` },
@@ -326,7 +323,7 @@ const PART_CTX = {
 const ORDER = {
   '00-base': ['d0:tbl'],
   '01-body': ['b0', 'b:rpr', 'b:ppr', 'b:run', 'b:numpr', 'b:pbdr', 'b:tabs', 'b:omml', 'b:para'],
-  '02-tables': ['t:sect', 't:cols-kids', 't:cols', 't:tblPr', 't:borders', 't:cellmar', 't:grid', 't:tr', 't:trPr', 't:tcPr', 't:tcborders', 't:tcmar', 't:b0'],
+  '02-tables': ['t:sect', 't:tblPr', 't:borders', 't:cellmar', 't:grid', 't:tr', 't:trPr', 't:tcPr', 't:tcborders', 't:tcmar', 't:b0'],
   '03-drawings': ['d:inline', 'd:wp', 'd:anchor-kids', 'd:pic', 'd:xfrm', 'd:clr', 'd:clr2', 'd:gs', 'd:ln', 'd:fx', 'd:scene', 'd:wps', 'd:bodypr', 'd:custgeom'],
   '04-vml': ['v:pict', 'v:shape-attr', 'v:main', 'v:fill', 'v:stroke', 'v:formulas', 'v:handles', 'v:group', 'v:object', 'v:object-run', 'v:ffdata', 'v:textinput'],
   styles: ['s:latent', 's:style-attrs', 's:style-kids', 's:style-rpr'],
@@ -492,7 +489,9 @@ const PLACE = {
   cols: [
     { c: 't:sect', av: { num: '1', space: '708', equalWidth: '1' } },
   ],
-  col: [{ c: 't:cols-kids', av: { space: '14', w: '7092' } }],
+  // w:col 必须是 w:cols 的**子**（CT_Columns 的列定义），而读手取的是 sectPr 里的
+  // 第一枚 w:cols——所以它的载荷要嵌进那一枚内部，不是排在它后面。into 就是干这个的
+  col: [{ c: 't:sect', av: { space: '14', w: '7092' }, into: 'cols' }],
   formProt: [{ c: 't:sect', av: { val: '0' } }],
   rtlGutter: [{ c: 't:sect', av: { val: '0' } }],
   docGrid: [{ c: 't:sect', av: { type: 'default', linePitch: '312', charSpace: '0' } }],
@@ -784,6 +783,56 @@ function push(f, part, open, close, xml) {
   a.items.push(xml)
 }
 
+// ── 子上下文：嵌进同段里某元素**内部**（v0.156）────────────────────────────
+// 块模型原本只有一层：open + 若干载荷 + close，载荷之间一律是**兄弟**。可 OOXML 里
+// 有一批元素生来就是别人的子（w:col 属 w:cols、w:startOverride 属 w:lvlOverride），
+// 它们的主人又必须是「读手 find 到的第一枚」——单开一个块去装主人，读手取的是别的
+// 一枚，载荷就永远踩不到（col|w / col|space 挂了两轮就是这个原因）。
+// into 字段声明父元素名：载荷不进 items，先记进 NEST，主循环跑完再嵌进同段里第一枚
+// 同名元素的内部（把它的第一个 "/>" 换成 ">"，尾巴补收口）。父不在场就现开一枚。
+const NEST = new Map() // accKey → [{ into, pfx, xml }]
+function pushInto(f, part, open, close, into, pfx, xml) {
+  const key = `${f}|${part}|${open}`
+  let a = NEST.get(key)
+  if (!a) {
+    a = []
+    NEST.set(key, a)
+  }
+  a.push({ into, pfx, xml })
+}
+function applyNest() {
+  for (const [key, list] of NEST) {
+    const a = acc.get(key)
+    if (!a) throw new Error(`into 挂到了不存在的段：${key}`)
+    // 同一段的同一父只嵌一次：分笔嵌的话，第二笔会把「第一枚同名元素」认成第一笔
+    // 刚造出来的那个内部节点，嵌出 <w:col …><w:col …/></w:cols> 这种错形的套娃
+    const byInto = new Map()
+    for (const x of list) {
+      let g = byInto.get(x.into)
+      if (!g) {
+        g = []
+        byInto.set(x.into, g)
+      }
+      g.push(x)
+    }
+    for (const [into, group] of byInto) {
+      const pfx = group[0].pfx
+      const xml = group.map((g) => g.xml).join('')
+      const tag = `<${pfx}${into}`
+      const i = a.items.findIndex((s) => s.startsWith(tag))
+      if (i < 0) {
+        a.items.push(`${tag}>${xml}</${pfx}${into}>`)
+        continue
+      }
+      // 嵌进第一枚：读手 find/all 取的就是它。后面那些兄弟（按字面权重复制出来的）
+      // 保持自闭合——它们只为计数服务，多嵌一次只会让分母平白翻倍
+      const s = a.items[i]
+      const j = s.indexOf('/>')
+      a.items[i] = j < 0 ? s + xml : `${s.slice(0, j)}>${xml}</${pfx}${into}>${s.slice(j + 2)}`
+    }
+  }
+}
+
 // background 属性取值（themeColor 的 background1 是 schema 合法主题色槽）
 const BG_VAL = { color: 'FFFFFF', themeColor: 'background1', themeShade: '0' }
 const missing = []
@@ -834,9 +883,13 @@ for (const { pair, count } of uni.pairs) {
     const c = PART_CTX[s.c] ?? CTX[s.c]
     const pfx = s.p ?? 'w:'
     const apfx = s.bare ? (s.ap?.[attr] ?? '') : (s.ap?.[attr] ?? 'w:')
-    push(c.f, c.part, c.open, c.close, `<${pfx}${el} ${apfx}${attr}="${s.av[attr]}"/>`.repeat(m))
+    const payload = `<${pfx}${el} ${apfx}${attr}="${s.av[attr]}"/>`.repeat(m)
+    if (s.into) pushInto(c.f, c.part, c.open, c.close, s.into, pfx, payload)
+    else push(c.f, c.part, c.open, c.close, payload)
   })
 }
+// 主循环跑完才嵌：父元素可能排在宇宙里更靠后的位置（col 就排在 cols 之前）
+applyNest()
 
 // 表格样式的条件块 + 引用它的那张表：读手的 styleCondCells 只在「表上 w:tblStyle
 // 指着一个带 w:tblStylePr 的样式」时才走这条路——tblStylePr|type 与条件行高那两条

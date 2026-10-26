@@ -37,6 +37,34 @@ const str = (v: unknown): string | null => (typeof v === 'string' && v ? v : nul
 const num = (v: unknown): number | null => (typeof v === 'number' && Number.isFinite(v) ? v : null)
 const round2 = (n: number): number => Math.round(n * 100) / 100
 
+/** w:u/@w:val 的线型 → CSS text-decoration-style（v0.156）。
+ * 认不得的档按 solid——OOXML 有十八档线型，CSS 只有五档，多数档只能近似 */
+const U_LINE: Record<string, string> = {
+  single: 'solid',
+  words: 'solid',
+  double: 'double',
+  thick: 'solid',
+  dotted: 'dotted',
+  dotteddheavy: 'dotted',
+  dottedheavy: 'dotted',
+  dash: 'dashed',
+  dashlong: 'dashed',
+  dashdotheavy: 'dashed',
+  dotdash: 'dashed',
+  dotdotdash: 'dashed',
+  wave: 'wavy',
+  wavyheavy: 'wavy',
+  wavydouble: 'wavy',
+  none: 'none',
+}
+/** w:em/@w:val → CSS text-emphasis（v0.156）。与 docx-fidelity 的 EMPHASIS 表同一套值 */
+const EMPHASIS_CSS: Record<string, { style: string; under?: boolean }> = {
+  dot: { style: 'dot' },
+  circle: { style: 'circle' },
+  comma: { style: 'sesame' },
+  underdot: { style: 'dot', under: true },
+}
+
 export const CharExtra = Mark.create({
   name: 'charExtra',
   // 不 inclusive：光标在一段文字末尾继续打字时，新字不该继承上一段文字的 cs/lang——
@@ -171,6 +199,50 @@ export const CharExtra = Mark.create({
         parseHTML: (el: HTMLElement) => str(el.getAttribute('data-vanish')),
         renderHTML: (attrs: Record<string, unknown>) => (str(attrs.vanish) ? { 'data-vanish': '1', style: 'visibility: hidden' } : {}),
       },
+      // u（v0.156）：下划线**线型 + 颜色**一组（载荷 `线型;颜色`，颜色是 #RRGGBB，空槽 = 那枚没写）。
+      // 为什么要这一枚：<u> 标签只带得动「有下划线」这一比特，线型与颜色都挂在这个标签的
+      // inline style 上，而 inline style 过不了 TipParse（underline mark 只认标签名）——
+      // 屏上那半由本 mark 自己发 CSS（与 pos/kern 同纪律），存盘那半由 docx.ts 落回
+      // w:u 的 w:val 与 w:color（docx 的 underline.type / underline.color 两枚都是原生槽）
+      u: {
+        default: null as string | null,
+        parseHTML: (el: HTMLElement) => str(el.getAttribute('data-u')),
+        renderHTML: (attrs: Record<string, unknown>) => {
+          const raw = str(attrs.u)
+          if (!raw) return {}
+          const [val = 'single', color = ''] = raw.split(';')
+          const line = U_LINE[val.toLowerCase()] ?? 'underline'
+          const c = color && color.toLowerCase() !== 'auto' ? `text-decoration-color: #${color.replace(/^#/, '').toLowerCase()}; ` : ''
+          return { 'data-u': raw, style: `${c}text-decoration-line: underline; text-decoration-style: ${line}` }
+        },
+      },
+      // em（v0.156）：着重号型别（dot 圈点 / circle 空心圈 / comma 逗号 / underDot 点在下）。
+      // 屏上走 text-emphasis——与 docx-fidelity 的 EMPHASIS 表同一套映射（两处必须一致，
+      // 否则同一枚属性在「导入后立刻导出」与「编辑器里再渲染」两条路上长两个样）
+      em: {
+        default: null as string | null,
+        parseHTML: (el: HTMLElement) => str(el.getAttribute('data-em')),
+        renderHTML: (attrs: Record<string, unknown>) => {
+          const v = str(attrs.em)
+          if (!v) return {}
+          const e = EMPHASIS_CSS[v.toLowerCase()]
+          if (!e) return { 'data-em': v }
+          return { 'data-em': v, style: `text-emphasis: ${e.style}${e.under ? '; text-emphasis-position: under right' : ''}` }
+        },
+      },
+      // emboss/imprint（v0.156）：浮雕与阴文。CSS 只有半吊子近似（text-shadow 模拟浮雕），
+      // 做了会画出与 Word 不像的样子——屏上不兑现，只随 data-* 走往返（与 iCs/bCs 同纪律）。
+      // 写侧两枚在 docx 包里都是原生槽（IRunOptions.emboss / imprint），直接传
+      emboss: {
+        default: null as string | null,
+        parseHTML: (el: HTMLElement) => str(el.getAttribute('data-emboss')),
+        renderHTML: (attrs: Record<string, unknown>) => (str(attrs.emboss) ? { 'data-emboss': '1' } : {}),
+      },
+      imprint: {
+        default: null as string | null,
+        parseHTML: (el: HTMLElement) => str(el.getAttribute('data-imprint')),
+        renderHTML: (attrs: Record<string, unknown>) => (str(attrs.imprint) ? { 'data-imprint': '1' } : {}),
+      },
     }
   },
 
@@ -191,6 +263,10 @@ export const CharExtra = Mark.create({
       { tag: 'span[data-caps]' },
       { tag: 'span[data-bdr]' },
       { tag: 'span[data-vanish]' },
+      { tag: 'span[data-u]' },
+      { tag: 'span[data-em]' },
+      { tag: 'span[data-emboss]' },
+      { tag: 'span[data-imprint]' },
     ]
   },
 

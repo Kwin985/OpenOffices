@@ -1462,6 +1462,14 @@ interface RunProps {
   b?: boolean
   i?: boolean
   u?: boolean
+  /**
+   * w:u/@w:val 的线型（single / double / dotted / wave …，v0.156）。
+   * 屏上那一半此前只写 `<u>`——线型就此丢在模型外；现在与颜色一起进 data-u 载荷往返
+   */
+  uVal?: string
+  /** w:emboss / w:imprint（v0.156）：浮雕与阴文。CSS 没有像样的对应物，屏上不兑现，只往返 */
+  emboss?: boolean
+  imprint?: boolean
   strike?: boolean
   color?: string
   hl?: string
@@ -1566,7 +1574,10 @@ function readRPr(el: XEl | undefined, p: RunProps, tc?: ThemeColors): RunProps {
   if (on(find(el, 'w:dstrike'))) o.strike = true
   const u = find(el, 'w:u')
   if (u) {
-    o.u = attr(u, 'w:val') !== 'none'
+    const uv = attr(u, 'w:val')
+    o.u = uv !== 'none'
+    // 线型（v0.156）：写侧 docx 的 underline.type 认得这一枚，与颜色同走 data-u 载荷
+    if (uv && uv !== 'none') o.uVal = uv
     // v0.155：下划线颜色。三枚都查问（字面色 / 主题槽 / 主题深浅），但只出一个 CSS 值——
     // 与 w:color 同一条主次：主题引用能解析就用主题，否则落字面。写侧只有字面 color 的槽
     // （docx 的 underline.color），所以主题解析出来的值回不去——单边，如实记
@@ -1589,9 +1600,10 @@ function readRPr(el: XEl | undefined, p: RunProps, tc?: ThemeColors): RunProps {
   if (on(find(el, 'w:cntxtalts'))) o.cntxtalts = true
   // v0.155：字形装饰三枚（浮雕 / 阴文 / 镂空）。CSS 只有半吊子近似（text-shadow 模拟浮雕、
   // -webkit-text-stroke 模拟镂空，且都不在标准里），做了会画出与 Word 不像的样子——
-  // 屏上不兑现，纯记账
-  on(find(el, 'w:emboss'))
-  on(find(el, 'w:imprint'))
+  // 屏上不兑现。v0.156：浮雕与阴文在 docx 包里有原生槽（IRunOptions.emboss/imprint），
+  // 所以这两枚从「纯记账」升成「只往返」——存盘不丢，屏上仍然不画。镂空没有槽，继续纯记账
+  if (on(find(el, 'w:emboss'))) o.emboss = true
+  if (on(find(el, 'w:imprint'))) o.imprint = true
   on(find(el, 'w:outline'))
   const colorEl = find(el, 'w:color')
   if (colorEl) {
@@ -1861,6 +1873,9 @@ function marked(inner: string, p: RunProps): string {
   const css = cssOf(p)
   // 复杂文字三件套与 hint（v0.138）：HTML 里没有对应物，随 data-* 进模型再走往返。
   // 由 lib/char-extra.ts 的 charExtra mark 接住（cs/hint 写回 docx，szCs/lang 见该文件头注）
+  // 下划线的往返载荷：线型缺省按 single（OOXML 里缺 w:val 就是默认单线），
+  // 只有颜色没有线型时也按 single 记，颜色才不至于跟着丢
+  const uLoad = p.uVal || p.uColor ? `${p.uVal || 'single'};${p.uColor ?? ''}` : ''
   const extra = [
     p.cs ? ` data-cs="${attrEsc(p.cs)}"` : '',
     p.szCs !== undefined ? ` data-szcs="${p.szCs}"` : '',
@@ -1881,6 +1896,13 @@ function marked(inner: string, p: RunProps): string {
     // v0.154：隐藏文字。屏上那一半在 cssOf（visibility: hidden），载荷只为往返
     p.vanish ? ' data-vanish="1"' : '',
     p.bdr ? ` data-bdr="${p.bdr.val};${p.bdr.sz ?? ''};${p.bdr.space ?? ''};${p.bdr.color ?? ''}"` : '',
+    // v0.156：下划线线型 + 颜色（载荷 `线型;颜色`，颜色是 #RRGGBB 或空槽）。
+    // 屏上那一半此前挂在 `<u>` 的 inline style 上，过不了 TipParse（underline mark 只认标签），
+    // 存盘就丢了；线型更是一直没有出口。两枚一起随 data-u 进模型走往返
+    uLoad ? ` data-u="${attrEsc(uLoad)}"` : '',
+    p.em ? ` data-em="${attrEsc(p.em)}"` : '',
+    p.emboss ? ' data-emboss="1"' : '',
+    p.imprint ? ' data-imprint="1"' : '',
   ].join('')
   if (css || extra) s = `<span${css ? ` style="${css}"` : ''}${extra}>${s}</span>`
   if (p.hl) s = `<mark data-color="${p.hl}" style="background-color: ${p.hl}; color: inherit">${s}</mark>`

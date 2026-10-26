@@ -10,6 +10,8 @@
 //   ... --selftest        用内置夹具证明分子语义（不依赖任何语料）
 //   ... --clean-pass      再跑一遍不带探针的副本，证明观察者不扰动产品
 //   ... --mut no-attrL    变异档：故意漏注入一枚漏斗，覆盖率必须下降
+//   ... --mut no-theme    主题恒解析不出来，覆盖率必须**不动**（查问与解析已解耦）
+//   ... --mut no-themeshade  还原旧写法（shade/tint 不查问），覆盖率必须下降
 //   ... --synth           语料是合成重建件（scripts/gen-docx-fidelity-corpus.mjs 按
 //                         docs/fidelity-universe.json 的冻结计数 1/100 缩放生成）：
 //                         与旧账「按对」可比、「按字面」不可比，报告里播出处节
@@ -1089,6 +1091,38 @@ function injectProbe(file, mut) {
   return applied
 }
 
+// 主题链的两条变异腿（v0.156）：都只改 themeRefCss 那一段，一处是「解析」一处是「查问」。
+//   no-theme       —— 主题恒解析不出来（三道 return 里的第一道无条件命中）。
+//                     期望**覆盖率一动不动**：这就是 v0.155 那处修法的断言——
+//                     shade/tint 的查问被提到了 return 之前，与解析结果无关。
+//                     谁把它们挪回 return 之后（旧写法），这一腿当场掉分。
+//   no-themeshade  —— 还原旧写法：shade/tint 两枚根本不查问。
+//                     期望**覆盖率下降**：证明那两枚属性确实是账上的分子来源，
+//                     不是靠别的路径顺带看到的。
+function injectMut(file, mut) {
+  if (mut !== 'no-theme' && mut !== 'no-themeshade') return []
+  let src = fs.readFileSync(file, 'utf8')
+  const inj =
+    mut === 'no-theme'
+      ? {
+          id: 'theme',
+          find:
+            '  const shadeRaw = attr(el, shadeAttr)\n  const tintRaw = attr(el, tintAttr)\n  if (!theme || !ref) return undefined',
+          put:
+            '  const shadeRaw = attr(el, shadeAttr)\n  const tintRaw = attr(el, tintAttr)\n  if (!ref || true) return undefined',
+        }
+      : {
+          id: 'themeshade',
+          find: '  const shadeRaw = attr(el, shadeAttr)\n  const tintRaw = attr(el, tintAttr)',
+          put: '  const shadeRaw = undefined\n  const tintRaw = undefined',
+        }
+  const hits = src.split(inj.find).length - 1
+  if (hits !== 1) throw new Error(`注入锚点 ${inj.id} 命中 ${hits} 次（应为 1）`)
+  src = src.replace(inj.find, inj.put)
+  fs.writeFileSync(file, src, 'utf8')
+  return [inj.id]
+}
+
 // 读手副本再导出探针：脚本只从 reader.__PROBE 取账，不另开一份 ooxml.ts 的导入。
 // 为什么必须这样——vite-node 下同一个 .ts 文件按不同路径形状导入是两个模块实例
 // （实测：入口脚本按绝对路径 `E:/…/ooxml.ts` 动态导入 vs docx-fidelity.ts 内按
@@ -1211,6 +1245,7 @@ async function main() {
   const { count: modFiles, fromGit } = materialize(MOD_DIR)
   const applied = injectProbe(path.join(MOD_DIR, 'ooxml.ts'), MUT)
   applied.push(injectReaderReexport(path.join(MOD_DIR, 'docx-fidelity.ts')))
+  applied.push(...injectMut(path.join(MOD_DIR, 'docx-fidelity.ts'), MUT))
   const reader = await import(`${path.join(MOD_DIR, 'docx-fidelity.ts').replace(/\\/g, '/')}`)
   const { parseXml } = await import(`${path.join(MOD_DIR, 'ooxml.ts').replace(/\\/g, '/')}`)
   const seen = reader.__PROBE.seen
@@ -1592,6 +1627,8 @@ function renderMd(d) {
   L.push('| `--selftest` | the probe sees exactly the lookups a fixture dictates, including the pairs we deliberately do not read |')
   L.push('| `--clean-pass` | the patched copy and an unpatched copy emit byte-identical HTML for every readable file: the observer does not perturb the product |')
   L.push('| `--mut no-attrL` | coverage drops: the numerator really comes from run-time lookups, not from a name list in the source |')
+  L.push('| `--mut no-theme` | coverage does **not** move: asking for `themeShade`/`themeTint` is decoupled from whether the theme resolves (v0.155) |')
+  L.push('| `--mut no-themeshade` | coverage drops: the shade/tint pairs really enter the numerator through `themeRefCss` |')
   L.push('| `scripts/fidelity-census.py` | a second, different XML parser (Python `xml.etree`) counts the same denominator |')
   if (d.equivalence) {
     L.push('')

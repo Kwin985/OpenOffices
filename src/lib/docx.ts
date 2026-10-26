@@ -39,9 +39,10 @@ import {
   TextRun,
   VerticalAlignTable,
   WidthType,
-  type TabStopDefinition,
+  type   TabStopDefinition,
   type IFrameOptions,
   type ITableFloatOptions,
+  UnderlineType,
 } from 'docx'
 import { xml2js } from 'xml-js'
 import { borderParts, pxToEighths, pxToPt, parseFramePayload, parseImgPayload, parsePprPayload, parseShadePayload, parseTabsPayload, parseTblpPayload, parseTblPrPayload, parseTlookPayload, CELL_EDGES, type CellEdge } from './cell-style'
@@ -56,6 +57,25 @@ export interface PMNode {
   content?: PMNode[]
   marks?: { type: string; attrs?: Record<string, unknown> }[]
   text?: string
+}
+
+/**
+ * data-u 载荷 `线型;颜色` → 包的 underline 槽（v0.156）。
+ *
+ * 两枚都是包的原生槽（IRunOptions.underline.type / .color，dist/index.d.ts:1647），
+ * 实现里 `createUnderline(type, color)` 逐枚写进 w:u 的 w:val 与 w:color（颜色过
+ * hexColorValue 校验）。线型按 OOXML 那十八档的名字对（大小写不敏感），认不得的档
+ * 落 single——宁可写成单线也不要写出一个 Word 认不得的枚举值。
+ */
+type ULineType = (typeof UnderlineType)[keyof typeof UnderlineType]
+const U_TYPE = new Map<string, ULineType>(Object.values(UnderlineType).map((v) => [String(v).toLowerCase(), v]))
+function underlineOf(child: PMNode, on: boolean): { type?: ULineType; color?: string } | undefined {
+  const raw = markAttr(child, 'charExtra', 'u')
+  if (!raw) return on ? {} : undefined
+  const [val = '', color = ''] = raw.split(';')
+  const type = U_TYPE.get((val || 'single').toLowerCase()) ?? UnderlineType.SINGLE
+  const c = color && color.toLowerCase() !== 'auto' ? color.replace(/^#/, '').toUpperCase() : undefined
+  return { type, ...(c ? { color: c } : {}) }
 }
 
 // TipTap 3 getJSON 的文本节点是顶层 text；历史结构测试用过 attrs.text，两者都兼容
@@ -886,7 +906,11 @@ function childToRuns(child: PMNode, inherited: Inherited, cs?: CommentTrack, dt?
         ...(lsTw !== null && lsTw !== 0 ? { characterSpacing: lsTw } : {}),
         ...(color ? { color } : {}),
         ...(highlight ? { shading: { type: 'clear' as const, fill: highlight } } : {}),
-        ...(underline ? { underline: {} } : {}),
+        // v0.156：线型与颜色一起走 data-u 载荷（此前只有「有下划线」这一比特上纸）
+        ...(() => {
+          const u = underlineOf(child, underline)
+          return u ? { underline: u } : {}
+        })(),
         ...(rstyle ? { style: rstyle } : {}),
         ...vertAlignOf(child),
       }
@@ -1623,6 +1647,15 @@ function withCharExtra<T extends object>(opts: T, child: PMNode): T {
   const scale = num('scale')
   const pos = num('pos')
   const kern = num('kern')
+  // v0.156：着重号与浮雕/阴文三枚。emphasisMark 在库里实现着
+  // （`if (options.emphasisMark) push(createEmphasisMark(options.emphasisMark.type))`，
+  // 值原样写进 w:em/@w:val），但**类型面只列了 dot 一档**（EmphasisMarkType 只有一个
+  // 成员），circle/comma/underDot 三档得按库外槽传——与 szCs/pos 同款断言，不是猜测。
+  // emboss/imprint 两枚是类型面全暴露的原生槽（dist/index.d.ts:1670-1671），实现是
+  // `if (options.emboss !== void 0) push(new OnOffElement("w:emboss", …))`，直接传
+  const emVal = str('em')
+  const emboss = str('emboss')
+  const imprint = str('imprint')
   // v0.143：复杂文字粗斜与小型大写。库里实现着（boldComplexScript / **italicsComplexScript**
   // ——斜体那枚是复数 italics，类型面 dist/index.d.ts:1644 与实现一致，写单数 italic 不报错
   // 但静默不输出 / smallCaps），TS 类型面同样没暴露这几枚——与 szcs/lang 同走库外槽。
@@ -1651,6 +1684,9 @@ function withCharExtra<T extends object>(opts: T, child: PMNode): T {
   if (sc) extra.smallCaps = true
   if (caps) extra.allCaps = true
   if (vanish) extra.vanish = true
+  if (emVal) extra.emphasisMark = { type: emVal }
+  if (emboss) extra.emboss = true
+  if (imprint) extra.imprint = true
   // 字符边框（v0.152）：w:bdr 四枚 → 包的 IRunOptions.border。val 是线型枚举、
   // sz 是八分之一磅、space 是磅、color 是 hex；缺的枚不给（包自己有默认）。
   // **type 面是 BorderStyle 枚举**（SINGLE/DOTTED/…），而 OOXML 的 val 是小写串
