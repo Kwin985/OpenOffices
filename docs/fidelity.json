@@ -13,7 +13,7 @@
     "files": 5,
     "readable": 5,
     "unreadable": 0,
-    "bytes": 22117,
+    "bytes": 22113,
     "scopeParts": [
       "word/document.xml",
       "word/styles.xml",
@@ -36,12 +36,12 @@
     "meaningfulOccurrences": 23771
   },
   "coverage": {
-    "byPair": 0.9868035190615836,
-    "byOccurrence": 0.984140339068613,
-    "consultedPairs": 673,
-    "consultedOccurrences": 23394,
-    "neverConsultedPairs": 9,
-    "neverConsultedOccurrences": 377
+    "byPair": 0.9897360703812317,
+    "byOccurrence": 0.984224475200875,
+    "consultedPairs": 675,
+    "consultedOccurrences": 23396,
+    "neverConsultedPairs": 7,
+    "neverConsultedOccurrences": 375
   },
   "consulted": [
     [
@@ -1561,6 +1561,14 @@
       1
     ],
     [
+      "col|space",
+      1
+    ],
+    [
+      "col|w",
+      1
+    ],
+    [
       "cols|equalWidth",
       1
     ],
@@ -2755,14 +2763,6 @@
       2
     ],
     [
-      "col|space",
-      1
-    ],
-    [
-      "col|w",
-      1
-    ],
-    [
       "line|gfxdata",
       1
     ],
@@ -2865,10 +2865,6 @@
     [
       "shape",
       7
-    ],
-    [
-      "col",
-      2
     ],
     [
       "group",

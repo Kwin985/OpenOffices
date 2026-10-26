@@ -9225,6 +9225,46 @@ neverConsulted 121 → **9 对**（剩下的全在「明确不做」名单里）
 剩余 9 对全在「不收」名单：`t|space`、`instrText|space`、`gfxdata` 五处、`col` 两枚。
 
 
+### v0.156（D15）——单边通道升双向四族 + 量具补子上下文与两条变异腿
+
+榜单清完之后，账本已经看不见剩下的洞了——**它只记「查问过没有」，不记「写不写得回」**。
+这一轮换了靶子：**把读得进、写不出的单边通道挑四条补成真双向**，顺手把量具自己欠的两笔
+（合成语料放不下 `w:col`、变异腿只有两条）也还了。覆盖率按对 **98.7% → 99.0%**（清掉
+`col` 两枚），按字面 98.4% 不动。
+
+| 族 | 此前 | 现在 |
+|---|---|---|
+| `w:u` 的**线型**（`w:val` 十八档） | 只有「有下划线」这一比特上纸 | **读写**（`underline.type`） |
+| `w:u` 的**颜色**（`w:color`） | 挂 `<u>` 的 inline style，过不了 TipParse，存盘即丢 | **读写**（`underline.color`） |
+| `w:em` 着重号型别（dot / circle / comma / underDot） | 纯记账 | **读写**（`emphasisMark`，库外槽） |
+| `w:emboss` / `w:imprint` 浮雕与阴文 | 纯记账 | **读写**（包里的原生槽） |
+
+- **「读到了、存盘却丢」是账本的第二层盲区**：线型与颜色一直在读、一直在画（`<u style=
+  "text-decoration-color: …">`），可 TipTap 的 underline mark 只认 `<u>` 这个标签名，
+  inline style 根本进不了模型——**打开另存一次就没了**。修法是让它们随 `data-u` 载荷走
+  charExtra 通道（与 v0.138 的 cs/lang、v0.152 的 bdr 同一条路），屏上那一半改由 mark
+  自己发 CSS。
+- **`w:em` 是库外槽**：docx 包的 `EmphasisMarkType` 只声明了 `DOT` 一个成员，可它运行时
+  就是把传进去的值原样写进 `w:em/@w:val`——circle/comma/underDot 三档照传不误。类型面
+  没有 ≠ 实现没有，判据是 dist 里的 `createEmphasisMark`，不是猜的。
+- **`w:outline`（镂空）继续纯记账**：包里没有这一枚的槽（`effect` 是 `w:effect`，另一回事），
+  CSS 也只有 `-webkit-text-stroke` 这种不在标准里的近似，硬画会画出与 Word 不像的样子。
+- **合成语料的 spot 多了 `into` 字段**：块模型原本只有「开标签 + 载荷 + 闭标签」一层，
+  载荷之间一律是兄弟。可 `w:col` 生来就是 `w:cols` 的子，而读手 `find` 取的是第一枚
+  `w:cols`——单开一个块去装主人，读手取的是别的那一枚。现在载荷可以直接嵌进同段里第一枚
+  同名元素内部，`col|w` / `col|space` 两对就此上账（此前挂了两轮）。
+- **变异腿从两条加到四条**：`--mut no-theme` 让主题恒解析不出来，**覆盖率必须一动不动**
+  （这是 v0.155 那处「查问与解析解耦」的回归闸——谁把 shade/tint 挪回 return 之后，这一腿
+  当场掉分，实测两腿的 consulted 集合逐对相同）；`--mut no-themeshade` 还原旧写法，
+  **覆盖率必须下降**（实测 99.0% → 96.5%，掉 17 对）。
+
+**门禁**：tsc 0、build ✓；selftest MUST_SEE **540 枚全命中** / MUST_NOT_SEE 1 枚全落空；
+往返探针 `tmp/check-d15.mjs` 全绿（四族读侧进模型 + 写侧回得了纸）；变异腿四条
+（no-attrL 51.8%/83.5%、no-attr 59.2%/42.1%、no-theme 不动、no-themeshade 96.5%）；
+干净腿复位 md5 与主腿一致（`cd953d32…` / `1c67668b…`）。账上剩 **7 对**，全是既有裁定
+「不收」：`t|space`、`instrText|space`、`gfxdata` 五处。
+
+
 ## 性能（v0.3）
 
 

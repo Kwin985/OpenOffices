@@ -23,10 +23,10 @@ probe injected at 3 points: attr, attrL, reader.__PROBE(再导出)).
 | In scope (7 parts, 5 readable files) | 701 | 31,482 |
 | Word save-session noise | 19 | 7,711 |
 | Meaningful universe | 682 | 23,771 |
-| Consulted | 673 | 23,394 |
-| Never consulted | 9 | 377 |
+| Consulted | 675 | 23,396 |
+| Never consulted | 7 | 375 |
 
-**Coverage: 98.7% of distinct pairs, 98.4% of meaningful literals.**
+**Coverage: 99.0% of distinct pairs, 98.4% of meaningful literals.**
 
 The corpus held 5 synthetic .docx files (22 KiB); 0 were
 unreadable as archives and are reported by failure class only, never by name.
@@ -55,8 +55,6 @@ run into `docs/fidelity-universe.json` and rebuilt at 1/100 scale by `scripts/ge
 | `instrText|space` | 15 |
 | `shape|gfxdata` | 7 |
 | `group|gfxdata` | 2 |
-| `col|space` | 1 |
-| `col|w` | 1 |
 | `line|gfxdata` | 1 |
 | `rect|gfxdata` | 1 |
 | `roundrect|gfxdata` | 1 |
@@ -68,7 +66,6 @@ run into `docs/fidelity-universe.json` and rebuilt at 1/100 scale by `scripts/ge
 | `t` | 348 |
 | `instrText` | 15 |
 | `shape` | 7 |
-| `col` | 2 |
 | `group` | 2 |
 | `line` | 1 |
 | `rect` | 1 |
@@ -143,4 +140,6 @@ output, so a diff of `docs/fidelity.md` is a diff of fidelity, not of a timestam
 | `--selftest` | the probe sees exactly the lookups a fixture dictates, including the pairs we deliberately do not read |
 | `--clean-pass` | the patched copy and an unpatched copy emit byte-identical HTML for every readable file: the observer does not perturb the product |
 | `--mut no-attrL` | coverage drops: the numerator really comes from run-time lookups, not from a name list in the source |
+| `--mut no-theme` | coverage does **not** move: asking for `themeShade`/`themeTint` is decoupled from whether the theme resolves (v0.155) |
+| `--mut no-themeshade` | coverage drops: the shade/tint pairs really enter the numerator through `themeRefCss` |
 | `scripts/fidelity-census.py` | a second, different XML parser (Python `xml.etree`) counts the same denominator |
