@@ -21,9 +21,9 @@
  },
  "totals": {
   "read": 582,
-  "kept": 175,
-  "value": 32,
-  "lost": 375,
+  "kept": 192,
+  "value": 22,
+  "lost": 368,
   "part": 0,
   "consulted": 645,
   "srcParts": 7,
@@ -751,13 +751,14 @@
    "out": []
   },
   "cNvPr|descr": {
-   "bucket": "value",
+   "bucket": "kept",
    "n": 1,
    "src": [
     "图形级替代文本"
    ],
    "out": [
-    ""
+    "",
+    "图形级替代文本"
    ]
   },
   "cNvPr|id": {
@@ -893,10 +894,10 @@
    ]
   },
   "comment|date": {
-   "bucket": "value",
+   "bucket": "kept",
    "n": 1,
    "src": [
-    "2026-10-25t10:00:00z"
+    "2026-10-25t10:00:00.000z"
    ],
    "out": [
     "2026-10-25t10:00:00.000z"
@@ -1094,18 +1095,20 @@
    "out": [
     "",
     "图形余量",
-    "浮动图",
-    "画布级替代文本"
+    "图片 1",
+    "浮动图"
    ]
   },
   "document|Ignorable": {
-   "bucket": "value",
+   "bucket": "kept",
    "n": 1,
    "src": [
     "w14"
    ],
    "out": [
-    "w14 w15 wp14"
+    "w14",
+    "w15",
+    "wp14"
    ]
   },
   "effectExtent|b": {
@@ -1171,13 +1174,15 @@
    ]
   },
   "endnotes|Ignorable": {
-   "bucket": "value",
+   "bucket": "kept",
    "n": 1,
    "src": [
     "w14"
    ],
    "out": [
-    "w14 w15 wp14"
+    "w14",
+    "w15",
+    "wp14"
    ]
   },
   "entryMacro|val": {
@@ -1464,13 +1469,15 @@
    "out": []
   },
   "footnotes|Ignorable": {
-   "bucket": "value",
+   "bucket": "kept",
    "n": 1,
    "src": [
     "w14"
    ],
    "out": [
-    "w14 w15 wp14"
+    "w14",
+    "w15",
+    "wp14"
    ]
   },
   "formProt|val": {
@@ -2046,10 +2053,10 @@
    "bucket": "kept",
    "n": 1,
    "src": [
-    "2026-10-26t00:00:00z"
+    "2026-10-26t00:00:00.000z"
    ],
    "out": [
-    "2026-10-26t00:00:00z"
+    "2026-10-26t00:00:00.000z"
    ]
   },
   "ins|id": {
@@ -2703,24 +2710,28 @@
    ]
   },
   "lvl|tentative": {
-   "bucket": "value",
+   "bucket": "kept",
    "n": 2,
    "src": [
     "0",
     "1"
    ],
    "out": [
+    "0",
     "1"
    ]
   },
   "lvl|tplc": {
-   "bucket": "lost",
+   "bucket": "kept",
    "n": 2,
    "src": [
     "0409001d",
     "0409001f"
    ],
-   "out": []
+   "out": [
+    "0409001d",
+    "0409001f"
+   ]
   },
   "lvlJc|val": {
    "bucket": "value",
@@ -2745,20 +2756,24 @@
    ]
   },
   "lvlPicBulletId|val": {
-   "bucket": "lost",
+   "bucket": "kept",
    "n": 1,
    "src": [
     "7"
    ],
-   "out": []
+   "out": [
+    "7"
+   ]
   },
   "lvlRestart|val": {
-   "bucket": "lost",
+   "bucket": "kept",
    "n": 1,
    "src": [
     "0"
    ],
-   "out": []
+   "out": [
+    "0"
+   ]
   },
   "lvlText|val": {
    "bucket": "kept",
@@ -2850,12 +2865,14 @@
    ]
   },
   "nsid|val": {
-   "bucket": "lost",
+   "bucket": "kept",
    "n": 1,
    "src": [
     "00a1b2c3"
    ],
-   "out": []
+   "out": [
+    "00a1b2c3"
+   ]
   },
   "num|durableId": {
    "bucket": "lost",
@@ -2877,13 +2894,15 @@
    ]
   },
   "numbering|Ignorable": {
-   "bucket": "value",
+   "bucket": "kept",
    "n": 1,
    "src": [
     "w14"
    ],
    "out": [
-    "w14 w15 wp14"
+    "w14",
+    "w15",
+    "wp14"
    ]
   },
   "numFmt|val": {
@@ -3182,33 +3201,33 @@
    ]
   },
   "pgMar|header": {
-   "bucket": "value",
+   "bucket": "kept",
    "n": 1,
    "src": [
     "851"
    ],
    "out": [
-    "850"
+    "851"
    ]
   },
   "pgMar|left": {
-   "bucket": "value",
+   "bucket": "kept",
    "n": 1,
    "src": [
     "1800"
    ],
    "out": [
-    "1797"
+    "1800"
    ]
   },
   "pgMar|right": {
-   "bucket": "value",
+   "bucket": "kept",
    "n": 1,
    "src": [
     "1800"
    ],
    "out": [
-    "1797"
+    "1800"
    ]
   },
   "pgMar|top": {
@@ -4722,31 +4741,38 @@
    ]
   },
   "styleLink|val": {
-   "bucket": "lost",
+   "bucket": "kept",
    "n": 1,
    "src": [
     "report"
    ],
-   "out": []
+   "out": [
+    "report"
+   ]
   },
   "styles|Ignorable": {
    "bucket": "kept",
    "n": 1,
    "src": [
-    "w14 w15"
+    "w14",
+    "w15"
    ],
    "out": [
-    "w14 w15"
+    "w14",
+    "w15"
    ]
   },
   "suff|val": {
-   "bucket": "lost",
+   "bucket": "kept",
    "n": 2,
    "src": [
     "nothing",
     "tab"
    ],
-   "out": []
+   "out": [
+    "nothing",
+    "tab"
+   ]
   },
   "suppressAutoHyphens|val": {
    "bucket": "kept",
@@ -5136,12 +5162,14 @@
    "out": []
   },
   "tmpl|val": {
-   "bucket": "lost",
+   "bucket": "kept",
    "n": 1,
    "src": [
     "0a0b0c"
    ],
-   "out": []
+   "out": [
+    "0a0b0c"
+   ]
   },
   "top|color": {
    "bucket": "kept",

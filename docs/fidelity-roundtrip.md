@@ -33,15 +33,18 @@ docx ──读手──▶ HTML ──TipTap schema──▶ PM 模型 ──写
 - `true/1/on` 与 `false/0/off` 归一（ST_OnOff 的两套写法，写手换一套不算丢）；
   关系 id（`rId1` 之类）归一成占位符——那是包内编号，写手按自己的打包顺序重排，
   逐字比只会比出假红；Word 的存档流水号（`rsid*`/`paraId`/`textId`）按名字规则剔出分母。
+- `lvlJc`/`jc` 的 `start`≡`left`、`end`≡`right`（ST_Jc 的两套写法）；`mc:Ignorable`
+  按空格拆成一串命名空间前缀（写手多声明两个兼容前缀不是丢东西）；ISO 时刻按
+  `Date` 归一（`…T10:00:00Z` 与 `…T10:00:00.000Z` 是同一刻）。
 
 ## 账
 
 | | 值 |
 |---|---:|
 | 读到的对 | 582 |
-| 保留 | **175（30.1%）** |
-| 值变 | 32 |
-| 掉了 | 375 |
+| 保留 | **192（33.0%）** |
+| 值变 | 22 |
+| 掉了 | 368 |
 | 缺件 | 0 |
 | 源包部件 | 7 |
 | 写出包部件 | 7 |
@@ -56,13 +59,13 @@ docx ──读手──▶ HTML ──TipTap schema──▶ PM 模型 ──写
 
 | 族 | 读到的 | 保留 | 值变 | 掉了 | 保留率 |
 |---|---:|---:|---:|---:|---:|
-| 正文属性（`w:*`） | 263 | 148 | 29 | 86 | **56.3%** |
-| 图形壳（`a:`/`v:`/`wp:`/`pic:`/`wps:`/`o:`） | 319 | 27 | 3 | 289 | **8.5%** |
+| 正文属性（`w:*`） | 263 | 164 | 20 | 79 | **62.4%** |
+| 图形壳（`a:`/`v:`/`wp:`/`pic:`/`wps:`/`o:`） | 319 | 28 | 2 | 289 | **8.8%** |
 
 口径说明：一个对算正文，当且仅当它在源包里**只**出现在 `w:*` 元素上（沾过图形壳就算图形壳）。
 对名按 local name 归并（与保真账本同口径），所以 `fill|type` 这种两族同名的会并成一笔。
 
-### 掉了（375）
+### 掉了（368）
 
 名字一次都没写出来。这里每一行都是一条**单边通道**：读手读了，模型或写手没有它的槽。
 
@@ -77,7 +80,6 @@ docx ──读手──▶ HTML ──TipTap schema──▶ PM 模型 ──写
 | `col|w` | 2 | 2000, 3000 | — |
 | `ext|uri` | 2 | {1234-5678-9abc-def0}, {1234-5678-9abc-def1} | — |
 | `imagedata|id` | 2 | rid# | — |
-| `lvl|tplc` | 2 | 0409001f, 0409001d | — |
 | `path|h` | 2 | 1000 | — |
 | `path|w` | 2 | 1000 | — |
 | `pt|x` | 2 | 0, 10 | — |
@@ -88,7 +90,6 @@ docx ──读手──▶ HTML ──TipTap schema──▶ PM 模型 ──写
 | `rect|t` | 2 | 0 | — |
 | `spLocks|noEditPoints` | 2 | 1 | — |
 | `srgbClr|val` | 2 | ff0000, 0000ff | — |
-| `suff|val` | 2 | nothing, tab | — |
 | `alpha|val` | 1 | 50000 | — |
 | `alphaOff|val` | 1 | 200 | — |
 | `anchor|allowOverlap` | 1 | 1 | — |
@@ -108,9 +109,11 @@ docx ──读手──▶ HTML ──TipTap schema──▶ PM 模型 ──写
 | `bodyPr|anchor` | 1 | ctr | — |
 | `bodyPr|anchorCtr` | 1 | 0 | — |
 | `bodyPr|bIns` | 1 | 91440 | — |
-| …共 375 条，完整清单见 `docs/fidelity-roundtrip.json` | | | |
+| `bodyPr|compatLnSpc` | 1 | 0 | — |
+| `bodyPr|forceAA` | 1 | 0 | — |
+| …共 368 条，完整清单见 `docs/fidelity-roundtrip.json` | | | |
 
-### 值变（32）
+### 值变（22）
 
 名字在，但某个源值没写回去。比「掉了」更隐蔽——普查看着它在场，屏上也像那么回事。
 
@@ -118,7 +121,7 @@ docx ──读手──▶ HTML ──TipTap schema──▶ PM 模型 ──写
 |---|---:|---|---|
 | `name|val` | 6 | text1, normal, report head, report | title, heading 1, heading 2, heading 3 |
 | `docPr|id` | 5 | 7, 8, 9, 11 | 7, 8, 1, 11 |
-| `docPr|name` | 5 | 图片 1, 浮动图, 形状 1, 图形余量 | 画布级替代文本, 浮动图, , 图形余量 |
+| `docPr|name` | 5 | 图片 1, 浮动图, 形状 1, 图形余量 | 图片 1, 浮动图, , 图形余量 |
 | `gridCol|w` | 4 | 5000, 2500 | 4995, 2505 |
 | `ind|left` | 3 | 420, 0 | 420, 720, 1440, 2160 |
 | `bookmarkEnd|id` | 2 | 7, 9 | 1 |
@@ -126,25 +129,15 @@ docx ──读手──▶ HTML ──TipTap schema──▶ PM 模型 ──写
 | `bottom|space` | 2 | 4, 0 | 4, 2 |
 | `ind|right` | 2 | 210, 0 | 210 |
 | `left|space` | 2 | 2, 0 | 2, 3 |
-| `lvl|tentative` | 2 | 1, 0 | 1 |
 | `lvlJc|val` | 2 | left, center | left, start |
 | `right|space` | 2 | 3, 0 | 3 |
 | `widowControl|val` | 2 | 1, 0 | 0 |
 | `abstractNum|abstractNumId` | 1 | 0 | 1, 2, 3 |
 | `abstractNumId|val` | 1 | 0 | 1, 3 |
-| `cNvPr|descr` | 1 | 图形级替代文本 | — |
 | `color|val` | 1 | ff0000 | adbbd4, 2e74b5, 1f4d78, 0563c1 |
 | `cols|equalWidth` | 1 | 0 | 1 |
-| `comment|date` | 1 | 2026-10-25t10:00:00z | 2026-10-25t10:00:00.000z |
-| `document|Ignorable` | 1 | w14 | w14 w15 wp14 |
-| `endnotes|Ignorable` | 1 | w14 | w14 w15 wp14 |
-| `footnotes|Ignorable` | 1 | w14 | w14 w15 wp14 |
 | `ins|id` | 1 | 7 | 1 |
-| `numbering|Ignorable` | 1 | w14 | w14 w15 wp14 |
 | `numId|val` | 1 | 1 | 2 |
-| `pgMar|header` | 1 | 851 | 850 |
-| `pgMar|left` | 1 | 1800 | 1797 |
-| `pgMar|right` | 1 | 1800 | 1797 |
 | `startOverride|val` | 1 | 3 | 1 |
 | `tcW|w` | 1 | 5000 | 4995, 2505 |
 | `u|color` | 1 | ff0000 | b4c7e7 |
@@ -155,7 +148,7 @@ docx ──读手──▶ HTML ──TipTap schema──▶ PM 模型 ──写
 
 （空）
 
-### 保留（175）
+### 保留（192）
 
 这些是真的双向。列出来是为了让「保留」也可核对，而不是一个孤零零的百分比。
 
@@ -185,7 +178,7 @@ docx ──读手──▶ HTML ──TipTap schema──▶ PM 模型 ──写
 | `ext|cy` | 2 | 914400 | 914400, 638175, 2286000 |
 | `graphicData|uri` | 2 | http://schemas.openxmlformats.org/drawingml/2006/picture | http://schemas.openxmlformats.org/drawingml/2006/picture |
 | `hyperlink|id` | 2 | rid# | rid# |
-| …共 175 条，完整清单见 `docs/fidelity-roundtrip.json` | | | |
+| …共 192 条，完整清单见 `docs/fidelity-roundtrip.json` | | | |
 
 ## 边界
 
