@@ -1129,15 +1129,23 @@ function readNumbering(xml: string, theme?: ThemeFonts): Numbering {
     const levels = new Map<number, LvlDef>()
     for (const l of all(a, 'w:lvl')) {
       const ilvl = Number(attr(l, 'w:ilvl') ?? '0')
+      const numFmt = val(l, 'w:numFmt') ?? 'bullet'
+      const lvlText = val(l, 'w:lvlText')
       levels.set(ilvl, {
-        numFmt: val(l, 'w:numFmt') ?? 'bullet',
+        numFmt,
         start: valNum(l, 'w:start') ?? 1,
-        lvlText: val(l, 'w:lvlText'),
+        lvlText,
         lvlJc: (val(l, 'w:lvlJc') ?? '').toLowerCase() || undefined,
       })
       // 层属性三枚（v0.150）：tentative 是 onOff（「这一层还在草拟」，显式关也是值），
       // tplc 是模板层号（十六进制串），suff 是编号与正文之间夹的那一段
       const meta: DocxLvlMeta = {}
+      // 逐层档位（v0.158）：numFmt/lvlText 原本只拼进 fp 那一串里，写手取不到逐层的值，
+      // 重建编号时三层全拍成一个符面，指纹因此对不上——整条定义的元数据（suff/
+      // lvlRestart/styleLink/nsid/tmpl）也就跟着贴不回去。逐层单存一份（与 fp 同源，
+      // 那边是给人看的串，这边是给写手用的值）
+      meta.fmt = numFmt
+      if (lvlText !== undefined) meta.text = lvlText
       const tnt = onOff(attr(l, 'w:tentative'))
       if (tnt !== undefined) meta.tentative = tnt
       const tplc = attr(l, 'w:tplc')

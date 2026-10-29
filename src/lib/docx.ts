@@ -486,6 +486,15 @@ export interface DocxLvlMeta {
   tplc?: string
   suff?: string
   /**
+   * 这一层自己的档位（v0.158）：`w:numFmt/@w:val` 与 `w:lvlText/@w:val`，逐层单存一份。
+   * 从前这两枚只以合并串的形式活在 `fp` 里（`0:bullet|·;1:lowerLetter|%2.`），写手拿不到
+   * 「第 1 层是 lowerLetter」这种信息，重建编号时只能把三层全拍成同一个符面——于是内容
+   * 指纹对不上，`patchNumberingXml` 认不出这条定义，**整族元数据（suff/lvlRestart/
+   * styleLink/nsid/tmpl）跟着一起贴不回去**。存成字段后写手能照原样逐层重建。
+   */
+  fmt?: string
+  text?: string
+  /**
    * 这一层是否随上一级重新起号（v0.155）：`w:lvlRestart/@w:val`，0 表示永不重起。
    * 屏上零兑现（编号串由 ListRegistry 按段重建），随 numbering.xml 补丁往返
    */
@@ -1843,17 +1852,57 @@ function markerAlignOf(v: unknown): 'left' | 'center' | 'right' {
  * 起始号落在**使用层**（startLevel）：段落的 w:numPr 指哪一层，Word 就从那一层的
  * w:start 起算——落在第 0 层而段落引用第 1 层的话，Word 整条读不到起始值。
  */
-function listLevels(kind: ListKind, startLevel = 0) {
-  return [0, 1, 2].map((level) => ({
+/** 一层的档位类型：`format` 是包里那 63 档枚举，不是裸字符串 */
+type LvlFormat = (typeof LevelFormat)[keyof typeof LevelFormat]
+
+/**
+ * OOXML 的 `w:numFmt` 取值 → 包里的 `LevelFormat`：63 档一一对应，值就是同一串
+ * （decimal / lowerLetter / chicago / …）。认不出的档位（自定义格式串）不硬猜。
+ */
+const NUM_FMT = new Map<string, LvlFormat>(Object.values(LevelFormat).map((v) => [String(v), v]))
+
+/**
+ * 源文档那份编号定义的逐层档位（v0.158）。有一层认不出（不在那 63 档里），或者层号
+ * 跳着来（没法按 ilvl 对位），就整条不认——宁可按段的档位重建，也不写一枚 Word 打不
+ * 开的 numFmt。与 patchNumberingXml 同一条纪律：认不出就不贴。
+ */
+function defLvlsOf(def?: DocxAbstractNumMeta): { level: number; format: LvlFormat; text: string }[] | null {
+  if (!def) return null
+  const out: { level: number; format: LvlFormat; text: string }[] = []
+  for (const k of Object.keys(def.levels)) {
+    const lv = def.levels[k]
+    const format = lv.fmt ? NUM_FMT.get(lv.fmt) : undefined
+    if (!format) return null
+    out.push({ level: Number(k), format, text: lv.text ?? '' })
+  }
+  if (!out.length) return null
+  out.sort((a, b) => a.level - b.level)
+  for (let i = 0; i < out.length; i++) if (out[i].level !== i) return null
+  return out
+}
+
+function listLevels(kind: ListKind, startLevel = 0, def?: DocxAbstractNumMeta) {
+  const align =
+    kind.align === 'center' ? AlignmentType.CENTER : kind.align === 'right' ? AlignmentType.END : AlignmentType.START
+  const one = (level: number, format: LvlFormat, text: string) => ({
     level,
-    ...(kind.ordered
-      ? { format: kind.marker as (typeof LevelFormat)[keyof typeof LevelFormat], text: `%${level + 1}.` }
-      : { format: LevelFormat.BULLET, text: kind.marker }),
-    alignment:
-      kind.align === 'center' ? AlignmentType.CENTER : kind.align === 'right' ? AlignmentType.END : AlignmentType.START,
+    format,
+    text,
+    alignment: align,
     ...(kind.ordered && kind.start !== 1 && level === startLevel ? { start: kind.start } : {}),
     style: { paragraph: { indent: { left: 720 * (level + 1), hanging: 360 } } },
-  }))
+  })
+  // 按段档位造一层：有序档的 `text` 是 `%N.`（N = 层 + 1），符面档三层共用同一个字符
+  const synth = (level: number) =>
+    kind.ordered
+      ? one(level, kind.marker as LvlFormat, `%${level + 1}.`)
+      : one(level, LevelFormat.BULLET, kind.marker)
+  const src = defLvlsOf(def)
+  if (!src) return [0, 1, 2].map(synth)
+  // 源有几层就写几层，不足三层用按段档位补齐：段落引用的层号被截到 2，写少了那一段
+  // 在 Word 里没有档位可用。多出来的尾层不影响对位——patchNumberingXml 比的是前缀
+  const n = Math.max(3, src.length)
+  return Array.from({ length: n }, (_, level) => (src[level] ? one(level, src[level].format, src[level].text) : synth(level)))
 }
 
 /**
@@ -1863,7 +1912,35 @@ function listLevels(kind: ListKind, startLevel = 0) {
  * 只有「档位与默认不同」的列表才生成独立 reference（符面字符、罗马数字、居中对齐…）。
  */
 class ListRegistry {
-  private refs = new Map<string, { ref: string; kind: ListKind; level: number }>()
+  private refs = new Map<string, { ref: string; kind: ListKind; level: number; def?: DocxAbstractNumMeta }>()
+  /** 源文档的编号定义（v0.158）：按「第 0 层的档位」认领，一份定义只许一串列表用 */
+  private defs: DocxAbstractNumMeta[]
+  private claimed = new Set<number>()
+
+  constructor(defs: DocxAbstractNumMeta[] = []) {
+    this.defs = defs
+  }
+
+  /**
+   * 认领一份源定义：**只比第 0 层**的 `numFmt|lvlText`——更深那几层本来就是写手拍平
+   * 拍没了的东西，拿它们当判据等于永远认不出。第 0 层是屏上那一串真正用的档位，
+   * 读手把它带进了模型（`<ol type>` / `<ul data-marker>`），两边对得上。
+   *
+   * 认不出就返回 undefined（退回到按段重建），绝不去够第二份——两份定义都挂着同一个
+   * 第 0 层时，第二串列表不该抢走第一串的那份（patchNumberingXml 也是一份定义只贴一枚）。
+   */
+  private claim(kind: ListKind): DocxAbstractNumMeta | undefined {
+    const fmt = kind.ordered ? String(kind.marker) : String(LevelFormat.BULLET)
+    const text = kind.ordered ? '%1.' : kind.marker
+    for (let i = 0; i < this.defs.length; i++) {
+      if (this.claimed.has(i)) continue
+      const lv = this.defs[i].levels['0']
+      if (!lv || lv.fmt !== fmt || (lv.text ?? '') !== text) continue
+      this.claimed.add(i)
+      return this.defs[i]
+    }
+    return undefined
+  }
 
   /**
    * 取这一串列表的 reference。level 是段落将引用的层（= 嵌套深度，已截到 2）：
@@ -1875,12 +1952,15 @@ class ListRegistry {
     const hit = this.refs.get(key)
     if (hit) return hit.ref
     const ref = `oof-list-${this.refs.size}`
-    this.refs.set(key, { ref, kind, level })
+    this.refs.set(key, { ref, kind, level, def: this.claim(kind) })
     return ref
   }
 
   config(): { reference: string; levels: ReturnType<typeof listLevels> }[] {
-    return [...this.refs.values()].map(({ ref, kind, level }) => ({ reference: ref, levels: listLevels(kind, level) }))
+    return [...this.refs.values()].map(({ ref, kind, level, def }) => ({
+      reference: ref,
+      levels: listLevels(kind, level, def),
+    }))
   }
 }
 
@@ -2250,8 +2330,9 @@ function blocksOf(
 
 export async function prosemirrorToDocxBytes(json: PMNode, meta?: DocMeta): Promise<Uint8Array> {
   const dt = newDocTrack()
-  // 编号注册表（v0.142）：blocksOf 一路往里传，收齐全篇的自定义档位后进 Document.numbering
-  const lists = new ListRegistry()
+  // 编号注册表（v0.142）：blocksOf 一路往里传，收齐全篇的自定义档位后进 Document.numbering。
+  // 带上源文档的编号定义（v0.158）：重建一串列表时能照原样逐层发，而不是三层拍成一个符面
+  const lists = new ListRegistry(meta?.numbering?.defs ?? [])
   const pg = resolvePage(meta?.page)
   const twips = (mm: number) => Math.round(mm * MM_TWIPS)
   // 版心宽度：与界面上的精确列宽同一个算法（contentTwipsOf），没有宽度账的表按它等分写真网格
