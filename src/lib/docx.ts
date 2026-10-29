@@ -457,6 +457,8 @@ export interface DocxLsdException {
 export interface DocBackground {
   /** 解析出来的 CSS 色；没有主题槽时它就是回写的字面值（去掉 # 转大写） */
   css?: string
+  /** 字面色原文（v0.157）：主题槽在场时 Word 按主题算，这枚是兜底值，跟着一起写回 */
+  color?: string
   themeColor?: string
   themeShade?: string
   themeTint?: string
@@ -2385,9 +2387,13 @@ export async function prosemirrorToDocxBytes(json: PMNode, meta?: DocMeta): Prom
             ...(meta.background.themeColor ? { themeColor: meta.background.themeColor } : {}),
             ...(meta.background.themeShade ? { themeShade: meta.background.themeShade } : {}),
             ...(meta.background.themeTint ? { themeTint: meta.background.themeTint } : {}),
-            ...(!meta.background.themeColor && meta.background.css
-              ? { color: meta.background.css.replace(/^#/, '').toUpperCase() }
-              : {}),
+            // v0.157：字面色与主题槽并存（主题槽在场时 Word 按主题算，字面值是兜底）。
+            // 此前只在没有 themeColor 时才写字面色，于是"两枚都有"的件一往返就少一枚
+            ...(meta.background.color
+              ? { color: meta.background.color.replace(/^#/, '').toUpperCase() }
+              : !meta.background.themeColor && meta.background.css
+                ? { color: meta.background.css.replace(/^#/, '').toUpperCase() }
+                : {}),
           },
         }
       : {}),

@@ -29,6 +29,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import process from 'node:process'
 import { createHash } from 'node:crypto'
+import { execFileSync } from 'node:child_process'
 import JSZip from 'jszip'
 import { parseHTML } from 'linkedom'
 import { getSchema } from '@tiptap/core'
@@ -67,6 +68,17 @@ const local = (n) => (n.includes(':') ? n.slice(n.indexOf(':') + 1) : n)
 const md5 = (s) => createHash('md5').update(s).digest('hex')
 const url = (p) => `file:///${p.replace(/\\/g, '/')}`
 
+// 写手那一半没有副本，靠这条断言把它钉在取样 rev 上：工作树脏了就拒绝跑。
+// 归一换行再比——Windows 上 git 会把检出换成 CRLF，那不是内容变化。
+function assertAtRef(rel) {
+  const head = execFileSync('git', ['show', `${REF}:${rel}`], { cwd: REPO, encoding: 'utf8' })
+  const disk = fs.readFileSync(path.join(REPO, rel), 'utf8')
+  const norm = (s) => s.replace(/\r\n/g, '\n')
+  if (norm(head) !== norm(disk)) {
+    throw new Error(`${rel} 与 ${REF} 不一致：先提交再跑账（账本要按 rev 复现）`)
+  }
+}
+
 // ST_OnOff：true/1/on 与 false/0/off 是同一个布尔的两套写法，写手换一套不算丢
 const BOOL_ON = new Set(['true', 'on'])
 const BOOL_OFF = new Set(['false', 'off'])
@@ -74,6 +86,9 @@ function normValue(v) {
   const s = String(v).trim().toLowerCase()
   if (BOOL_ON.has(s)) return '1'
   if (BOOL_OFF.has(s)) return '0'
+  // 关系 id 是**包内编号**：写手按自己的打包顺序重排（源里的 rId1 到写出包成了 rId8），
+  // 逐字比只会比出一堆假红。规范化成同一个占位符——「有没有这枚关系」由名字本身记着。
+  if (/^r?id\d+$/.test(s)) return 'rid#'
   return s
 }
 
@@ -137,11 +152,14 @@ async function main() {
   const { parseXml } = await import(url(path.join(MOD_DIR, 'ooxml.ts')))
   const seen = reader.__PROBE.seen
 
-  // 写手与 schema 也从同一份副本取：账本必须"给定 rev 就给定答案"，读手取 HEAD 而写手
-  // 取工作树的话，工作树里改一行产品代码，同一份账本就换了数——那不是账本，是快照。
-  // 探针只注在读手那侧；写手这份副本与产品源逐字节相同（materialize 只是复制）。
-  const writer = await import(url(path.join(MOD_DIR, 'docx.ts')))
-  const { docExtensions } = await import(url(path.join(MOD_DIR, 'doc-schema.ts')))
+  // 写手与 schema 从产品源取。为什么不从副本取：副本目录是运行期新建的，vite 的依赖
+  // 预构建第一次见到它就会重启，动态导入当场作废（"Request is outdated"）。所以改用
+  // 「文件必须是干净的」这条硬闸代替取样——工作树与取样 rev 不一致就直接拒绝跑。
+  // 账本要能"给定 rev 就给定答案"，写手这一半靠这条断言守住。
+  assertAtRef('src/lib/docx.ts')
+  assertAtRef('src/lib/doc-schema.ts')
+  const writer = await import(url(path.join(REPO, 'src/lib/docx.ts')))
+  const { docExtensions } = await import(url(path.join(REPO, 'src/lib/doc-schema.ts')))
 
   // ---- 1. 源包 ----
   const srcZip = new JSZip()
@@ -259,7 +277,8 @@ function writeLedger(d) {
   L.push('| 缺件 | 连承载它的部件都没写出来 | 整件丢失，比掉了更早一步 |')
   L.push('')
   L.push('- `true/1/on` 与 `false/0/off` 归一（ST_OnOff 的两套写法，写手换一套不算丢）；')
-  L.push('  Word 的存档流水号（`rsid*`/`paraId`/`textId`）按名字规则剔出分母。')
+  L.push('  关系 id（`rId1` 之类）归一成占位符——那是包内编号，写手按自己的打包顺序重排，')
+  L.push('  逐字比只会比出假红；Word 的存档流水号（`rsid*`/`paraId`/`textId`）按名字规则剔出分母。')
   L.push('')
   L.push('## 账')
   L.push('')

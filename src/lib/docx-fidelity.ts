@@ -4788,6 +4788,8 @@ export async function docxToHtmlFidelity(bytes: Uint8Array, depth = 0): Promise<
 export interface DocBackground {
   /** 解析出来的 CSS 色（主题引用优先于字面值，与 w:color 同款主次） */
   css?: string
+  /** 字面色原文（v0.157）：主题槽在场时 Word 按主题算，这枚是它的兜底值，仍要原样写回 */
+  color?: string
   themeColor?: string
   themeShade?: string
   themeTint?: string
@@ -4805,6 +4807,10 @@ function docBackgroundOf(doc: XEl | undefined, tc: ThemeColors | undefined): Doc
   const c = (attr(bg, 'w:color') ?? '').toLowerCase()
   if (themed) out.css = themed
   else if (c && c !== 'auto') out.css = '#' + c.replace(/^#/, '')
+  // v0.157：字面色单独留一份。主题槽在场时上面那支只记解析结果，字面值就没人记得——
+  // 往返账第一次跑就照出来：源里 `w:color="FFE699" w:themeColor="background1"`，
+  // 写出包只剩 themeColor，字面这枚整条掉了（Word 用它兜底，主题缺失时才看得见）
+  if (c && c !== 'auto') out.color = c
   const thc = attr(bg, 'w:themeColor')
   if (thc) out.themeColor = thc
   const ths = attr(bg, 'w:themeShade')
