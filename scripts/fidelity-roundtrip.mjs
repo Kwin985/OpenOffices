@@ -82,10 +82,22 @@ function assertAtRef(rel) {
 // ST_OnOff：true/1/on 与 false/0/off 是同一个布尔的两套写法，写手换一套不算丢
 const BOOL_ON = new Set(['true', 'on'])
 const BOOL_OFF = new Set(['false', 'off'])
-function normValue(v) {
+function normValue(v, attrName) {
   const s = String(v).trim().toLowerCase()
   if (BOOL_ON.has(s)) return '1'
   if (BOOL_OFF.has(s)) return '0'
+  // ST_Jc 的 start/end 与 left/right 是同一档对齐的两套写法（docx 库发 start，Word 发
+  // left），写手换一套不算丢。只认这两枚属性名——start/end 在别的属性上是别的意思
+  if (attrName === 'lvlJc' || attrName === 'jc') {
+    if (s === 'start') return 'left'
+    if (s === 'end') return 'right'
+  }
+  // ISO 时刻：`2026-10-25T10:00:00Z` 与 `...T10:00:00.000Z` 是同一刻的两种写法
+  // （批注时间由写手补出毫秒）。按 Date 归一，免得记成一笔「值变了」
+  if (/^\d{4}-\d{2}-\d{2}t\d{2}:\d{2}:\d{2}(\.\d+)?z?$/.test(s)) {
+    const t = Date.parse(s)
+    if (Number.isFinite(t)) return new Date(t).toISOString().toLowerCase()
+  }
   // 关系 id 是**包内编号**：写手按自己的打包顺序重排（源里的 rId1 到写出包成了 rId8），
   // 超链接那一枚更狠——docx 库给它现编一个随机串（实测 `rIdNGYG-ok_KKGZMBu-YDYJA`，
   // 每次跑都不一样）。逐字比不但比出假红，还会让账本本身不可复现。一律归一成占位符：
@@ -125,7 +137,14 @@ function census(zip, parseXml, parts) {
         rec.n++
         rec.parts.add(part)
         rec.pfxs.add(pfx)
-        const v = normValue(el.attrs[k])
+        // mc:Ignorable 是**一串**命名空间前缀（"w14 w15 wp14"），写手比源多声明两个
+        // 兼容命名空间不是丢东西。整串当一个值比，源那份永远不在写出值里——假红。拆开记
+        if (local(k) === 'Ignorable') {
+          for (const t of String(el.attrs[k]).split(/\s+/).filter(Boolean))
+            rec.values.set(t, (rec.values.get(t) ?? 0) + 1)
+          continue
+        }
+        const v = normValue(el.attrs[k], local(k))
         rec.values.set(v, (rec.values.get(v) ?? 0) + 1)
       }
       for (const c of el.children ?? []) if (typeof c !== 'string') visit(c)
@@ -313,6 +332,9 @@ function writeLedger(d) {
   L.push('- `true/1/on` 与 `false/0/off` 归一（ST_OnOff 的两套写法，写手换一套不算丢）；')
   L.push('  关系 id（`rId1` 之类）归一成占位符——那是包内编号，写手按自己的打包顺序重排，')
   L.push('  逐字比只会比出假红；Word 的存档流水号（`rsid*`/`paraId`/`textId`）按名字规则剔出分母。')
+  L.push('- `lvlJc`/`jc` 的 `start`≡`left`、`end`≡`right`（ST_Jc 的两套写法）；`mc:Ignorable`')
+  L.push('  按空格拆成一串命名空间前缀（写手多声明两个兼容前缀不是丢东西）；ISO 时刻按')
+  L.push('  `Date` 归一（`…T10:00:00Z` 与 `…T10:00:00.000Z` 是同一刻）。')
   L.push('')
   L.push('## 账')
   L.push('')

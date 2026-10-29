@@ -145,8 +145,12 @@ export interface DocxSection {
  * 判定、分栏缺省回落、一位小数），两腿读的是同一份数——那条腿留给不跑读手的导入路径
  */
 export function pageSetupOf(s: DocxSection): PageSetup {
-  const r1 = (v?: number) => (v === undefined ? undefined : Math.round(v * 10) / 10)
-  const mm = (t?: number) => (t === undefined || !(t > 0) ? undefined : r1(t / MM_TWIPS))
+  // 缇 → 毫米留两位（v0.158）：一位小数是**不可逆**的——1800 缇 = 31.7499…（浮点上差一点
+  // 到不了 31.75），一位小数截成 31.7，回算只剩 1797；851 缇（15.0105）截成 15.0 回算 850。
+  // 两位小数把往返误差压到 0.3 缇以内，取整后都能回到原值。毫米是 UI 上那一栏的单位，
+  // 多一位只让显示多一位，语义不变
+  const rmm = (v?: number) => (v === undefined ? undefined : Math.round(v * 100) / 100)
+  const mm = (t?: number) => (t === undefined || !(t > 0) ? undefined : rmm(t / MM_TWIPS))
   const page: PageSetup = {}
   const pw = mm(s.w)
   const ph = mm(s.h)
@@ -164,8 +168,8 @@ export function pageSetupOf(s: DocxSection): PageSetup {
     if (lm !== undefined) margin.left = lm
     page.size = size
     if (size === 'custom') {
-      page.w = r1(pw)
-      page.h = r1(ph)
+      page.w = rmm(pw)
+      page.h = rmm(ph)
     }
     if (Object.keys(margin).length) page.margin = margin
   }
@@ -655,24 +659,25 @@ export async function docxToDocMeta(bytes: Uint8Array): Promise<DocMeta> {
   const mr = tw(pgMar, 'right')
   const mb = tw(pgMar, 'bottom')
   const ml = tw(pgMar, 'left')
-  const r1 = (v?: number) => (v === undefined ? undefined : Math.round(v * 10) / 10)
+  // 与 pageSetupOf 那一处同一把尺子（v0.158）：两位小数，缇 → 毫米 → 缇 能回到原值
+  const rmm = (v?: number) => (v === undefined ? undefined : Math.round(v * 100) / 100)
   const page: PageSetup = {}
   if (pw && ph) {
     const near = (a: number, b: number) => Math.abs(a - b) < 1
     const size = near(pw, 210) && near(ph, 297) ? 'A4' : near(pw, 215.9) && near(ph, 279.4) ? 'Letter' : 'custom'
     const margin: Partial<PageMargin> = {}
-    const tm = r1(mt)
-    const rm = r1(mr)
-    const bm = r1(mb)
-    const lm = r1(ml)
+    const tm = rmm(mt)
+    const rm = rmm(mr)
+    const bm = rmm(mb)
+    const lm = rmm(ml)
     if (tm !== undefined) margin.top = tm
     if (rm !== undefined) margin.right = rm
     if (bm !== undefined) margin.bottom = bm
     if (lm !== undefined) margin.left = lm
     page.size = size
     if (size === 'custom') {
-      page.w = r1(pw)
-      page.h = r1(ph)
+      page.w = rmm(pw)
+      page.h = rmm(ph)
     }
     if (Object.keys(margin).length) page.margin = margin
   }
@@ -681,7 +686,7 @@ export async function docxToDocMeta(bytes: Uint8Array): Promise<DocMeta> {
   if (num > 1) {
     page.cols = Math.min(4, num)
     const gap = tw(colsEl, 'space')
-    if (gap && Math.abs(gap - DEFAULT_COL_GAP) > 0.6) page.colGap = r1(gap)
+    if (gap && Math.abs(gap - DEFAULT_COL_GAP) > 0.6) page.colGap = rmm(gap)
   }
   if (Object.keys(page).length) out.page = page
   return out
