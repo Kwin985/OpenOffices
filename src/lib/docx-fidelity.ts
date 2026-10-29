@@ -722,13 +722,23 @@ function readImgPayload(el: XEl): string {
   // wp:docPr（画布级）与 pic:cNvPr（图形级）各有 id/name；name 那边读手已用 descr 优先
   // 取过 alt，这里收的是对象名本身。两处 id 都是整数、都只查一次（不用 ?? 短路——
   // 右支不求值会让后一枚永远不进探针账）
-  const docPrId = attrNum(findDesc(el, 'docPr'), 'id')
+  const docPr = findDesc(el, 'docPr')
+  const docPrId = attrNum(docPr, 'id')
   if (docPrId !== undefined) kv.docPrId = String(docPrId)
+  // 画布级对象名（v0.158）：descr 是替代文本、name 是对象名，两码事。写手那一侧把 alt
+  // 同时塞进 name 与 descr，源里的对象名（「图片 1」）就被替代文本顶掉了——对象名在
+  // Word 的选择窗格与定位里是要用的，得单存一份带回去
+  const docPrName = attr(docPr, 'name')
+  if (docPrName) kv.docPrName = docPrName
   const cNvPr = findDesc(el, 'cNvPr')
   const cNvPrId = attrNum(cNvPr, 'id')
   if (cNvPrId !== undefined) kv.cNvPrId = String(cNvPrId)
   const cNvPrName = attr(cNvPr, 'name')
   if (cNvPrName) kv.cNvPrName = cNvPrName
+  // 图形级替代文本（v0.158）：与画布级那枚 descr 是两枚不同的属性（读手取 alt 时才把它们
+  // 当主次），写手只发画布级，图形级这一枚就整条没了。单存一份
+  const cNvPrDescr = attr(cNvPr, 'descr')
+  if (cNvPrDescr) kv.cNvPrDescr = cNvPrDescr
   // 两枚 locks：锁纵横比。onOff 三态（元素在场无 val 按「开」）
   const gfl = onOff(attrL(findDesc(el, 'graphicFrameLocks'), 'noChangeAspect'))
   if (gfl !== undefined) kv.gfl = gfl ? '1' : '0'

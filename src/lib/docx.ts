@@ -3337,10 +3337,17 @@ async function patchImgXml(bytes: Uint8Array, shells: string[]): Promise<Uint8Ar
       if (kv[k] !== undefined) ee[n] = kv[k]
     }
     if (Object.keys(ee).length) chunk = retag(chunk, 'wp:effectExtent', ee)
-    if (kv.docPrId !== undefined) chunk = retag(chunk, 'wp:docPr', { id: kv.docPrId })
+    // 画布级的对象序号与**对象名**（v0.158）：名字也走这一枚——包把 alt 同时写进 name
+    // 与 descr，源里的对象名（「图片 1」）被替代文本顶掉，得按源值设回来
+    const dp: Record<string, string> = {}
+    if (kv.docPrId !== undefined) dp.id = kv.docPrId
+    if (kv.docPrName !== undefined) dp.name = kv.docPrName
+    if (Object.keys(dp).length) chunk = retag(chunk, 'wp:docPr', dp)
     const nv: Record<string, string> = {}
     if (kv.cNvPrId !== undefined) nv.id = kv.cNvPrId
     if (kv.cNvPrName !== undefined) nv.name = kv.cNvPrName
+    // 图形级替代文本（v0.158）：与画布级那枚 descr 是两枚属性，包只发后者
+    if (kv.cNvPrDescr !== undefined) nv.descr = kv.cNvPrDescr
     if (Object.keys(nv).length) chunk = retag(chunk, 'pic:cNvPr', nv)
     if (kv.gfl !== undefined) chunk = retag(chunk, 'a:graphicFrameLocks', { noChangeAspect: kv.gfl })
     // a:picLocks 的纵横比锁与箭头锁（v0.149）：同一枚元素两个属性，各补各的
