@@ -1,15 +1,5 @@
 import { memo, useEffect, useRef, useState, type CSSProperties } from 'react'
 import { useEditor, EditorContent } from '@tiptap/react'
-import StarterKit from '@tiptap/starter-kit'
-import Image from '@tiptap/extension-image'
-import Placeholder from '@tiptap/extension-placeholder'
-import TextAlign from '@tiptap/extension-text-align'
-import { TableKit } from '@tiptap/extension-table'
-import { TextStyleKit } from '@tiptap/extension-text-style'
-import { Superscript } from '@tiptap/extension-superscript'
-import { Subscript } from '@tiptap/extension-subscript'
-import Highlight from '@tiptap/extension-highlight'
-import { CharacterCount } from '@tiptap/extensions'
 import { message, open } from '@tauri-apps/plugin-dialog'
 import { invoke } from '@tauri-apps/api/core'
 import type { Tab } from '../store'
@@ -37,11 +27,9 @@ import {
   type TableCond,
   type TableCondType,
 } from '../lib/docx'
-import { Comment, addCommentMark, findCommentAnchor, removeCommentMark } from '../lib/comment-extension'
-import { Bookmark } from '../lib/bookmark-extension'
-import { RevDel, RevIns, RevMode, acceptRevisions, deleteAsRevision, rejectRevisions, revModeOnState, toggleRevMode } from '../lib/revision-extension'
+import { addCommentMark, findCommentAnchor, removeCommentMark } from '../lib/comment-extension'
+import { acceptRevisions, deleteAsRevision, rejectRevisions, revModeOnState, toggleRevMode } from '../lib/revision-extension'
 import {
-  Note,
   NOTE_LABEL,
   locateNote,
   noteOrdinalOf,
@@ -50,18 +38,12 @@ import {
 } from '../lib/note-extension'
 import type { DocxImport } from '../lib/docx-fidelity'
 import { nextStyleId, styleCssOf } from '../lib/doc-style-css'
-import { Toc } from '../lib/toc-extension'
-import { PageBreak } from '../lib/page-break-extension'
-import { Indent } from '../lib/indent-extension'
-import { CharSpacing } from '../lib/char-spacing'
-import { BulletChar } from '../lib/bullet-char'
 import {
   loadSpellDict,
   onSpellDictChange,
   setSpellDeep,
   spellDeepOn,
   spellDictState,
-  SpellCheck,
   spellIgnored,
   spellPluginKey,
   spellUnignore,
@@ -75,18 +57,16 @@ import {
   BORDER_STYLES,
   BORDER_WIDTH_PT,
   CELL_EDGES,
-  CellStyle,
   EDGE_LABEL,
-  IndentTableView,
   bdAttr,
   borderCss,
   borderParts,
   type CellEdge,
 } from '../lib/cell-style'
-import { ParagraphStyle, RStyleMark, ruleOf, type LineRule } from '../lib/paragraph-style'
-import { CharExtra } from '../lib/char-extra'
-import { TableWidth, caretColumn, tableTargetPx } from '../lib/table-width'
-import { FindReplace, frPluginKey, activeIndexOf } from '../lib/find-replace'
+import { ruleOf, type LineRule } from '../lib/paragraph-style'
+import { docExtensions } from '../lib/doc-schema'
+import { caretColumn, tableTargetPx } from '../lib/table-width'
+import { frPluginKey, activeIndexOf } from '../lib/find-replace'
 import { docTemplate } from '../lib/templates'
 import { odtToHtml, prosemirrorToOdtBytes } from '../lib/odt'
 import { planFeed, runFeed, type FeedSource } from '../lib/doc-feed'
@@ -153,31 +133,6 @@ function spacingFromModel(raw: unknown): number {
 
 // 常用符面：前六枚是 ODF/OOXML 双方都落得下的保守集，后几枚是装饰性的
 const BULLET_CHARS = ['•', '○', '■', '□', '◆', '◇', '★', '☆', '▪', '▸', '–', '—', '✓', '✗', '✦', '❖']
-
-// 图片扩展自带 width/height（像素数字），补 align=center：渲染成块级 + 双侧 auto 边距
-const ImgExt = Image.extend({
-  addAttributes() {
-    return {
-      ...this.parent?.(),
-      // 图片容器壳（v0.148）：wp:inline/wp:anchor 的避让与锚点、effectExtent 四边、
-      // 两处对象序号与对象名、两枚 locks、prstGeom 档位、xfrm 的 off/ext。屏上一条都不
-      // 兑现，只随 data-img 载荷往返（与 data-ppr/data-tlook 同一套纪律）
-      img: {
-        default: null,
-        parseHTML: (el: HTMLElement) => el.getAttribute('data-img') || null,
-        renderHTML: (attrs: { img?: string | null }) =>
-          typeof attrs.img === 'string' && attrs.img ? { 'data-img': attrs.img } : {},
-      },
-      align: {
-        default: null,
-        parseHTML: (el: HTMLElement) =>
-          el.style.display === 'block' && el.style.marginLeft === 'auto' ? 'center' : null,
-        renderHTML: (attrs: { align?: string | null }) =>
-          attrs.align === 'center' ? { style: 'display:block;margin-left:auto;margin-right:auto' } : {},
-      },
-    }
-  },
-})
 
 // 状态栏字数/字符的最小刷新间隔：characterCount 每次都要遍历全文
 const WORDS_THROTTLE_MS = 400
@@ -272,54 +227,9 @@ function DocEditor({ tab }: Props) {
   const autoRescheduleRef = useRef<(() => void) | null>(null)
 
   const editor = useEditor({
-    extensions: [
-      StarterKit.configure({
-        heading: { levels: [1, 2, 3, 4] },
-      }),
-      // 列表符面（ODT 的 text:bullet-char 走 ul 的行内 list-style-type）：给 bulletList 挂一枚节点属性
-      BulletChar,
-      ImgExt.configure({ allowBase64: true }),
-      Placeholder.configure({ placeholder: '开始输入内容…' }),
-      TextAlign.configure({ types: ['heading', 'paragraph'] }),
-      Indent.configure({ types: ['heading', 'paragraph'] }),
-      TableKit.configure({ table: { resizable: true, View: IndentTableView } }),
-      // textStyle mark + 字色/字体族/字号。lineHeight 必须关掉：那是 TextStyleKit 给段落挂的同名属性，
-      // 与本编辑器记 OOXML 行距的 lineHeight（ParagraphStyle）撞名字，两边只能留一个
-      TextStyleKit.configure({ backgroundColor: false, lineHeight: false }),
-      // 字符间距挂同一枚 textStyle（保真导入发的 letter-spacing: Npt 靠它才进得了模型）
-      CharSpacing,
-      // 拼写检查：默认关。开着时每次文档变更全量重扫，长文档上是一笔输入延迟，
-      // 所以做成"要查才开"而不是常驻——与 Word 那个开关同一条理由
-      SpellCheck,
-      // 上下标不在 TextStyleKit 里（它们是独立 mark，渲染成 <sup>/<sub>）
-      Superscript,
-      Subscript,
-      // 表格/单元格的边框、底纹、竖排对齐与表格缩进：保真导入落在这些属性上
-      CellStyle,
-      // 精确列宽那一枚命令（setGridColumnWidth）：一次写遍整表，账由 redistribute 算
-      TableWidth,
-      // 段落行距/段前后/底纹/四边：docx 的 w:spacing、w:shd、w:pBdr 读进来就靠这一层接住
-      ParagraphStyle,
-      // 字符级命名样式标签（v0.113）：w:rStyle 读进来落 span[data-rstyle]，导出写回 w:rStyle
-      RStyleMark,
-      // 复杂文字与语言四槽（v0.138）：cs/szCs/lang/hint 读进来落 data-*，导出按库的选项面能写多少写多少
-      CharExtra,
-      // 书签区间（v0.146）：w:bookmarkStart/End 读进来落 span[data-oo-bookmark]，导出包回 Bookmark
-      Bookmark,
-      Highlight.configure({ multicolor: true }),
-      CharacterCount,
-      Toc,
-      PageBreak,
-      Comment,
-      // 修订标记（v0.100）：docx 的 w:ins/w:del 读进来落在这里，接受/拒绝在工具栏
-      RevIns,
-      RevDel,
-      // 修订模式（v0.101）：本应用里改字留痕，插入自动挂 revIns、删除转 revDel
-      RevMode,
-      // 脚注/尾注：行内原子节点，正文存在节点属性上（三条保存链路都从这一份事实出发）
-      Note,
-      FindReplace,
-    ],
+    // 扩展清单住在 lib/doc-schema.ts（v0.157）：组件与保真往返账共用同一份 schema，
+    // 否则量具看到的是另一套 parseHTML 规则，账就成了假账
+    extensions: docExtensions(),
     content: '<p></p>',
     onUpdate: () => markDirty(tab.id, true),
     editorProps: {

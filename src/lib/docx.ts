@@ -939,34 +939,8 @@ function childToRuns(child: PMNode, inherited: Inherited, cs?: CommentTrack, dt?
     } else if (child.type === 'hardBreak') {
       out.push(new TextRun({ text: '', break: 1 }))
     } else if (child.type === 'image') {
-      const src = (child.attrs?.src as string) ?? ''
-      const bytes = src.startsWith('data:') ? dataUriToBytes(src) : null
-      if (bytes) {
-        // 替代文本（v0.145）：PM 的 alt 属性 → ImageRun 的 altText.description（docx 包
-        // DocPropertiesOptions 原生槽）。读手那一侧 alt 以 docPr/cNvPr 的 descr 优先、
-        // name 兜底（见 docx-fidelity 的 bitmap）；name 本身不进模型，对象名丢了无害
-        const alt = typeof child.attrs?.alt === 'string' ? child.attrs.alt : ''
-        // 容器壳（v0.148）：一枚 ImageRun 正对一个 `<w:drawing>`，登记顺序即出现序。
-        // 只有真发得出位图的这一支才登记（另一支退化成 `[图片: src]` 字面，没有壳）
-        dt?.imgExtras.push(typeof child.attrs?.img === 'string' ? child.attrs.img : '')
-        out.push(
-          new TextRun({
-            children: [
-              new ImageRun({
-                type: imageType(src),
-                data: bytes,
-                transformation: {
-                  width: Number(child.attrs?.width) || 320,
-                  height: Number(child.attrs?.height) || 240,
-                },
-                ...(alt ? { altText: { name: alt, description: alt } } : {}),
-              }),
-            ],
-          }),
-        )
-      } else if (src) {
-        out.push(new TextRun({ text: `[图片: ${src}]`, italics: true }))
-      }
+      const run = imageRunOf(child, dt)
+      if (run) out.push(run)
     } else if (child.type === 'note') {
       const kind: NoteKind = child.attrs?.kind === 'endnote' ? 'endnote' : 'footnote'
       const text = typeof child.attrs?.text === 'string' ? child.attrs.text : ''
@@ -992,6 +966,42 @@ function childToRuns(child: PMNode, inherited: Inherited, cs?: CommentTrack, dt?
  * 事实。同段同名两组（病态件）会并成一组；w:id 由 docx 库自动重排（Word 自己复制
  * 书签时也重排）
  */
+/**
+ * 图片节点 → 一枚 TextRun（内含 ImageRun）。行内与**块级**两个调用点共用（v0.157）。
+ *
+ * 为什么提出来：schema 里 Image 是 **block** 节点（`@tiptap/extension-image` 的 `inline`
+ * 缺省 false），读手又把 `<img>` 发在块层——于是真实链路里每张图都成了顶层节点，走的是
+ * blocksOf 末尾那条兜底 `para(node, …)`，而 image 节点没有 content，整张图就被写成了一枚
+ * 空段落：屏上看得见，另存一次就没了。此前只有行内那一支，逐族探针又都是按行内构造的 PM，
+ * 两头对着演，谁也没碰到真实的形状。往返账第一次跑就撞上了：PM 里 5 张图，写出包 0 个
+ * `w:drawing`。
+ */
+function imageRunOf(child: PMNode, dt?: DocTrack): TextRun | null {
+  const src = (child.attrs?.src as string) ?? ''
+  const bytes = src.startsWith('data:') ? dataUriToBytes(src) : null
+  if (!bytes) return src ? new TextRun({ text: `[图片: ${src}]`, italics: true }) : null
+  // 替代文本（v0.145）：PM 的 alt 属性 → ImageRun 的 altText.description（docx 包
+  // DocPropertiesOptions 原生槽）。读手那一侧 alt 以 docPr/cNvPr 的 descr 优先、
+  // name 兜底（见 docx-fidelity 的 bitmap）；name 本身不进模型，对象名丢了无害
+  const alt = typeof child.attrs?.alt === 'string' ? child.attrs.alt : ''
+  // 容器壳（v0.148）：一枚 ImageRun 正对一个 `<w:drawing>`，登记顺序即出现序。
+  // 只有真发得出位图的这一支才登记（另一支退化成 `[图片: src]` 字面，没有壳）
+  dt?.imgExtras.push(typeof child.attrs?.img === 'string' ? child.attrs.img : '')
+  return new TextRun({
+    children: [
+      new ImageRun({
+        type: imageType(src),
+        data: bytes,
+        transformation: {
+          width: Number(child.attrs?.width) || 320,
+          height: Number(child.attrs?.height) || 240,
+        },
+        ...(alt ? { altText: { name: alt, description: alt } } : {}),
+      }),
+    ],
+  })
+}
+
 function inlineToChildren(node: PMNode, inherited: Inherited = {}, cs?: CommentTrack, dt?: DocTrack): ParagraphChildLike[] {
   const kids = node.content ?? []
   const spanStart = new Map<number, { name: string; last: number }>()
@@ -2208,6 +2218,18 @@ function blocksOf(
               })
             },
           ),
+        }),
+      )
+      continue
+    }
+    if (node.type === 'image') {
+      // 块级图片（v0.157）：见 imageRunOf 的注释。一段一图，与 Word 存「独占一段的图」
+      // 同形；对齐读的是 align 属性（读手把居中的块图记在 align 上，不是 textAlign）
+      const run = imageRunOf(node, dt)
+      out.push(
+        para(node, {
+          children: run ? [run] : [],
+          ...(node.attrs?.align === 'center' ? { alignment: AlignmentType.CENTER } : {}),
         }),
       )
       continue
