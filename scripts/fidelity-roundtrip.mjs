@@ -86,10 +86,11 @@ function normValue(v) {
   const s = String(v).trim().toLowerCase()
   if (BOOL_ON.has(s)) return '1'
   if (BOOL_OFF.has(s)) return '0'
-  // 关系 id 是**包内编号**：写手按自己的打包顺序重排（源里的 rId1 到写出包成了 rId8，
-  // 超链接那枚还会长成 rIdWWcn...）。逐字比只会比出一堆假红，规范化成同一个占位符——
+  // 关系 id 是**包内编号**：写手按自己的打包顺序重排（源里的 rId1 到写出包成了 rId8），
+  // 超链接那一枚更狠——docx 库给它现编一个随机串（实测 `rIdNGYG-ok_KKGZMBu-YDYJA`，
+  // 每次跑都不一样）。逐字比不但比出假红，还会让账本本身不可复现。一律归一成占位符：
   // 「有没有这枚关系」由名字本身记着。
-  if (/^rid[0-9a-z_]*$/.test(s)) return 'rid#'
+  if (/^rid[-_0-9a-z]*$/i.test(s)) return 'rid#'
   return s
 }
 
