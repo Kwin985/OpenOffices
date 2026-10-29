@@ -86,9 +86,10 @@ function normValue(v) {
   const s = String(v).trim().toLowerCase()
   if (BOOL_ON.has(s)) return '1'
   if (BOOL_OFF.has(s)) return '0'
-  // 关系 id 是**包内编号**：写手按自己的打包顺序重排（源里的 rId1 到写出包成了 rId8），
-  // 逐字比只会比出一堆假红。规范化成同一个占位符——「有没有这枚关系」由名字本身记着。
-  if (/^r?id\d+$/.test(s)) return 'rid#'
+  // 关系 id 是**包内编号**：写手按自己的打包顺序重排（源里的 rId1 到写出包成了 rId8，
+  // 超链接那枚还会长成 rIdWWcn...）。逐字比只会比出一堆假红，规范化成同一个占位符——
+  // 「有没有这枚关系」由名字本身记着。
+  if (/^rid[0-9a-z_]*$/.test(s)) return 'rid#'
   return s
 }
 
@@ -109,16 +110,20 @@ function census(zip, parseXml, parts) {
     }
     const visit = (el) => {
       const p = local(el.name)
+      // 命名空间前缀（v0.157）：正文属性（w:*）与图形壳（a:/v:/wp:/pic:/wps:）是两笔完全
+      // 不同的账，混在一个百分比里看不出任何东西。前缀在迷你解析器里是原样留着的。
+      const pfx = el.name.includes(':') ? el.name.slice(0, el.name.indexOf(':')) : ''
       for (const k of Object.keys(el.attrs ?? {})) {
         if (k === 'xmlns' || k.startsWith('xmlns:')) continue
         const key = `${p}|${local(k)}`
         let rec = pairs.get(key)
         if (!rec) {
-          rec = { n: 0, values: new Map(), parts: new Set() }
+          rec = { n: 0, values: new Map(), parts: new Set(), pfxs: new Set() }
           pairs.set(key, rec)
         }
         rec.n++
         rec.parts.add(part)
+        rec.pfxs.add(pfx)
         const v = normValue(el.attrs[k])
         rec.values.set(v, (rec.values.get(v) ?? 0) + 1)
       }
@@ -210,7 +215,16 @@ async function main() {
       const missing = [...sp.values.keys()].filter((v) => !op.values.has(v))
       bucket = missing.length ? 'value' : 'kept'
     }
-    rows.push({ key, bucket, noise, srcN: sp.n, srcValues: sp.values, outValues: op?.values ?? new Map() })
+    rows.push({
+      key,
+      bucket,
+      noise,
+      // 这笔属性只出现在 w:* 元素上，还是沾过图形壳（a:/v:/wp:/pic:/wps:/o:）
+      ns: sp.pfxs.size === 1 && sp.pfxs.has('w') ? 'w' : 'other',
+      srcN: sp.n,
+      srcValues: sp.values,
+      outValues: op?.values ?? new Map(),
+    })
   }
 
   const real = rows.filter((r) => !r.noise)
@@ -223,6 +237,16 @@ async function main() {
   const keptN = byBucket.kept.length
   const runMs = Date.now() - t0
 
+  // 正文属性与图形壳分列（v0.157）：混在一起的那个百分比说明不了任何事——
+  // 这份夹具一半是 VML/DrawingML 图形壳（本来就是"读了写不回"的档），
+  // 正文那一半才是日常文档真正走的路
+  const nsTotals = {}
+  for (const r of real) {
+    const b = (nsTotals[r.ns] ??= { read: 0, kept: 0, value: 0, lost: 0, part: 0 })
+    b.read++
+    b[r.bucket]++
+  }
+
   console.log(
     `ROUNDTRIP|ref=${REF} 模块=${modFiles}${fromGit ? '(git)' : '(工作树)'} blocks=${fid.blocks} 注入=[${applied.join(',')}]`,
   )
@@ -232,24 +256,33 @@ async function main() {
   console.log(
     `ROUNDTRIP|往返 保留=${keptN}/${total}(${pct(keptN, total)}%) 值变=${byBucket.value.length} 掉了=${byBucket.lost.length} 缺件=${byBucket.part.length}  噪音对=${rows.length - total}  用时=${(runMs / 1000).toFixed(1)}s`,
   )
+  for (const ns of ['w', 'other']) {
+    const b = nsTotals[ns]
+    if (!b) continue
+    console.log(
+      `ROUNDTRIP|  ${ns === 'w' ? '正文属性' : '图形壳  '} 保留=${b.kept}/${b.read}(${pct(b.kept, b.read)}%) 值变=${b.value} 掉了=${b.lost} 缺件=${b.part}`,
+    )
+  }
   console.log(`ROUNDTRIP|写出包 部件=${out.present.size}（${[...out.present].map((p) => p.replace('word/', '')).join(' ')}）`)
   if (VERBOSE) {
     for (const r of byBucket.lost) console.log(`  LOST ${r.key} ×${r.srcN}`)
     for (const r of byBucket.value) console.log(`  VAL  ${r.key} ×${r.srcN} 源=${[...r.srcValues.keys()].join(',')} 出=${[...r.outValues.keys()].join(',')}`)
   }
 
-  writeLedger({ rows, byBucket, total, keptN, pct, src, out, consulted, runMs, modFiles, fromGit, fid })
+  writeLedger({ rows, byBucket, nsTotals, total, keptN, pct, src, out, consulted, runMs, modFiles, fromGit, fid })
 }
 
 // ---- 6. 写账本 ---------------------------------------------------------------
 
 function writeLedger(d) {
-  const { rows, byBucket, total, keptN, pct, src, out, consulted, runMs, modFiles, fromGit, fid } = d
-  const now = new Date().toISOString().slice(0, 10)
+  const { rows, byBucket, nsTotals, total, keptN, pct, src, out, consulted, runMs, modFiles, fromGit, fid } = d
   const L = []
   L.push('# docx 往返账（读 → 模型 → 写）')
   L.push('')
-  L.push(`生成于 ${now}，取样 rev \`${REF}\`（${modFiles} 个模块${fromGit ? '，取自 git' : '，取自工作树'}）。`)
+  L.push(`取样 rev \`${REF}\`（${modFiles} 个模块${fromGit ? '，取自 git' : '，取自工作树'}）。`)
+  L.push('')
+  L.push('账本里**不写日期**：同一 rev、同一份夹具复跑必须逐字节相同，否则 `diff` 出来的')
+  L.push('就不再是保真的变化。')
   L.push('')
   L.push('保真账本回答「读手按名查问了哪些对」。这份账回答**下一句**：查问过、也读到了的东西，')
   L.push('写回包里还在不在。两份账的分母口径相同（同一套「元素|属性」对、同一个解析器、同一份部件清单），')
@@ -293,6 +326,26 @@ function writeLedger(d) {
   L.push(`| 写出包部件 | ${out.present.size} |`)
   L.push('')
   L.push(`探针在这一趟里记到 ${consulted.size} 个查问对；源包在场而有 ${total} 个既在场又被查问，构成上面的分母。`)
+  L.push('')
+  L.push('## 分两笔账：正文属性与图形壳')
+  L.push('')
+  L.push('一个混起来的百分比说明不了任何事。这份夹具里一半是 VML / DrawingML 的图形壳，')
+  L.push('那是**成心**放进去照「读了写不回」的（形状与文本框被读手展平成文字，壳就没有容身之处）；')
+  L.push('日常文档真正走的是正文那一半。所以分列：')
+  L.push('')
+  L.push('| 族 | 读到的 | 保留 | 值变 | 掉了 | 保留率 |')
+  L.push('|---|---:|---:|---:|---:|---:|')
+  for (const [ns, label] of [
+    ['w', '正文属性（`w:*`）'],
+    ['other', '图形壳（`a:`/`v:`/`wp:`/`pic:`/`wps:`/`o:`）'],
+  ]) {
+    const b = nsTotals[ns]
+    if (!b) continue
+    L.push(`| ${label} | ${b.read} | ${b.kept} | ${b.value} | ${b.lost} | **${pct(b.kept, b.read)}%** |`)
+  }
+  L.push('')
+  L.push('口径说明：一个对算正文，当且仅当它在源包里**只**出现在 `w:*` 元素上（沾过图形壳就算图形壳）。')
+  L.push('对名按 local name 归并（与保真账本同口径），所以 `fill|type` 这种两族同名的会并成一笔。')
   L.push('')
 
   const block = (title, note, list, view) => {
@@ -356,7 +409,6 @@ function writeLedger(d) {
 
   const json = {
     ref: REF,
-    generated: now,
     definition: {
       numerator: 'source-present ∩ probe-consulted',
       buckets: ['kept', 'value', 'lost', 'part'],
