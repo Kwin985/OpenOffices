@@ -50,7 +50,7 @@ import { all, allDesc, attr, attrL, attrNum, els, find, findDesc, findL, local, 
 import { FieldEngine, fieldLabel, parseInstr, recomputable } from './docx-fields'
 import { embedHtml, inlineFlatten, unwrapEmbed, type EmbedHtml } from './ole'
 import { chartToHtml, smartArtToHtml } from './ooxml-graphics'
-import { CELL_EDGES, CNF_ATTR, CNF_KEYS, CSS_BORDER_STYLE, FRAME_NUMERIC_KEYS, FRAME_STR_KEYS, IMG_ATTR, PPR_ATTR, PPR_IND_KEYS, PPR_ONOFF_KEYS, PPR_STR_KEYS, TAB_LEADERS, TBLPR_ATTR, TLOOK_ATTR, bdSpaceAttrs, cnfPayload, eighthsToPx, framePayload, imgPayload, pprPayload, ptToPx, rgb2hex, shadeCss, tblpPayload, tblPrPayload, tabsPayload, tlookPayload, type CellEdge, type CnfPayload, type FramePayload, type ImgPayload, type PprPayload, type TabSpec, type TblpPayload } from './cell-style'
+import { CELL_EDGES, CNF_ATTR, CNF_KEYS, CSS_BORDER_STYLE, FRAME_NUMERIC_KEYS, FRAME_STR_KEYS, IMG_ATTR, PPR_ATTR, PPR_IND_KEYS, PPR_ONOFF_KEYS, PPR_STR_KEYS, TAB_LEADERS, TBLB_ATTR, TBLB_EDGES, TBLB_KEYS, TBLPR_ATTR, TLOOK_ATTR, bdSpaceAttrs, cnfPayload, eighthsToPx, framePayload, imgPayload, pprPayload, ptToPx, rgb2hex, shadeCss, tblbPayload, tblpPayload, tblPrPayload, tabsPayload, tlookPayload, type CellEdge, type CnfPayload, type FramePayload, type ImgPayload, type PprPayload, type TabSpec, type TblbPayload, type TblpPayload } from './cell-style'
 import { ooxmlLine } from './paragraph-style'
 import {
   asTableCondType,
@@ -573,6 +573,35 @@ function readTlookPayload(tblPr: XEl | undefined): string {
  *
  * 十三枚全用 attrL 查问（与 noteCnfStyleMarks 同一枚漏斗，分子不增不减）。
  */
+/**
+ * `w:tblPr/w:tblBorders` 六边的**原值**（v0.163）→ data-tblb 载荷。
+ *
+ * 七枚都按名查问、原值照带，一条也不解析：屏上那一半（格边 padding）由 `edgeCss` /
+ * `edgeSpacePx` 那一趟负责，这一趟只管**源件在表级写过什么**。两趟同读一批属性名，
+ * 但记的是两本账——保真账要的是「查问过」，往返账要的是「值回来了」。
+ */
+function readTblbPayload(tblBorders: XEl | undefined): string {
+  if (!tblBorders) return ''
+  const p: TblbPayload = {}
+  for (const e of TBLB_EDGES) {
+    const el = find(tblBorders, `w:${e}`)
+    if (!el) continue
+    const kv: Partial<Record<(typeof TBLB_KEYS)[number], string>> = {}
+    for (const k of ['val', 'sz', 'color', 'space'] as const) {
+      const v = attr(el, `w:${k}`)
+      if (v) kv[k] = v.trim()
+    }
+    // 主题三枚：themeRefParts 恒查问（与 w:color 同款「查问与解析解耦」），
+    // 这里要的是引用名本身而不是解析出来的 hex——解析值回不去包，只有原值回得去
+    const t = themeRefParts(el)
+    if (t.ref) kv.themeColor = t.ref
+    if (t.tint) kv.themeTint = t.tint
+    if (t.shade) kv.themeShade = t.shade
+    if (Object.keys(kv).length) p[e] = kv
+  }
+  return tblbPayload(p)
+}
+
 function readCnfPayload(tblPr: XEl | undefined): string {
   if (!tblPr) return ''
   const el = find(tblPr, 'w:cnfStyle')
@@ -3762,7 +3791,10 @@ class Fidelity {
     const tblprAttr = readTblPrPayload(tblPr)
     // 表条件格式落点十三枚（v0.162）：屏上零兑现，只随 data-cnf 往返
     const cnfAttr = readCnfPayload(tblPr)
-    let s = `<table${tblStyle ? ` style="${tblStyle}"` : ''}${ownerAttr}${tblpAttr ? ` data-tblp="${tblpAttr}"` : ''}${tlookAttr ? ` ${TLOOK_ATTR}="${tlookAttr}"` : ''}${tblprAttr ? ` ${TBLPR_ATTR}="${tblprAttr}"` : ''}${cnfAttr ? ` ${CNF_ATTR}="${cnfAttr}"` : ''}>`
+    // 表级边框六边原值（v0.163）：屏上那一半走「分摊到格」那一趟（上面 tbSpace 已经在跑），
+    // 这一趟只把原件照带回去——两趟值是两回事，不能互相顶替
+    const tblbAttr = readTblbPayload(tblBordersEl)
+    let s = `<table${tblStyle ? ` style="${tblStyle}"` : ''}${ownerAttr}${tblpAttr ? ` data-tblp="${tblpAttr}"` : ''}${tlookAttr ? ` ${TLOOK_ATTR}="${tlookAttr}"` : ''}${tblprAttr ? ` ${TBLPR_ATTR}="${tblprAttr}"` : ''}${cnfAttr ? ` ${CNF_ATTR}="${cnfAttr}"` : ''}${tblbAttr ? ` ${TBLB_ATTR}="${tblbAttr}"` : ''}>`
     for (let ri = 0; ri < plan.length; ri++) {
       const trPr = find(rows[ri], 'w:trPr')
       // 表头由 w:trPr/w:tblHeader 决定，不限首行（Word 里可以声明第 2 行起重复表头）

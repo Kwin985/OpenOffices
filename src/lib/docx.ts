@@ -46,7 +46,7 @@ import {
   UnderlineType,
 } from 'docx'
 import { xml2js } from 'xml-js'
-import { borderParts, pxToEighths, pxToPt, parseCnfPayload, parseFramePayload, parseImgPayload, parsePprPayload, parseShadePayload, parseTabsPayload, parseTblpPayload, parseTblPrPayload, parseTlookPayload, CELL_EDGES, CNF_KEYS, PPR_IND_KEYS, type CellEdge } from './cell-style'
+import { borderParts, pxToEighths, pxToPt, parseCnfPayload, parseFramePayload, parseImgPayload, parsePprPayload, parseShadePayload, parseTabsPayload, parseTblbPayload, parseTblpPayload, parseTblPrPayload, parseTlookPayload, CELL_EDGES, CNF_KEYS, PPR_IND_KEYS, TBLB_EDGES, TBLB_KEYS, type CellEdge } from './cell-style'
 import { lineToOoxml, type LineRule } from './paragraph-style'
 import { decodeEnt } from './ooxml'
 import { condLookBits } from './table-cond'
@@ -1889,6 +1889,14 @@ interface DocTrack {
    */
   cnfStyles: string[]
   /**
+   * 表级边框六边原值（v0.163）：与 `section.children` 里每个 Table 一一对应、同序。
+   * 包恒发 `<w:tblBorders>` 但值是硬编码默认（single/4/auto 六枚），且六个槽里装不下
+   * 主题三枚——所以走打包后补丁**整片替换内容**（不是插元素、也不是补属性）。
+   * 与前四族同住 `<w:tblPr>`、同序登记，但动作不同：那四族是「插一枚新元素」，
+   * 这一族是「换掉一片已有元素的孩子」
+   */
+  tblBorders: string[]
+  /**
    * 被包吞掉的那一枚全大写（v0.161）：与 document.xml 里每个 `<w:smallCaps>` 一一对应、
    * 同序。包的 RunProperties 里 `smallCaps` 与 `allCaps` 是 **else-if**（dist/index.mjs:
    * 10538-10539：先 smallCaps，有了就再不看 allCaps）——一个 run 同时要两枚时，库只发
@@ -1924,6 +1932,7 @@ function newDocTrack(): DocTrack {
     cellExtras: [],
     imgExtras: [],
     cnfStyles: [],
+    tblBorders: [],
     capsExtras: [],
     uThemes: [],
     colorThemes: [],
@@ -2345,6 +2354,8 @@ function blocksOf(
       dt.cellSps.push(tblCellSpacingXmlOf(node.attrs?.tblPr))
       // 表条件格式落点十三枚（v0.162）：第三笔 tblPr 补丁，锚点又不同（紧跟 tblStyle）
       dt.cnfStyles.push(cnfXmlOf(node.attrs?.cnf))
+      // 表级边框六边原值（v0.163）：整片替换，与上面四族同序登记
+      dt.tblBorders.push(tblBordersXmlOf(node.attrs?.tblb))
       out.push(
         new Table({
           // 表样式引用（v0.114）：表身上这枚 data-tstyle 就是 w:tblStyle，
@@ -2674,7 +2685,13 @@ export async function prosemirrorToDocxBytes(json: PMNode, meta?: DocMeta): Prom
   const withImg = await patchImgXml(withCaps, dt.imgExtras)
   // 表闸门三样都要补：样式推出来的（looks）与表自己带的（dt.tblLooks），
   // v0.152 起再加表级条件格式尺寸两枚（dt.tblPrs，与 tblLook 同住 tblPr）
-  const needTbl = looks.size || dt.tblLooks.some((x) => x) || dt.tblPrs.some((x) => x) || dt.cellSps.some((x) => x) || dt.cnfStyles.some((x) => x)
+  const needTbl =
+    looks.size ||
+    dt.tblLooks.some((x) => x) ||
+    dt.tblPrs.some((x) => x) ||
+    dt.cellSps.some((x) => x) ||
+    dt.cnfStyles.some((x) => x) ||
+    dt.tblBorders.some((x) => x)
   // 单元格不换行（v0.152）：包里没有 noWrap 的槽，按 <w:tc> 出现序插 <w:noWrap/>
   const withCell = dt.cellExtras.some((x) => x) ? await patchTcPr(withImg, dt.cellExtras) : withImg
   const withStyles = props.size || latent
@@ -2682,9 +2699,13 @@ export async function prosemirrorToDocxBytes(json: PMNode, meta?: DocMeta): Prom
     : withCell
   if (numDefs.length) {
     const withNum = await patchNumberingXml(withStyles, numDefs)
-    return needTbl ? await patchTblLook(withNum, looks, dt.tblLooks, dt.tblPrs, dt.cellSps, dt.cnfStyles) : withNum
+    return needTbl
+      ? await patchTblLook(withNum, looks, dt.tblLooks, dt.tblPrs, dt.cellSps, dt.cnfStyles, dt.tblBorders)
+      : withNum
   }
-  return needTbl ? patchTblLook(withStyles, looks, dt.tblLooks, dt.tblPrs, dt.cellSps, dt.cnfStyles) : withStyles
+  return needTbl
+    ? patchTblLook(withStyles, looks, dt.tblLooks, dt.tblPrs, dt.cellSps, dt.cnfStyles, dt.tblBorders)
+    : withStyles
 }
 
 /**
@@ -3445,6 +3466,34 @@ function cnfXmlOf(raw: unknown): string {
 }
 
 /**
+ * data-tblb 载荷 → 整片 `<w:tblBorders>` 的**内容**（v0.163）。
+ *
+ * 包恒发六枚硬编码默认的边（`new TableBorders(options.borders ?? {})`，DEFAULT_BORDER
+ * = single/4/auto），值一个都不对；而真要带上 space 与主题三枚，包那六个槽里也没有
+ * （`createBorderElement` 只发 val/sz/color/space，主题一概不认）。所以这一族走
+ * **整片替换**而不是属性补丁：`w:tblBorders` 里只有这六枚孩子，且六枚都是单枚元素，
+ * 逐枚改与整片换等价，整片换还能顺带把源件没写的边**撤掉**（包默认发全六枚）。
+ */
+function tblBordersXmlOf(raw: unknown): string {
+  const p = parseTblbPayload(typeof raw === 'string' ? raw : null)
+  const edges = Object.keys(p) as (keyof typeof p)[]
+  if (!edges.length) return ''
+  let out = ''
+  for (const e of TBLB_EDGES) {
+    const kv = p[e]
+    if (!kv) continue
+    let a = ''
+    for (const k of TBLB_KEYS) {
+      const v = kv[k]
+      if (v === undefined || v === '') continue
+      a += ` w:${k}="${xmlAttr(v)}"`
+    }
+    if (a) out += `<w:${e}${a}/>`
+  }
+  return out
+}
+
+/**
  * 给表格补 `<w:tblLook>`：一是引用了带条件层样式的表（按 styleId 查 `looks`，老路数），
  * 二是表**自己**带闸门的那一张（按出现序查 `own`，v0.147）——后者压过前者。
  * 两路都走同一处补丁：贴 `<w:tblPr>` 的末位（已有 w:tblLook 就整枚替换）。
@@ -3457,6 +3506,7 @@ async function patchTblLook(
   band: string[] = [],
   spacing: string[] = [],
   cnf: string[] = [],
+  borders: string[] = [],
 ): Promise<Uint8Array> {
   const { default: JSZip } = await import('jszip')
   const zip = await JSZip.loadAsync(bytes)
@@ -3498,6 +3548,14 @@ async function patchTblLook(
     if (cnfFrag && !/<w:cnfStyle\b/.test(inner)) {
       touched = true
       out = insertTblPrKids(out, cnfFrag, AFTER_CNF_STYLE)
+    }
+    // 表级边框六边（v0.163）：整片替换 `<w:tblBorders>` 的内容。包恒发这一片（六枚
+    // 硬编码默认边），所以不需要插入锚点，只要把内容换掉；源件没写 tblBorders 的表
+    // 不动（留包的默认壳，比凭空开一片更接近源件）
+    const bdFrag = borders[i - 1] ?? ''
+    if (bdFrag) {
+      touched = true
+      out = out.replace(/(<w:tblBorders>)[\s\S]*?(<\/w:tblBorders>)/, (_m: string, a: string, b: string) => a + bdFrag + b)
     }
     return out
   })

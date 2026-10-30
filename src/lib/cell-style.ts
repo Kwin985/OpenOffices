@@ -485,6 +485,74 @@ export function cnfPayload(kv: CnfPayload): string {
   return cells.some(Boolean) ? cells.join(';') : ''
 }
 
+/* ── 表级边框六边原值（v0.163）─────────────────────────────────────
+ * `w:tblPr/w:tblBorders` 的六条边 top / left / bottom / right / insideH / insideV，
+ * 每边七枚属性：val（线型枚举）、sz（八分之一磅）、color（字面色）、space（磅）、
+ * themeColor / themeTint / themeShade（主题引用三枚）。
+ *
+ * 为什么另开一条通道而不是复用格边那批 bdTop / bdSpace*：**表级那六枚是原件，格边那一批
+ * 是分摊结果**。屏上那一半走的是「表级边框分摊到格」（CSS 的格边 padding），值与原件
+ * 不等（pt↔px 两趟换算 + 逐格覆盖），拿分摊后的值回写表级，等于把屏上的误差写成源件
+ * 说过的话。所以这一族**只做存盘通道，屏上一动不动**——v0.163 定的口径，此前三轮挂在
+ * 清单上等的「分摊与原值冲突」就是把两趟当成一趟才有的。
+ *
+ * 载荷：边与边用 `|` 隔，边内七格用 `;` 隔（定序，空槽留空；只有真写着值的边才进载荷）。 */
+export const TBLB_ATTR = 'data-tblb'
+
+/** w:tblBorders 的六条边，**顺序即载荷格序**（CT_TblBorders 的元素序） */
+export const TBLB_EDGES = ['top', 'left', 'bottom', 'right', 'insideH', 'insideV'] as const
+
+/** 一条边的七枚属性名，**顺序即载荷格序** */
+export const TBLB_KEYS = ['val', 'sz', 'color', 'space', 'themeColor', 'themeTint', 'themeShade'] as const
+
+export type TblbEdge = (typeof TBLB_EDGES)[number]
+export type TblbPayload = Partial<Record<TblbEdge, Partial<Record<(typeof TBLB_KEYS)[number], string>>>>
+
+/** 七枚各自的形状闸门：脏格整格丢（不猜，猜出来的值写进包里比不写更坏） */
+const TBLB_FIELD: Record<(typeof TBLB_KEYS)[number], RegExp> = {
+  // 线型：OOXML 的 ST_Border 枚举（single/dashed/dotted/double/nil/none/…），纯字母
+  val: /^[A-Za-z]+$/,
+  // 线宽：八分之一磅，非负整数
+  sz: /^\d+$/,
+  // 字面色：六位 hex；Word 也写 auto（与「没写」同义，但源件真写了就照带）
+  color: /^(?:[0-9A-Fa-f]{6}|auto)$/,
+  // 边框与内容之间的间距：磅，非负整数
+  space: /^\d+$/,
+  // 主题槽名（accent1 / dark1 / majorHueShift / …），字母数字
+  themeColor: /^[A-Za-z0-9]+$/,
+  // 深浅两枚是两位 hex（Word 写 99 / BF 这样的字节值）
+  themeTint: /^[0-9A-Fa-f]{2}$/i,
+  themeShade: /^[0-9A-Fa-f]{2}$/i,
+}
+
+/** data-tblb 载荷 → 六边 × 七枚（形状不对的格整格丢；一条边全格皆空则这条边不进表） */
+export function parseTblbPayload(raw: string | null | undefined): TblbPayload {
+  const out: TblbPayload = {}
+  if (!raw) return out
+  raw.split('|').forEach((chunk, ei) => {
+    const edge = TBLB_EDGES[ei]
+    if (!edge) return
+    const kv: Partial<Record<(typeof TBLB_KEYS)[number], string>> = {}
+    chunk.split(';').forEach((v, ki) => {
+      const k = TBLB_KEYS[ki]
+      const s = (v ?? '').trim()
+      if (!k || !s || !TBLB_FIELD[k].test(s)) return
+      kv[k] = s
+    })
+    if (Object.keys(kv).length) out[edge] = kv
+  })
+  return out
+}
+
+/** 六边 × 七枚 → data-tblb 载荷（与 parseTblbPayload 互逆；空表给空串） */
+export function tblbPayload(p: TblbPayload): string {
+  const chunks = TBLB_EDGES.map((e) => {
+    const kv = p[e]
+    return TBLB_KEYS.map((k) => kv?.[k] ?? '').join(';')
+  })
+  return chunks.some(Boolean) ? chunks.join('|') : ''
+}
+
 /* ── 段落属性余量（v0.147）─────────────────────────────────────
  * w:pPr 里那一批「说了也不改屏上排版」的直接属性：adjustRightInd（编号右边缩进跟随
  * 自动缩进）、snapToGrid（对齐到文档网格）、topLinePunct（首尾标点压缩）、bidi（段落
@@ -969,6 +1037,21 @@ export const CellStyle = Extension.create({
             renderHTML: (attrs: Record<string, unknown>) => {
               const raw = typeof attrs.cnf === 'string' ? attrs.cnf : ''
               return Object.keys(parseCnfPayload(raw)).length ? { [CNF_ATTR]: raw } : {}
+            },
+          },
+          /**
+           * 表级边框六边原值（v0.163）：`w:tblPr/w:tblBorders` 六条边各七枚——
+           * val/sz/color/space/themeColor/themeTint/themeShade。**只往返不兑现**：
+           * 屏上那一半走的是「分摊到格」（CSS 格边 padding），值与原件不等，拿分摊值回写
+           * 表级就是把屏上的误差写成源件说过的话。写侧按载荷重写整片 `<w:tblBorders>`
+           * （包只发六枚硬编码默认的壳），与 tblLook / bandSize 同住 tblPr、同序登记
+           */
+          tblb: {
+            default: null as string | null,
+            parseHTML: (el: HTMLElement) => el.getAttribute(TBLB_ATTR) || null,
+            renderHTML: (attrs: Record<string, unknown>) => {
+              const raw = typeof attrs.tblb === 'string' ? attrs.tblb : ''
+              return Object.keys(parseTblbPayload(raw)).length ? { [TBLB_ATTR]: raw } : {}
             },
           },
           /** Word 的 `w:tblInd`：整张表离版心左边距多远 */

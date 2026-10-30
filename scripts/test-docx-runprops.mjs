@@ -649,6 +649,103 @@ const RF = '<w:rFonts w:ascii="Calibri" w:eastAsia="宋体" w:hint="eastAsia"/>'
   has('cnfStyle 导入：十三枚读成定序格串', r.html, 'data-cnf="000000100000;1;0;1;0;1;0;1;0;1;0;0;0"')
 }
 
+// ────────────── 11. 表级边框六边原值（v0.163）────────────────────────────
+//
+// `w:tblPr/w:tblBorders` 六条边各七枚：val / sz / color / space / themeColor /
+// themeTint / themeShade。包恒发这一片（六枚硬编码默认边 single/4/auto），六个槽里
+// 既装不下 space 也装不下主题三枚——所以走**整片替换**而不是属性补丁。
+// 口径：只做存盘通道，**不动屏上分摊**（格边 padding 那一趟是另一本账）。
+{
+  const cell = (text) => ({ type: 'tableCell', content: [{ type: 'paragraph', content: [{ type: 'text', text }] }] })
+  // 载荷格序 = TBLB_EDGES（top;left;bottom;right;insideH;insideV）× TBLB_KEYS 七枚
+  const tblb = [
+    'single;4;000000;1', // top
+    'single;4;000000;0', // left
+    'single;4;000000;0', // bottom
+    'single;4;000000;0', // right
+    'single;4;000000;2;accent1;99;BF', // insideH（带主题三枚）
+    'single;4;000000;3;accent1;99;BF', // insideV
+  ].join('|')
+  const doc = {
+    type: 'doc',
+    content: [
+      { type: 'table', attrs: { tblb }, content: [{ type: 'tableRow', content: [cell('甲'), cell('乙')] }] },
+    ],
+  }
+  const bytes = await prosemirrorToDocxBytes(doc)
+  const xml = await (await JSZip.loadAsync(bytes)).file('word/document.xml').async('string')
+  const block = /<w:tblBorders>[\s\S]*?<\/w:tblBorders>/.exec(xml)?.[0] ?? ''
+  has('tblBorders 导出：space 原值（磅，不再丢）', block, '<w:insideH w:val="single" w:sz="4" w:color="000000" w:space="2"')
+  has('tblBorders 导出：主题三枚', block, 'w:themeColor="accent1" w:themeTint="99" w:themeShade="BF"')
+  has('tblBorders 导出：insideV 的 space 是 3 不是 2', block, 'w:space="3"')
+  // 反例：包那六枚硬编码默认（color="auto"、无 space）必须被整片换掉
+  check('tblBorders 导出：包的硬编码默认已被整片替换', !block.includes('w:color="auto"'), block)
+  check('tblBorders 导出：仍是六条边', (block.match(/<w:(top|left|bottom|right|insideH|insideV)\b/g) ?? []).length === 6, block)
+  check('tblBorders 导出：整份只有一片', (xml.match(/<w:tblBorders>/g) ?? []).length === 1, '')
+}
+
+{
+  // 反例：**源件没写**的边不该凭空长出——载荷只带 top 一条边就只发一条。
+  // 包默认发全六枚，撤掉其余五枚比留着更接近源件
+  const cell = (text) => ({ type: 'tableCell', content: [{ type: 'paragraph', content: [{ type: 'text', text }] }] })
+  const doc = {
+    type: 'doc',
+    content: [
+      { type: 'table', attrs: { tblb: 'single;4;000000;1' }, content: [{ type: 'tableRow', content: [cell('甲')] }] },
+    ],
+  }
+  const bytes = await prosemirrorToDocxBytes(doc)
+  const xml = await (await JSZip.loadAsync(bytes)).file('word/document.xml').async('string')
+  const block = /<w:tblBorders>[\s\S]*?<\/w:tblBorders>/.exec(xml)?.[0] ?? ''
+  check('tblBorders 导出：只发载荷里有的边（余下五枚撤掉）', (block.match(/<w:(top|left|bottom|right|insideH|insideV)\b/g) ?? []).length === 1, block)
+  has('tblBorders 导出：那一条边仍在', block, '<w:top w:val="single"')
+}
+
+{
+  // 反例：形状不对的格整格丢（不猜）；一条边全格皆空则这条边不进表
+  const cell = (text) => ({ type: 'tableCell', content: [{ type: 'paragraph', content: [{ type: 'text', text }] }] })
+  const doc = {
+    type: 'doc',
+    content: [
+      { type: 'table', attrs: { tblb: 'single;四;000000;1|;;;|single;4;0000ff;2' }, content: [{ type: 'tableRow', content: [cell('甲')] }] },
+    ],
+  }
+  const bytes = await prosemirrorToDocxBytes(doc)
+  const xml = await (await JSZip.loadAsync(bytes)).file('word/document.xml').async('string')
+  const block = /<w:tblBorders>[\s\S]*?<\/w:tblBorders>/.exec(xml)?.[0] ?? ''
+  check('tblBorders 导出：脏格整格丢（sz=四 不落）', !block.includes('w:sz="四"'), block)
+  check('tblBorders 导出：全空的边不进表（left 撤掉）', !block.includes('<w:left'), block)
+  has('tblBorders 导出：干净那条边照发', block, 'w:color="0000ff"')
+}
+
+{
+  // 导入侧：六边原值读成定序格串；space 与主题三枚都按**原值**带走（不解析）
+  const zip = new JSZip()
+  zip.file(
+    'word/document.xml',
+    `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:document xmlns:w="${W}"><w:body>` +
+      `<w:tbl><w:tblPr><w:tblBorders>` +
+      `<w:top w:val="single" w:sz="4" w:space="1" w:color="000000"/>` +
+      `<w:insideH w:val="single" w:sz="4" w:space="2" w:color="000000" w:themeColor="accent1" w:themeTint="99" w:themeShade="BF"/>` +
+      `<w:insideV w:val="single" w:sz="4" w:space="3" w:color="000000" w:themeColor="accent1" w:themeTint="99" w:themeShade="BF"/>` +
+      `</w:tblBorders></w:tblPr>` +
+      `<w:tblGrid><w:gridCol w:w="2500"/><w:gridCol w:w="2500"/></w:tblGrid>` +
+      `<w:tr><w:tc><w:p><w:r><w:t>甲</w:t></w:r></w:p></w:tc>` +
+      `<w:tc><w:p><w:r><w:t>乙</w:t></w:r></w:p></w:tc></w:tr></w:tbl>` +
+      `</w:body></w:document>`,
+  )
+  zip.file('word/styles.xml', `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:styles xmlns:w="${W}"></w:styles>`)
+  const bytes = new Uint8Array(await zip.generateAsync({ type: 'arraybuffer', compression: 'STORE' }))
+  const r = await docxToHtmlFidelity(bytes)
+  has(
+    'tblBorders 导入：六边定序格串（空边留空）',
+    r.html,
+    'data-tblb="single;4;000000;1;;;|;;;;;;|;;;;;;|;;;;;;|single;4;000000;2;accent1;99;BF|single;4;000000;3;accent1;99;BF"',
+  )
+  // 屏上那一趟（分摊到格）照旧在跑：space 变成格边 padding，与存盘通道互不顶替
+  has('tblBorders 导入：屏上分摊照旧（格边 bdSpace 那一趟没被顶替）', r.html, 'data-bdspace-top="1.33"')
+}
+
 console.log(`通过 ${ok.length} 项` + (bad.length ? `，**失败 ${bad.length} 项**` : '，失败 0 项'))
 for (const b of bad) console.log(`FAIL ${b}`)
 if (bad.length) process.exitCode = 1
