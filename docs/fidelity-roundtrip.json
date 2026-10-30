@@ -21,12 +21,12 @@
   "onOffBareElement": true
  },
  "totals": {
-  "read": 592,
-  "kept": 230,
-  "value": 20,
-  "lost": 342,
+  "read": 594,
+  "kept": 243,
+  "value": 17,
+  "lost": 334,
   "part": 0,
-  "consulted": 646,
+  "consulted": 648,
   "srcParts": 7,
   "outParts": 7,
   "htmlBlocks": 35
@@ -568,13 +568,14 @@
    ]
   },
   "bottom|space": {
-   "bucket": "value",
+   "bucket": "kept",
    "n": 2,
    "src": [
     "0",
     "4"
    ],
    "out": [
+    "0",
     "2",
     "4"
    ]
@@ -2151,13 +2152,26 @@
     "1"
    ]
   },
+  "insideH|color": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "000000"
+   ],
+   "out": [
+    "000000",
+    "auto"
+   ]
+  },
   "insideH|space": {
-   "bucket": "lost",
+   "bucket": "kept",
    "n": 1,
    "src": [
     "2"
    ],
-   "out": []
+   "out": [
+    "2"
+   ]
   },
   "insideH|sz": {
    "bucket": "kept",
@@ -2170,28 +2184,34 @@
    ]
   },
   "insideH|themeColor": {
-   "bucket": "lost",
+   "bucket": "kept",
    "n": 1,
    "src": [
     "accent1"
    ],
-   "out": []
+   "out": [
+    "accent1"
+   ]
   },
   "insideH|themeShade": {
-   "bucket": "lost",
+   "bucket": "kept",
    "n": 1,
    "src": [
     "bf"
    ],
-   "out": []
+   "out": [
+    "bf"
+   ]
   },
   "insideH|themeTint": {
-   "bucket": "lost",
+   "bucket": "kept",
    "n": 1,
    "src": [
     "99"
    ],
-   "out": []
+   "out": [
+    "99"
+   ]
   },
   "insideH|val": {
    "bucket": "kept",
@@ -2203,13 +2223,26 @@
     "single"
    ]
   },
+  "insideV|color": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "000000"
+   ],
+   "out": [
+    "000000",
+    "auto"
+   ]
+  },
   "insideV|space": {
-   "bucket": "lost",
+   "bucket": "kept",
    "n": 1,
    "src": [
     "3"
    ],
-   "out": []
+   "out": [
+    "3"
+   ]
   },
   "insideV|sz": {
    "bucket": "kept",
@@ -2222,28 +2255,34 @@
    ]
   },
   "insideV|themeColor": {
-   "bucket": "lost",
+   "bucket": "kept",
    "n": 1,
    "src": [
     "accent1"
    ],
-   "out": []
+   "out": [
+    "accent1"
+   ]
   },
   "insideV|themeShade": {
-   "bucket": "lost",
+   "bucket": "kept",
    "n": 1,
    "src": [
     "bf"
    ],
-   "out": []
+   "out": [
+    "bf"
+   ]
   },
   "insideV|themeTint": {
-   "bucket": "lost",
+   "bucket": "kept",
    "n": 1,
    "src": [
     "99"
    ],
-   "out": []
+   "out": [
+    "99"
+   ]
   },
   "insideV|val": {
    "bucket": "kept",
@@ -2410,13 +2449,14 @@
    ]
   },
   "left|space": {
-   "bucket": "value",
+   "bucket": "kept",
    "n": 2,
    "src": [
     "0",
     "2"
    ],
    "out": [
+    "0",
     "2",
     "3"
    ]
@@ -3897,13 +3937,14 @@
    ]
   },
   "right|space": {
-   "bucket": "value",
+   "bucket": "kept",
    "n": 2,
    "src": [
     "0",
     "3"
    ],
    "out": [
+    "0",
     "3"
    ]
   },
