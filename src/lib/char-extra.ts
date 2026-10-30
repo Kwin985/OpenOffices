@@ -199,22 +199,35 @@ export const CharExtra = Mark.create({
         parseHTML: (el: HTMLElement) => str(el.getAttribute('data-vanish')),
         renderHTML: (attrs: Record<string, unknown>) => (str(attrs.vanish) ? { 'data-vanish': '1', style: 'visibility: hidden' } : {}),
       },
-      // u（v0.156）：下划线**线型 + 颜色**一组（载荷 `线型;颜色`，颜色是 #RRGGBB，空槽 = 那枚没写）。
+      // u（v0.156）：下划线**线型 + 颜色**一组。载荷六格
+      // `线型;屏上色;字面色;themeColor;themeTint;themeShade`（空槽 = 那枚没写）。
       // 为什么要这一枚：<u> 标签只带得动「有下划线」这一比特，线型与颜色都挂在这个标签的
       // inline style 上，而 inline style 过不了 TipParse（underline mark 只认标签名）——
       // 屏上那半由本 mark 自己发 CSS（与 pos/kern 同纪律），存盘那半由 docx.ts 落回
-      // w:u 的 w:val 与 w:color（docx 的 underline.type / underline.color 两枚都是原生槽）
+      // w:u 的 w:val 与 w:color（docx 的 underline.type / underline.color 两枚都是原生槽）。
+      // 主题三枚（v0.159）包外无槽：写手另走 run 级补丁位补回 word/document.xml
       u: {
         default: null as string | null,
         parseHTML: (el: HTMLElement) => str(el.getAttribute('data-u')),
         renderHTML: (attrs: Record<string, unknown>) => {
           const raw = str(attrs.u)
           if (!raw) return {}
+          // 第二格是屏上色（解析主题之后的颜色）；第三格起是存盘用的原值，屏上不用
           const [val = 'single', color = ''] = raw.split(';')
           const line = U_LINE[val.toLowerCase()] ?? 'underline'
           const c = color && color.toLowerCase() !== 'auto' ? `text-decoration-color: #${color.replace(/^#/, '').toLowerCase()}; ` : ''
           return { 'data-u': raw, style: `${c}text-decoration-line: underline; text-decoration-style: ${line}` }
         },
+      },
+      // sym（v0.159）：符号（w:sym）。载荷 `char;font`——char 是**原始的十六进制串**
+      // （原样保留，不做大小写与补零的规整），font 是符号字体名。
+      // 屏上那一半点：读手已经把字符本身发在 span 里（`&#xF0FC;` 这样的私有区码点）并
+      // 挂了 font-family，本 mark 不再画；这里只为存盘时发回真的 `<w:sym w:char w:font>`
+      // ——docx 包有原生 SymbolRun，不需要补丁位
+      sym: {
+        default: null as string | null,
+        parseHTML: (el: HTMLElement) => str(el.getAttribute('data-sym')),
+        renderHTML: (attrs: Record<string, unknown>) => (str(attrs.sym) ? { 'data-sym': str(attrs.sym) } : {}),
       },
       // em（v0.156）：着重号型别（dot 圈点 / circle 空心圈 / comma 逗号 / underDot 点在下）。
       // 屏上走 text-emphasis——与 docx-fidelity 的 EMPHASIS 表同一套映射（两处必须一致，
@@ -264,6 +277,7 @@ export const CharExtra = Mark.create({
       { tag: 'span[data-bdr]' },
       { tag: 'span[data-vanish]' },
       { tag: 'span[data-u]' },
+      { tag: 'span[data-sym]' },
       { tag: 'span[data-em]' },
       { tag: 'span[data-emboss]' },
       { tag: 'span[data-imprint]' },

@@ -1408,12 +1408,50 @@ function applyTintShade(hex: string, shade?: number, tint?: number): string {
   return `#${h(r)}${h(g)}${h(b)}`
 }
 
+/** 元素上的主题引用三枚的**原值**（v0.159：`w:u` 要把它们带进模型，解析出来的 hex 回不去槽） */
+interface ThemeRef {
+  ref: string
+  tint?: string
+  shade?: string
+}
+
 /**
- * 元素上的主题色引用（+tint/shade）→ '#hex'。解析不了（没主题、槽空、引用名不认识）
- * 返回 undefined，调用方落回字面值——Word 也是这个分工：主题引用是主，
- * 字面值是给不认主题的读者兜的底（所以两枚常一起写）。
+ * 读元素上的主题引用三枚（原值，不解析）。查问与解析分开：查问恒做（量具的分子就是
+ * 这么来的），解析不出来也照样把原值带出来。
+ *
+ * 引用名先按名查问再谈解析：没有主题（或槽空）时旧写法在这里就 return，那枚
+ * themeColor/tint/shade 属性等于没被读过——保真账上它一直挂在 neverConsulted。
+ * 深浅两枚也**恒查问**（v0.155 修）：旧写法把它们放在三道 return 之后，于是
+ * 「主题没装 / 槽名不认 / 引用为空」三种情形下这两枚属性等于没被读过——表级
+ * insideH/insideV 的 themeShade/themeTint 就这么一直挂在 neverConsulted 里。
+ *
  * 三个属性名做成参数：w:color 用 themeColor/themeTint/themeShade，
  * w:shd 用 themeFill/themeFillTint/themeFillShade，边框同 w:color 一族。
+ */
+function themeRefParts(
+  el: XEl,
+  refAttr = 'w:themeColor',
+  tintAttr = 'w:themeTint',
+  shadeAttr = 'w:themeShade',
+): ThemeRef {
+  const ref = (attr(el, refAttr) ?? '').trim()
+  const tint = attr(el, tintAttr)
+  const shade = attr(el, shadeAttr)
+  return { ref, ...(tint ? { tint } : {}), ...(shade ? { shade } : {}) }
+}
+
+/** 主题引用 → '#hex'。解析不了（没主题、槽空、引用名不认识）返回 undefined，调用方落回字面值 */
+function themeCssOf(theme: ThemeColors | undefined, p: ThemeRef): string | undefined {
+  if (!theme || !p.ref) return undefined
+  const slot = THEME_COLOR_SLOT[p.ref.toLowerCase()]
+  const base = slot ? theme[slot] : undefined
+  if (!base) return undefined
+  return applyTintShade(base, tintShadeOf(p.shade), tintShadeOf(p.tint))
+}
+
+/**
+ * 元素上的主题色引用（+tint/shade）→ '#hex'，供屏上兑现用。Word 的分工是主题引用
+ * 为主、字面值兜底（两枚常一起写），所以解析不出就落回字面值的那一分。
  */
 function themeRefCss(
   theme: ThemeColors | undefined,
@@ -1422,22 +1460,7 @@ function themeRefCss(
   tintAttr = 'w:themeTint',
   shadeAttr = 'w:themeShade',
 ): string | undefined {
-  // 引用名先按名查问再谈解析：没有主题（或槽空）时旧写法在这里就 return，
-  // 那枚 themeColor/tint/shade 属性等于没被读过——保真账上它一直挂在 neverConsulted。
-  // 查问与解析分开：查问恒做（量具的分子就是这么来的），解析不出来仍回 undefined
-  const ref = (attr(el, refAttr) ?? '').trim()
-  // 深浅两枚也**恒查问**（v0.155 修）：旧写法把它们放在三道 return 之后，于是
-  // 「主题没装 / 槽名不认 / 引用为空」三种情形下这两枚属性等于没被读过——表级
-  // insideH/insideV 的 themeShade/themeTint 就这么一直挂在 neverConsulted 里
-  // （同一族里 top/left 那几枚早上了账，因为它们所在的上下文另外有主题可解析）。
-  // 与 ref 本身一样：查问是查问，解析是解析，解析不出来仍回 undefined
-  const shadeRaw = attr(el, shadeAttr)
-  const tintRaw = attr(el, tintAttr)
-  if (!theme || !ref) return undefined
-  const slot = THEME_COLOR_SLOT[ref.toLowerCase()]
-  const base = slot ? theme[slot] : undefined
-  if (!base) return undefined
-  return applyTintShade(base, tintShadeOf(shadeRaw), tintShadeOf(tintRaw))
+  return themeCssOf(theme, themeRefParts(el, refAttr, tintAttr, shadeAttr))
 }
 
 /**
@@ -1566,6 +1589,23 @@ interface RunProps {
    * 主题引用优先，与 w:color 同款主次
    */
   uColor?: string
+  /**
+   * w:u/@w:color 的**字面值**（v0.159，去掉 # 的小写 hex）。
+   *
+   * 为什么要与 uColor 分开：uColor 是解析主题之后给屏上用的颜色，源件里 `w:u` 常写成
+   * `w:color="FF0000" w:themeColor="accent1"`——两枚是**两个不同的槽**。此前写手只拿到
+   * 解析值，于是往 w:color 里写主题算出来的色（往返账上就记着 ff0000 → b4c7e7 这一笔
+   * 「值变」），主题那两枚则整条掉。现在字面走字面、主题走主题（见 uTheme）
+   */
+  uColorLit?: string
+  /**
+   * w:u 上的主题引用原值（v0.159）：{ref, tint?, shade?}。
+   * 写手的 underline 只有 `{type, color}` 两枚原生槽（dist 里 createUnderline 只写
+   * w:val 与 w:color），主题三枚**包外无槽**——随 data-u 载荷进模型，存盘时由
+   * docx.ts 的 patchUTheme 在 word/document.xml 上按序补回（与 w:sym 同一条「run 级
+   * 补丁位」的机制，两处一起还的这笔债）
+   */
+  uTheme?: ThemeRef
   /** w:em/@w:val（v0.155）：着重号型别（dot 圈点 / circle 空心圈 / comma 逗号 / underDot）。屏上走 text-emphasis */
   em?: string
   /** w:ligatures/@w:val（v0.155）：连字档。屏上走 font-variant-ligatures */
@@ -1597,12 +1637,17 @@ function readRPr(el: XEl | undefined, p: RunProps, tc?: ThemeColors): RunProps {
     // 线型（v0.156）：写侧 docx 的 underline.type 认得这一枚，与颜色同走 data-u 载荷
     if (uv && uv !== 'none') o.uVal = uv
     // v0.155：下划线颜色。三枚都查问（字面色 / 主题槽 / 主题深浅），但只出一个 CSS 值——
-    // 与 w:color 同一条主次：主题引用能解析就用主题，否则落字面。写侧只有字面 color 的槽
-    // （docx 的 underline.color），所以主题解析出来的值回不去——单边，如实记
-    const themed = themeRefCss(tc, u)
+    // 与 w:color 同一条主次：主题引用能解析就用主题，否则落字面。
+    // v0.159：字面与主题**分开存**——写手把字面写回 w:color、主题三枚走补丁位补回，
+    // 两枚各归各的槽（此前字面被解析值顶掉，往返账上记着 ff0000 → b4c7e7）
+    const th = themeRefParts(u)
+    const themed = themeCssOf(tc, th)
     const uc = (attr(u, 'w:color') ?? '').toLowerCase()
+    const ucHex = uc && uc !== 'auto' ? uc.replace(/^#/, '') : undefined
     if (themed) o.uColor = themed
-    else if (uc && uc !== 'auto') o.uColor = '#' + uc.replace(/^#/, '')
+    else if (ucHex) o.uColor = '#' + ucHex
+    if (ucHex) o.uColorLit = ucHex
+    if (th.ref) o.uTheme = th
   }
   // v0.155：OpenType 字形档位四枚 + 着重号。屏上都有 CSS 对应物（font-variant-* 与
   // text-emphasis），但都是「浏览器与字体支持才生效」的软兑现：字体没有那张特性表就按默认画。
@@ -1891,9 +1936,17 @@ function marked(inner: string, p: RunProps): string {
   const css = cssOf(p)
   // 复杂文字三件套与 hint（v0.138）：HTML 里没有对应物，随 data-* 进模型再走往返。
   // 由 lib/char-extra.ts 的 charExtra mark 接住（cs/hint 写回 docx，szCs/lang 见该文件头注）
-  // 下划线的往返载荷：线型缺省按 single（OOXML 里缺 w:val 就是默认单线），
-  // 只有颜色没有线型时也按 single 记，颜色才不至于跟着丢
-  const uLoad = p.uVal || p.uColor ? `${p.uVal || 'single'};${p.uColor ?? ''}` : ''
+  // 下划线的往返载荷（v0.156，v0.159 扩到六格）：线型缺省按 single（OOXML 里缺 w:val
+  // 就是默认单线），只有颜色没有线型时也按 single 记，颜色才不至于跟着丢。
+  // 六格 = `线型;屏上色;字面色;themeColor;themeTint;themeShade`，空槽留空。
+  // 屏上色（第二格）与字面色（第三格）必须分开：前者是解析主题后画屏用的颜色，
+  // 后者是 `w:u/@w:color` 的原文；主题三枚回不去包的 underline 槽（只有 {type,color}
+  // 两枚），要随载荷带走、由写手的 run 级补丁位补回
+  const uPayload = (() => {
+    if (!(p.uVal || p.uColor || p.uColorLit || p.uTheme)) return ''
+    const t = p.uTheme
+    return [p.uVal || 'single', p.uColor ?? '', p.uColorLit ?? '', t?.ref ?? '', t?.tint ?? '', t?.shade ?? ''].join(';')
+  })()
   const extra = [
     p.cs ? ` data-cs="${attrEsc(p.cs)}"` : '',
     p.szCs !== undefined ? ` data-szcs="${p.szCs}"` : '',
@@ -1914,10 +1967,10 @@ function marked(inner: string, p: RunProps): string {
     // v0.154：隐藏文字。屏上那一半在 cssOf（visibility: hidden），载荷只为往返
     p.vanish ? ' data-vanish="1"' : '',
     p.bdr ? ` data-bdr="${p.bdr.val};${p.bdr.sz ?? ''};${p.bdr.space ?? ''};${p.bdr.color ?? ''}"` : '',
-    // v0.156：下划线线型 + 颜色（载荷 `线型;颜色`，颜色是 #RRGGBB 或空槽）。
+    // v0.156：下划线线型 + 颜色（载荷 `线型;颜色;主题三枚`，颜色是 #RRGGBB 或空槽）。
     // 屏上那一半此前挂在 `<u>` 的 inline style 上，过不了 TipParse（underline mark 只认标签），
     // 存盘就丢了；线型更是一直没有出口。两枚一起随 data-u 进模型走往返
-    uLoad ? ` data-u="${attrEsc(uLoad)}"` : '',
+    uPayload ? ` data-u="${attrEsc(uPayload)}"` : '',
     p.em ? ` data-em="${attrEsc(p.em)}"` : '',
     p.emboss ? ' data-emboss="1"' : '',
     p.imprint ? ' data-imprint="1"' : '',
@@ -2975,13 +3028,17 @@ class Fidelity {
         // （「插入 → 符号」插的就是它），丢了等于文档平白少一个字。char 是十六进制码点，
         // font 是那一枚符号所在的字体（Wingdings/Webdings 之类，码位常落在 Unicode 私有区，
         // 只有配上原字体才画得出那个形状，所以 font 必须一起带走）。
-        // 往返是天然的：输出的 span 带 font-family，写手按普通文字发回 w:t + rFonts
+        //
+        // v0.159：此前只把字符当普通文字发出去（屏上看着对，存盘变 w:t + rFonts）——
+        // 往返账上 `sym|char` 与 `sym|font` 两笔都是「掉了」。现在把 char/font 原值一起
+        // 装进 data-sym，由写手发回真的 w:sym（docx 包有原生 SymbolRun，不需要补丁位）
         const char = attr(node, 'w:char')
         const font = attr(node, 'w:font')
         const cp = char ? parseInt(char, 16) : NaN
         if (Number.isFinite(cp) && cp > 0 && cp <= 0x10ffff) {
           const f = font ? ` style="font-family: ${attrEsc(font)}"` : ''
-          push(st, `<span${f}>&#x${cp.toString(16).toUpperCase()};</span>`)
+          const load = ` data-sym="${attrEsc(`${char};${font ?? ''}`)}"`
+          push(st, `<span${f}${load}>&#x${cp.toString(16).toUpperCase()};</span>`)
         } else {
           this.warn(`符号（w:sym）缺可用的 char 属性（font=${font ?? '未写'}）`)
         }

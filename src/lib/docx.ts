@@ -31,6 +31,7 @@ import {
   Packer,
   Paragraph,
   ShadingType,
+  SymbolRun,
   Table,
   TableCell,
   TableLayoutType,
@@ -60,22 +61,39 @@ export interface PMNode {
 }
 
 /**
- * data-u 载荷 `线型;颜色` → 包的 underline 槽（v0.156）。
+ * data-u 载荷 `线型;屏上色;字面色;themeColor;themeTint;themeShade` → 包的 underline 槽
+ * + 待补的主题三枚（v0.156，v0.159 扩到六格）。
  *
- * 两枚都是包的原生槽（IRunOptions.underline.type / .color，dist/index.d.ts:1647），
+ * 线型与字面色是包的原生槽（IRunOptions.underline.type / .color，dist/index.d.ts:1647），
  * 实现里 `createUnderline(type, color)` 逐枚写进 w:u 的 w:val 与 w:color（颜色过
  * hexColorValue 校验）。线型按 OOXML 那十八档的名字对（大小写不敏感），认不得的档
  * 落 single——宁可写成单线也不要写出一个 Word 认不得的枚举值。
+ *
+ * 主题三枚包外无槽（createUnderline 只认 val/color 两枚属性），返回值里的 `theme`
+ * 是拼好的属性串，由 `patchUTheme` 在打包之后按序补回——与 w:sym 同一条 run 级
+ * 补丁位的机制。第二格「屏上色」不写盘：它是解析主题之后的显示用色，落到 w:color
+ * 会把主题引用钉死成一个字面值（往返账上那笔 ff0000 → b4c7e7 就是这么来的）
  */
 type ULineType = (typeof UnderlineType)[keyof typeof UnderlineType]
 const U_TYPE = new Map<string, ULineType>(Object.values(UnderlineType).map((v) => [String(v).toLowerCase(), v]))
-function underlineOf(child: PMNode, on: boolean): { type?: ULineType; color?: string } | undefined {
+interface ULoad {
+  value?: { type?: ULineType; color?: string }
+  /** 待补进 `<w:u>` 开标签的属性串（前导空格起头）；没有主题引用时是空串 */
+  theme: string
+}
+function underlineOf(child: PMNode, on: boolean): ULoad {
   const raw = markAttr(child, 'charExtra', 'u')
-  if (!raw) return on ? {} : undefined
-  const [val = '', color = ''] = raw.split(';')
+  const [val = '', , lit = '', thc = '', tht = '', ths = ''] = (raw ?? '').split(';')
+  const theme = [
+    thc ? ` w:themeColor="${xmlAttr(thc)}"` : '',
+    tht ? ` w:themeTint="${xmlAttr(tht)}"` : '',
+    ths ? ` w:themeShade="${xmlAttr(ths)}"` : '',
+  ].join('')
+  if (!raw) return { ...(on ? { value: {} } : {}), theme: '' }
   const type = U_TYPE.get((val || 'single').toLowerCase()) ?? UnderlineType.SINGLE
-  const c = color && color.toLowerCase() !== 'auto' ? color.replace(/^#/, '').toUpperCase() : undefined
-  return { type, ...(c ? { color: c } : {}) }
+  // 字面走字面：主题在场时源件的 w:color 未必等于解析出来的色，两枚各归各的槽
+  const c = lit && lit.toLowerCase() !== 'auto' ? lit.replace(/^#/, '').toUpperCase() : undefined
+  return { value: { type, ...(c ? { color: c } : {}) }, theme }
 }
 
 // TipTap 3 getJSON 的文本节点是顶层 text；历史结构测试用过 attrs.text，两者都兼容
@@ -860,6 +878,7 @@ function openComment(out: ParagraphChildLike[], cs: CommentTrack, cid: number) {
 
 type ParagraphChildLike =
   | TextRun
+  | SymbolRun
   | InsertedTextRun
   | DeletedTextRun
   | ExternalHyperlink
@@ -912,6 +931,11 @@ function childToRuns(child: PMNode, inherited: Inherited, cs?: CommentTrack, dt?
       const hintVal = cx('hint')
       const baseFont = docFont(ts('fontFamily')) ?? (mono ? 'Consolas' : undefined)
       const font = csFont || hintVal ? fontWithCsHint(baseFont, csFont, hintVal) : baseFont
+      // 下划线（v0.156 线型/色，v0.159 主题三枚）：包只有 {type,color} 两枚原生槽，
+      // 主题三枚登记进 dt.uThemes 等打包后补。**每个发出 w:u 的 run 都要登记一格**
+      // （无主题时是空串）——补丁按 `<w:u>` 出现序对位，靠条数闸门兜底
+      const uLoad = underlineOf(child, underline)
+      if (uLoad.value) dt?.uThemes.push(uLoad.theme)
       const runOpts = {
         text,
         bold,
@@ -922,13 +946,33 @@ function childToRuns(child: PMNode, inherited: Inherited, cs?: CommentTrack, dt?
         ...(lsTw !== null && lsTw !== 0 ? { characterSpacing: lsTw } : {}),
         ...(color ? { color } : {}),
         ...(highlight ? { shading: { type: 'clear' as const, fill: highlight } } : {}),
-        // v0.156：线型与颜色一起走 data-u 载荷（此前只有「有下划线」这一比特上纸）
-        ...(() => {
-          const u = underlineOf(child, underline)
-          return u ? { underline: u } : {}
-        })(),
+        // v0.156：线型与颜色一起走 data-u 载荷（此前只有「有下划线」这一比特上纸）；
+        // v0.159：主题三枚已在上面登记进 dt.uThemes，这里只落原生槽
+        ...(uLoad.value ? { underline: uLoad.value } : {}),
         ...(rstyle ? { style: rstyle } : {}),
         ...vertAlignOf(child),
+      }
+      // 符号（v0.159）：data-sym 载荷 `char;font` → 包的原生 SymbolRun（发 <w:sym>）。
+      // 只在「一个 run 一个字符」时发——载荷只能表达一枚码点，多字符会丢字；char 与
+      // font 缺一也不发（SymbolRun 的 symbolfont 缺省是 Wingdings，猜一个字体比写错更坏）。
+      // 带超链接或修订壳的符号不走这里（那两支的 children 类型不收 SymbolRun，且罕见），
+      // 退化为普通文字：字还在，w:sym 这枚元素丢——如实记在这条边界上
+      const symLoad = cx('sym')
+      const revShell = dt && (hasMark(child, 'revDel') || hasMark(child, 'revIns'))
+      if (symLoad && !href && !revShell) {
+        const [symChar = '', symFont = ''] = symLoad.split(';')
+        if (symChar && symFont && [...text].length === 1) {
+          // w:sym 自带字体，rFonts 在这里没有意义（run 里没有普通文字），剥掉更干净
+          const { font: _f, text: _t, ...rest } = runOpts
+          out.push(
+            new SymbolRun({
+              char: symChar.toUpperCase(),
+              symbolfont: symFont,
+              ...(withCharExtra(rest, child) as Record<string, unknown>),
+            }),
+          )
+          return out
+        }
       }
       if (href) {
         // 超链接里的文字不包修订壳（docx 库的链接子元素类型不收 Inserted/DeletedTextRun）：
@@ -1787,6 +1831,13 @@ interface DocTrack {
    * locks 恒 1、pic:cNvPr 的 name 是空串），所以也走打包后补丁——按出现序逐块改值
    */
   imgExtras: string[]
+  /**
+   * 下划线主题三枚（v0.159）：与 document.xml 里每个 `<w:u>` 一一对应、同序。
+   * 包只有 `{type,color}` 两枚槽（createUnderline 只写 w:val 与 w:color），
+   * `w:themeColor / w:themeTint / w:themeShade` 包外无槽，只能按出现序补回去
+   * （计数闸门同 pprExtras：条数对不上就整笔放弃）
+   */
+  uThemes: string[]
 }
 
 type NoteKind = 'footnote' | 'endnote'
@@ -1811,6 +1862,7 @@ function newDocTrack(): DocTrack {
     cellSps: [],
     cellExtras: [],
     imgExtras: [],
+    uThemes: [],
   }
 }
 
@@ -2542,8 +2594,10 @@ export async function prosemirrorToDocxBytes(json: PMNode, meta?: DocMeta): Prom
   const numDefs = meta?.numbering?.defs ?? []
   // 段落属性余量（v0.147）：按出现序贴回各自的 <w:pPr>，与上面两笔同一路数
   const withPara = await patchParaProps(out, dt.pprExtras)
+  // 下划线主题三枚（v0.159）：按 <w:u> 出现序补属性——包只有 {type,color} 两枚槽
+  const withU = await patchUTheme(withPara, dt.uThemes)
   // 图片容器壳（v0.148）：按 <w:drawing> 出现序逐块改值（包发得出壳，只是值硬编码）
-  const withImg = await patchImgXml(withPara, dt.imgExtras)
+  const withImg = await patchImgXml(withU, dt.imgExtras)
   // 表闸门三样都要补：样式推出来的（looks）与表自己带的（dt.tblLooks），
   // v0.152 起再加表级条件格式尺寸两枚（dt.tblPrs，与 tblLook 同住 tblPr）
   const needTbl = looks.size || dt.tblLooks.some((x) => x) || dt.tblPrs.some((x) => x) || dt.cellSps.some((x) => x)
@@ -3028,6 +3082,57 @@ async function patchParaProps(bytes: Uint8Array, extras: string[]): Promise<Uint
       continue
     }
     out += xml.slice(cursor, start) + pprInsert(xml.slice(start, stop), extras[i])
+    cursor = stop
+    touched = true
+  }
+  if (!touched) return bytes
+  out += xml.slice(cursor)
+  zip.file('word/document.xml', out)
+  const buf = (await zip.generateAsync({ type: 'arraybuffer' })) as ArrayBuffer
+  return new Uint8Array(buf)
+}
+
+/**
+ * 给每个 `<w:u>` 补主题三枚（v0.159）：按**出现序**贴——第 i 枚贴 `extras[i]`。
+ *
+ * 为什么又开一层补丁：docx 包的 underline 槽只有 `{type,color}`（createUnderline
+ * 只发 w:val 与 w:color 两枚属性），`w:themeColor / w:themeTint / w:themeShade`
+ * 这一族在包外。与 w:sym 一起是同一笔机制债——sym 那一半包里有原生 SymbolRun，
+ * 这一半没有，于是只能走打包后的 run 级补丁位。
+ *
+ * 对位靠**计数闸门**：document.xml 里 `<w:u` 的枚数与登记条数对不上就整笔放弃
+ * （宁可不补，也绝不补到别的 run 上）。匹配用 `(?=[\s/>])` 收边，免得把
+ * `w:unhideWhenUsed`、`w:uiPriority` 这些同前缀的元素算进来。
+ *
+ * 只扫 document.xml：样式表里的 `<w:u>`（我们自己拼的表样式 rPr）不在这一族的账上，
+ * 而 run 级补丁位管的就是正文里那一枚。
+ */
+async function patchUTheme(bytes: Uint8Array, extras: string[]): Promise<Uint8Array> {
+  if (!extras.some((x) => x)) return bytes
+  const { default: JSZip } = await import('jszip')
+  const zip = await JSZip.loadAsync(bytes)
+  const file = zip.file('word/document.xml')
+  if (!file) return bytes
+  const xml = await file.async('string')
+  const opens = [...xml.matchAll(/<w:u(?=[\s/>])[^>]*>/g)]
+  if (opens.length !== extras.length) return bytes
+  let out = ''
+  let cursor = 0
+  let touched = false
+  for (let i = 0; i < opens.length; i++) {
+    const m = opens[i]
+    const start = m.index ?? 0
+    const stop = start + m[0].length
+    const add = extras[i]
+    if (!add) {
+      out += xml.slice(cursor, stop)
+      cursor = stop
+      continue
+    }
+    // 属性追加在 `/>` 之前（自闭合）或最后那个 `>` 之前——XML 属性无序，不必讲次位
+    const tag = m[0]
+    const at = tag.endsWith('/>') ? tag.length - 2 : tag.length - 1
+    out += xml.slice(cursor, start) + tag.slice(0, at) + add + tag.slice(at)
     cursor = stop
     touched = true
   }

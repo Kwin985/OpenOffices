@@ -141,12 +141,12 @@ const RF = '<w:rFonts w:ascii="Calibri" w:eastAsia="宋体" w:hint="eastAsia"/>'
 // ───────────────────────── 3. pos / kern / 复杂文字三件套 ─────────────────────────
 
 {
-  const html = await importDocx(styleWith(''), '<w:pos w:val="24"/>')
+  const html = await importDocx(styleWith(''), '<w:position w:val="24"/>')
   has('pos：正升 → vertical-align', html, 'vertical-align: 16px') // 24 半点 = 12pt = 16px
 }
 
 {
-  const html = await importDocx(styleWith(''), '<w:pos w:val="-16"/>')
+  const html = await importDocx(styleWith(''), '<w:position w:val="-16"/>')
   has('pos：负降 → vertical-align', html, 'vertical-align: -10.67px') // -16 半点 = -8pt
 }
 
@@ -161,7 +161,7 @@ const RF = '<w:rFonts w:ascii="Calibri" w:eastAsia="宋体" w:hint="eastAsia"/>'
 }
 
 {
-  const html = await importDocx(styleWith(''), '<w:pos w:val="24"/><w:vertAlign w:val="superscript"/>')
+  const html = await importDocx(styleWith(''), '<w:position w:val="24"/><w:vertAlign w:val="superscript"/>')
   // Word 按 vertAlign 渲染，pos 不兑现
   check('pos：与上下标同时出现时不兑现', !html.includes('vertical-align') && html.includes('<sup>'), html.slice(0, 200))
 }
@@ -261,6 +261,131 @@ const RF = '<w:rFonts w:ascii="Calibri" w:eastAsia="宋体" w:hint="eastAsia"/>'
   const bytes = await prosemirrorToDocxBytes(doc)
   const xml = await (await JSZip.loadAsync(bytes)).file('word/document.xml').async('string')
   check('导出：没有 charExtra 不发 rFonts', !xml.includes('<w:rFonts'), '')
+}
+
+// ───────────────── 5. w:sym 与 w:u 的主题三枚（v0.159，run 级补丁位）─────────────────
+//
+// 这两枚是同一笔机制债的两半：包都不给槽。
+//   w:sym —— 包里有原生 SymbolRun（发 <w:sym w:char w:font>），只是读手此前把符号当
+//            普通文字发出去，往返账上 `sym|char`/`sym|font` 两笔都是「掉了」
+//   w:u 的主题三枚 —— 包的 underline 只有 {type,color}，themeColor/themeTint/Shade
+//            包外无槽，只能打包后按 <w:u> 出现序补（**计数闸门**：条数对不上整笔放弃）
+// 顺带钉住「字面色与主题色是两个槽」这件事：此前写手把解析出来的色写进 w:color，
+// 往返账上记着 ff0000 → b4c7e7 那一笔值变。
+
+{
+  // 导入侧：w:sym 的 char/font 原值要进模型（载荷 `char;font`）
+  const zip = new JSZip()
+  zip.file(
+    'word/document.xml',
+    `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:document xmlns:w="${W}"><w:body>` +
+      `<w:p><w:r><w:sym w:font="Wingdings" w:char="F0FC"/></w:r></w:p>` +
+      `</w:body></w:document>`,
+  )
+  zip.file('word/styles.xml', `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:styles xmlns:w="${W}"></w:styles>`)
+  const r = await docxToHtmlFidelity(new Uint8Array(await zip.generateAsync({ type: 'arraybuffer', compression: 'STORE' })))
+  has('sym 导入：char/font 进 data-sym 载荷', r.html, 'data-sym="F0FC;Wingdings"')
+  has('sym 导入：字符本身仍在正文里', r.html, '&#xF0FC;')
+}
+
+{
+  // 导入侧：w:u 的字面色与主题三枚分格装（第二格屏上色、第三格字面色、后三格主题）
+  const zip = new JSZip()
+  zip.file(
+    'word/document.xml',
+    `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:document xmlns:w="${W}"><w:body>` +
+      `<w:p><w:r><w:rPr><w:u w:val="single" w:color="FF0000" w:themeColor="accent1" w:themeTint="99"/></w:rPr>` +
+      `<w:t>下划线</w:t></w:r></w:p></w:body></w:document>`,
+  )
+  zip.file('word/styles.xml', `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:styles xmlns:w="${W}"></w:styles>`)
+  const r = await docxToHtmlFidelity(new Uint8Array(await zip.generateAsync({ type: 'arraybuffer', compression: 'STORE' })))
+  has('u 导入：六格载荷（线型;屏上色;字面色;主题;tint;shade）', r.html, 'data-u="single;#ff0000;ff0000;accent1;99;"')
+}
+
+{
+  // 导出侧：data-sym → 真的 <w:sym>（不是 w:t + rFonts）
+  const doc = {
+    type: 'doc',
+    content: [
+      {
+        type: 'paragraph',
+        content: [{ type: 'text', text: '\uf0fc', marks: [{ type: 'charExtra', attrs: { sym: 'F0FC;Wingdings' } }] }],
+      },
+    ],
+  }
+  const bytes = await prosemirrorToDocxBytes(doc)
+  const xml = await (await JSZip.loadAsync(bytes)).file('word/document.xml').async('string')
+  has('sym 导出：发回 w:sym 元素', xml, '<w:sym ')
+  has('sym 导出：w:char 是原始码位', xml, 'w:char="F0FC"')
+  has('sym 导出：w:font 是符号字体', xml, 'w:font="Wingdings"')
+  check('sym 导出：不再退化成普通文字', !xml.includes('w:t>\uf0fc'), '')
+}
+
+{
+  // 反例：多字符时不发 w:sym（一枚 w:sym 只表达一个码点，硬发会吞字）
+  const doc = {
+    type: 'doc',
+    content: [
+      {
+        type: 'paragraph',
+        content: [{ type: 'text', text: 'AB', marks: [{ type: 'charExtra', attrs: { sym: 'F0FC;Wingdings' } }] }],
+      },
+    ],
+  }
+  const bytes = await prosemirrorToDocxBytes(doc)
+  const xml = await (await JSZip.loadAsync(bytes)).file('word/document.xml').async('string')
+  check('sym 导出：多字符退化为普通文字', !xml.includes('<w:sym'), '')
+  has('sym 导出：多字符时字还在', xml, 'AB')
+}
+
+{
+  // 导出侧：data-u 的主题三枚无槽 → patchUTheme 补进 <w:u> 开标签
+  const doc = {
+    type: 'doc',
+    content: [
+      {
+        type: 'paragraph',
+        content: [
+          {
+            type: 'text',
+            text: '下划线',
+            marks: [
+              { type: 'underline' },
+              { type: 'charExtra', attrs: { u: 'single;#ff0000;ff0000;accent1;99;' } },
+            ],
+          },
+        ],
+      },
+    ],
+  }
+  const bytes = await prosemirrorToDocxBytes(doc)
+  const xml = await (await JSZip.loadAsync(bytes)).file('word/document.xml').async('string')
+  has('u 导出：字面走 w:color（原生槽）', xml, 'w:color="FF0000"')
+  has('u 导出：主题引用补回 w:themeColor', xml, 'w:themeColor="accent1"')
+  has('u 导出：主题深浅补回 w:themeTint', xml, 'w:themeTint="99"')
+}
+
+{
+  // 反例：只有主题没有字面时不该凭空写出 w:color（那会把主题钉死成一个色）
+  const doc = {
+    type: 'doc',
+    content: [
+      {
+        type: 'paragraph',
+        content: [
+          {
+            type: 'text',
+            text: 'x',
+            marks: [{ type: 'underline' }, { type: 'charExtra', attrs: { u: 'single;#b4c7e7;;accent1;;' } }],
+          },
+        ],
+      },
+    ],
+  }
+  const bytes = await prosemirrorToDocxBytes(doc)
+  const xml = await (await JSZip.loadAsync(bytes)).file('word/document.xml').async('string')
+  check('u 导出：无字面时不写 w:color', !/w:u [^>]*w:color/.test(xml), '')
+  has('u 导出：主题照样补回', xml, 'w:themeColor="accent1"')
 }
 
 console.log(`通过 ${ok.length} 项` + (bad.length ? `，**失败 ${bad.length} 项**` : '，失败 0 项'))
