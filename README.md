@@ -9435,6 +9435,68 @@ themeColor/themeTint/themeShade 还是同一个形状（1 对仍在掉了名单�
 `insideH|space`（表内边框间距，1 对）；其余承接 D18 未动项（`gridCol`/`tcW` 的 ±5 缇、
 `w:cols` 的 `equalWidth`、`ind|left` 的列表缩进覆盖、`docPr|id` 重排、`lvlJc` 深层 `center`）。
 
+## v0.160（D19）——补丁位泛化成任意元素：文字色的主题引用与缩进的字符档
+
+往返账**正文属性 64.3% → 66.2%**（174/263），整体 33.8% → 34.7%，掉了 364 → 359，
+值变 21 不变。五对从「掉了」翻成「保留」：`color|themeColor`、`color|themeTint`、
+`color|themeShade`、`ind|firstLineChars`、`ind|hangingChars`。保真账本按对仍是 99.0%
+（这一轮动的是写手与两枚载荷，读手查问集一枚没动）。
+
+### 补丁位从「一个元素」泛化成「任意元素」
+
+上一轮的 `patchUTheme` 只认 `<w:u>`。这一轮有了第二处同形状的需求（`w:color` 也带
+`themeColor/themeTint/themeShade` 三枚），于是把它参数化成 `patchElemAttrs(bytes, tag,
+extras)`——匹配 `<w:{tag}(?=[\s/>])`、按出现序贴属性串、计数闸门照旧。**两族的登记数组
+分开**（`dt.uThemes` 与 `dt.colorThemes`）：对位靠的是各自元素在 `document.xml` 里的
+出现序，合成一串就对不上了。
+
+闸门能成立有个前提：脚注/尾注/批注那一支在我们的写手里走**简单文本**（不带
+`charExtra`，也就不会登记），所以 `document.xml` 里的 `w:color` 枚数正好等于登记条数。
+这条前提写进了函数头注——哪天脚注也开始走 `childToRuns`，闸门会先喊。
+
+### 文字色这次**故意不拆**字面槽
+
+`w:color` 与 `w:u` 长得一模一样（`w:val="FF0000" w:themeColor="accent1"`），但这一轮没有
+照搬 u 那套「字面/解析分两格」的做法。理由只有一条：**模型的 `textStyle.color` 是用户
+可编辑的单一事实源**。拆成字面槽之后，写盘取的是源里的 `ff0000`，用户把颜色改成红色再
+存盘，出去的还是 `ff0000`——「改了色导出却不变」比一笔「值变」的账坏得多。所以
+`color|val` 那笔值变（源 `ff0000` → 出 `adbbd4`）继续挂着，主题三枚由补丁位补回，
+Word 打开时仍是主题说了算。
+
+（u 那边可以拆，是因为下划线颜色在编辑器里没有入口——有没有这一条「能不能被用户改」
+的判据，决定了同一形状的两个槽该不该分。）
+
+### 缩进的字符档：合并而不是另起一枚
+
+`w:ind` 在 `CT_PPrBase` 里是**单枚**元素。写手自己发的那一枚常常已经带着 `w:left` /
+`w:firstLine`（模型折算出来的），再插一枚新的会让 Word 只认后写的那一枚，先写的整枚
+被丢——缩进会静默变样。所以 `pprOrder` 多了一条**同名元素合并属性**：命中同名就把
+属性并进去，已有的同名属性不覆盖（以包自己那一枚为准）。导出结果是一枚：
+
+```
+<w:ind w:left="420" w:right="210" w:firstLine="450" w:firstLineChars="200" w:hangingChars="0"/>
+```
+
+留一条已知边界：`firstLine`（缇）与 `firstLineChars`（百分之一字符）是**同一枚首行槽的
+两套记法**，同时出现时 Word 取哪一档规范里没写死。数值上两者等价（字符档就是用同一
+底数折出来的 450 缇），差异只在用户之后改了字号：字符档会跟着字号走，缇值不会。
+这一条如实记在账上，没有替源件选。
+
+### 门禁
+
+tsc 0、build ✓（5556 模块）；结构测试 **53 → 66 项**全绿（新增十三条约一半是反例：
+没有 `textStyle.color` 时不凭空写 `w:color`、`pPr` 里只允许一枚 `w:ind`）；四条变异腿
+`no-attrL` 51.8%/83.5%、`no-attr` 59.2%/42.1%、`no-themeshade` 96.5%/98.3% 三腿下降，
+`no-theme` 一腿**一动不动**（99.0%/98.4%）；保真账本 md5 仍 `95846f03…`/`aab9813c…`，
+往返账 `0135a0d1…`/`b36aa62d…` 两次复跑逐字节相同。
+
+D20 顺延：**`rFonts` 的 `asciiTheme`/`eastAsiaTheme`/`hAnsiTheme`**（3 对，与 `w:color`
+同一形状的第三处，补丁位已就绪，缺的是读手把引用名带出来）；**量具口径**——`ST_OnOff`
+的「裸元素在场」应归一成 `|val = 1`（`caps|val`、`vanish|val`、`widowControl|val` 这几笔
+是账本自己的假红，账本头注里写的 `true/1/on` 归一漏了这一档）；`insideH`/`insideV` 的
+`space` 与主题三枚（8 对，要新开「表级边框原值」通道，与读手「分摊到格」的口径冲突，
+得先定口径）；`cnfStyle` 十二对（表条件格式账）；`fldChar` 三对（域指令，模型无槽）。
+
 
 ## 性能（v0.3）
 
