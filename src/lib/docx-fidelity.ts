@@ -50,7 +50,7 @@ import { all, allDesc, attr, attrL, attrNum, els, find, findDesc, findL, local, 
 import { FieldEngine, fieldLabel, parseInstr, recomputable } from './docx-fields'
 import { embedHtml, inlineFlatten, unwrapEmbed, type EmbedHtml } from './ole'
 import { chartToHtml, smartArtToHtml } from './ooxml-graphics'
-import { CELL_EDGES, CSS_BORDER_STYLE, FRAME_NUMERIC_KEYS, FRAME_STR_KEYS, IMG_ATTR, PPR_ATTR, PPR_IND_KEYS, PPR_ONOFF_KEYS, PPR_STR_KEYS, TAB_LEADERS, TBLPR_ATTR, TLOOK_ATTR, bdSpaceAttrs, eighthsToPx, framePayload, imgPayload, pprPayload, ptToPx, rgb2hex, shadeCss, tblpPayload, tblPrPayload, tabsPayload, tlookPayload, type CellEdge, type FramePayload, type ImgPayload, type PprPayload, type TabSpec, type TblpPayload } from './cell-style'
+import { CELL_EDGES, CNF_ATTR, CNF_KEYS, CSS_BORDER_STYLE, FRAME_NUMERIC_KEYS, FRAME_STR_KEYS, IMG_ATTR, PPR_ATTR, PPR_IND_KEYS, PPR_ONOFF_KEYS, PPR_STR_KEYS, TAB_LEADERS, TBLPR_ATTR, TLOOK_ATTR, bdSpaceAttrs, cnfPayload, eighthsToPx, framePayload, imgPayload, pprPayload, ptToPx, rgb2hex, shadeCss, tblpPayload, tblPrPayload, tabsPayload, tlookPayload, type CellEdge, type CnfPayload, type FramePayload, type ImgPayload, type PprPayload, type TabSpec, type TblpPayload } from './cell-style'
 import { ooxmlLine } from './paragraph-style'
 import {
   asTableCondType,
@@ -563,6 +563,35 @@ function readTlookPayload(tblPr: XEl | undefined): string {
  * （隔行/隔列底纹的落点账不在我们模型里），只随 data-tblpr 往返。
  * 与 tlook 同住 tblPr、同一条补丁路数（写侧没有库槽）
  */
+/**
+ * 表条件格式的落点开关（v0.162）：`w:tblPr/w:cnfStyle` 十三枚 → data-cnf 定序格串。
+ *
+ * 此前这一族是**纯只读记账**（`noteCnfStyleMarks` 整树按名查问，一个数也不落地）；
+ * 记账管的是保真账本那一本（「读手查问过哪些对」），这一趟管的是往返账（「回不回得来」）。
+ * 两趟并存、各记各的：整树扫继续负责 tcPr 里那些格级 cnfStyle 的查问（格级没有往返通道，
+ * 只有表级有），表级这一枚由这里读进载荷。
+ *
+ * 十三枚全用 attrL 查问（与 noteCnfStyleMarks 同一枚漏斗，分子不增不减）。
+ */
+function readCnfPayload(tblPr: XEl | undefined): string {
+  if (!tblPr) return ''
+  const el = find(tblPr, 'w:cnfStyle')
+  if (!el) return ''
+  const kv: CnfPayload = {}
+  for (const k of CNF_KEYS) {
+    const raw = attrL(el, `w:${k}`)
+    if (raw === undefined || raw === '') continue
+    // ST_OnOff 归一成 0/1：真件里 `true`/`on`/`1` 是同一件事，而载荷只有一种口径。
+    // val 是 12 位位串，不参与这层归一（parseCnfPayload 那里再校验形状）
+    if (k === 'val') kv.val = raw
+    else {
+      const s = raw.trim().toLowerCase()
+      kv[k] = s === '0' || s === 'false' || s === 'off' ? '0' : '1'
+    }
+  }
+  return cnfPayload(kv)
+}
+
 function readTblPrPayload(tblPr: XEl | undefined): string {
   if (!tblPr) return ''
   const kv: Record<string, string> = {}
@@ -3731,7 +3760,9 @@ class Fidelity {
     const tlookAttr = readTlookPayload(tblPr)
     // 表级条件格式尺寸（v0.152）：两枚 bandSize，屏上不兑现只往返
     const tblprAttr = readTblPrPayload(tblPr)
-    let s = `<table${tblStyle ? ` style="${tblStyle}"` : ''}${ownerAttr}${tblpAttr ? ` data-tblp="${tblpAttr}"` : ''}${tlookAttr ? ` ${TLOOK_ATTR}="${tlookAttr}"` : ''}${tblprAttr ? ` ${TBLPR_ATTR}="${tblprAttr}"` : ''}>`
+    // 表条件格式落点十三枚（v0.162）：屏上零兑现，只随 data-cnf 往返
+    const cnfAttr = readCnfPayload(tblPr)
+    let s = `<table${tblStyle ? ` style="${tblStyle}"` : ''}${ownerAttr}${tblpAttr ? ` data-tblp="${tblpAttr}"` : ''}${tlookAttr ? ` ${TLOOK_ATTR}="${tlookAttr}"` : ''}${tblprAttr ? ` ${TBLPR_ATTR}="${tblprAttr}"` : ''}${cnfAttr ? ` ${CNF_ATTR}="${cnfAttr}"` : ''}>`
     for (let ri = 0; ri < plan.length; ri++) {
       const trPr = find(rows[ri], 'w:trPr')
       // 表头由 w:trPr/w:tblHeader 决定，不限首行（Word 里可以声明第 2 行起重复表头）
@@ -4763,11 +4794,9 @@ function noteVmlShellMarks(doc: XEl | undefined): void {
  * 按整树扫而不按 tblPr/tcPr 找：这一枚在真件里两种容器都住（表级 tblPr 与逐格 tcPr），
  * 而它的 local name 不与别家撞（cnfStyle 只此一处），整树扫不会记假账。
  */
-const CNF_STYLE_ATTRS = [
-  'val', 'firstRow', 'lastRow', 'firstColumn', 'lastColumn',
-  'oddHBand', 'evenHBand', 'oddVBand', 'evenVBand',
-  'firstRowFirstColumn', 'firstRowLastColumn', 'lastRowFirstColumn', 'lastRowLastColumn',
-] as const
+// 名单与 cell-style.ts 的 CNF_KEYS 同源（v0.162：那一族从「纯记账」升成「只往返」后，
+// 记账这一趟与往返那一趟必须读同一组名字——两份名单迟早会走散）
+const CNF_STYLE_ATTRS = CNF_KEYS
 
 function noteCnfStyleMarks(doc: XEl | undefined): void {
   if (!doc) return

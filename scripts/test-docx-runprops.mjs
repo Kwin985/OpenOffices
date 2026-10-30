@@ -578,6 +578,77 @@ const RF = '<w:rFonts w:ascii="Calibri" w:eastAsia="宋体" w:hint="eastAsia"/>'
   check('量具口径：caps|val 由产品补丁翻正（不是靠归一）', j.pairs?.['caps|val']?.bucket === 'kept', j.pairs?.['caps|val']?.bucket ?? '(不在账)')
 }
 
+// ────────────── 10. 表条件格式的落点开关（v0.162）──────────────────────────
+//
+// `w:tblPr/w:cnfStyle` 十三枚：Word 的表样式靠它决定条件格式落在哪一行/列（tblLook 只管
+// 要不要套）。此前是**纯只读记账**（按名查问、一个数不落地），这一轮升成只往返：
+// data-cnf 定序格串 + 打包后补丁插回 tblPr（包没有这一族的槽）。
+{
+  const cell = (text) => ({ type: 'tableCell', content: [{ type: 'paragraph', content: [{ type: 'text', text }] }] })
+  const doc = {
+    type: 'doc',
+    content: [
+      {
+        type: 'table',
+        attrs: { cnf: '000000100000;1;0;1;0;1;0;1;0;1;0;0;0' },
+        content: [{ type: 'tableRow', content: [cell('甲'), cell('乙')] }],
+      },
+    ],
+  }
+  const bytes = await prosemirrorToDocxBytes(doc)
+  const xml = await (await JSZip.loadAsync(bytes)).file('word/document.xml').async('string')
+  const cnf = /<w:cnfStyle[^>]*>/.exec(xml)?.[0] ?? ''
+  has('cnfStyle 导出：位串 val 原样发回', cnf, 'w:val="000000100000"')
+  has('cnfStyle 导出：首行开关', cnf, 'w:firstRow="1"')
+  has('cnfStyle 导出：末行开关（显式 0 也要发）', cnf, 'w:lastRow="0"')
+  has('cnfStyle 导出：四角之一', cnf, 'w:firstRowFirstColumn="1"')
+  // 次位：CT_TblPrBase 里 cnfStyle 紧跟 tblStyle、排在 tblW 之前
+  check('cnfStyle 导出：插在 tblW 之前', xml.indexOf('<w:cnfStyle') < xml.indexOf('<w:tblW'), xml.slice(0, 400))
+  check('cnfStyle 导出：整份只有一枚', (xml.match(/<w:cnfStyle/g) ?? []).length === 1, '')
+}
+
+{
+  // 反例：位串形状不对（11 位）**只丢那一格**，其余十二枚照发——脏格整格丢是这一族
+  // 的既定口径（与 parseTblPrPayload 同款），不因为一枚坏了就把整枚元素吞掉
+  const cell = (text) => ({ type: 'tableCell', content: [{ type: 'paragraph', content: [{ type: 'text', text }] }] })
+  const doc = {
+    type: 'doc',
+    content: [
+      {
+        type: 'table',
+        attrs: { cnf: '0000001000;1;0;1;0;1;0;1;0;1;0;0;0' },
+        content: [{ type: 'tableRow', content: [cell('甲')] }],
+      },
+    ],
+  }
+  const bytes = await prosemirrorToDocxBytes(doc)
+  const xml = await (await JSZip.loadAsync(bytes)).file('word/document.xml').async('string')
+  const cnf = /<w:cnfStyle[^>]*>/.exec(xml)?.[0] ?? ''
+  check('cnfStyle 导出：位串形状不对就丢那一格', cnf !== '' && !cnf.includes('w:val='), cnf)
+  has('cnfStyle 导出：同一枚上其余开关照发', cnf, 'w:firstRow="1"')
+}
+
+{
+  // 导入侧：十三枚读成定序格串（ST_OnOff 的 true/on 归一成 1）
+  const zip = new JSZip()
+  zip.file(
+    'word/document.xml',
+    `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:document xmlns:w="${W}"><w:body>` +
+      `<w:tbl><w:tblPr><w:cnfStyle w:val="000000100000" w:firstRow="true" w:lastRow="0"` +
+      ` w:firstColumn="on" w:lastColumn="0" w:oddHBand="1" w:evenHBand="0" w:oddVBand="1"` +
+      ` w:evenVBand="0" w:firstRowFirstColumn="1" w:firstRowLastColumn="0"` +
+      ` w:lastRowFirstColumn="0" w:lastRowLastColumn="0"/></w:tblPr>` +
+      `<w:tblGrid><w:gridCol w:w="2500"/><w:gridCol w:w="2500"/></w:tblGrid>` +
+      `<w:tr><w:tc><w:p><w:r><w:t>甲</w:t></w:r></w:p></w:tc>` +
+      `<w:tc><w:p><w:r><w:t>乙</w:t></w:r></w:p></w:tc></w:tr></w:tbl>` +
+      `</w:body></w:document>`,
+  )
+  zip.file('word/styles.xml', `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:styles xmlns:w="${W}"></w:styles>`)
+  const bytes = new Uint8Array(await zip.generateAsync({ type: 'arraybuffer', compression: 'STORE' }))
+  const r = await docxToHtmlFidelity(bytes)
+  has('cnfStyle 导入：十三枚读成定序格串', r.html, 'data-cnf="000000100000;1;0;1;0;1;0;1;0;1;0;0;0"')
+}
+
 console.log(`通过 ${ok.length} 项` + (bad.length ? `，**失败 ${bad.length} 项**` : '，失败 0 项'))
 for (const b of bad) console.log(`FAIL ${b}`)
 if (bad.length) process.exitCode = 1

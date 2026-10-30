@@ -46,7 +46,7 @@ import {
   UnderlineType,
 } from 'docx'
 import { xml2js } from 'xml-js'
-import { borderParts, pxToEighths, pxToPt, parseFramePayload, parseImgPayload, parsePprPayload, parseShadePayload, parseTabsPayload, parseTblpPayload, parseTblPrPayload, parseTlookPayload, CELL_EDGES, PPR_IND_KEYS, type CellEdge } from './cell-style'
+import { borderParts, pxToEighths, pxToPt, parseCnfPayload, parseFramePayload, parseImgPayload, parsePprPayload, parseShadePayload, parseTabsPayload, parseTblpPayload, parseTblPrPayload, parseTlookPayload, CELL_EDGES, CNF_KEYS, PPR_IND_KEYS, type CellEdge } from './cell-style'
 import { lineToOoxml, type LineRule } from './paragraph-style'
 import { decodeEnt } from './ooxml'
 import { condLookBits } from './table-cond'
@@ -1882,6 +1882,13 @@ interface DocTrack {
    */
   colorThemes: string[]
   /**
+   * 表条件格式的落点开关（v0.162）：与 `section.children` 里每个 Table 一一对应、同序。
+   * `w:cnfStyle` 十三枚在包里没有槽（包只发它认得的表属性），走打包后补丁按
+   * `<w:tblPr>` 出现序插。与 tblLooks/tblPrs/cellSps 同住一处，但**插入锚点不同**——
+   * cnfStyle 在 CT_TblPrBase 里紧跟 tblStyle，排在其它三族之前
+   */
+  cnfStyles: string[]
+  /**
    * 被包吞掉的那一枚全大写（v0.161）：与 document.xml 里每个 `<w:smallCaps>` 一一对应、
    * 同序。包的 RunProperties 里 `smallCaps` 与 `allCaps` 是 **else-if**（dist/index.mjs:
    * 10538-10539：先 smallCaps，有了就再不看 allCaps）——一个 run 同时要两枚时，库只发
@@ -1916,6 +1923,7 @@ function newDocTrack(): DocTrack {
     cellSps: [],
     cellExtras: [],
     imgExtras: [],
+    cnfStyles: [],
     capsExtras: [],
     uThemes: [],
     colorThemes: [],
@@ -2335,6 +2343,8 @@ function blocksOf(
       // 单元格间距（v0.154）：同一张表的第二笔 tblPr 补丁，插入锚点与 bandSize 不同
       // （序里排在 tblW 之后），所以单列一条登记，共用那一次解压/重压
       dt.cellSps.push(tblCellSpacingXmlOf(node.attrs?.tblPr))
+      // 表条件格式落点十三枚（v0.162）：第三笔 tblPr 补丁，锚点又不同（紧跟 tblStyle）
+      dt.cnfStyles.push(cnfXmlOf(node.attrs?.cnf))
       out.push(
         new Table({
           // 表样式引用（v0.114）：表身上这枚 data-tstyle 就是 w:tblStyle，
@@ -2664,7 +2674,7 @@ export async function prosemirrorToDocxBytes(json: PMNode, meta?: DocMeta): Prom
   const withImg = await patchImgXml(withCaps, dt.imgExtras)
   // 表闸门三样都要补：样式推出来的（looks）与表自己带的（dt.tblLooks），
   // v0.152 起再加表级条件格式尺寸两枚（dt.tblPrs，与 tblLook 同住 tblPr）
-  const needTbl = looks.size || dt.tblLooks.some((x) => x) || dt.tblPrs.some((x) => x) || dt.cellSps.some((x) => x)
+  const needTbl = looks.size || dt.tblLooks.some((x) => x) || dt.tblPrs.some((x) => x) || dt.cellSps.some((x) => x) || dt.cnfStyles.some((x) => x)
   // 单元格不换行（v0.152）：包里没有 noWrap 的槽，按 <w:tc> 出现序插 <w:noWrap/>
   const withCell = dt.cellExtras.some((x) => x) ? await patchTcPr(withImg, dt.cellExtras) : withImg
   const withStyles = props.size || latent
@@ -2672,9 +2682,9 @@ export async function prosemirrorToDocxBytes(json: PMNode, meta?: DocMeta): Prom
     : withCell
   if (numDefs.length) {
     const withNum = await patchNumberingXml(withStyles, numDefs)
-    return needTbl ? await patchTblLook(withNum, looks, dt.tblLooks, dt.tblPrs, dt.cellSps) : withNum
+    return needTbl ? await patchTblLook(withNum, looks, dt.tblLooks, dt.tblPrs, dt.cellSps, dt.cnfStyles) : withNum
   }
-  return needTbl ? patchTblLook(withStyles, looks, dt.tblLooks, dt.tblPrs, dt.cellSps) : withStyles
+  return needTbl ? patchTblLook(withStyles, looks, dt.tblLooks, dt.tblPrs, dt.cellSps, dt.cnfStyles) : withStyles
 }
 
 /**
@@ -3405,6 +3415,36 @@ function tblCellSpacingXmlOf(raw: unknown): string {
 const AFTER_CELL_SPACING: string[] = ['tblInd', 'tblBorders', 'shd', 'tblLayout', 'tblCellMar', 'tblLook', 'tblCaption', 'tblDescription']
 
 /**
+ * `w:cnfStyle` 的插入锚点（v0.162）：排在它**之后**的元素（CT_TblPrBase 序里
+ * tblStyle → **cnfStyle** → tblpPr → …）。
+ *
+ * 这一族**不与 bandSize 共用锚点表**——v0.147 那条教训：同一套「插到第一个已知后续
+ * 元素之前」的表不能给两组元素共用（bandSize 排在 tblW 前、cellSpacing 排在它后，
+ * 共用会把后者插错位置）。cnfStyle 是第三组，自带第三张表。
+ */
+const AFTER_CNF_STYLE: string[] = [
+  'tblpPr', 'bidiVisual', 'tblOverlap', 'tblStyleRowBandSize', 'tblStyleColBandSize',
+  'tblW', 'jc', 'tblCellSpacing', 'tblInd', 'tblBorders', 'shd', 'tblLayout',
+  'tblCellMar', 'tblLook', 'tblCaption', 'tblDescription',
+]
+
+/**
+ * data-cnf 载荷 → `<w:cnfStyle/>`（v0.162）。
+ * 十三枚按 CNF_KEYS 的序逐枚发，空槽不发（源件没写那枚就不替它写——「没写」与
+ * 「显式 0」在 Word 里同结果，但照抄源件的形状最不容易出意外）。
+ */
+function cnfXmlOf(raw: unknown): string {
+  const kv = parseCnfPayload(typeof raw === 'string' ? raw : null)
+  const bits: string[] = []
+  for (const k of CNF_KEYS) {
+    const v = kv[k]
+    if (v === undefined || v === '') continue
+    bits.push(` w:${k}="${xmlAttr(v)}"`)
+  }
+  return bits.length ? `<w:cnfStyle${bits.join('')}/>` : ''
+}
+
+/**
  * 给表格补 `<w:tblLook>`：一是引用了带条件层样式的表（按 styleId 查 `looks`，老路数），
  * 二是表**自己**带闸门的那一张（按出现序查 `own`，v0.147）——后者压过前者。
  * 两路都走同一处补丁：贴 `<w:tblPr>` 的末位（已有 w:tblLook 就整枚替换）。
@@ -3416,6 +3456,7 @@ async function patchTblLook(
   own: string[] = [],
   band: string[] = [],
   spacing: string[] = [],
+  cnf: string[] = [],
 ): Promise<Uint8Array> {
   const { default: JSZip } = await import('jszip')
   const zip = await JSZip.loadAsync(bytes)
@@ -3425,7 +3466,8 @@ async function patchTblLook(
   // 计数闸门：两族（tblLook 与 bandSize）都按 tblPr 出现序对位，
   // 长度必须与 tblPr 枚数相等（两族在同一处 push，恒等长；取 max 只是防御）
   const n = (xml.match(/<w:tblPr>/g) ?? []).length
-  if ((own.length || band.length) && n !== Math.max(own.length, band.length)) return bytes
+  // 计数闸门：四族都按 tblPr 出现序对位（同处 push，恒等长；取 max 只是防御）
+  if ((own.length || band.length || cnf.length) && n !== Math.max(own.length, band.length, cnf.length)) return bytes
   let i = 0
   let touched = false
   const patched = xml.replace(/<w:tblPr>([\s\S]*?)<\/w:tblPr>/g, (all: string) => {
@@ -3449,6 +3491,13 @@ async function patchTblLook(
     if (spFrag) {
       touched = true
       out = insertTblPrKids(out, spFrag, AFTER_CELL_SPACING)
+    }
+    // 表条件格式落点（v0.162）：同一张表的第三笔补丁，锚点又不同（紧跟 tblStyle）。
+    // 已在场的 cnfStyle 不重复插（读手只认表级那一枚，格级的仍走纯记账）
+    const cnfFrag = cnf[i - 1] ?? ''
+    if (cnfFrag && !/<w:cnfStyle\b/.test(inner)) {
+      touched = true
+      out = insertTblPrKids(out, cnfFrag, AFTER_CNF_STYLE)
     }
     return out
   })

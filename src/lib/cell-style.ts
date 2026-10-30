@@ -435,6 +435,56 @@ export function tblPrPayload(kv: TblPrPayload): string {
     .join(';')
 }
 
+/* ── 表条件格式的落点开关（v0.162）─────────────────────────────────
+ * `w:tblPr/w:cnfStyle` 十三枚：这一行/这一列算不算「首行/末行/奇偶数行/首列/末列/四角」，
+ * Word 的表样式靠这十三枚决定套哪一档条件格式（tblLook 只管**要不要套**，这一族管
+ * **落在哪**）。
+ *
+ * 屏上零兑现（我们没有表样式的条件层），写侧也发不出（包只发它认得的表属性），
+ * 所以走 `data-cnf` 载荷 + 打包后补丁——与 tblLook / bandSize 同住 `<w:tblPr>`、同序登记。
+ *
+ * 载荷是**定序格串**而不是 key=value：十三枚的名字是固定集合（不会像 ppr 那样逐版增补），
+ * 定序更短也更稳。格序见 CNF_KEYS，空槽留空（源件没写那枚就留空，写回时也不发它）。
+ */
+export const CNF_ATTR = 'data-cnf'
+
+/** w:cnfStyle 的十三枚属性名，**顺序即载荷格序**（与读手 noteCnfStyleMarks 的名单同源） */
+export const CNF_KEYS = [
+  'val', 'firstRow', 'lastRow', 'firstColumn', 'lastColumn',
+  'oddHBand', 'evenHBand', 'oddVBand', 'evenVBand',
+  'firstRowFirstColumn', 'firstRowLastColumn', 'lastRowFirstColumn', 'lastRowLastColumn',
+] as const
+
+export type CnfPayload = Partial<Record<(typeof CNF_KEYS)[number], string>>
+
+/**
+ * data-cnf 载荷 → 十三枚的 key/value 表。
+ * `val` 是 12 位 0/1 位串（Word 把十二个开关压成一枚存），其余十二枚是 ST_OnOff——
+ * 只收 `0`/`1`（真件里也见过 `true`/`on`，读手侧已归一成 0/1，这里不再放宽：
+ * 载荷是我们自己写的，口径只有一种）。脏格整格丢，不猜。
+ */
+export function parseCnfPayload(raw: string | null | undefined): CnfPayload {
+  const out: CnfPayload = {}
+  if (!raw) return out
+  const cells = raw.split(';')
+  CNF_KEYS.forEach((k, i) => {
+    const v = (cells[i] ?? '').trim()
+    if (!v) return
+    if (k === 'val') {
+      if (/^[01]{12}$/.test(v)) out.val = v
+      return
+    }
+    if (v === '0' || v === '1') out[k] = v
+  })
+  return out
+}
+
+/** key/value 表 → data-cnf 载荷（与 parseCnfPayload 互逆；空表给空串） */
+export function cnfPayload(kv: CnfPayload): string {
+  const cells = CNF_KEYS.map((k) => kv[k] ?? '')
+  return cells.some(Boolean) ? cells.join(';') : ''
+}
+
 /* ── 段落属性余量（v0.147）─────────────────────────────────────
  * w:pPr 里那一批「说了也不改屏上排版」的直接属性：adjustRightInd（编号右边缩进跟随
  * 自动缩进）、snapToGrid（对齐到文档网格）、topLinePunct（首尾标点压缩）、bidi（段落
@@ -905,6 +955,20 @@ export const CellStyle = Extension.create({
             renderHTML: (attrs: Record<string, unknown>) => {
               const raw = typeof attrs.tblPr === 'string' ? attrs.tblPr : ''
               return Object.keys(parseTblPrPayload(raw)).length ? { [TBLPR_ATTR]: raw } : {}
+            },
+          },
+          /**
+           * 表条件格式的落点开关（v0.162）：`w:tblPr/w:cnfStyle` 十三枚——这一行/这一列
+           * 算不算「首行/末行/奇偶数行/首列/末列/四角」。Word 的表样式靠它决定套哪一档
+           * 条件格式（tblLook 管要不要套，这一族管落在哪）。屏上零兑现，只随 data-cnf
+           * 往返，写侧走打包后补丁（与 tblLook / bandSize 同住 tblPr、同序登记）
+           */
+          cnf: {
+            default: null as string | null,
+            parseHTML: (el: HTMLElement) => el.getAttribute(CNF_ATTR) || null,
+            renderHTML: (attrs: Record<string, unknown>) => {
+              const raw = typeof attrs.cnf === 'string' ? attrs.cnf : ''
+              return Object.keys(parseCnfPayload(raw)).length ? { [CNF_ATTR]: raw } : {}
             },
           },
           /** Word 的 `w:tblInd`：整张表离版心左边距多远 */
