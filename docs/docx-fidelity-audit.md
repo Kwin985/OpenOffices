@@ -1153,3 +1153,101 @@ u 那边可以拆，是因为下划线颜色在编辑器里没有入口。**能�
 - **`cnfStyle` 十二对**（表条件格式账）、**`fldChar` 三对**（域指令，模型无槽）。
 - 承接未动项：`gridCol`/`tcW` 的 ±5 缇、`w:cols` 的 `equalWidth`、`ind|left` 的列表缩进覆盖、
   `docPr|id` 重排、`lvlJc` 深层 `center`。
+
+---
+
+## v0.161（D20）——先修账本：量具口径本身会造假红
+
+| | 上一轮 | 这一轮 |
+|---|---:|---:|
+| 正文属性 | 174/263 = 66.2% | **189/273 = 69.2%** |
+| 图形壳 | 28/319 = 8.8% | 28/319 = 8.8% |
+| 合计 | 202/582 = 34.7% | **217/592 = 36.7%** |
+| 掉了 | 359 | 355 |
+| 值变 | 21 | 20 |
+
+四对翻正（掉了 → 保留）：`caps|val`、`rFonts|asciiTheme`、`rFonts|eastAsiaTheme`、
+`rFonts|hAnsiTheme`。另有十对是**分母补进来**的（此前根本不在账上）：`bCs|val`、
+`iCs|val`、`smallCaps|val`、`pageBreakBefore|val`、`keepNext|val`、`keepLines|val`、
+`snapToGrid|val` 等——源里那些裸 OnOff 元素此前不产生任何属性，census 看不见它们。
+`vanish|val` 由「掉了」翻正、`widowControl|val` 由「值变」翻正。
+
+保真账本按对仍 99.0%，md5 仍 `95846f03…`/`aab9813c…`。往返账 `18516b03…`/`bb5367ca…`，
+两次复跑逐字节相同。
+
+### 一、口径：`<w:vanish/>` ≡ `w:val="1"`
+
+这一条**不改产品，改量具**。`ST_OnOff` 元素可以不写 `w:val`——`<w:vanish/>` 与
+`<w:vanish w:val="1"/>` 是同一件事的两种写法，包的 `OnOffElement` 传 `true` 时发的就是
+裸元素。普查只按属性取值，裸元素压根进不了 `values`：源写 `w:val="1"`、写出包发裸元素，
+账上记一笔「掉了」，而两边的值一模一样。
+
+修法是 `census` 对一张 `ST_OnOff` 元素名单（四十余枚）补一条：没写 `w:val` 时记一笔
+`val=1`。动手前先把**漏了的后果**想清楚：漏掉的元素两边都不补，最多留一笔假红，
+**不会造假绿**。方向是保守的——假红占着榜单比造假成绩好得多（v0.157 那条教训）。
+
+同一条纪律的延伸：这条口径写进了结构测试（读账本 `definition.onOffBareElement` 自陈
+字段 + 三对的状态）。**账本不自查，假红就一直占着榜单**——量具的输入是产品，量具本身
+的口径却没人测。
+
+### 二、真被库吞掉的一枚：`<w:caps/>`
+
+一个 run 同时要小型大写与全大写时，写出包里只有 `<w:smallCaps/>`，`w:caps` 整个消失。
+真因在包里（`RunProperties`，dist/index.mjs:10538）：
+
+```js
+if (options.smallCaps !== void 0) this.push(new OnOffElement("w:smallCaps", options.smallCaps));
+else if (options.allCaps !== void 0) this.push(new OnOffElement("w:caps", options.allCaps));
+```
+
+是 `else if`，两枚在库里互斥——不是我们传错了，也不是模型没带。**这一笔假红能挂这么久，
+是因为归一之前它和 `vanish`/`widowControl` 那几笔混在一起，看不出哪个是真的。**
+「先修账本」的第一个回报就是这个：假红清掉，真信号才浮出来。
+
+补法是一枚新的打包后补丁 `patchBeforeElem`（按 `<w:smallCaps>` 出现序在它前面插
+`<w:caps/>`,`CT_RPrBase` 里 caps 排在 smallCaps 之前）。没有与 `patchElemAttrs` 合并——
+那一族是「属性补进已有开标签」，这一族是「元素补进已有父的子女位」，动作不同；合并就得
+在一个函数里同时参数化「插哪」与「插什么」。
+
+登记放在 `withCharExtra` **内部**而不是 `childToRuns` 里：发 smallCaps 的路径有五条，
+漏一条就整体错位。这跟「闸门对的是枚数」是同一件事的两面——**对位纪律的脆弱点永远是
+「漏登记」，不是「贴错」**。
+
+### 三、样式的主题字体引用：继承来的不算自己说过
+
+`RunProps.fontThemes`（四枚 `*Theme` 原值）+ 写手按 styleId 补进该样式自己那枚
+`<w:rFonts>`。与 `w:color`（v0.160）同一形状的第三处，但**通道不同**：那一族在
+document.xml 的 run 上（补丁位按出现序），这一族在 styles.xml 的样式上（按 styleId）。
+
+坑在 `styleList()` 是**沿 basedOn 链合并**的：Normal 的引用名会被摊到 Report /
+ReportHead / ReportChar 上（写出包里这四枚各有 rFonts，源里只有 Normal 一枚）。摊出来
+的那些不该凭空戴引用名——包自己会沿 basedOn 摊字体，再写一遍等于「用户在这一层也钉了
+一次」。于是 `fontTheme` 只按 `info` 自己的 rPr 取（传 `NONE` = 不继承），链合并那一趟
+不落这一格。
+
+**「继承来的」与「自己说过的」是两件事**——这一条在编号定义那次（v0.158）已经付过一次
+学费（认领只比第 0 层），这次是第二次。
+
+### 教训
+
+1. **量具的口径本身会造假红，而且不会自己喊。** 归一化表写的是 `true/1/on` 归一，漏了
+   「元素在场而无 `w:val`」这一档——它安静地记了八轮假红。**账本要自查**（把口径写进
+   `definition` 自陈字段 + 结构测试断言），否则「先修账本」这句话永远只是一句口号。
+2. **假红清掉之前，真信号浮不出来。** `caps|val` 这一笔真丢与 `vanish|val` 那两笔假红
+   混在同一张榜单上，八轮里没人分辨过。
+3. **对位纪律的脆弱点是「漏登记」。** 五条路径发 smallCaps，登记漏一条就整体错位——所以
+   登记放进 `withCharExtra`（唯一出口），不放进 `childToRuns`（五个调用点之一）。
+4. **「继承来的」与「自己说过的」要分格**（第二次付这条学费）：链合并用于**屏上**（要
+   的是最终生效值），按自己 rPr 取用于**存盘**（要的是源件写过什么）。两处用途不同，
+   取数方式就该不同。
+
+### 顺延清单（D21）
+
+- **`insideH`/`insideV` 的 `space` 与主题三枚**（8 对）：要新开「表级边框原值」通道，与
+  读手「表级边框分摊到格」的既定口径冲突（分摊后 padding 会重复计数）——**先定口径再动代码**。
+- **`cnfStyle` 十二对**（表条件格式账）：模型无槽，要样式表级补丁。
+- **`fldChar` 三对**（域指令，模型无槽）。
+- **`outline|val`**（文字镂空）：与 emboss/imprint 同族，但**包里没有原生槽**
+  （类型面那些 `outline?` 是 DrawingML 的图形轮廓，不是它）——只能走 run 级补丁位。
+- 承接未动项：`gridCol`/`tcW` 的 ±5 缇、`w:cols` 的 `equalWidth`、`ind|left` 的列表缩进
+  覆盖、`docPr|id` 重排、`lvlJc` 深层 `center`。

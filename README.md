@@ -9498,6 +9498,81 @@ D20 顺延：**`rFonts` 的 `asciiTheme`/`eastAsiaTheme`/`hAnsiTheme`**（3 对�
 得先定口径）；`cnfStyle` 十二对（表条件格式账）；`fldChar` 三对（域指令，模型无槽）。
 
 
+## v0.161（D20）——先修账本，再修两处「看着丢了其实没丢」和一处真被库吞掉
+
+往返账**正文属性 66.2% → 69.2%**（174/263 → 189/273），整体 34.7% → 36.7%，掉了
+359 → 355。四对从「掉了」翻成「保留」：`caps|val`、`rFonts|asciiTheme`、
+`rFonts|eastAsiaTheme`、`rFonts|hAnsiTheme`。另有十对是**账本自己漏记**后补进分母的
+（`bCs|val`、`iCs|val`、`smallCaps|val`、`pageBreakBefore|val`、`keepNext|val`、
+`keepLines|val`、`snapToGrid|val` 等），`vanish|val` 与 `widowControl|val` 由假红翻正。
+保真账本按对仍是 99.0%，md5 仍 `95846f03…`/`aab9813c…`（读手新查问的四枚属性早就在
+`applyThemeFonts` 那一趟的分子里，账本一枚没动）。
+
+### 一、量具口径：`<w:vanish/>` 就是 `w:val="1"`
+
+`ST_OnOff` 的元素可以不写 `w:val`——`<w:vanish/>` 与 `<w:vanish w:val="1"/>` 是同一件事
+的两种写法，包的 `OnOffElement` 传 `true` 时发的就是裸元素。而往返账的普查只按**属性**
+取值，裸元素压根进不了 `values`：源里写 `w:val="1"`、写出包发 `<w:vanish/>`，账上就记
+一笔「掉了」，两边的值一模一样。
+
+于是 `census` 对一张 `ST_OnOff` 元素名单（四十余枚）补一条：**没写 `w:val` 时记一笔
+`val=1`**。名单漏了的后果想清楚了才动手——漏掉的元素两边都不补，最多留一笔假红，
+**不会造假绿**，方向是保守的（v0.157：假红占着榜单比造假成绩好得多）。
+
+这一条同时也补了分母：源里那些裸 OnOff 元素此前根本不在账上，现在按「在场」计，十对
+一次性进账且全部保留。
+
+顺带把这条口径写进了结构测试（读 `docs/fidelity-roundtrip.json` 的 `definition` 自陈
+字段与三对的状态）——**账本不自查，假红就一直占着榜单**。
+
+### 二、真被库吞掉的一枚：`<w:caps/>`
+
+一个 run 同时要小型大写与全大写时，写出包里只有 `<w:smallCaps/>`，`w:caps` 整个消失。
+查包的 `RunProperties`：
+
+```js
+if (options.smallCaps !== void 0) this.push(new OnOffElement("w:smallCaps", options.smallCaps));
+else if (options.allCaps !== void 0) this.push(new OnOffElement("w:caps", options.allCaps));
+```
+
+**`else if`**——两枚在库里互斥，不是我们传错了。补法是一枚新的打包后补丁
+`patchBeforeElem`：按 `<w:smallCaps>` 出现序在它**前面**插 `<w:caps/>`（`CT_RPrBase`
+里 caps 排在 smallCaps 之前，反了就是 Word 认不得的 rPr）。
+
+登记放在 `withCharExtra` **内部**而不是 `childToRuns` 里：发 smallCaps 的路径有五条
+（普通 run / 超链接 / 修订插入 / 修订删除 / 符号），漏登记一条就整体错位——这跟
+「闸门对的是枚数」是同一件事。
+
+### 三、样式的主题字体引用：继承来的不算自己说过
+
+Word 的 `Normal` 样式只写 `asciiTheme="minorHAnsi"` 这类引用名，具名字体要靠主题部件
+解析。读手（v0.138 起）把解析值落在 `fonts` 上，屏上要它——但**引用名本身也是源件说过
+的话**，写回时只写解析值，就把「跟着主题走」改成了「钉死 Calibri」：换主题时整篇不再
+跟着变。
+
+所以 `RunProps` 多一份 `fontThemes`（四枚原值），写手按 styleId 补进该样式自己那枚
+`<w:rFonts>`。这里有个坑：`styleList()` 是**沿 basedOn 链合并**的，Normal 的引用名会被
+摊到 Report / ReportHead / ReportChar 上（写出包里这四枚样式各有 rFonts，而源里只有
+Normal 一枚）。摊出来的那些不该凭空戴上引用名——包自己会沿 basedOn 摊字体，再在子样式
+上写一遍等于「用户在这一层也钉了一次」。于是 `fontTheme` **只按 `info` 自己的 rPr 取**
+（传 `NONE` = 不继承），链合并那一趟不落这一格。
+
+### 门禁
+
+tsc 0、build ✓；结构测试 **66 → 79 项**全绿（新增十三条约三成是反例：只要 caps 时整份
+只有一枚、子样式不凭空戴 `Theme=`、账本的裸 OnOff 归一已生效）；四条变异腿
+`no-attrL` 52.3%/87.2%、`no-attr` 59.2%/42.1%、`no-themeshade` 96.5%/98.3% 三腿下降，
+`no-theme` 一腿**一动不动**（99.0%/98.4%）；往返账 `18516b03…`/`bb5367ca…` 两次复跑逐
+字节相同。
+
+D21 顺延：**`insideH`/`insideV` 的 `space` 与主题三枚**（8 对，要新开「表级边框原值」
+通道，与读手「分摊到格」的口径冲突，得先定口径）；**`cnfStyle` 十二对**（表条件格式账，
+模型无槽，要样式表级补丁）；`fldChar` 三对（域指令）；`outline|val`（文字镂空，与
+emboss/imprint 同族但**包里没有原生槽**，只能走 run 级补丁位）；承接未动项：
+`gridCol`/`tcW` 的 ±5 缇、`w:cols` 的 `equalWidth`、`ind|left` 的列表缩进覆盖、
+`docPr|id` 重排、`lvlJc` 深层 `center`。
+
+
 ## 性能（v0.3）
 
 

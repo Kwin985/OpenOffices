@@ -31,6 +31,8 @@ docx ──读手──▶ HTML ──TipTap schema──▶ PM 模型 ──写
 | 缺件 | 连承载它的部件都没写出来 | 整件丢失，比掉了更早一步 |
 
 - `true/1/on` 与 `false/0/off` 归一（ST_OnOff 的两套写法，写手换一套不算丢）；
+  **裸元素也算 `val=1`**（`<w:vanish/>` ≡ `w:val="1"`）——只按属性比对时裸元素进不了
+  values，写手发裸元素就记成「掉了」，而值与源里那枚一模一样（v0.161）。
   关系 id（`rId1` 之类）归一成占位符——那是包内编号，写手按自己的打包顺序重排，
   逐字比只会比出假红；Word 的存档流水号（`rsid*`/`paraId`/`textId`）按名字规则剔出分母。
 - `lvlJc`/`jc` 的 `start`≡`left`、`end`≡`right`（ST_Jc 的两套写法）；`mc:Ignorable`
@@ -41,15 +43,15 @@ docx ──读手──▶ HTML ──TipTap schema──▶ PM 模型 ──写
 
 | | 值 |
 |---|---:|
-| 读到的对 | 582 |
-| 保留 | **202（34.7%）** |
-| 值变 | 21 |
-| 掉了 | 359 |
+| 读到的对 | 592 |
+| 保留 | **217（36.7%）** |
+| 值变 | 20 |
+| 掉了 | 355 |
 | 缺件 | 0 |
 | 源包部件 | 7 |
 | 写出包部件 | 7 |
 
-探针在这一趟里记到 645 个查问对；源包在场而有 582 个既在场又被查问，构成上面的分母。
+探针在这一趟里记到 646 个查问对；源包在场而有 592 个既在场又被查问，构成上面的分母。
 
 ## 分两笔账：正文属性与图形壳
 
@@ -59,13 +61,13 @@ docx ──读手──▶ HTML ──TipTap schema──▶ PM 模型 ──写
 
 | 族 | 读到的 | 保留 | 值变 | 掉了 | 保留率 |
 |---|---:|---:|---:|---:|---:|
-| 正文属性（`w:*`） | 263 | 174 | 19 | 70 | **66.2%** |
+| 正文属性（`w:*`） | 273 | 189 | 18 | 66 | **69.2%** |
 | 图形壳（`a:`/`v:`/`wp:`/`pic:`/`wps:`/`o:`） | 319 | 28 | 2 | 289 | **8.8%** |
 
 口径说明：一个对算正文，当且仅当它在源包里**只**出现在 `w:*` 元素上（沾过图形壳就算图形壳）。
 对名按 local name 归并（与保真账本同口径），所以 `fill|type` 这种两族同名的会并成一笔。
 
-### 掉了（359）
+### 掉了（355）
 
 名字一次都没写出来。这里每一行都是一条**单边通道**：读手读了，模型或写手没有它的槽。
 
@@ -111,9 +113,9 @@ docx ──读手──▶ HTML ──TipTap schema──▶ PM 模型 ──写
 | `bodyPr|bIns` | 1 | 91440 | — |
 | `bodyPr|compatLnSpc` | 1 | 0 | — |
 | `bodyPr|forceAA` | 1 | 0 | — |
-| …共 359 条，完整清单见 `docs/fidelity-roundtrip.json` | | | |
+| …共 355 条，完整清单见 `docs/fidelity-roundtrip.json` | | | |
 
-### 值变（21）
+### 值变（20）
 
 名字在，但某个源值没写回去。比「掉了」更隐蔽——普查看着它在场，屏上也像那么回事。
 
@@ -131,7 +133,6 @@ docx ──读手──▶ HTML ──TipTap schema──▶ PM 模型 ──写
 | `left|space` | 2 | 2, 0 | 2, 3 |
 | `lvlJc|val` | 2 | left, center | left, start |
 | `right|space` | 2 | 3, 0 | 3 |
-| `widowControl|val` | 2 | 1, 0 | 0 |
 | `abstractNum|abstractNumId` | 1 | 0 | 1, 2, 3 |
 | `abstractNumId|val` | 1 | 0 | 1, 3 |
 | `color|val` | 1 | ff0000 | adbbd4, 2e74b5, 1f4d78, 0563c1 |
@@ -147,7 +148,7 @@ docx ──读手──▶ HTML ──TipTap schema──▶ PM 模型 ──写
 
 （空）
 
-### 保留（202）
+### 保留（217）
 
 这些是真的双向。列出来是为了让「保留」也可核对，而不是一个孤零零的百分比。
 
@@ -177,7 +178,7 @@ docx ──读手──▶ HTML ──TipTap schema──▶ PM 模型 ──写
 | `ext|cy` | 2 | 914400 | 914400, 638175, 2286000 |
 | `graphicData|uri` | 2 | http://schemas.openxmlformats.org/drawingml/2006/picture | http://schemas.openxmlformats.org/drawingml/2006/picture |
 | `hyperlink|id` | 2 | rid# | rid# |
-| …共 202 条，完整清单见 `docs/fidelity-roundtrip.json` | | | |
+| …共 217 条，完整清单见 `docs/fidelity-roundtrip.json` | | | |
 
 ## 边界
 

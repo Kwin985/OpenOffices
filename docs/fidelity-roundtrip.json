@@ -17,15 +17,16 @@
    "word/comments.xml",
    "word/commentsExtended.xml"
   ],
-  "onOffNormalised": true
+  "onOffNormalised": true,
+  "onOffBareElement": true
  },
  "totals": {
-  "read": 582,
-  "kept": 202,
-  "value": 21,
-  "lost": 359,
+  "read": 592,
+  "kept": 217,
+  "value": 20,
+  "lost": 355,
   "part": 0,
-  "consulted": 645,
+  "consulted": 646,
   "srcParts": 7,
   "outParts": 7,
   "htmlBlocks": 35
@@ -231,7 +232,8 @@
     "0"
    ],
    "out": [
-    "0"
+    "0",
+    "1"
    ]
   },
   "background|color": {
@@ -273,6 +275,17 @@
    "out": [
     "defaultparagraphfont",
     "normal"
+   ]
+  },
+  "bCs|val": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "1"
+   ],
+   "out": [
+    "0",
+    "1"
    ]
   },
   "bdr|color": {
@@ -599,12 +612,14 @@
    "out": []
   },
   "caps|val": {
-   "bucket": "lost",
+   "bucket": "kept",
    "n": 1,
    "src": [
     "1"
    ],
-   "out": []
+   "out": [
+    "1"
+   ]
   },
   "chExt|cx": {
    "bucket": "lost",
@@ -1177,6 +1192,16 @@
    ],
    "out": [
     "dot"
+   ]
+  },
+  "emboss|val": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "1"
+   ],
+   "out": [
+    "1"
    ]
   },
   "endnotes|Ignorable": {
@@ -1873,6 +1898,17 @@
    ],
    "out": []
   },
+  "iCs|val": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "1"
+   ],
+   "out": [
+    "0",
+    "1"
+   ]
+  },
   "id|val": {
    "bucket": "lost",
    "n": 1,
@@ -1938,6 +1974,16 @@
     "老式图的标题"
    ],
    "out": []
+  },
+  "imprint|val": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "1"
+   ],
+   "out": [
+    "1"
+   ]
   },
   "ind|firstLineChars": {
    "bucket": "kept",
@@ -2191,6 +2237,26 @@
    ],
    "out": [
     "both"
+   ]
+  },
+  "keepLines|val": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "1"
+   ],
+   "out": [
+    "1"
+   ]
+  },
+  "keepNext|val": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "1"
+   ],
+   "out": [
+    "1"
    ]
   },
   "kern|val": {
@@ -2874,6 +2940,16 @@
     "reporthead"
    ]
   },
+  "noWrap|val": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "1"
+   ],
+   "out": [
+    "1"
+   ]
+  },
   "nsid|val": {
    "bucket": "kept",
    "n": 1,
@@ -3071,6 +3147,14 @@
    ],
    "out": []
   },
+  "outline|val": {
+   "bucket": "lost",
+   "n": 1,
+   "src": [
+    "1"
+   ],
+   "out": []
+  },
   "overflowPunct|val": {
    "bucket": "kept",
    "n": 1,
@@ -3090,6 +3174,16 @@
    ],
    "out": [
     "00000002"
+   ]
+  },
+  "pageBreakBefore|val": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "1"
+   ],
+   "out": [
+    "1"
    ]
   },
   "path|arrowok": {
@@ -3701,12 +3795,14 @@
    ]
   },
   "rFonts|asciiTheme": {
-   "bucket": "lost",
+   "bucket": "kept",
    "n": 1,
    "src": [
     "minorhansi"
    ],
-   "out": []
+   "out": [
+    "minorhansi"
+   ]
   },
   "rFonts|cs": {
    "bucket": "kept",
@@ -3731,20 +3827,24 @@
    ]
   },
   "rFonts|eastAsiaTheme": {
-   "bucket": "lost",
+   "bucket": "kept",
    "n": 1,
    "src": [
     "minoreastasia"
    ],
-   "out": []
+   "out": [
+    "minoreastasia"
+   ]
   },
   "rFonts|hAnsiTheme": {
-   "bucket": "lost",
+   "bucket": "kept",
    "n": 1,
    "src": [
     "minorhansi"
    ],
-   "out": []
+   "out": [
+    "minorhansi"
+   ]
   },
   "rFonts|hint": {
    "bucket": "kept",
@@ -4401,6 +4501,16 @@
     "margin"
    ],
    "out": []
+  },
+  "smallCaps|val": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "1"
+   ],
+   "out": [
+    "1"
+   ]
   },
   "smartTag|element": {
    "bucket": "lost",
@@ -5307,12 +5417,14 @@
    "out": []
   },
   "vanish|val": {
-   "bucket": "lost",
+   "bucket": "kept",
    "n": 1,
    "src": [
     "1"
    ],
-   "out": []
+   "out": [
+    "1"
+   ]
   },
   "w|val": {
    "bucket": "kept",
@@ -5341,14 +5453,15 @@
    "out": []
   },
   "widowControl|val": {
-   "bucket": "value",
+   "bucket": "kept",
    "n": 2,
    "src": [
     "0",
     "1"
    ],
    "out": [
-    "0"
+    "0",
+    "1"
    ]
   },
   "wordWrap|val": {
