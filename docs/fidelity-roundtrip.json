@@ -21,9 +21,9 @@
  },
  "totals": {
   "read": 582,
-  "kept": 192,
-  "value": 22,
-  "lost": 368,
+  "kept": 197,
+  "value": 21,
+  "lost": 364,
   "part": 0,
   "consulted": 645,
   "srcParts": 7,
@@ -3687,8 +3687,7 @@
    ],
    "out": [
     "calibri",
-    "times new roman",
-    "wingdings"
+    "times new roman"
    ]
   },
   "rFonts|asciiTheme": {
@@ -3707,7 +3706,6 @@
    ],
    "out": [
     "arial",
-    "wingdings",
     "等线"
    ]
   },
@@ -3718,7 +3716,6 @@
     "宋体"
    ],
    "out": [
-    "wingdings",
     "宋体",
     "等线"
    ]
@@ -4795,20 +4792,24 @@
    ]
   },
   "sym|char": {
-   "bucket": "lost",
+   "bucket": "kept",
    "n": 1,
    "src": [
     "f0fc"
    ],
-   "out": []
+   "out": [
+    "f0fc"
+   ]
   },
   "sym|font": {
-   "bucket": "lost",
+   "bucket": "kept",
    "n": 1,
    "src": [
     "wingdings"
    ],
-   "out": []
+   "out": [
+    "wingdings"
+   ]
   },
   "sz|val": {
    "bucket": "kept",
@@ -5237,30 +5238,34 @@
    "out": []
   },
   "u|color": {
-   "bucket": "value",
+   "bucket": "kept",
    "n": 1,
    "src": [
     "ff0000"
    ],
    "out": [
-    "b4c7e7"
+    "ff0000"
    ]
   },
   "u|themeColor": {
-   "bucket": "lost",
+   "bucket": "kept",
    "n": 1,
    "src": [
     "accent1"
    ],
-   "out": []
+   "out": [
+    "accent1"
+   ]
   },
   "u|themeTint": {
-   "bucket": "lost",
+   "bucket": "kept",
    "n": 1,
    "src": [
     "99"
    ],
-   "out": []
+   "out": [
+    "99"
+   ]
   },
   "u|val": {
    "bucket": "kept",

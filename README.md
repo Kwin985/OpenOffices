@@ -9375,6 +9375,67 @@ D18 顺延：`w:sym` 只读不写（要上纸得新开 run 级补丁位）；`w:
 与逐栏宽度（模型没有分栏这个概念）；`ind|left` 的列表缩进覆盖；`docPr|id` 的对象序号重排。
 
 
+## v0.159（D18）——run 级补丁位：符号回真，下划线的主题色也跟着回来
+
+往返账**正文属性 62.4% → 64.3%**（169/263），整体 33.0% → 33.8%，值变 22 → 21。
+五对从「掉了/值变」翻成「保留」，是上一轮顺延清单里点名的那条**机制债**。
+
+### 顺延清单说「两处是同一条债」，实际上只对了一半
+
+清单上写着「`w:sym` 只读不写、`w:u` 的字面色，两处都是包外槽，要 run 级补丁位」。查了
+`docx` 的实现才发现 `w:sym` 根本不需要补丁——包里有原生 `SymbolRun`：
+
+```
+constructor(char = "", symbolfont = "Wingdings") { super("w:sym"); … xmlKeys = { char: "w:char", symbolfont: "w:font" } }
+```
+
+它一直就在那儿。缺的不是机制，是**读手没把原值带进模型**：`w:sym` 从前被当普通文字
+发出去（`<span style="font-family: Wingdings">&#xF0FC;</span>`），屏上看着分毫不差，
+存盘就变成 `w:t` + `rFonts`——`w:sym` 这枚元素整个消失。往返账第一次跑就点出
+`sym|char` 与 `sym|font` 两笔「掉了」，而只看屏幕永远看不出来。
+
+改法是让读手把 `char`/`font` 原值装进 `data-sym` 载荷（`F0FC;Wingdings`），写手认出
+这枚载荷就发 `SymbolRun`。**只在「一个 run 一个字符」时发**：一枚 `w:sym` 只表达一个
+码点，多字符硬发会吞字，退化成普通文字反而字还在；`char` 与 `font` 缺一也不发
+（`SymbolRun` 的 `symbolfont` 缺省是 `Wingdings`，猜一个字体比写错更坏）。
+
+### 下划线的「字面」与「主题」是两个槽
+
+`w:u` 常写成 `w:color="FF0000" w:themeColor="accent1" w:themeTint="99"`——三枚是三个槽：
+字面值是给不认主题的读者兜底，主题引用是主。读手此前把它们解析成一个「屏上颜色」，
+写手再把这个解析值写回 `w:color`，于是往返账上记着 `ff0000 → b4c7e7` 一笔**值变**：
+主题算出来的色把源里的字面值顶掉了。
+
+这一轮把载荷从两格扩到六格：`线型;屏上色;字面色;themeColor;themeTint;themeShade`。
+屏上色（解析值）只给编辑器画屏用，字面色走包的 `underline.color` 原生槽，主题三枚走
+新开的 **run 级补丁位**——包只有 `{type, color}` 两枚槽，`createUnderline` 里只写
+`w:val` 与 `w:color`。
+
+补丁位本身很薄：`patchUTheme` 按 `<w:u>` 在 `word/document.xml` 里的**出现序**贴回属性串，
+对位靠**计数闸门**——条数对不上就整笔放弃（宁可不补，也绝不补到别的 run 上）。匹配用
+`<w:u(?=[\s/>])` 收边，免得把 `w:unhideWhenUsed`、`w:uiPriority` 这些同前缀元素算进来。
+这是本项目第五处打包后补丁（`w:pPr`、`w:tblLook`/`w:tcPr`、图片壳、编号定义之后）。
+
+### 顺带修的三处测试口径
+
+结构测试里有三条断言拿 `<w:pos>` 当输入，而读手从 v0.151 起读的是 `<w:position>`
+（`CT_RPr` 里根本没有 `w:pos` 这枚元素）——那三条从 v0.151 之后一直红着，只是脚本不在
+常规门禁里，没人跑到。改成 `w:position` 之后 53 项全绿，顺带补了符号与下划线主题色的
+十二条断言（含三条反例：多字符不发 `w:sym`、无字面不写 `w:color`）。
+
+**门禁**：tsc 0、build ✓（5556 模块）；结构测试 53 项全绿；四条变异腿 `no-attrL` 51.8%、
+`no-attr` 59.2%、`no-themeshade` 96.5% 三腿下降，`no-theme` 一腿**覆盖率一动不动**
+（99.0%/98.4%，守着「查问与解析解耦」）；保真账本复位后 md5 仍是 `95846f03…`/`aab9813c…`
+（这一轮改的是写手与载荷形状，读手的查问集一枚没动），往返账 md5 `a6eb5d52…`/`bfe80bf0…`
+两次复跑逐字节相同。
+
+D19 顺延：run 级补丁位该泛化成 `patchElemAttrs(bytes, tag, extras)`——`w:color` 上的
+themeColor/themeTint/themeShade 还是同一个形状（1 对仍在掉了名单里）；`w:ind` 的
+`firstLineChars`/`hangingChars`（字符单位缩进，1 对，PPR 通道加两格即可）；
+`insideH|space`（表内边框间距，1 对）；其余承接 D18 未动项（`gridCol`/`tcW` 的 ±5 缇、
+`w:cols` 的 `equalWidth`、`ind|left` 的列表缩进覆盖、`docPr|id` 重排、`lvlJc` 深层 `center`）。
+
+
 ## 性能（v0.3）
 
 
