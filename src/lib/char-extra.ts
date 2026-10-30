@@ -17,8 +17,8 @@
 //   w:bdr 四属性   字符边框（v0.152）——屏上走 CSS border，同上；val 是线型、sz 是
 //                  八分之一磅、space 是磅、color 是 hex，四枚一组缺一不可
 // 读侧由 docx-fidelity 发成 span[data-cs|data-hint|data-szcs|data-lang|data-lang-ea|data-lang-bidi|
-// data-scale|data-pos|data-kern|data-ics|data-bcs|data-smallcaps|data-caps|data-bdr]，这个 mark 接住；
-// 写侧由 docx.ts 读回 mark 属性落回 rPr。
+// data-scale|data-pos|data-kern|data-ics|data-bcs|data-smallcaps|data-caps|data-bdr|data-u|data-sym]，
+// 这个 mark 接住；写侧由 docx.ts 读回 mark 属性落回 rPr。
 //
 // **全都能落盘**，但路径分两种，值得记一笔：cs/hint/szCs/lang/pos/kern 在 docx 库的
 // RunProperties 里都实现着（createRunFonts 的 attrs.hint、options.sizeComplexScript、
@@ -29,6 +29,10 @@
 // smallCaps，dist 产物里逐枚有），类型面同样没暴露，走同一个库外槽。
 // caps/bdr 两枚（v0.152）反而是**类型面全暴露**的（IRunOptions.allCaps 与 IRunOptions.border，
 // dist/index.d.ts:1660 与 :1674）——库里实现着、类型也写着，docx.ts 直接传，不用断言。
+//
+// 两枚「不在 rPr 上」的例外（v0.159）：
+//   u    —— 下划线的线型/字面/主题六格。包只有 {type,color} 两枚槽，主题三枚走 run 级补丁位
+//   sym  —— 符号的 char/font。包里有原生 SymbolRun（发 w:sym），缺的只是读手没带原值
 
 import { Mark, mergeAttributes } from '@tiptap/core'
 import { CSS_BORDER_STYLE, eighthsToPx } from './cell-style'

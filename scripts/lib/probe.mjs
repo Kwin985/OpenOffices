@@ -103,6 +103,12 @@ export function injectProbe(file, mut) {
 //   no-themeshade  —— 还原旧写法：shade/tint 两枚根本不查问。
 //                     期望**覆盖率下降**：证明那两枚属性确实是账上的分子来源，
 //                     不是靠别的路径顺带看到的。
+//
+// v0.159 锚点搬家：`themeRefCss` 拆成了 `themeRefParts`（查问三枚、回原值）+
+// `themeCssOf`（纯解析），因为 `w:u` 要把主题三枚的原值带进模型（解析出来的 hex
+// 回不去槽）。两条腿随之各落各的新家——查问在 parts 里、解析在 cssOf 里，
+// 这恰好让「查问与解析解耦」这条纪律的断言更直接：no-theme 只动解析那一行，
+// no-themeshade 只动查问那两行。
 export function injectMut(file, mut) {
   if (mut !== 'no-theme' && mut !== 'no-themeshade') return []
   let src = fs.readFileSync(file, 'utf8')
@@ -110,15 +116,13 @@ export function injectMut(file, mut) {
     mut === 'no-theme'
       ? {
           id: 'theme',
-          find:
-            '  const shadeRaw = attr(el, shadeAttr)\n  const tintRaw = attr(el, tintAttr)\n  if (!theme || !ref) return undefined',
-          put:
-            '  const shadeRaw = attr(el, shadeAttr)\n  const tintRaw = attr(el, tintAttr)\n  if (!ref || true) return undefined',
+          find: '  if (!theme || !p.ref) return undefined',
+          put: '  if (!p.ref || true) return undefined',
         }
       : {
           id: 'themeshade',
-          find: '  const shadeRaw = attr(el, shadeAttr)\n  const tintRaw = attr(el, tintAttr)',
-          put: '  const shadeRaw = undefined\n  const tintRaw = undefined',
+          find: '  const tint = attr(el, tintAttr)\n  const shade = attr(el, shadeAttr)',
+          put: '  const tint = undefined\n  const shade = undefined',
         }
   const hits = src.split(inj.find).length - 1
   if (hits !== 1) throw new Error(`注入锚点 ${inj.id} 命中 ${hits} 次（应为 1）`)
