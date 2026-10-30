@@ -17,7 +17,8 @@
 //   w:bdr 四属性   字符边框（v0.152）——屏上走 CSS border，同上；val 是线型、sz 是
 //                  八分之一磅、space 是磅、color 是 hex，四枚一组缺一不可
 // 读侧由 docx-fidelity 发成 span[data-cs|data-hint|data-szcs|data-lang|data-lang-ea|data-lang-bidi|
-// data-scale|data-pos|data-kern|data-ics|data-bcs|data-smallcaps|data-caps|data-bdr|data-u|data-sym]，
+// data-scale|data-pos|data-kern|data-ics|data-bcs|data-smallcaps|data-caps|data-bdr|data-u|
+// data-ctheme|data-sym]，
 // 这个 mark 接住；写侧由 docx.ts 读回 mark 属性落回 rPr。
 //
 // **全都能落盘**，但路径分两种，值得记一笔：cs/hint/szCs/lang/pos/kern 在 docx 库的
@@ -223,6 +224,17 @@ export const CharExtra = Mark.create({
           return { 'data-u': raw, style: `${c}text-decoration-line: underline; text-decoration-style: ${line}` }
         },
       },
+      // ctheme（v0.160）：**文字色** `w:color` 上的主题引用三枚。载荷 `ref;tint;shade`
+      // ——与 u 那三格同形状，但槽在另一个元素上（w:color 而不是 w:u）。
+      // 屏上那一半已经由 textStyle 的 color 兑现（读手把主题解析成 hex 再发 CSS），
+      // 这一格只为存盘：包发 w:color 时只写 w:val，主题三枚包外无槽，走 run 级补丁位。
+      // 为什么不并进 u 那一格：两者是**不同元素上的不同属性**，并一格就得在载荷里再
+      // 记一次「这枚属于谁」，补丁位的对位也会跟着耦合（u 的枚数闸门与 color 的不同）
+      ctheme: {
+        default: null as string | null,
+        parseHTML: (el: HTMLElement) => str(el.getAttribute('data-ctheme')),
+        renderHTML: (attrs: Record<string, unknown>) => (str(attrs.ctheme) ? { 'data-ctheme': str(attrs.ctheme) } : {}),
+      },
       // sym（v0.159）：符号（w:sym）。载荷 `char;font`——char 是**原始的十六进制串**
       // （原样保留，不做大小写与补零的规整），font 是符号字体名。
       // 屏上那一半点：读手已经把字符本身发在 span 里（`&#xF0FC;` 这样的私有区码点）并
@@ -281,6 +293,7 @@ export const CharExtra = Mark.create({
       { tag: 'span[data-bdr]' },
       { tag: 'span[data-vanish]' },
       { tag: 'span[data-u]' },
+      { tag: 'span[data-ctheme]' },
       { tag: 'span[data-sym]' },
       { tag: 'span[data-em]' },
       { tag: 'span[data-emboss]' },

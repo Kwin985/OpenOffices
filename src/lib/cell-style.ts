@@ -473,6 +473,16 @@ export const PPR_ONOFF_KEYS = [
 /** 枚举档：textAlignment 的 top/center/bottom/baseline/auto；textDirection 的 tbRl/btLr/… */
 export const PPR_STR_KEYS = ['textAlignment', 'textDirection'] as const
 
+/* 缩进的字符档两枚（v0.160）：CT_Ind 上 firstLineChars / hangingChars 是「按字符数」的那
+ * 一套写法（百分之一字符宽），与 firstLine / hanging（缇）是**同一枚首行槽的两套记法**。
+ * 屏上按段落字号折成 px 兑现（读手 paraCss，折得出误差但画得像），存盘要写回**原值**——
+ * 折回缇必然对不上整数字符数，且 Word 的缩进对话框那一栏存的就是整数。
+ * 载荷键带 `ind` 前缀（`indFirstLineChars`）：与 pPr 直子的 onOff/枚举键区分开——后者一
+ * 枚属性一个元素，这两枚是**同一个元素的两个属性**，写侧要合成一个 `<w:ind>` 而不是
+ * 新增两个元素（pPr 里两枚 w:ind 会让 Word 认后写的那一枚，先写的整枚被丢）。
+ * 属性顺序按 CT_Ind 的 schema：firstLine → firstLineChars → hanging → hangingChars。 */
+export const PPR_IND_KEYS = ['firstLineChars', 'hangingChars'] as const
+
 /** data-ppr 载荷 → key/value 表；onOff 键只收 '1'/'0'，脏值整键丢 */
 export function parsePprPayload(raw: string | null | undefined): PprPayload {
   const out: PprPayload = {}

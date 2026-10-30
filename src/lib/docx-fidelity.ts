@@ -50,7 +50,7 @@ import { all, allDesc, attr, attrL, attrNum, els, find, findDesc, findL, local, 
 import { FieldEngine, fieldLabel, parseInstr, recomputable } from './docx-fields'
 import { embedHtml, inlineFlatten, unwrapEmbed, type EmbedHtml } from './ole'
 import { chartToHtml, smartArtToHtml } from './ooxml-graphics'
-import { CELL_EDGES, CSS_BORDER_STYLE, FRAME_NUMERIC_KEYS, FRAME_STR_KEYS, IMG_ATTR, PPR_ATTR, PPR_ONOFF_KEYS, PPR_STR_KEYS, TAB_LEADERS, TBLPR_ATTR, TLOOK_ATTR, bdSpaceAttrs, eighthsToPx, framePayload, imgPayload, pprPayload, ptToPx, rgb2hex, shadeCss, tblpPayload, tblPrPayload, tabsPayload, tlookPayload, type CellEdge, type FramePayload, type ImgPayload, type PprPayload, type TabSpec, type TblpPayload } from './cell-style'
+import { CELL_EDGES, CSS_BORDER_STYLE, FRAME_NUMERIC_KEYS, FRAME_STR_KEYS, IMG_ATTR, PPR_ATTR, PPR_IND_KEYS, PPR_ONOFF_KEYS, PPR_STR_KEYS, TAB_LEADERS, TBLPR_ATTR, TLOOK_ATTR, bdSpaceAttrs, eighthsToPx, framePayload, imgPayload, pprPayload, ptToPx, rgb2hex, shadeCss, tblpPayload, tblPrPayload, tabsPayload, tlookPayload, type CellEdge, type FramePayload, type ImgPayload, type PprPayload, type TabSpec, type TblpPayload } from './cell-style'
 import { ooxmlLine } from './paragraph-style'
 import {
   asTableCondType,
@@ -615,6 +615,16 @@ function readPprPayload(pPr: XEl | undefined): string {
     if (!el) continue
     const v = attr(el, 'w:val')
     if (v) kv[k] = v
+  }
+  // v0.160：缩进的字符档两枚。`w:ind` 在 pPr 上是**一枚元素多个属性**，所以走带前缀的
+  // 载荷键（不占 PPR_ONOFF_KEYS/STR_KEYS 那套「一枚属性一个元素」的通道）。只收整数：
+  // 这两枚是百分之一字符数，Word 只写整数；脏值整键丢（比写回一个 Word 认不得的数好）
+  const indEl = find(pPr, 'w:ind')
+  if (indEl) {
+    for (const k of PPR_IND_KEYS) {
+      const v = attr(indEl, `w:${k}`)
+      if (v && /^-?\d+$/.test(v)) kv[`ind${k[0].toUpperCase()}${k.slice(1)}`] = v
+    }
   }
   return pprPayload(kv)
 }
@@ -1606,6 +1616,14 @@ interface RunProps {
    * 补丁位」的机制，两处一起还的这笔债）
    */
   uTheme?: ThemeRef
+  /**
+   * w:color 上的主题引用原值（v0.160）：{ref, tint?, shade?}。
+   *
+   * 与 uTheme 同一条机制债的另一半：包发 `w:color` 时只写 w:val（createColor 就认这一枚），
+   * 主题三枚包外无槽。屏上那一半由 `color`（解析后的 hex）兑现，这一格只为存盘——
+   * 否则「Word 主题色」的文档一进一出，主题引用全被拍成字面值（改主题就换不了色了）
+   */
+  colorTheme?: ThemeRef
   /** w:em/@w:val（v0.155）：着重号型别（dot 圈点 / circle 空心圈 / comma 逗号 / underDot）。屏上走 text-emphasis */
   em?: string
   /** w:ligatures/@w:val（v0.155）：连字档。屏上走 font-variant-ligatures */
@@ -1670,11 +1688,14 @@ function readRPr(el: XEl | undefined, p: RunProps, tc?: ThemeColors): RunProps {
   on(find(el, 'w:outline'))
   const colorEl = find(el, 'w:color')
   if (colorEl) {
-    // 主题引用是主、字面值是兜底（Word 两枚常一起写）；主题解析不了才落字面
-    const themed = themeRefCss(tc, colorEl)
+    // 主题引用是主、字面值是兜底（Word 两枚常一起写）；主题解析不了才落字面。
+    // v0.160：主题三枚另存一份原值——屏上用解析值、存盘写回引用，与 w:u 同款的两槽分工
+    const th = themeRefParts(colorEl)
+    const themed = themeCssOf(tc, th)
     const v = (attr(colorEl, 'w:val') ?? '').toLowerCase()
     if (themed) o.color = themed
     else if (v && v !== 'auto') o.color = '#' + v.replace(/^#/, '')
+    if (th.ref) o.colorTheme = th
   }
   const hlv = val(el, 'w:highlight')
   if (hlv) o.hl = HL[hlv.toLowerCase()] ?? '#ffff00'
@@ -1947,6 +1968,9 @@ function marked(inner: string, p: RunProps): string {
     const t = p.uTheme
     return [p.uVal || 'single', p.uColor ?? '', p.uColorLit ?? '', t?.ref ?? '', t?.tint ?? '', t?.shade ?? ''].join(';')
   })()
+  // 文字色的主题三枚（v0.160）：`ref;tint;shade`，缺的槽留空串。与 uPayload 分开走是因为
+  // 它们落在**两个不同的元素**上（w:u / w:color），补丁位按元素分别计数，混一格就对不上位
+  const cthemePayload = p.colorTheme ? [p.colorTheme.ref, p.colorTheme.tint ?? '', p.colorTheme.shade ?? ''].join(';') : ''
   const extra = [
     p.cs ? ` data-cs="${attrEsc(p.cs)}"` : '',
     p.szCs !== undefined ? ` data-szcs="${p.szCs}"` : '',
@@ -1971,6 +1995,8 @@ function marked(inner: string, p: RunProps): string {
     // 屏上那一半此前挂在 `<u>` 的 inline style 上，过不了 TipParse（underline mark 只认标签），
     // 存盘就丢了；线型更是一直没有出口。两枚一起随 data-u 进模型走往返
     uPayload ? ` data-u="${attrEsc(uPayload)}"` : '',
+    // v0.160：文字色的主题三枚（w:color/@w:themeColor 一族），走 run 级补丁位补回
+    cthemePayload ? ` data-ctheme="${attrEsc(cthemePayload)}"` : '',
     p.em ? ` data-em="${attrEsc(p.em)}"` : '',
     p.emboss ? ' data-emboss="1"' : '',
     p.imprint ? ' data-imprint="1"' : '',

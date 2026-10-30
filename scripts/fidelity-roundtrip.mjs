@@ -285,8 +285,12 @@ async function main() {
   }
   console.log(`ROUNDTRIP|写出包 部件=${out.present.size}（${[...out.present].map((p) => p.replace('word/', '')).join(' ')}）`)
   if (VERBOSE) {
-    for (const r of byBucket.lost) console.log(`  LOST ${r.key} ×${r.srcN}`)
-    for (const r of byBucket.value) console.log(`  VAL  ${r.key} ×${r.srcN} 源=${[...r.srcValues.keys()].join(',')} 出=${[...r.outValues.keys()].join(',')}`)
+    // 带上族标（w = 正文 / g = 图形壳）：榜单混着看不出该先修哪一笔
+    for (const r of byBucket.lost) console.log(`  LOST ${r.ns === 'w' ? 'w' : 'g'} ${r.key} ×${r.srcN}`)
+    for (const r of byBucket.value)
+      console.log(
+        `  VAL  ${r.ns === 'w' ? 'w' : 'g'} ${r.key} ×${r.srcN} 源=${[...r.srcValues.keys()].join(',')} 出=${[...r.outValues.keys()].join(',')}`,
+      )
   }
 
   writeLedger({ rows, byBucket, nsTotals, total, keptN, pct, src, out, consulted, runMs, modFiles, fromGit, fid })

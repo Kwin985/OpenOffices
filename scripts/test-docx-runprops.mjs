@@ -388,6 +388,109 @@ const RF = '<w:rFonts w:ascii="Calibri" w:eastAsia="宋体" w:hint="eastAsia"/>'
   has('u 导出：主题照样补回', xml, 'w:themeColor="accent1"')
 }
 
+// ───────────────────────── 5. 文字色的主题三枚（v0.160）─────────────────────────
+//
+// 与 w:u 那一族同一条机制债的另一半：包发 w:color 时只写 w:val，主题三枚包外无槽，
+// 走同一个补丁位（patchElemAttrs 换了 tag）。两组：导出侧补回 + 导入侧带出原值。
+// 反例同样要钉：没有字面色时（模型里没有 textStyle.color）补丁无从附着——
+// 「只有主题引用、没有字面值」的那一段会整族掉，这是已知的边界，不是静默写坏。
+
+{
+  const doc = {
+    type: 'doc',
+    content: [
+      {
+        type: 'paragraph',
+        content: [
+          {
+            type: 'text',
+            text: '主题色正文',
+            marks: [
+              { type: 'textStyle', attrs: { color: '#adbbd4' } },
+              { type: 'charExtra', attrs: { ctheme: 'accent1;99;BF' } },
+            ],
+          },
+        ],
+      },
+    ],
+  }
+  const bytes = await prosemirrorToDocxBytes(doc)
+  const xml = await (await JSZip.loadAsync(bytes)).file('word/document.xml').async('string')
+  has('ctheme 导出：字的解析值落在 w:color@val', xml, '<w:color w:val="adbbd4"')
+  has('ctheme 导出：主题引用补回 w:themeColor', xml, 'w:themeColor="accent1"')
+  has('ctheme 导出：主题深浅两枚一起补', xml, 'w:themeTint="99"')
+  has('ctheme 导出：themeShade 也补', xml, 'w:themeShade="BF"')
+}
+
+{
+  // 反例：没有 textStyle.color 时包不发 w:color，补丁无处附着——不凭空造元素
+  const doc = {
+    type: 'doc',
+    content: [
+      {
+        type: 'paragraph',
+        content: [{ type: 'text', text: 'x', marks: [{ type: 'charExtra', attrs: { ctheme: 'accent1;;' } }] }],
+      },
+    ],
+  }
+  const bytes = await prosemirrorToDocxBytes(doc)
+  const xml = await (await JSZip.loadAsync(bytes)).file('word/document.xml').async('string')
+  check('ctheme 导出：无字面色时不凭空写 w:color', !xml.includes('<w:color'), '')
+}
+
+{
+  // 导入侧：主题部件里没有 clrScheme（这份 THEME 只有 fontScheme），主题解析不出来，
+  // 但**引用名照样要带出去**——解析与带值是两件事（v0.150 起的老纪律）
+  const html = await importDocx(styleWith(''), '<w:color w:val="ff0000" w:themeColor="accent1" w:themeTint="99"/>')
+  has('ctheme 导入：主题引用随载荷带出', html, 'data-ctheme="accent1;99;"')
+  has('ctheme 导入：解析不出主题时字面值兜底', html, 'color: #ff0000')
+}
+
+// ───────────────────────── 6. 缩进的字符档（v0.160）─────────────────────────
+//
+// CT_Ind 上 firstLineChars / hangingChars 是「按字符数」的那套记法，屏上按字号折成
+// px 兑现、存盘写回**原值**。两枚是**同一枚元素的两个属性**，所以走带 ind 前缀的
+// ppr 载荷键、由 pprOrder 并进包自己那一枚 <w:ind>（再插一枚会被 Word 丢掉前一枚）。
+
+{
+  const doc = {
+    type: 'doc',
+    content: [
+      {
+        type: 'paragraph',
+        attrs: { ppr: 'indFirstLineChars=200;indHangingChars=0' },
+        content: [{ type: 'text', text: '按字符缩进' }],
+      },
+    ],
+  }
+  const bytes = await prosemirrorToDocxBytes(doc)
+  const xml = await (await JSZip.loadAsync(bytes)).file('word/document.xml').async('string')
+  has('ind 导出：字符档写回 w:ind', xml, 'w:firstLineChars="200"')
+  has('ind 导出：hangingChars=0 也写回（0 是真值）', xml, 'w:hangingChars="0"')
+  // 同一枚元素：不能出现两个 <w:ind>
+  check('ind 导出：pPr 里只有一枚 w:ind', (xml.match(/<w:ind/g) ?? []).length === 1, `实际 ${(xml.match(/<w:ind/g) ?? []).length} 枚`)
+}
+
+{
+  // 包自己发的那一枚 w:ind 带着 left（模型算出来的缩进）时，字符档**并进去**而不是另起一枚
+  const doc = {
+    type: 'doc',
+    content: [
+      {
+        type: 'paragraph',
+        attrs: { indentLeft: 40, ppr: 'indFirstLineChars=200' },
+        content: [{ type: 'text', text: '两档合并' }],
+      },
+    ],
+  }
+  const bytes = await prosemirrorToDocxBytes(doc)
+  const xml = await (await JSZip.loadAsync(bytes)).file('word/document.xml').async('string')
+  const ind = /<w:ind[^>]*>/.exec(xml)?.[0] ?? ''
+  check('ind 导出：合并后仍只有一枚 w:ind', (xml.match(/<w:ind/g) ?? []).length === 1, ind)
+  has('ind 导出：原有的 w:left 保住', ind, 'w:left="600"')
+  has('ind 导出：字符档并进同一枚', ind, 'w:firstLineChars="200"')
+}
+
 console.log(`通过 ${ok.length} 项` + (bad.length ? `，**失败 ${bad.length} 项**` : '，失败 0 项'))
 for (const b of bad) console.log(`FAIL ${b}`)
 if (bad.length) process.exitCode = 1

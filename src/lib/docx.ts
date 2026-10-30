@@ -46,7 +46,7 @@ import {
   UnderlineType,
 } from 'docx'
 import { xml2js } from 'xml-js'
-import { borderParts, pxToEighths, pxToPt, parseFramePayload, parseImgPayload, parsePprPayload, parseShadePayload, parseTabsPayload, parseTblpPayload, parseTblPrPayload, parseTlookPayload, CELL_EDGES, type CellEdge } from './cell-style'
+import { borderParts, pxToEighths, pxToPt, parseFramePayload, parseImgPayload, parsePprPayload, parseShadePayload, parseTabsPayload, parseTblpPayload, parseTblPrPayload, parseTlookPayload, CELL_EDGES, PPR_IND_KEYS, type CellEdge } from './cell-style'
 import { lineToOoxml, type LineRule } from './paragraph-style'
 import { decodeEnt } from './ooxml'
 import { condLookBits } from './table-cond'
@@ -76,6 +76,22 @@ export interface PMNode {
  */
 type ULineType = (typeof UnderlineType)[keyof typeof UnderlineType]
 const U_TYPE = new Map<string, ULineType>(Object.values(UnderlineType).map((v) => [String(v).toLowerCase(), v]))
+
+/**
+ * 主题引用三枚 → 待补的属性串（v0.159 用在 `w:u`、v0.160 用在 `w:color`）。
+ *
+ * 成品是 ` w:themeColor="accent1"` 这种**带前导空格**的串，直接拼进元素开标签的 `>`
+ * 之前。空槽不写——「没写这一枚」与「写了 0」在 OOXML 里是两回事（themeTint="00"
+ * 是「不调亮」，缺这一枚是「不声明」），别替源件补。
+ */
+function themeAttrs(ref: string | undefined, tint: string | undefined, shade: string | undefined): string {
+  return [
+    ref ? ` w:themeColor="${xmlAttr(ref)}"` : '',
+    tint ? ` w:themeTint="${xmlAttr(tint)}"` : '',
+    shade ? ` w:themeShade="${xmlAttr(shade)}"` : '',
+  ].join('')
+}
+
 interface ULoad {
   value?: { type?: ULineType; color?: string }
   /** 待补进 `<w:u>` 开标签的属性串（前导空格起头）；没有主题引用时是空串 */
@@ -84,11 +100,7 @@ interface ULoad {
 function underlineOf(child: PMNode, on: boolean): ULoad {
   const raw = markAttr(child, 'charExtra', 'u')
   const [val = '', , lit = '', thc = '', tht = '', ths = ''] = (raw ?? '').split(';')
-  const theme = [
-    thc ? ` w:themeColor="${xmlAttr(thc)}"` : '',
-    tht ? ` w:themeTint="${xmlAttr(tht)}"` : '',
-    ths ? ` w:themeShade="${xmlAttr(ths)}"` : '',
-  ].join('')
+  const theme = themeAttrs(thc, tht, ths)
   if (!raw) return { ...(on ? { value: {} } : {}), theme: '' }
   const type = U_TYPE.get((val || 'single').toLowerCase()) ?? UnderlineType.SINGLE
   // 字面走字面：主题在场时源件的 w:color 未必等于解析出来的色，两枚各归各的槽
@@ -936,6 +948,16 @@ function childToRuns(child: PMNode, inherited: Inherited, cs?: CommentTrack, dt?
       // （无主题时是空串）——补丁按 `<w:u>` 出现序对位，靠条数闸门兜底
       const uLoad = underlineOf(child, underline)
       if (uLoad.value) dt?.uThemes.push(uLoad.theme)
+      // 文字色的主题三枚（v0.160）：登记规则与 w:u 同款——**每个会发出 w:color 的 run
+      // 都要占一格**（无主题时是空串），补丁按元素出现序对位、靠条数闸门兜底。
+      // 只在真有 color 时登记：包发 w:color 的前提就是我们传了 color，两者必须一一对应。
+      // 有主题却没有字面色（源件只写 themeColor）时无处附着——那笔账如实挂在
+      // 「字面色与主题三枚一起丢」上，不去动闸门
+      const ctheme = cx('ctheme')
+      if (color) {
+        const [thc = '', tht = '', ths = ''] = (ctheme ?? '').split(';')
+        dt?.colorThemes.push(themeAttrs(thc, tht, ths))
+      }
       const runOpts = {
         text,
         bold,
@@ -1838,6 +1860,12 @@ interface DocTrack {
    * （计数闸门同 pprExtras：条数对不上就整笔放弃）
    */
   uThemes: string[]
+  /**
+   * 文字色主题三枚（v0.160）：与 document.xml 里每个 `<w:color>` 一一对应、同序。
+   * 与 uThemes 同一条机制债的另一半（包发 w:color 时只写 w:val），两族各按自己的
+   * 元素出现序对位，互不干扰
+   */
+  colorThemes: string[]
 }
 
 type NoteKind = 'footnote' | 'endnote'
@@ -1863,6 +1891,7 @@ function newDocTrack(): DocTrack {
     cellExtras: [],
     imgExtras: [],
     uThemes: [],
+    colorThemes: [],
   }
 }
 
@@ -2595,9 +2624,11 @@ export async function prosemirrorToDocxBytes(json: PMNode, meta?: DocMeta): Prom
   // 段落属性余量（v0.147）：按出现序贴回各自的 <w:pPr>，与上面两笔同一路数
   const withPara = await patchParaProps(out, dt.pprExtras)
   // 下划线主题三枚（v0.159）：按 <w:u> 出现序补属性——包只有 {type,color} 两枚槽
-  const withU = await patchUTheme(withPara, dt.uThemes)
+  const withU = await patchElemAttrs(withPara, 'u', dt.uThemes)
+  // 文字色主题三枚（v0.160）：按 <w:color> 出现序补——包只写 w:val 一枚
+  const withColor = await patchElemAttrs(withU, 'color', dt.colorThemes)
   // 图片容器壳（v0.148）：按 <w:drawing> 出现序逐块改值（包发得出壳，只是值硬编码）
-  const withImg = await patchImgXml(withU, dt.imgExtras)
+  const withImg = await patchImgXml(withColor, dt.imgExtras)
   // 表闸门三样都要补：样式推出来的（looks）与表自己带的（dt.tblLooks），
   // v0.152 起再加表级条件格式尺寸两枚（dt.tblPrs，与 tblLook 同住 tblPr）
   const needTbl = looks.size || dt.tblLooks.some((x) => x) || dt.tblPrs.some((x) => x) || dt.cellSps.some((x) => x)
@@ -3040,6 +3071,15 @@ function pprExtraXml(node: PMNode | undefined): string {
   const raw = typeof node?.attrs?.ppr === 'string' ? node.attrs.ppr : ''
   const kv = parsePprPayload(raw)
   const bits: string[] = []
+  // v0.160：缩进的字符档两枚在同一枚 `<w:ind>` 上（不是各开一个元素——CT_PPrBase 里
+  // w:ind 是单枚，两枚并存时 Word 只认后写的那一枚）。载荷键带 ind 前缀，与下面那批
+  // 「一枚属性一个元素」的键分开走。回写的是**原始整数**（百分之一字符数），不做缇↔字符
+  // 的折算：折一次就对不上 Word 缩进对话框里那一栏的整数了
+  const indAttrs = PPR_IND_KEYS.map((k) => [k, kv[`ind${k[0].toUpperCase()}${k.slice(1)}`]] as const)
+    .filter(([, v]) => v !== undefined && v !== '' && /^-?\d+$/.test(v))
+    .map(([k, v]) => ` w:${k}="${v}"`)
+    .join('')
+  if (indAttrs) bits.push(`<w:ind${indAttrs}/>`)
   for (const k of PPR_WRITE_ORDER) {
     const v = kv[k]
     if (v === undefined || v === '') continue
@@ -3093,28 +3133,33 @@ async function patchParaProps(bytes: Uint8Array, extras: string[]): Promise<Uint
 }
 
 /**
- * 给每个 `<w:u>` 补主题三枚（v0.159）：按**出现序**贴——第 i 枚贴 `extras[i]`。
+ * 给 document.xml 里每个 `<w:{tag}>` 补属性串（v0.159 建、v0.160 泛化）：按**出现序**
+ * 贴——第 i 枚贴 `extras[i]`。
  *
- * 为什么又开一层补丁：docx 包的 underline 槽只有 `{type,color}`（createUnderline
- * 只发 w:val 与 w:color 两枚属性），`w:themeColor / w:themeTint / w:themeShade`
- * 这一族在包外。与 w:sym 一起是同一笔机制债——sym 那一半包里有原生 SymbolRun，
- * 这一半没有，于是只能走打包后的 run 级补丁位。
+ * 为什么要有这一层：docx 包的一批元素只认自己那两三枚属性（`createUnderline` 只写
+ * w:val 与 w:color，`createColor` 只写 w:val），`w:themeColor / w:themeTint /
+ * w:themeShade` 这一族在包外。与 w:sym 一起是同一笔机制债——sym 那一半包里有原生
+ * SymbolRun，这一半没有，于是只能走打包后的 run 级补丁位。
  *
- * 对位靠**计数闸门**：document.xml 里 `<w:u` 的枚数与登记条数对不上就整笔放弃
+ * 泛化到「任意元素名」是同一个形状的第二处需求（w:u 与 w:color 各带各的三枚）：
+ * 两族的登记数组分开、各按自己的元素出现序对位，所以不是合并成一串而是开两个 tag。
+ *
+ * 对位靠**计数闸门**：document.xml 里 `<w:{tag}` 的枚数与登记条数对不上就整笔放弃
  * （宁可不补，也绝不补到别的 run 上）。匹配用 `(?=[\s/>])` 收边，免得把
  * `w:unhideWhenUsed`、`w:uiPriority` 这些同前缀的元素算进来。
  *
- * 只扫 document.xml：样式表里的 `<w:u>`（我们自己拼的表样式 rPr）不在这一族的账上，
- * 而 run 级补丁位管的就是正文里那一枚。
+ * 只扫 document.xml：样式表里的同名元素（我们自己拼的表样式 rPr）不在这一族的账上，
+ * 而 run 级补丁位管的就是正文里那一枚。脚注/批注的正文在我们的写手里走简单文本
+ * （不带 charExtra），不会登记进这一族，所以计数是对得上的
  */
-async function patchUTheme(bytes: Uint8Array, extras: string[]): Promise<Uint8Array> {
+async function patchElemAttrs(bytes: Uint8Array, tag: string, extras: string[]): Promise<Uint8Array> {
   if (!extras.some((x) => x)) return bytes
   const { default: JSZip } = await import('jszip')
   const zip = await JSZip.loadAsync(bytes)
   const file = zip.file('word/document.xml')
   if (!file) return bytes
   const xml = await file.async('string')
-  const opens = [...xml.matchAll(/<w:u(?=[\s/>])[^>]*>/g)]
+  const opens = [...xml.matchAll(new RegExp(`<w:${tag}(?=[\\s/>])[^>]*>`, 'g'))]
   if (opens.length !== extras.length) return bytes
   let out = ''
   let cursor = 0
@@ -3161,6 +3206,11 @@ function pprInsert(chunk: string, extra: string): string {
  * 把余量元素插进既有 `<w:pPr>` 内容：逐枚找第一个 schema 位次更靠后的现有子元素，
  * 插在它前面；没有更靠后的就追加在末尾。余量自身按位次升序给（`PPR_WRITE_ORDER`），
  * 于是后插的天然落在先插的之后。
+ *
+ * v0.160 起多一条：**同名元素合并属性**而不是再插一枚。`w:ind` 是 CT_PPrBase 里的单枚
+ * 元素，包自己发的那一枚常常已经带着 w:left/w:firstLine（模型里算出来的缩进），再插
+ * 一枚新的会让 Word 只认后写的那一枚——先写的那枚整枚被丢，缩进静默变样。所以命中
+ * 同名就把属性并进去（已有的同名属性不覆盖，以包自己那一枚为准）
  */
 function pprOrder(inner: string, extra: string): string {
   const kids = [...inner.matchAll(/<w:([A-Za-z]+)[\s/>]/g)].map((m) => ({ name: m[1], at: m.index ?? 0 }))
@@ -3170,6 +3220,22 @@ function pprOrder(inner: string, extra: string): string {
   for (const it of items) {
     const r = PPR_RANK[it.name]
     if (r === undefined) continue
+    const same = kids.find((k) => k.name === it.name)
+    if (same) {
+      const at = same.at + shift
+      const tag = /^<w:[A-Za-z]+[^>]*>/.exec(s.slice(at))?.[0]
+      if (!tag) continue
+      const attrs = /^<w:[A-Za-z]+([^>]*?)\/?>/.exec(it.xml)?.[1] ?? ''
+      const add = [...attrs.matchAll(/\s+w:([A-Za-z]+)="[^"]*"/g)]
+        .filter((m) => !new RegExp(`\\sw:${m[1]}=`).test(tag))
+        .map((m) => m[0])
+        .join('')
+      if (!add) continue
+      const cut = tag.endsWith('/>') ? tag.length - 2 : tag.length - 1
+      s = s.slice(0, at) + tag.slice(0, cut) + add + tag.slice(cut) + s.slice(at + tag.length)
+      shift += add.length
+      continue
+    }
     let at = -1
     for (const k of kids) {
       const kr = PPR_RANK[k.name]
