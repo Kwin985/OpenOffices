@@ -1529,6 +1529,16 @@ interface RunProps {
   /** 字符间距：w:rPr/w:spacing/@w:val，单位缇（20 缇 = 1 磅），负值是紧缩 */
   sp?: number
   fonts?: string[]
+  /**
+   * rFonts 上的**主题字体引用名**（v0.161）：`w:asciiTheme` / `w:eastAsiaTheme` /
+   * `w:hAnsiTheme` / `w:cstheme` 四枚的原值。
+   *
+   * 与 `fonts` 是两套并存的说法而不是两种用途：Word 的 Normal 样式只写引用名
+   * （`asciiTheme="minorHAnsi"`），具名字体要靠主题部件解析出来。读手把解析值落在
+   * `fonts` 上（屏上要它），但**引用名本身也是源件说过的话**——写回时只写解析值，
+   * 就把「跟着主题走」这层意思改成了「钉死 Calibri」：换主题时文档不再跟着变。
+   */
+  fontThemes?: { ascii?: string; eastAsia?: string; hAnsi?: string; cs?: string }
   /** w:vertAlign：superscript / subscript（其余值视为 normal） */
   va?: 'sup' | 'sub'
   /** 修订标记：这一段文字是 w:ins 包着的（插入）还是 w:del 包着的（删除，文字在 w:delText 里） */
@@ -1723,6 +1733,16 @@ function readRPr(el: XEl | undefined, p: RunProps, tc?: ThemeColors): RunProps {
     if (hint === 'eastasia' || hint === 'default') o.hint = hint
     const cs = attr(rf, 'w:cs')
     if (cs) o.cs = cs
+    // 主题引用名（v0.161）：四枚都按名查问（applyThemeFonts 那一趟已查问过一遍，这里再
+    // 查一次不新增分子，只是把**原值**带进模型——那一趟只落解析值，引用名就此没了）。
+    // 空串不算声明：写了 `w:asciiTheme=""` 等于没说
+    const ft = {
+      ascii: attr(rf, 'w:asciiTheme') || undefined,
+      eastAsia: attr(rf, 'w:eastAsiaTheme') || undefined,
+      hAnsi: attr(rf, 'w:hAnsiTheme') || undefined,
+      cs: attr(rf, 'w:cstheme') || undefined,
+    }
+    if (Object.values(ft).some(Boolean)) o.fontThemes = ft
   }
   const szCs = valNum(el, 'w:szCs')
   if (szCs !== undefined && szCs > 0) o.szCs = szCs
@@ -2654,6 +2674,8 @@ class Fidelity {
     const runSnapshot = (rp: RunProps): DocxStyleInfo['run'] => {
       const run: DocxStyleInfo['run'] = {}
       if (rp.fonts?.length) run.font = rp.fonts.join(', ')
+      // 主题字体引用名**不在这里**落（v0.161）：它是「这一枚样式自己说过的话」，链合并
+      // 会把 Normal 的引用名摊到子样式上。由调用方按 info 自己的 rPr 单独取
       if (rp.sz) run.sizePx = Math.round(rp.sz * HP_PX * 100) / 100
       if (rp.b) run.bold = true
       if (rp.i) run.italic = true
@@ -2671,6 +2693,12 @@ class Fidelity {
       let rp: RunProps = NONE
       for (const s of view.chain) if (s.rPr) rp = readRPr(s.rPr, rp, this.themeColors)
       const run = runSnapshot(rp)
+      // 主题字体引用是**这一枚样式自己说过的话**，不是继承来的（v0.161）：链合并会把
+      // Normal 的引用名摊到 Report/ReportHead/ReportChar 上，而写手那份继承由包自己
+      // 沿 basedOn 摊——再在子样式上写一遍就成了「用户在这层也钉了一次」，换主题时
+      // 子样式不再跟着变。所以这里**只看 info 自己的 rPr**（传 NONE = 不继承）
+      const own = info.rPr ? readRPr(info.rPr, NONE, this.themeColors) : undefined
+      if (own?.fontThemes) run.fontTheme = own.fontThemes
       /**
        * 表样式（v0.114）：只摊"表级那一层"说了什么——外框四边与内部横竖线、默认格边距、
        * 整表对齐、默认格底纹，以及应用到表内文字的那份 run。

@@ -411,6 +411,12 @@ export interface DocxStyleInfo {
   aliases?: string
   run: {
     font?: string
+    /**
+     * 主题字体引用名（v0.161）：`w:asciiTheme` / `w:eastAsiaTheme` / `w:hAnsiTheme` /
+     * `w:cstheme` 四枚的原值。与 `font`（解析后的具名字体）**同时写回**——只写解析值
+     * 等于把「跟着主题走」改成「钉死某套字体」，换主题时文档不再跟着变。
+     */
+    fontTheme?: { ascii?: string; eastAsia?: string; hAnsi?: string; cs?: string }
     sizePx?: number
     bold?: boolean
     italic?: boolean
@@ -990,7 +996,7 @@ function childToRuns(child: PMNode, inherited: Inherited, cs?: CommentTrack, dt?
             new SymbolRun({
               char: symChar.toUpperCase(),
               symbolfont: symFont,
-              ...(withCharExtra(rest, child) as Record<string, unknown>),
+              ...(withCharExtra(rest, child, dt) as Record<string, unknown>),
             }),
           )
           return out
@@ -1002,7 +1008,7 @@ function childToRuns(child: PMNode, inherited: Inherited, cs?: CommentTrack, dt?
         out.push(
           new ExternalHyperlink({
             link: href,
-            children: [new TextRun(withCharExtra({ ...runOpts, style: 'Hyperlink' }, child))],
+            children: [new TextRun(withCharExtra({ ...runOpts, style: 'Hyperlink' }, child, dt))],
           }),
         )
       } else if (dt && (hasMark(child, 'revDel') || hasMark(child, 'revIns'))) {
@@ -1014,9 +1020,9 @@ function childToRuns(child: PMNode, inherited: Inherited, cs?: CommentTrack, dt?
         const author = markAttr(child, markName, 'author') || '未知'
         const date = markAttr(child, markName, 'date') || new Date().toISOString()
         const revOpts = { ...runOpts, id: dt.revId++, author, date }
-        out.push(isDel ? new DeletedTextRun(withCharExtra(revOpts, child)) : new InsertedTextRun(withCharExtra(revOpts, child)))
+        out.push(isDel ? new DeletedTextRun(withCharExtra(revOpts, child, dt)) : new InsertedTextRun(withCharExtra(revOpts, child, dt)))
       } else {
-        out.push(new TextRun(withCharExtra(runOpts, child)))
+        out.push(new TextRun(withCharExtra(runOpts, child, dt)))
       }
     } else if (child.type === 'hardBreak') {
       out.push(new TextRun({ text: '', break: 1 }))
@@ -1716,7 +1722,12 @@ function fontWithCsHint(
  * 只是 IRunStylePropertiesOptions 的类型面没列这几枚——传进去要靠这一个断言。
  * 判据是库的 dist（node_modules/docx/dist/index.cjs 的 RunProperties 构造器），不是猜的。
  */
-function withCharExtra<T extends object>(opts: T, child: PMNode): T {
+/**
+ * 库外槽并回 options（见 lib/char-extra.ts 头注）。
+ * `dt` 是打包后补丁的登记册——**必须传**：发 smallCaps 的路径有五条，而 caps 那一枚
+ * 要按 `<w:smallCaps>` 出现序补（v0.161），漏登记一条就整体错位。
+ */
+function withCharExtra<T extends object>(opts: T, child: PMNode, dt?: DocTrack): T {
   const mark = child.marks?.find((x) => x.type === 'charExtra')
   // 数值槽不能走 markAttr——那个只返字符串，szcs/pos/kern 三枚在模型里是 number
   const num = (a: string): number | undefined => {
@@ -1796,6 +1807,10 @@ function withCharExtra<T extends object>(opts: T, child: PMNode): T {
       ...(color && color.toLowerCase() !== 'auto' ? { color: color.replace(/^#/, '').toUpperCase() } : {}),
     }
   }
+  // 全大写与小型大写同时要时，包只发 smallCaps（else-if），caps 那一枚由补丁位补。
+  // **只要发了 smallCaps 就登记一格**（不管这枚 run 要不要 caps）——闸门对的是
+  // document.xml 里 `<w:smallCaps>` 的枚数，登记半截等于整笔错位
+  if (sc) dt?.capsExtras.push(caps ? '<w:caps/>' : '')
   return Object.keys(extra).length ? ({ ...opts, ...extra } as unknown as T) : opts
 }
 
@@ -1866,6 +1881,17 @@ interface DocTrack {
    * 元素出现序对位，互不干扰
    */
   colorThemes: string[]
+  /**
+   * 被包吞掉的那一枚全大写（v0.161）：与 document.xml 里每个 `<w:smallCaps>` 一一对应、
+   * 同序。包的 RunProperties 里 `smallCaps` 与 `allCaps` 是 **else-if**（dist/index.mjs:
+   * 10538-10539：先 smallCaps，有了就再不看 allCaps）——一个 run 同时要两枚时，库只发
+   * smallCaps，`<w:caps/>` 整个消失。补丁按 `<w:smallCaps>` 出现序在它**前面**插
+   * `<w:caps/>`（CT_RPrBase 里 caps 排在 smallCaps 之前）。
+   *
+   * 登记在 withCharExtra 内部而不是 childToRuns 里：发 smallCaps 的路径有五条
+   * （普通 run / 超链接 / 修订插入 / 修订删除 / 符号），少登记一条就整体错位
+   */
+  capsExtras: string[]
 }
 
 type NoteKind = 'footnote' | 'endnote'
@@ -1890,6 +1916,7 @@ function newDocTrack(): DocTrack {
     cellSps: [],
     cellExtras: [],
     imgExtras: [],
+    capsExtras: [],
     uThemes: [],
     colorThemes: [],
   }
@@ -2609,13 +2636,17 @@ export async function prosemirrorToDocxBytes(json: PMNode, meta?: DocMeta): Prom
   // 这里只补段落/字符两桶。
   // v0.150：同一路数再带上样式身份两枚——next（后续段落样式）与 rsid（修订会话号），
   // 一样是包不发的槽，按 styleId 逐枚补
-  const props = new Map<string, { custom?: string; next?: string; rsid?: string; aliases?: string }>()
+  const props = new Map<string, StyleExtraProps>()
   for (const s of meta?.styles ?? []) {
-    const p: { custom?: string; next?: string; rsid?: string; aliases?: string } = {}
+    const p: StyleExtraProps = {}
     if (s.customStyle !== undefined && s.kind !== 'table') p.custom = s.customStyle ? '1' : '0'
     if (s.next) p.next = s.next
     if (s.rsid) p.rsid = s.rsid
     if (s.aliases) p.aliases = s.aliases
+    // v0.161：主题字体引用名。只有**这一枚样式自己写过**才补——包会把 Normal 的字体
+    // 沿 basedOn 链摊到子样式上（写出包里 Report/ReportHead/ReportChar 各有 rFonts 而
+    // 源里没有），摊出来的那些不该凭空戴上引用名
+    if (s.run?.fontTheme) p.fontTheme = s.run.fontTheme
     if (Object.keys(p).length) props.set(s.id, p)
   }
   const latent = meta?.latentStyles
@@ -2627,8 +2658,10 @@ export async function prosemirrorToDocxBytes(json: PMNode, meta?: DocMeta): Prom
   const withU = await patchElemAttrs(withPara, 'u', dt.uThemes)
   // 文字色主题三枚（v0.160）：按 <w:color> 出现序补——包只写 w:val 一枚
   const withColor = await patchElemAttrs(withU, 'color', dt.colorThemes)
+  // 被包吞掉的全大写（v0.161）：按 <w:smallCaps> 出现序在它前面插 <w:caps/>
+  const withCaps = await patchBeforeElem(withColor, 'smallCaps', dt.capsExtras)
   // 图片容器壳（v0.148）：按 <w:drawing> 出现序逐块改值（包发得出壳，只是值硬编码）
-  const withImg = await patchImgXml(withColor, dt.imgExtras)
+  const withImg = await patchImgXml(withCaps, dt.imgExtras)
   // 表闸门三样都要补：样式推出来的（looks）与表自己带的（dt.tblLooks），
   // v0.152 起再加表级条件格式尺寸两枚（dt.tblPrs，与 tblLook 同住 tblPr）
   const needTbl = looks.size || dt.tblLooks.some((x) => x) || dt.tblPrs.some((x) => x) || dt.cellSps.some((x) => x)
@@ -2656,10 +2689,23 @@ export async function prosemirrorToDocxBytes(json: PMNode, meta?: DocMeta): Prom
  * rsid 排在 personal* 之后、pPr 之前（乱序同样会被 Word 判损坏件）。两枚都只有
  * 「子元素不在场」时才插——在场说明别的工具已经写过，按 styleId 对位即可
  */
+/** 逐枚样式要补的余量：都是包不给槽、只能打包后按 styleId 补回去的东西 */
+interface StyleExtraProps {
+  custom?: string
+  next?: string
+  rsid?: string
+  aliases?: string
+  /**
+   * 主题字体引用名（v0.161）：写手发的是解析后的具名字体（`w:ascii="Calibri"`），
+   * 源件说的是「跟着 minorHAnsi 走」。两者一起写才与源等价——Word 认引用优先
+   */
+  fontTheme?: { ascii?: string; eastAsia?: string; hAnsi?: string; cs?: string }
+}
+
 async function patchStylesXml(
   bytes: Uint8Array,
   latent: DocxLatentStyles | undefined,
-  props: Map<string, { custom?: string; next?: string; rsid?: string; aliases?: string }>,
+  props: Map<string, StyleExtraProps>,
 ): Promise<Uint8Array> {
   const { default: JSZip } = await import('jszip')
   const zip = await JSZip.loadAsync(bytes)
@@ -2691,6 +2737,20 @@ async function patchStylesXml(
           'name', 'aliases', 'basedOn', 'next', 'link', 'autoRedefine', 'hidden', 'uiPriority',
           'semiHidden', 'unhideWhenUsed', 'qFormat', 'locked', 'personal', 'personalCompose', 'personalReply',
         ])
+      }
+      // 主题字体引用（v0.161）：补进已有那枚 `<w:rFonts>` 的开标签（属性无序，不必讲次位）。
+      // 没有 rFonts 就不现开——源件没写具名字体时也确实不会写引用名，凭空造一枚等于
+      // 把「继承上一层的字体」改成「钉在这一层」
+      if (p.fontTheme) {
+        const ft = p.fontTheme
+        const add =
+          (ft.ascii ? ` w:asciiTheme="${xmlAttr(ft.ascii)}"` : '') +
+          (ft.eastAsia ? ` w:eastAsiaTheme="${xmlAttr(ft.eastAsia)}"` : '') +
+          (ft.hAnsi ? ` w:hAnsiTheme="${xmlAttr(ft.hAnsi)}"` : '') +
+          (ft.cs ? ` w:cstheme="${xmlAttr(ft.cs)}"` : '')
+        if (add && /<w:rFonts\b/.test(out)) {
+          out = out.replace(/<w:rFonts[^>]*>/, (tag) => (tag.endsWith('/>') ? tag.slice(0, -2) + add + '/>' : tag.slice(0, -1) + add + '>'))
+        }
       }
       return out
     })
@@ -3179,6 +3239,44 @@ async function patchElemAttrs(bytes: Uint8Array, tag: string, extras: string[]):
     const at = tag.endsWith('/>') ? tag.length - 2 : tag.length - 1
     out += xml.slice(cursor, start) + tag.slice(0, at) + add + tag.slice(at)
     cursor = stop
+    touched = true
+  }
+  if (!touched) return bytes
+  out += xml.slice(cursor)
+  zip.file('word/document.xml', out)
+  const buf = (await zip.generateAsync({ type: 'arraybuffer' })) as ArrayBuffer
+  return new Uint8Array(buf)
+}
+
+/**
+ * 按出现序在锚点元素**前面**插一整枚元素（v0.161）：第 i 个 `<w:anchor>` 之前插
+ * `extras[i]`（空串 = 这一处不用插）。
+ *
+ * 与 patchElemAttrs 的差别是**动作**：那一族是「属性补进已有元素的开标签」，这一族是
+ * 「元素补进已有父的子女位」。两族共用同一套对位纪律（出现序 + 计数闸门），但动作不同，
+ * 所以不合并——合并就得在一个函数里同时参数化「插哪」与「插什么」，读起来更费劲。
+ *
+ * 插在前面而不是后面，是因为 CT_RPrBase 这类 sequence 有次位要求：`<w:caps>` 排在
+ * `<w:smallCaps>` 之前，反了就是 Word 认不得的 rPr。
+ */
+async function patchBeforeElem(bytes: Uint8Array, anchor: string, extras: string[]): Promise<Uint8Array> {
+  if (!extras.some((x) => x)) return bytes
+  const { default: JSZip } = await import('jszip')
+  const zip = await JSZip.loadAsync(bytes)
+  const file = zip.file('word/document.xml')
+  if (!file) return bytes
+  const xml = await file.async('string')
+  const opens = [...xml.matchAll(new RegExp(`<w:${anchor}(?=[\\s/>])[^>]*>`, 'g'))]
+  if (opens.length !== extras.length) return bytes
+  let out = ''
+  let cursor = 0
+  let touched = false
+  for (let i = 0; i < opens.length; i++) {
+    const start = opens[i].index ?? 0
+    const add = extras[i]
+    if (!add) continue
+    out += xml.slice(cursor, start) + add
+    cursor = start
     touched = true
   }
   if (!touched) return bytes

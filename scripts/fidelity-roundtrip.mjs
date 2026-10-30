@@ -82,6 +82,27 @@ function assertAtRef(rel) {
 // ST_OnOff：true/1/on 与 false/0/off 是同一个布尔的两套写法，写手换一套不算丢
 const BOOL_ON = new Set(['true', 'on'])
 const BOOL_OFF = new Set(['false', 'off'])
+
+/**
+ * ST_OnOff 元素名单（v0.161）：这些元素的 `w:val` 可以不写——`<w:vanish/>` 与
+ * `<w:vanish w:val="1"/>` 是同一件事的两种写法（包的 OnOffElement 在传 `true` 时
+ * 就发裸元素）。只按属性比对时，裸元素这一枚**根本进不了 values**：源里写
+ * `w:val="1"`、写出包发裸元素，账上就记一笔「掉了」，而两边的值一模一样。
+ *
+ * 于是 census 里对名单上的元素，**没写 w:val 时补记一笔 val=1**（见下）。
+ * 名单漏了会怎样：漏掉的元素两边都不补，最多留一笔假红，**不会造假绿**——
+ * 这正是我们要的保守方向（v0.157：假红占着榜单比漏归一更坏，但假绿是伪造成绩）。
+ */
+const ON_OFF_EL = new Set([
+  'adjustRightInd', 'applyBreakingRules', 'autoSpaceDE', 'autoSpaceDN', 'b', 'bCs',
+  'bidi', 'cantSplit', 'caps', 'contextualSpacing', 'cs', 'dstrike', 'emboss',
+  'evenAndOddHeaders', 'growAutofit', 'hidden', 'i', 'iCs', 'imprint', 'keepLines',
+  'keepNext', 'kinsoku', 'mirrorIndents', 'mwSmallCaps', 'noProof', 'noWrap',
+  'outline', 'overflowPunct', 'pageBreakBefore', 'printColBlack', 'rtl', 'rtlGutter',
+  'shadow', 'smallCaps', 'snapToGrid', 'specVanish', 'strike', 'suppressAutoHyphens',
+  'suppressLineNumbers', 'suppressOverlap', 'tblHeader', 'textboxTightWrap',
+  'topLinePunct', 'vanish', 'webHidden', 'widowControl', 'wordWrap',
+])
 function normValue(v, attrName) {
   const s = String(v).trim().toLowerCase()
   if (BOOL_ON.has(s)) return '1'
@@ -146,6 +167,20 @@ function census(zip, parseXml, parts) {
         }
         const v = normValue(el.attrs[k], local(k))
         rec.values.set(v, (rec.values.get(v) ?? 0) + 1)
+      }
+      // 裸 OnOff 元素（v0.161）：`<w:vanish/>` 等于 `w:val="1"`。不补这一笔，写手发裸元素
+      // 就记成「掉了」——而它与源里那枚 `w:val="1"` 是同一个值
+      if (ON_OFF_EL.has(p) && !Object.keys(el.attrs ?? {}).some((k) => local(k) === 'val')) {
+        const key = `${p}|val`
+        let rec = pairs.get(key)
+        if (!rec) {
+          rec = { n: 0, values: new Map(), parts: new Set(), pfxs: new Set() }
+          pairs.set(key, rec)
+        }
+        rec.n++
+        rec.parts.add(part)
+        rec.pfxs.add(pfx)
+        rec.values.set('1', (rec.values.get('1') ?? 0) + 1)
       }
       for (const c of el.children ?? []) if (typeof c !== 'string') visit(c)
     }
@@ -334,6 +369,8 @@ function writeLedger(d) {
   L.push('| 缺件 | 连承载它的部件都没写出来 | 整件丢失，比掉了更早一步 |')
   L.push('')
   L.push('- `true/1/on` 与 `false/0/off` 归一（ST_OnOff 的两套写法，写手换一套不算丢）；')
+  L.push('  **裸元素也算 `val=1`**（`<w:vanish/>` ≡ `w:val="1"`）——只按属性比对时裸元素进不了')
+  L.push('  values，写手发裸元素就记成「掉了」，而值与源里那枚一模一样（v0.161）。')
   L.push('  关系 id（`rId1` 之类）归一成占位符——那是包内编号，写手按自己的打包顺序重排，')
   L.push('  逐字比只会比出假红；Word 的存档流水号（`rsid*`/`paraId`/`textId`）按名字规则剔出分母。')
   L.push('- `lvlJc`/`jc` 的 `start`≡`left`、`end`≡`right`（ST_Jc 的两套写法）；`mc:Ignorable`')
@@ -441,6 +478,8 @@ function writeLedger(d) {
       buckets: ['kept', 'value', 'lost', 'part'],
       parts: PARTS,
       onOffNormalised: true,
+      /** v0.161：裸 OnOff 元素（`<w:vanish/>`）按 `w:val="1"` 记，否写手发裸元素就记成「掉了」 */
+      onOffBareElement: true,
     },
     totals: {
       read: total,

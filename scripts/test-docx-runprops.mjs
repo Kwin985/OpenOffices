@@ -14,6 +14,7 @@
 // 三组：主题字体 → hint 分段 → pos/kern/复杂文字三件套。每组都有反例
 // （不解析 / 不切 / 不补的那种形状），只测正面等于自说自话。
 
+import fs from 'node:fs'
 import JSZip from 'jszip'
 import { docxToHtmlFidelity } from '../src/lib/docx-fidelity.ts'
 import { prosemirrorToDocxBytes } from '../src/lib/docx.ts'
@@ -489,6 +490,92 @@ const RF = '<w:rFonts w:ascii="Calibri" w:eastAsia="宋体" w:hint="eastAsia"/>'
   check('ind 导出：合并后仍只有一枚 w:ind', (xml.match(/<w:ind/g) ?? []).length === 1, ind)
   has('ind 导出：原有的 w:left 保住', ind, 'w:left="600"')
   has('ind 导出：字符档并进同一枚', ind, 'w:firstLineChars="200"')
+}
+
+// ───────────────────── 7. 全大写与小型大写并存（v0.161）────────────────────
+//
+// 包的 RunProperties 里 smallCaps 与 allCaps 是 **else-if**（dist/index.mjs:10538）：
+// 有了 smallCaps 就再不看 allCaps。一个 run 同时要两枚时 `<w:caps/>` 整个消失——
+// 这是库的实现细节，不是我们传错了。补丁按 `<w:smallCaps>` 出现序在它前面插回去。
+{
+  const doc = {
+    type: 'doc',
+    content: [
+      {
+        type: 'paragraph',
+        content: [
+          {
+            type: 'text',
+            text: '两枚都要',
+            marks: [{ type: 'charExtra', attrs: { caps: '1', smallcaps: '1' } }],
+          },
+        ],
+      },
+    ],
+  }
+  const bytes = await prosemirrorToDocxBytes(doc)
+  const xml = await (await JSZip.loadAsync(bytes)).file('word/document.xml').async('string')
+  has('caps 导出：两枚同时要时 w:smallCaps 仍在', xml, '<w:smallCaps/>')
+  has('caps 导出：被库吞掉的那枚 w:caps 补回', xml, '<w:caps/>')
+  // 次位：CT_RPrBase 里 caps 排在 smallCaps 之前
+  check('caps 导出：w:caps 排在 w:smallCaps 之前', xml.indexOf('<w:caps/>') < xml.indexOf('<w:smallCaps/>'), xml.slice(xml.indexOf('<w:rPr'), xml.indexOf('<w:rPr') + 200))
+}
+
+{
+  // 反例：只有 caps 时库自己发 <w:caps/>，补丁不该再插一枚（插了就是两枚同名元素）
+  const doc = {
+    type: 'doc',
+    content: [
+      { type: 'paragraph', content: [{ type: 'text', text: '只要大写', marks: [{ type: 'charExtra', attrs: { caps: '1' } }] }] },
+    ],
+  }
+  const bytes = await prosemirrorToDocxBytes(doc)
+  const xml = await (await JSZip.loadAsync(bytes)).file('word/document.xml').async('string')
+  check('caps 导出：只要 caps 时整份只有一枚', (xml.match(/<w:caps/g) ?? []).length === 1, xml.slice(xml.indexOf('<w:rPr'), xml.indexOf('<w:rPr') + 200))
+}
+
+// ──────────────────── 8. 样式的主题字体引用（v0.161）───────────────────────
+//
+// Word 的 Normal 只写 `asciiTheme="minorHAnsi"`，具名字体靠主题部件解析。写手发的是
+// 解析值；只发解析值就把「跟着主题走」改成了「钉死 Calibri」。两枚一起写才与源等价。
+{
+  const doc = { type: 'doc', content: [{ type: 'paragraph', content: [{ type: 'text', text: 'x' }] }] }
+  const bytes = await prosemirrorToDocxBytes(doc, {
+    styles: [
+      {
+        id: 'Normal',
+        name: 'Normal',
+        kind: 'paragraph',
+        run: { font: 'Calibri', fontTheme: { ascii: 'minorHAnsi', eastAsia: 'minorEastAsia', hAnsi: 'minorHAnsi' } },
+        para: {},
+      },
+      // 子样式不写引用名：包自己沿 basedOn 摊字体，再写一遍就成了「这一层也钉了一次」
+      { id: 'Child', name: 'child', kind: 'paragraph', basedOn: 'Normal', run: { font: 'Calibri' }, para: {} },
+    ],
+  })
+  const xml = await (await JSZip.loadAsync(bytes)).file('word/styles.xml').async('string')
+  const normal = /<w:style\b[^>]*w:styleId="Normal"[^>]*>[\s\S]*?<\/w:style>/.exec(xml)?.[0] ?? ''
+  const child = /<w:style\b[^>]*w:styleId="Child"[^>]*>[\s\S]*?<\/w:style>/.exec(xml)?.[0] ?? ''
+  has('字体主题导出：解析值照写', normal, 'w:ascii="Calibri"')
+  has('字体主题导出：asciiTheme 补回', normal, 'w:asciiTheme="minorHAnsi"')
+  has('字体主题导出：eastAsiaTheme 补回', normal, 'w:eastAsiaTheme="minorEastAsia"')
+  has('字体主题导出：hAnsiTheme 补回', normal, 'w:hAnsiTheme="minorHAnsi"')
+  check('字体主题导出：子样式不凭空戴引用名', !/Theme=/.test(child), child.slice(0, 300))
+}
+
+// ─────────────────── 9. 量具口径：裸 OnOff 元素 ≡ w:val="1" ─────────────────
+//
+// 这一条不在产品里，在 scripts/fidelity-roundtrip.mjs 的 census：`<w:vanish/>` 与
+// `<w:vanish w:val="1"/>` 是同一件事。产品测不到它，所以断言落在账本自身上——
+// 账本不自查，假红就一直占着榜单（v0.157 那条教训）。
+{
+  const j = JSON.parse(fs.readFileSync(new URL('../docs/fidelity-roundtrip.json', import.meta.url), 'utf8'))
+  check('量具口径：裸 OnOff 已归一（账本自陈）', j.definition?.onOffBareElement === true, '')
+  // 归一对的效果：源里写 w:val="1"、写出包发裸元素的那几笔，不应再挂在「掉了」上
+  check('量具口径：vanish|val 不再记成掉了', j.pairs?.['vanish|val']?.bucket !== 'lost', j.pairs?.['vanish|val']?.bucket ?? '(不在账)')
+  check('量具口径：widowControl|val 不再记成值变', j.pairs?.['widowControl|val']?.bucket !== 'value', j.pairs?.['widowControl|val']?.bucket ?? '(不在账)')
+  // 这枚 run 上有 caps 也有 smallCaps，库只发一枚——是真的丢，靠产品侧补丁修
+  check('量具口径：caps|val 由产品补丁翻正（不是靠归一）', j.pairs?.['caps|val']?.bucket === 'kept', j.pairs?.['caps|val']?.bucket ?? '(不在账)')
 }
 
 console.log(`通过 ${ok.length} 项` + (bad.length ? `，**失败 ${bad.length} 项**` : '，失败 0 项'))
