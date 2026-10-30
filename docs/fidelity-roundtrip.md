@@ -44,9 +44,9 @@ docx ──读手──▶ HTML ──TipTap schema──▶ PM 模型 ──写
 | | 值 |
 |---|---:|
 | 读到的对 | 592 |
-| 保留 | **217（36.7%）** |
+| 保留 | **230（38.9%）** |
 | 值变 | 20 |
-| 掉了 | 355 |
+| 掉了 | 342 |
 | 缺件 | 0 |
 | 源包部件 | 7 |
 | 写出包部件 | 7 |
@@ -61,13 +61,13 @@ docx ──读手──▶ HTML ──TipTap schema──▶ PM 模型 ──写
 
 | 族 | 读到的 | 保留 | 值变 | 掉了 | 保留率 |
 |---|---:|---:|---:|---:|---:|
-| 正文属性（`w:*`） | 273 | 189 | 18 | 66 | **69.2%** |
+| 正文属性（`w:*`） | 273 | 202 | 18 | 53 | **74.0%** |
 | 图形壳（`a:`/`v:`/`wp:`/`pic:`/`wps:`/`o:`） | 319 | 28 | 2 | 289 | **8.8%** |
 
 口径说明：一个对算正文，当且仅当它在源包里**只**出现在 `w:*` 元素上（沾过图形壳就算图形壳）。
 对名按 local name 归并（与保真账本同口径），所以 `fill|type` 这种两族同名的会并成一笔。
 
-### 掉了（355）
+### 掉了（342）
 
 名字一次都没写出来。这里每一行都是一条**单边通道**：读手读了，模型或写手没有它的槽。
 
@@ -113,7 +113,7 @@ docx ──读手──▶ HTML ──TipTap schema──▶ PM 模型 ──写
 | `bodyPr|bIns` | 1 | 91440 | — |
 | `bodyPr|compatLnSpc` | 1 | 0 | — |
 | `bodyPr|forceAA` | 1 | 0 | — |
-| …共 355 条，完整清单见 `docs/fidelity-roundtrip.json` | | | |
+| …共 342 条，完整清单见 `docs/fidelity-roundtrip.json` | | | |
 
 ### 值变（20）
 
@@ -148,7 +148,7 @@ docx ──读手──▶ HTML ──TipTap schema──▶ PM 模型 ──写
 
 （空）
 
-### 保留（217）
+### 保留（230）
 
 这些是真的双向。列出来是为了让「保留」也可核对，而不是一个孤零零的百分比。
 
@@ -178,7 +178,7 @@ docx ──读手──▶ HTML ──TipTap schema──▶ PM 模型 ──写
 | `ext|cy` | 2 | 914400 | 914400, 638175, 2286000 |
 | `graphicData|uri` | 2 | http://schemas.openxmlformats.org/drawingml/2006/picture | http://schemas.openxmlformats.org/drawingml/2006/picture |
 | `hyperlink|id` | 2 | rid# | rid# |
-| …共 217 条，完整清单见 `docs/fidelity-roundtrip.json` | | | |
+| …共 230 条，完整清单见 `docs/fidelity-roundtrip.json` | | | |
 
 ## 边界
 
