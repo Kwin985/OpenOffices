@@ -150,6 +150,15 @@ export const FIXTURE_DOC =
   // v0.166：边框上补主题三枚——包的 IRunOptions.border 只有 color 一枚槽
   `<w:caps w:val="true"/><w:bdr w:val="single" w:sz="8" w:space="0" w:color="FF0000" w:themeColor="accent1" w:themeTint="99" w:themeShade="BF"/></w:rPr>` +
   `<w:t xml:space="preserve"> 带空白的正文 </w:t></w:r></w:p>` +
+  // v0.167：段落第五边 w:between——只在「相邻两段边框签名一致」时才画，所以这里放两段
+  // 一模一样的 pBdr（上边 + between，**没有下边**：显式下边会让 between 让位）。第一段
+  // 的 between 落成它的下边框（data-pbdr 不带 hidden），第二段是串尾、不画（带 hidden）
+  `<w:p><w:pPr><w:pBdr><w:top w:val="single" w:sz="4" w:color="4472C4"/>` +
+  `<w:between w:val="dotted" w:sz="6" w:space="2" w:color="FF9900" w:themeColor="accent2" w:themeTint="99"/></w:pBdr></w:pPr>` +
+  `<w:r><w:t>串一</w:t></w:r></w:p>` +
+  `<w:p><w:pPr><w:pBdr><w:top w:val="single" w:sz="4" w:color="4472C4"/>` +
+  `<w:between w:val="dotted" w:sz="6" w:space="2" w:color="FF9900" w:themeColor="accent2" w:themeTint="99"/></w:pBdr></w:pPr>` +
+  `<w:r><w:t>串二</w:t></w:r></w:p>` +
   // v0.142：主题色 run（accent1 + tint/shade 双戴）与图案底纹段（pct25 前景 FF0000/背景 FFFFFF）
   // v0.164：底纹的背景色改成「主题引用 + 字面色」双戴（Word 的默认写法）——主题那一枚让
   // 屏上色与字面 fill 分了家，字面值从此只有 data-shd 载荷记得住

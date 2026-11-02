@@ -252,6 +252,54 @@ export function bdrAttrsOf(raw: unknown): Record<string, string> {
   return parseBdrPayload(payload).length ? { [BDR_ATTR]: payload } : {}
 }
 
+/* ── 段落的第五边 w:between（v0.167）──────────────────────────────
+ * 它和四条 CSS 边不是一回事：**没有 `bd*` 槽**，屏上是借「本段的下边框」画出来的
+ * （`betweenOfSiblings` 只在相邻两段边框签名一致时才画，末段不画）。所以载荷自带
+ * 线型/粗细/间距四枚原件（四边那几枚从 CSS 反推得到，这一条反推不出来）。
+ *
+ * `screen` 是导入那一刻的屏上色、`hidden` 是「这一段没轮到画」：
+ * - 画了（hidden 缺）：屏上的替身就是下边框，用户改过色/删掉下边框 → between 跟着走；
+ * - 没画（hidden=1）：屏上没有替身可比，原样带回，不做判据。
+ */
+export const PBDR_ATTR = 'data-pbdr'
+export const PBDR_KEYS = ['val', 'sz', 'space', 'color', 'themeColor', 'themeTint', 'themeShade', 'screen', 'hidden'] as const
+export type PbdrPayload = Partial<Record<(typeof PBDR_KEYS)[number], string>>
+
+const PBDR_FIELD: Record<(typeof PBDR_KEYS)[number], RegExp> = {
+  val: /^[A-Za-z]+$/,
+  sz: /^\d+$/,
+  // 边框间距：磅，Word 允许负数（缩进式边框），照 OOXML 的整数档收
+  space: /^-?\d+$/,
+  color: /^(?:[0-9A-Fa-f]{6}|auto)$/,
+  themeColor: /^[A-Za-z0-9]+$/,
+  themeTint: /^[0-9A-Fa-f]{2}$/,
+  themeShade: /^[0-9A-Fa-f]{2}$/,
+  screen: /^[0-9A-Fa-f]{6}$/,
+  hidden: /^[01]$/,
+}
+
+/** 定序格串 → 原件表；空串给空表，形状不对的格整格丢 */
+export function parsePbdrPayload(raw: string | null | undefined): PbdrPayload {
+  const out: PbdrPayload = {}
+  const parts = (raw ?? '').split(';')
+  PBDR_KEYS.forEach((k, ki) => {
+    const v = (parts[ki] ?? '').trim()
+    if (v && PBDR_FIELD[k].test(v)) out[k] = v
+  })
+  return out
+}
+
+/** 原件表 → `data-pbdr` 载荷（与 parsePbdrPayload 互逆；键序固定） */
+export function pbdrPayload(p: PbdrPayload): string {
+  return PBDR_KEYS.map((k) => p[k] ?? '').join(';')
+}
+
+/** 屏上一条样式都不兑现，只为写回（与 bdrAttrsOf 同款） */
+export function pbdrAttrsOf(raw: unknown): Record<string, string> {
+  const payload = typeof raw === 'string' ? raw : ''
+  return Object.keys(parsePbdrPayload(payload)).length ? { [PBDR_ATTR]: payload } : {}
+}
+
 /** OOXML `w:sz`（1/8 磅）→ CSS 像素 */
 export function eighthsToPx(sz: number): number {
   return round2((sz / 8) * (4 / 3))

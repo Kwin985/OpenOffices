@@ -46,7 +46,7 @@ import {
   UnderlineType,
 } from 'docx'
 import { xml2js } from 'xml-js'
-import { bdAttr, borderParts, pxToEighths, pxToPt, parseBdrPayload, parseCnfPayload, parseFramePayload, parseImgPayload, parsePprPayload, parseShadePayload, parseShdPayload, parseTabsPayload, parseTblbPayload, parseTblpPayload, parseTblPrPayload, parseTlookPayload, CELL_EDGES, CNF_KEYS, PPR_IND_KEYS, TBLB_EDGES, TBLB_KEYS, type CellEdge } from './cell-style'
+import { bdAttr, borderParts, parsePbdrPayload, pxToEighths, pxToPt, parseBdrPayload, parseCnfPayload, parseFramePayload, parseImgPayload, parsePprPayload, parseShadePayload, parseShdPayload, parseTabsPayload, parseTblbPayload, parseTblpPayload, parseTblPrPayload, parseTlookPayload, CELL_EDGES, CNF_KEYS, PPR_IND_KEYS, TBLB_EDGES, TBLB_KEYS, type CellEdge } from './cell-style'
 import { lineToOoxml, type LineRule } from './paragraph-style'
 import { decodeEnt } from './ooxml'
 import { condLookBits } from './table-cond'
@@ -1509,7 +1509,8 @@ function paraFormatOf(node: PMNode, pstyle?: string | null, dt?: DocTrack) {
   // 底纹的存盘原件（v0.164）：**只在真发得出 `<w:shd>` 时登记**——补丁按出现序对位，
   // 多登记一条就把后面所有段落的那一枚都贴偏（少登记同样错位）
   if (sh) dt?.shdExtras.push(shdExtraOf(node.attrs))
-  const bd = bordersOf(node.attrs)
+  // 第一段那种「between 落成下边框」的情形：下边框不发，改发 `<w:between>`
+  const bd = bordersOf(node.attrs, betweenAsBottom(node.attrs))
   // 边框的存盘原件（v0.165）：同一条纪律——发不出 `<w:pBdr>` 就不登记
   if (bd) dt?.paraBdrs.push(bdrExtraOf(node.attrs))
   // 分页四件套（v0.143）：data-* 三态 → docx 包原生槽。'0' 显式传 false
@@ -1640,6 +1641,22 @@ function cellBorder(v: unknown): IBorderOptions | undefined {
  * 单元格侧住 bdSpace*（tcMar 与 tcBorders@space 在 Word 里叠加，回写要各走各的）——
  * 两种来源不会同节点并存（段落没有 tcMar、单元格的 pad 归 tcMar），取到即用。
  */
+/**
+ * 「这一段的下边框其实是 between 的替身」（v0.167）。
+ *
+ * 读手把 `w:between` 画成了本段的下边框（`betweenCss`），于是模型里的 `bdBottom`
+ * 多出一条源件根本没有的 `w:bottom`。判据是 payload 的 `screen`：屏上那条下边框的色
+ * 与它一致 = 它就是 between 的替身 → 下边框不发、改发 `w:between`；对不上说明用户
+ * 换过色，那时 between 作废、下边框照发（用户的改动优先）。
+ */
+function betweenAsBottom(attrs: Record<string, unknown> | undefined): boolean {
+  const p = parsePbdrPayload(typeof attrs?.pbdr === 'string' ? attrs.pbdr : null)
+  if (p.hidden === '1') return false
+  if (!p.val && !p.color && !p.themeColor) return false
+  const cur = borderParts(attrs?.bdBottom as string | undefined)
+  return !!cur && cur.hex.replace('#', '').toLowerCase() === (p.screen ?? '').toLowerCase()
+}
+
 function borderSpacePt(attrs: Record<string, unknown> | undefined, edge: 'top' | 'right' | 'bottom' | 'left'): number | undefined {
   const pad = attrs?.[`pad${edge[0].toUpperCase()}${edge.slice(1)}`]
   const bd = attrs?.[`bdSpace${edge[0].toUpperCase()}${edge.slice(1)}`]
@@ -1648,8 +1665,12 @@ function borderSpacePt(attrs: Record<string, unknown> | undefined, edge: 'top' |
   return pxToPt(px)
 }
 
-/** 四边 → w:tcBorders（表格）或 w:pBdr（段落）；两者同形，一条都没有就不写这个元素 */
-function bordersOf(attrs: Record<string, unknown> | undefined) {
+/**
+ * 四边 → w:tcBorders（表格）或 w:pBdr（段落）；两者同形，一条都没有就不写这个元素。
+ * `noBottom` 是段落那一路的第五边让位（见 betweenAsBottom）：那一条下边框的真相是
+ * `w:between`，发了 `w:bottom` 就会在 Word 里多画一根线
+ */
+function bordersOf(attrs: Record<string, unknown> | undefined, noBottom = false) {
   const withSpace = (edge: 'top' | 'right' | 'bottom' | 'left', v: IBorderOptions | undefined) => {
     const sp = borderSpacePt(attrs, edge)
     // 只有真画出了边才带 space——边都没有，间距无处附着
@@ -1657,7 +1678,7 @@ function bordersOf(attrs: Record<string, unknown> | undefined) {
   }
   const b = {
     top: withSpace('top', cellBorder(attrs?.bdTop)),
-    bottom: withSpace('bottom', cellBorder(attrs?.bdBottom)),
+    bottom: noBottom ? undefined : withSpace('bottom', cellBorder(attrs?.bdBottom)),
     left: withSpace('left', cellBorder(attrs?.bdLeft)),
     right: withSpace('right', cellBorder(attrs?.bdRight)),
   }
@@ -1687,7 +1708,37 @@ function bdrExtraOf(attrs: Record<string, unknown> | undefined): string {
       .join(' ')
     if (add) out.push(`${o.edge}|${add}`)
   }
+  // 第五边（v0.167）：与四边同一块、同一个数组——它插在 `<w:pBdr>` 里，
+  // 对位靠的就是这一块的出现序
+  const bt = betweenExtraOf(attrs)
+  if (bt) out.push(`between|${bt}`)
   return out.join(';')
+}
+
+/**
+ * 段落第五边（v0.167）：`data-pbdr` 载荷 → 要写进 `<w:pBdr>` 的属性串。
+ * 空串 = 这一块不补。
+ *
+ * 两个方向：
+ * - `hidden=1`（本段没轮到画）：屏上没有替身，原样带回；
+ * - 画了：屏上的替身是本段的**下边框**。用户改过色、或把下边框删了，between 跟着走
+ *   ——删了就一起删，别留一枚屏上不存在的旧线，等哪天去掉下边框它才冒出来。
+ */
+function betweenExtraOf(attrs: Record<string, unknown> | undefined): string {
+  const p = parsePbdrPayload(typeof attrs?.pbdr === 'string' ? attrs.pbdr : null)
+  if (!p.val && !p.color && !p.themeColor) return ''
+  if (p.hidden !== '1' && !betweenAsBottom(attrs)) return ''
+  return [
+    p.val ? `w:val="${p.val}"` : '',
+    p.sz ? `w:sz="${p.sz}"` : '',
+    p.space !== undefined ? `w:space="${p.space}"` : '',
+    p.color ? `w:color="${p.color}"` : '',
+    p.themeColor ? `w:themeColor="${p.themeColor}"` : '',
+    p.themeTint ? `w:themeTint="${p.themeTint}"` : '',
+    p.themeShade ? `w:themeShade="${p.themeShade}"` : '',
+  ]
+    .filter(Boolean)
+    .join(' ')
 }
 
 /**
@@ -3563,6 +3614,17 @@ async function patchBorderBlocks(bytes: Uint8Array, tag: 'w:pBdr' | 'w:tcBorders
       if (bar < 0) continue
       const edge = chunk.slice(0, bar)
       const attrs = chunk.slice(bar + 1)
+      // 第五边（v0.167）：写手没有它的槽，块里不会有——要**插**一枚。
+      // CT_PBdr 的序是 top → left → bottom → right → **between** → bar，
+      // 所以插在 `<w:bar>` 之前；没有 bar 就落在块尾
+      if (edge === 'between') {
+        if (tag === 'w:pBdr' && !/<w:between(?=[\s/>])/.test(block)) {
+          block = block.includes('<w:bar')
+            ? block.replace(/<w:bar(?=[\s/>])/, `<w:between ${attrs}/><w:bar`)
+            : block.replace('</w:pBdr>', `<w:between ${attrs}/></w:pBdr>`)
+        }
+        continue
+      }
       const edgeRe = new RegExp(`<w:${edge}(?=[\\s/>])[^>]*>`)
       // 块里没有这条边 = 写侧没发它（用户删了这一边），不是错位，跳过
       if (!edgeRe.test(block)) continue

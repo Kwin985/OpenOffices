@@ -1010,6 +1010,77 @@ const THEME_COLORS =
   has('字符边框：字面色留在载荷里', html, 'data-rbdr="single;8;0;FF0000;accent1;99;BF"')
 }
 
+// ───────────────────── 10. 段落第五边 w:between（v0.167）─────────────────────
+//
+// 读手把它画成本段的下边框（屏上的替身），模型里于是多一条源件没有的 `w:bottom`。
+// 这一组钉两件事：真身要作为 `<w:between>` 插回去、替身不能一起发（否则 Word 多一根线）。
+
+{
+  const doc = {
+    type: 'doc',
+    content: [
+      {
+        type: 'paragraph',
+        attrs: {
+          bdTop: '0.67px solid #4472c4',
+          bdBottom: '1px dotted #f8cbad',
+          bdr: 'top;4472C4;;;FFF;adbbd4',
+          pbdr: 'dotted;6;2;FF9900;accent2;99;;F8CBAD',
+        },
+        content: [{ type: 'text', text: '串一' }],
+      },
+    ],
+  }
+  const xml = await (await JSZip.loadAsync(await prosemirrorToDocxBytes(doc))).file('word/document.xml').async('string')
+  const block = /<w:pBdr[\s\S]*?<\/w:pBdr>/.exec(xml)?.[0] ?? ''
+  has('between 导出：真身插回去了', block, '<w:between w:val="dotted"')
+  has('between 导出：主题两枚跟着走', block, 'w:themeColor="accent2"')
+  has('between 导出：字面色是原件', block, 'w:color="FF9900"')
+  check('between 导出：替身那条下边框不发', !block.includes('<w:bottom'), block)
+  check('between 导出：次序在 right 之后块尾（CT_PBdr）', block.indexOf('<w:between') > block.lastIndexOf('<w:top'), block)
+}
+
+{
+  // 反例：用户换过下边框的色 → between 作废，那条下边框按用户的色发
+  const doc = {
+    type: 'doc',
+    content: [
+      {
+        type: 'paragraph',
+        attrs: {
+          bdTop: '0.67px solid #4472c4',
+          bdBottom: '1px dotted #00aa00',
+          bdr: 'top;4472C4;;;FFF;adbbd4',
+          pbdr: 'dotted;6;2;FF9900;accent2;99;;F8CBAD',
+        },
+        content: [{ type: 'text', text: '改过色' }],
+      },
+    ],
+  }
+  const xml = await (await JSZip.loadAsync(await prosemirrorToDocxBytes(doc))).file('word/document.xml').async('string')
+  const block = /<w:pBdr[\s\S]*?<\/w:pBdr>/.exec(xml)?.[0] ?? ''
+  check('between 导出：改过色就不补 between', !block.includes('<w:between'), block)
+  has('between 导出：用户的下边框照发', block, 'w:color="00aa00"')
+}
+
+{
+  // 没轮到画的那一段（串尾）：屏上没有替身，原样带回，不做判据
+  const doc = {
+    type: 'doc',
+    content: [
+      {
+        type: 'paragraph',
+        attrs: { bdTop: '0.67px solid #4472c4', bdr: 'top;4472C4;;;FFF;adbbd4', pbdr: 'dotted;6;2;FF9900;accent2;99;;F8CBAD;1' },
+        content: [{ type: 'text', text: '串二' }],
+      },
+    ],
+  }
+  const xml = await (await JSZip.loadAsync(await prosemirrorToDocxBytes(doc))).file('word/document.xml').async('string')
+  const block = /<w:pBdr[\s\S]*?<\/w:pBdr>/.exec(xml)?.[0] ?? ''
+  has('between 导出：串尾那一段原样带回', block, 'w:themeColor="accent2"')
+  check('between 导出：串尾不带下边框', !block.includes('<w:bottom'), block)
+}
+
 console.log(`通过 ${ok.length} 项` + (bad.length ? `，**失败 ${bad.length} 项**` : '，失败 0 项'))
 for (const b of bad) console.log(`FAIL ${b}`)
 if (bad.length) process.exitCode = 1

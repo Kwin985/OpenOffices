@@ -50,7 +50,7 @@ import { all, allDesc, attr, attrL, attrNum, els, find, findDesc, findL, local, 
 import { FieldEngine, fieldLabel, parseInstr, recomputable } from './docx-fields'
 import { embedHtml, inlineFlatten, unwrapEmbed, type EmbedHtml } from './ole'
 import { chartToHtml, smartArtToHtml } from './ooxml-graphics'
-import { BDR_ATTR, CELL_EDGES, CNF_ATTR, CNF_KEYS, CSS_BORDER_STYLE, FRAME_NUMERIC_KEYS, FRAME_STR_KEYS, IMG_ATTR, PPR_ATTR, PPR_IND_KEYS, PPR_ONOFF_KEYS, PPR_STR_KEYS, SHD_ATTR, TAB_LEADERS, TBLB_ATTR, TBLB_EDGES, TBLB_KEYS, TBLPR_ATTR, TLOOK_ATTR, bdSpaceAttrs, bdrPayload, borderParts, cnfPayload, eighthsToPx, framePayload, imgPayload, pprPayload, ptToPx, rgb2hex, shadeCss, shdPayloadOf, tblbPayload, tblpPayload, tblPrPayload, tabsPayload, tlookPayload, type BdrOrigin, type CellEdge, type CnfPayload, type FramePayload, type ImgPayload, type PprPayload, type ShdPayload, type TabSpec, type TblbPayload, type TblpPayload } from './cell-style'
+import { BDR_ATTR, CELL_EDGES, PBDR_ATTR, CNF_ATTR, CNF_KEYS, CSS_BORDER_STYLE, FRAME_NUMERIC_KEYS, FRAME_STR_KEYS, IMG_ATTR, PPR_ATTR, PPR_IND_KEYS, PPR_ONOFF_KEYS, PPR_STR_KEYS, SHD_ATTR, TAB_LEADERS, TBLB_ATTR, TBLB_EDGES, TBLB_KEYS, TBLPR_ATTR, TLOOK_ATTR, bdSpaceAttrs, bdrPayload, borderParts, cnfPayload, eighthsToPx, framePayload, imgPayload, pprPayload, ptToPx, rgb2hex, shadeCss, shdPayloadOf, tblbPayload, tblpPayload, tblPrPayload, tabsPayload, tlookPayload, pbdrPayload, type BdrOrigin, type CellEdge, type CnfPayload, type FramePayload, type ImgPayload, type PprPayload, type ShdPayload, type TabSpec, type TblbPayload, type TblpPayload } from './cell-style'
 import { ooxmlLine } from './paragraph-style'
 import {
   asTableCondType,
@@ -2594,7 +2594,10 @@ class Fidelity {
     // 边框的存盘原件（v0.165）：四边的字面色与主题三枚随 data-bdr 走。`paraCss` 里那
     // 一趟算的是屏上色（它要拼 CSS），这里再取一次原件——同一个元素，两趟各问各的
     const pbdrEl = find(effPPr, 'w:pBdr')
-    const bdrAttr = pbdrEl ? borderOrigin(pbdrEl, borderEdges(pbdrEl, this.themeColors)) : ''
+    const pbdrEdges = pbdrEl ? borderEdges(pbdrEl, this.themeColors) : {}
+    const bdrAttr = pbdrEl ? borderOrigin(pbdrEl, pbdrEdges) : ''
+    // 第五边（v0.167）：`betweenCss` 非空 = 本段真把它画成了下边框
+    const pbdrAttr = pbdrOrigin(pbdrEl, pbdrEdges, !!betweenCss)
     // 分页四件套（v0.143）：w:pageBreakBefore / w:keepNext / w:keepLines / w:widowControl。
     // Web 流式排版没有分页与孤行控制，屏上不兑现——只随 data-* 进出保往返。
     // onOff 三态：'1' 开、'0' 关（widowControl 在 Word 里默认就是开，「显式关」是真值，
@@ -2614,7 +2617,7 @@ class Fidelity {
     // 段落属性余量（v0.147）：pPr 里那批屏上不兑现的直接属性 → data-ppr 载荷
     const pprAttr = readPprPayload(effPPr)
     const body = this.layout(
-      `${tag}${shadeAttr ? ` data-shade="${shadeAttr}"` : ''}${shdAttr ? ` ${SHD_ATTR}="${shdAttr}"` : ''}${bdrAttr ? ` ${BDR_ATTR}="${bdrAttr}"` : ''}${tabsAttr ? ` data-tabs="${tabsAttr}"` : ''}${frameAttr ? ` data-frame="${frameAttr}"` : ''}${pprAttr ? ` ${PPR_ATTR}="${pprAttr}"` : ''}${flags.join('')}`,
+      `${tag}${shadeAttr ? ` data-shade="${shadeAttr}"` : ''}${shdAttr ? ` ${SHD_ATTR}="${shdAttr}"` : ''}${bdrAttr ? ` ${BDR_ATTR}="${bdrAttr}"` : ''}${pbdrAttr ? ` ${PBDR_ATTR}="${pbdrAttr}"` : ''}${tabsAttr ? ` data-tabs="${tabsAttr}"` : ''}${frameAttr ? ` data-frame="${frameAttr}"` : ''}${pprAttr ? ` ${PPR_ATTR}="${pprAttr}"` : ''}${flags.join('')}`,
       style,
       pieces,
     )
@@ -4124,6 +4127,35 @@ function borderEdges(el: XEl | undefined, tc?: ThemeColors): Record<string, stri
   if (!el) return out
   for (const child of els(el)) out[local(child.name)] = edgeCss(child, tc)
   return out
+}
+
+/**
+ * 段落第五边 `w:between` 的存盘原件（v0.167）：`data-pbdr` 载荷。
+ *
+ * 它没有 `bd*` 槽，所以线型/粗细/间距四枚也得自己带——四边那几枚能从 CSS 反推，
+ * 这一条反推不出来。`shown` 是本段有没有轮到这个 between 上屏（串尾、或被显式
+ * 下边框顶掉时它不画）：没画的那一段屏上没有替身，写侧不做「改过色没有」的判据。
+ */
+function pbdrOrigin(el: XEl | undefined, css: Record<string, string | undefined>, shown: boolean): string {
+  const b = el ? find(el, 'w:between') : undefined
+  if (!b || !css.between || css.between === 'none') return ''
+  const v = attr(b, 'w:val')
+  const sz = attr(b, 'w:sz')
+  const sp = attr(b, 'w:space')
+  const c = attr(b, 'w:color')
+  const parts = themeRefParts(b)
+  const screen = (borderParts(css.between)?.hex ?? '').replace('#', '').toUpperCase()
+  return pbdrPayload({
+    ...(v ? { val: v } : {}),
+    ...(sz ? { sz } : {}),
+    ...(sp !== undefined ? { space: sp } : {}),
+    ...(c ? { color: c } : {}),
+    ...(parts.ref ? { themeColor: parts.ref } : {}),
+    ...(parts.tint ? { themeTint: parts.tint } : {}),
+    ...(parts.shade ? { themeShade: parts.shade } : {}),
+    ...(screen ? { screen } : {}),
+    ...(shown ? {} : { hidden: '1' }),
+  })
 }
 
 /**
