@@ -9910,6 +9910,46 @@ D28 顺延：`fldChar` 三对；`outline|val`；表/节一族（`tblStyle|val`�
 `wAfter|*`、`gridAfter|val`、`pgNumType|*`、`smartTag|*`、`legacy|*`）；承接未动项
 `gridCol`/`tcW` 的 ±5 缇、`w:cols` 的 `equalWidth`、`ind|left` 的列表缩进覆盖、
 `docPr|id` 重排、`lvlJc` 深层 `center`。另有一件要定口径：`theme1.xml` 进不进普查清单。
+## v0.169（D28）——表样式：把一条从没跑过的路跑通，顺带补上「首行该粗不粗」
+
+往返账**正文属性 79.7% → 80.1%**（236/296 → 238/297），整体 42.9% → 43.2%，掉了 334 → **333**、
+值变 17 不动。`tblStyle|val` 从「掉了」变「保留」，`tblStylePr|type` 新进分母且保留。
+保真账本 md5 仍 `95846f03…`/`aab9813c…`，四条变异腿与上轮一字不差。
+
+### 为什么这条路一直没跑过
+
+夹具里三张表都写着 `<w:tblStyle w:val="TableGrid"/>`，可 `styles.xml` 里**没有这枚定义**。
+读手挂标签的条件是「这个 id 认得出」，认不出就不挂（挂上去是一枚指向不存在定义的引用）——
+于是 `data-tstyle` 从来没出现过，`w:tblStyle` 也就从来没被写回去。这条账在「掉了」里躺了
+很多轮，不是写手不会写，是输入里没有让它出场的东西。补上定义后三件一起验：引用、定义
+（`w:name`/`w:basedOn`/`w:tblStylePr`）、条件层型名——全部原样回来。
+
+### 顺带撞见的真问题：首行该粗不粗
+
+`w:tblStylePr` 里的 `w:rPr/w:b`（首行加粗）此前只走了一半：进了样式快照、跟着 styles.xml
+回去，**屏上从没兑现**——表里首行看着是常规字重，Word 打开却是粗的。这是 v0.164 那条
+「屏上对、纸上不对」的镜像。
+
+修法是给 `baseRunProps` 加一个 `seed`（比段落样式更弱的一层），表格那趟按位置算出条件层的
+run 传进格内段落；位置梯子复用 `condLadderAppearance`（底纹/边框/行高早就共用它，run 是
+第四族）。
+
+### 账本对这次修复一无所知
+
+修完跑账逐字节相同——**账本按属性记，元素级的增删它看不见**：`<w:b/>` 是裸元素、一个属性
+都没有，`b|val` 那对只统计写了 val 的那些。这不是账本的 bug，是它的口径边界：它量「源件
+说过的属性回来了没有」，量不了「源件没说过的东西有没有多出来」。这次靠结构测试钉住。
+
+### 门禁
+
+tsc 0、build ✓；结构测试 **155 → 159 项**全绿（含反例：次行不该加粗、tblLook 闸门关掉就
+不加粗）。
+
+D29 顺延：表样式自己的 `w:rPr`（常驻 run）接到表内文字上；`fldChar` 三对；`outline|val`；
+表/节一族（`col|w`/`col|space`、`wAfter|*`、`gridAfter|val`、`pgNumType|*`、`smartTag|*`、
+`legacy|*`）；承接未动项 `gridCol`/`tcW` 的 ±5 缇、`w:cols` 的 `equalWidth`、`ind|left` 的
+列表缩进覆盖、`docPr|id` 重排、`lvlJc` 深层 `center`。另有一件要定口径：`theme1.xml` 进不进
+普查清单。
 
 ## 性能（v0.3）
 

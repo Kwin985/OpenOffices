@@ -21,12 +21,12 @@
   "onOffBareElement": true
  },
  "totals": {
-  "read": 615,
-  "kept": 264,
+  "read": 616,
+  "kept": 266,
   "value": 17,
-  "lost": 334,
+  "lost": 333,
   "part": 0,
-  "consulted": 668,
+  "consulted": 669,
   "srcParts": 7,
   "outParts": 7,
   "htmlBlocks": 37
@@ -227,9 +227,10 @@
   },
   "b|val": {
    "bucket": "kept",
-   "n": 1,
+   "n": 2,
    "src": [
-    "0"
+    "0",
+    "1"
    ],
    "out": [
     "0",
@@ -328,13 +329,14 @@
   },
   "basedOn|val": {
    "bucket": "kept",
-   "n": 3,
+   "n": 4,
    "src": [
-    "normal"
+    "normal",
+    "tablenormal"
    ],
    "out": [
-    "defaultparagraphfont",
-    "normal"
+    "normal",
+    "tablenormal"
    ]
   },
   "bCs|val": {
@@ -1045,9 +1047,6 @@
     "ff0000"
    ],
    "out": [
-    "0563c1",
-    "1f4d78",
-    "2e74b5",
     "adbbd4"
    ]
   },
@@ -2820,10 +2819,6 @@
     "reportchar"
    ],
    "out": [
-    "endnotetext",
-    "endnotetextchar",
-    "footnotetext",
-    "footnotetextchar",
     "report",
     "reportchar"
    ]
@@ -3115,37 +3110,23 @@
   },
   "name|val": {
    "bucket": "value",
-   "n": 6,
+   "n": 7,
    "src": [
     "normal",
     "plain",
     "report",
     "report char",
     "report head",
+    "table grid",
     "text1"
    ],
    "out": [
-    "endnote reference",
-    "endnote text",
-    "endnote text char",
-    "footnote reference",
-    "footnote text",
-    "footnote text char",
-    "heading 1",
-    "heading 2",
-    "heading 3",
-    "heading 4",
-    "heading 5",
-    "heading 6",
-    "hyperlink",
-    "list paragraph",
     "normal",
     "plain",
     "report",
     "report char",
     "report head",
-    "strong",
-    "title"
+    "table grid"
    ]
   },
   "next|val": {
@@ -3155,7 +3136,6 @@
     "reporthead"
    ],
    "out": [
-    "normal",
     "reporthead"
    ]
   },
@@ -5063,48 +5043,36 @@
   },
   "style|styleId": {
    "bucket": "kept",
-   "n": 5,
+   "n": 6,
    "src": [
-    "normal",
-    "plain",
-    "report",
-    "reportchar",
-    "reporthead"
-   ],
-   "out": [
-    "endnotereference",
-    "endnotetext",
-    "endnotetextchar",
-    "footnotereference",
-    "footnotetext",
-    "footnotetextchar",
-    "heading1",
-    "heading2",
-    "heading3",
-    "heading4",
-    "heading5",
-    "heading6",
-    "hyperlink",
-    "listparagraph",
     "normal",
     "plain",
     "report",
     "reportchar",
     "reporthead",
-    "strong",
-    "title"
+    "tablegrid"
+   ],
+   "out": [
+    "normal",
+    "plain",
+    "report",
+    "reportchar",
+    "reporthead",
+    "tablegrid"
    ]
   },
   "style|type": {
    "bucket": "kept",
-   "n": 5,
+   "n": 6,
    "src": [
     "character",
-    "paragraph"
+    "paragraph",
+    "table"
    ],
    "out": [
     "character",
-    "paragraph"
+    "paragraph",
+    "table"
    ]
   },
   "styleLink|val": {
@@ -5189,12 +5157,8 @@
     "24"
    ],
    "out": [
-    "20",
     "22",
-    "24",
-    "26",
-    "32",
-    "56"
+    "24"
    ]
   },
   "szCs|val": {
@@ -5205,13 +5169,8 @@
     "28"
    ],
    "out": [
-    "20",
     "22",
-    "24",
-    "26",
-    "28",
-    "32",
-    "56"
+    "28"
    ]
   },
   "tab|leader": {
@@ -5318,7 +5277,8 @@
     "0"
    ],
    "out": [
-    "0"
+    "0",
+    "1"
    ]
   },
   "tblLook|val": {
@@ -5440,12 +5400,14 @@
    ]
   },
   "tblStyle|val": {
-   "bucket": "lost",
+   "bucket": "kept",
    "n": 1,
    "src": [
     "tablegrid"
    ],
-   "out": []
+   "out": [
+    "tablegrid"
+   ]
   },
   "tblStyleColBandSize|val": {
    "bucket": "kept",
@@ -5455,6 +5417,16 @@
    ],
    "out": [
     "2"
+   ]
+  },
+  "tblStylePr|type": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "firstrow"
+   ],
+   "out": [
+    "firstrow"
    ]
   },
   "tblStyleRowBandSize|val": {
@@ -5691,8 +5663,7 @@
     "9"
    ],
    "out": [
-    "9",
-    "99"
+    "9"
    ]
   },
   "useLocalDpi|val": {
