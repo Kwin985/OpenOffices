@@ -79,6 +79,14 @@ export const FIXTURE_STYLES =
   `<w:style w:type="character" w:styleId="ReportChar"><w:name w:val="report char"/>` +
   `<w:basedOn w:val="Normal"/><w:link w:val="Report"/><w:uiPriority w:val="9"/><w:rsid w:val="00B2"/></w:style>` +
   `<w:style w:type="paragraph" w:styleId="Plain"><w:name w:val="plain"/></w:style>` +
+  // v0.169：表样式定义。三张表都指着 TableGrid，但此前夹具里没这枚定义——读手挂标签要
+  // 「认得出 id」，所以 `data-tstyle` 一路从来没被端到端跑过，`w:tblStyle` 也就从没写回。
+  // 这里给身份（name/basedOn）与一层条件格式（firstRow 加粗）：前者验「引用 + 定义」这一对，
+  // 后者验条件层的型名与它那份 run（读手此前只把 run 塞进快照、屏上没兑现）。
+  // 不给 tblPr：表样式的**外观**早已逐格塌进内联样式，本轮不碰那一层
+  `<w:style w:type="table" w:styleId="TableGrid"><w:name w:val="Table Grid"/>` +
+  `<w:basedOn w:val="TableNormal"/>` +
+  `<w:tblStylePr w:type="firstRow"><w:rPr><w:b/></w:rPr></w:tblStylePr></w:style>` +
   `</w:styles>`
 
 // v0.142：编号部件。numId=1 指 abstractNumId=0：0 层是子弹（·/左对齐），1 层是小写

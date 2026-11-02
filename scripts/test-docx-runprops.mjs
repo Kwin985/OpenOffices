@@ -1155,6 +1155,38 @@ const THEME_COLORS =
   check('bar 导出：没载荷就不插', !xml.includes('<w:bar'), '')
 }
 
+// ─────────────── 12. 表样式的两条路（v0.169）：引用/定义 + 条件层 run ───────────────
+
+{
+  // 一份带表样式定义（含 firstRow 条件）的最小件；两张表只差 tblLook 的首行闸门
+  const table = (look) =>
+    `<w:tbl><w:tblPr><w:tblStyle w:val="TS"/>${look}</w:tblPr>` +
+    `<w:tblGrid><w:gridCol w:w="2000"/></w:tblGrid>` +
+    `<w:tr><w:tc><w:p><w:r><w:t>首行</w:t></w:r></w:p></w:tc></w:tr>` +
+    `<w:tr><w:tc><w:p><w:r><w:t>次行</w:t></w:r></w:p></w:tc></w:tr></w:tbl>`
+  const zip = new JSZip()
+  zip.file(
+    'word/document.xml',
+    `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:document xmlns:w="${W}"><w:body>` +
+      table('<w:tblLook w:firstRow="1"/>') +
+      table('<w:tblLook w:firstRow="0"/>') +
+      `</w:body></w:document>`,
+  )
+  zip.file(
+    'word/styles.xml',
+    `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:styles xmlns:w="${W}">` +
+      `<w:style w:type="table" w:styleId="TS"><w:name w:val="T"/>` +
+      `<w:tblStylePr w:type="firstRow"><w:rPr><w:b/></w:rPr></w:tblStylePr></w:style>` +
+      `</w:styles>`,
+  )
+  const r = await docxToHtmlFidelity(new Uint8Array(await zip.generateAsync({ type: 'arraybuffer', compression: 'STORE' })))
+  has('表样式：认得出的 id 挂 data-tstyle', r.html, 'data-tstyle="TS"')
+  has('条件层 run：首行加粗上屏', r.html, '<strong>首行</strong>')
+  check('条件层 run：次行不加粗', !r.html.includes('<strong>次行</strong>'), '')
+  // 第二张表把首行闸门关掉：同一份样式定义，不该再有加粗
+  check('条件层 run：闸门关掉就不加粗', !/w:firstRow="0"[\s\S]*<strong>/.test(r.html), '')
+}
+
 console.log(`通过 ${ok.length} 项` + (bad.length ? `，**失败 ${bad.length} 项**` : '，失败 0 项'))
 for (const b of bad) console.log(`FAIL ${b}`)
 if (bad.length) process.exitCode = 1

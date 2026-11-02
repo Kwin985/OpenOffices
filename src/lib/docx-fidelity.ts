@@ -1878,8 +1878,10 @@ function readRPr(el: XEl | undefined, p: RunProps, tc?: ThemeColors): RunProps {
 }
 
 /** 段落样式链 → 段落标记 run（pPr/rPr）：本段文字的基准运行属性（docDefaults 故意不参与，见 readStyles） */
-function baseRunProps(chain: StyleInfo[], pPr: XEl | undefined, tc?: ThemeColors): RunProps {
-  let p = NONE
+function baseRunProps(chain: StyleInfo[], pPr: XEl | undefined, tc?: ThemeColors, seed: RunProps = NONE): RunProps {
+  // seed 是「比段落样式更弱的那一层」（v0.169：表样式条件层的 run）。链与段落标记
+  // 依次盖在它上面——Word 的优先级也是段落样式压过表样式
+  let p = seed
   for (const s of chain) if (s.rPr) p = readRPr(s.rPr, p, tc)
   const paraMark = pPr ? find(pPr, 'w:rPr') : undefined
   if (paraMark) {
@@ -2554,10 +2556,10 @@ class Fidelity {
     return nxSig && nxSig.sig === curSig.sig ? (curSig.between ?? '') : ''
   }
 
-  private async paragraph(el: XEl, list: ListState, inCell: boolean, betweenCss = ''): Promise<string> {
+  private async paragraph(el: XEl, list: ListState, inCell: boolean, betweenCss = '', runSeed: RunProps = NONE): Promise<string> {
     const { pPr, effPPr } = this.effPPrOf(el)
     const view = styleView(this.book, pPr ? val(pPr, 'w:pStyle') : undefined)
-    const base = baseRunProps(view.chain, effPPr, this.themeColors)
+    const base = baseRunProps(view.chain, effPPr, this.themeColors, runSeed)
     // 段落标记自身的修订（v0.100）：pPr/w:ins = 这是新插入的段落（接受后留下来）；文字若没被
     // w:ins 单独包住，段落级插入就是它唯一的变化，按普通段落读不丢内容。pPr/rPr/w:del =
     // 段落标记被删（接受后本段并入下一段），这一层意思模型里没有承载，如实记账
@@ -3986,6 +3988,10 @@ class Fidelity {
           const sp = tbSpace[tblEdge]
           if (sp) bdSpace[edge] = sp
         }
+        // 条件层的 run（v0.169）：目前只有「首行加粗」这一枚进了快照。它此前只跟着
+        // styles.xml 回去、屏上从没兑现——表里首行该粗不粗，而 Word 打开是粗的
+        const condRun = condRunFor(look, conds, ri, ri === last, c.gc, c.colspan, acct.length)
+        const cellRun: RunProps = condRun.bold ? { b: true } : NONE
         const style = [cellStyleCss(tcPr, {
           top: cb.top ?? cb2.top ?? (ri === 0 ? tb.top : tb.insideH),
           bottom: cb.bottom ?? cb2.bottom ?? (ri === last ? tb.bottom : tb.insideH),
@@ -4000,7 +4006,7 @@ class Fidelity {
         // 这一枚载荷只为写侧认回（白-space 会与用户手设的样式混，不放载荷里认）
         if (on(find(tcPr, 'w:noWrap'))) attrs.push('data-nowrap="1"')
         for (const [k, v] of Object.entries(bdSpaceAttrs(bdSpace))) attrs.push(`${k}="${v}"`)
-        s += `<${tag}${attrs.length ? ' ' + attrs.join(' ') : ''}>${await this.cellBlocks(c.el)}</${tag}>`
+        s += `<${tag}${attrs.length ? ' ' + attrs.join(' ') : ''}>${await this.cellBlocks(c.el, cellRun)}</${tag}>`
       }
       s += '</tr>'
     }
@@ -4008,14 +4014,14 @@ class Fidelity {
   }
 
   /** 单元格内容：段落走"格内列表"的独立栈（不与外层正文的列表串台），嵌套表格出真表 */
-  private async cellBlocks(tc: XEl): Promise<string> {
+  private async cellBlocks(tc: XEl, runSeed: RunProps = NONE): Promise<string> {
     const list = new ListState()
     let html = ''
     for (let i = 0; i < tc.children.length; i++) {
       const b = tc.children[i]
       if (typeof b === 'string') continue
       const t = local(b.name)
-      if (t === 'p') html += await this.paragraph(b, list, true, this.betweenOfSiblings(tc.children, i))
+      if (t === 'p') html += await this.paragraph(b, list, true, this.betweenOfSiblings(tc.children, i), runSeed)
       else if (t === 'tbl') {
         // table() 里「整盘没账就按版心等分」那一档在格子里吃的是版心而不是外层格宽：真件 11 枚嵌套表
         // 枚枚带 w:tblGrid 与逐格 dxa 账（b6 的 N3/N4/N5），这一档在真件上够不着，本轮不为它改道
@@ -4517,6 +4523,11 @@ type CondCell = {
   borders?: Partial<Record<CellEdge, string>>
   rowHeightPx?: number
   rowHeightExact?: boolean
+  /**
+   * 条件层对文字的 run（v0.169）：目前只收 `w:rPr/w:b`——首行加粗是最常见的一条。
+   * 此前它只跟着 styles.xml 回去，屏上从没兑现：表里首行该粗不粗，Word 打开却是粗的
+   */
+  bold?: boolean
 }
 
 /**
@@ -4557,12 +4568,15 @@ function styleCondCells(book: StyleBook, id: string | undefined, tc?: ThemeColor
       const thEl = trPr ? find(trPr, 'w:trHeight') : undefined
       const thv = attrNum(thEl, 'w:val')
       const thExact = (attr(thEl, 'w:hRule') ?? 'atLeast').toLowerCase() === 'exact'
+      // 条件层的 run（v0.169）：只认 `w:rPr/w:b`。空元素与 val=1 都算开（ST_OnOff）
+      const bold = on(find(find(pr, 'w:rPr'), 'w:b'))
       if (
         Object.keys(mar).length ||
         Object.keys(tblMar).length ||
         shd ||
         Object.keys(borders).length ||
-        thv !== undefined
+        thv !== undefined ||
+        bold
       ) {
         const k = asTableCondType(type)
         if (k)
@@ -4570,6 +4584,7 @@ function styleCondCells(book: StyleBook, id: string | undefined, tc?: ThemeColor
             mar,
             tblMar,
             shd,
+            ...(bold ? { bold } : {}),
             ...(Object.keys(borders).length ? { borders } : {}),
             ...(thv !== undefined && thv > 0
               ? { rowHeightPx: px2(thv * TWIP_PX), rowHeightExact: thExact }
@@ -4650,6 +4665,27 @@ function condMarginsFor(
  * 逐边取一：梯子先说话的那一型把某条边定了，后面同边的型就改不动——角型在最前，于是角格的边框压住行型与列型。
  * 不同边互不 related（首行说 bottom、首列说 left，两枚各落各的）。
  */
+/**
+ * 这一格吃到的条件层 run（v0.169）：目前快照里只有 `bold` 一枚，按外观梯子取第一个
+ * 说了话的档。表样式对表内文字的那份 `w:rPr`（非条件层）还没接——它是**常驻**的
+ * 一层，不与位置相关，要接得另走一条（顺延）。
+ */
+function condRunFor(
+  look: Record<string, boolean>,
+  conds: Record<string, CondCell>,
+  ri: number,
+  isLastRow: boolean,
+  gc: number,
+  colspan: number,
+  cols: number,
+): { bold?: boolean } {
+  for (const t of condLadderAppearance(look, ri, isLastRow, gc, colspan, cols)) {
+    const c = conds[t]
+    if (c?.bold) return { bold: true }
+  }
+  return {}
+}
+
 function condBordersFor(
   look: Record<string, boolean>,
   conds: Record<string, CondCell>,
