@@ -1,5 +1,5 @@
 import { Extension, Mark, type CommandProps, type Editor } from '@tiptap/core'
-import { BDR_ATTR, CELL_EDGES, PBDR_ATTR, FRAME_ATTR, PPR_ATTR, SHADE_ATTR, SHD_ATTR, TABS_ATTR, bdAttr, bdrAttrsOf, edgeAttrs, inlineBorder, parseFramePayload, parsePprPayload, parseTabsPayload, rgb2hex, shadeAttrs, shdAttrsOf, pbdrAttrsOf, type CellEdge } from './cell-style'
+import { BDR_ATTR, CELL_EDGES, PBAR_ATTR, PBDR_ATTR, FRAME_ATTR, PPR_ATTR, SHADE_ATTR, SHD_ATTR, TABS_ATTR, bdAttr, bdrAttrsOf, edgeAttrs, inlineBorder, parseFramePayload, parsePprPayload, parseTabsPayload, rgb2hex, shadeAttrs, shdAttrsOf, pbarAttrsOf, pbdrAttrsOf, type CellEdge } from './cell-style'
 
 /**
  * 段落的排版属性：行距、段前段后、底纹与四边边框。
@@ -241,6 +241,12 @@ export const ParagraphStyle = Extension.create({
             default: null as string | null,
             parseHTML: (el: HTMLElement) => el.getAttribute(PBDR_ATTR) || null,
             renderHTML: (attrs: Record<string, unknown>) => pbdrAttrsOf(attrs.pbdr),
+          },
+          // 第六条边 w:bar（v0.168）：段落侧边的竖线，屏上没有替身，只往返
+          pbar: {
+            default: null as string | null,
+            parseHTML: (el: HTMLElement) => el.getAttribute(PBAR_ATTR) || null,
+            renderHTML: (attrs: Record<string, unknown>) => pbarAttrsOf(attrs.pbar),
           },
           // 边框与文字的距离（v0.143）：w:pBdr/@w:space（磅→px）。段落侧没有 tcMar 竞争，
           // padding-{side} 就是它自己，读回从同一条 CSS 解析；0 与未声明同路（不写）

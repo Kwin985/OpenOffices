@@ -50,7 +50,7 @@ import { all, allDesc, attr, attrL, attrNum, els, find, findDesc, findL, local, 
 import { FieldEngine, fieldLabel, parseInstr, recomputable } from './docx-fields'
 import { embedHtml, inlineFlatten, unwrapEmbed, type EmbedHtml } from './ole'
 import { chartToHtml, smartArtToHtml } from './ooxml-graphics'
-import { BDR_ATTR, CELL_EDGES, PBDR_ATTR, CNF_ATTR, CNF_KEYS, CSS_BORDER_STYLE, FRAME_NUMERIC_KEYS, FRAME_STR_KEYS, IMG_ATTR, PPR_ATTR, PPR_IND_KEYS, PPR_ONOFF_KEYS, PPR_STR_KEYS, SHD_ATTR, TAB_LEADERS, TBLB_ATTR, TBLB_EDGES, TBLB_KEYS, TBLPR_ATTR, TLOOK_ATTR, bdSpaceAttrs, bdrPayload, borderParts, cnfPayload, eighthsToPx, framePayload, imgPayload, pprPayload, ptToPx, rgb2hex, shadeCss, shdPayloadOf, tblbPayload, tblpPayload, tblPrPayload, tabsPayload, tlookPayload, pbdrPayload, type BdrOrigin, type CellEdge, type CnfPayload, type FramePayload, type ImgPayload, type PprPayload, type ShdPayload, type TabSpec, type TblbPayload, type TblpPayload } from './cell-style'
+import { BDR_ATTR, CELL_EDGES, PBAR_ATTR, PBDR_ATTR, CNF_ATTR, CNF_KEYS, CSS_BORDER_STYLE, FRAME_NUMERIC_KEYS, FRAME_STR_KEYS, IMG_ATTR, PPR_ATTR, PPR_IND_KEYS, PPR_ONOFF_KEYS, PPR_STR_KEYS, SHD_ATTR, TAB_LEADERS, TBLB_ATTR, TBLB_EDGES, TBLB_KEYS, TBLPR_ATTR, TLOOK_ATTR, bdSpaceAttrs, bdrPayload, borderParts, cnfPayload, eighthsToPx, framePayload, imgPayload, pprPayload, ptToPx, rgb2hex, shadeCss, shdPayloadOf, tblbPayload, tblpPayload, tblPrPayload, tabsPayload, tlookPayload, pbdrPayload, type BdrOrigin, type CellEdge, type CnfPayload, type FramePayload, type ImgPayload, type PprPayload, type ShdPayload, type TabSpec, type TblbPayload, type TblpPayload } from './cell-style'
 import { ooxmlLine } from './paragraph-style'
 import {
   asTableCondType,
@@ -2598,6 +2598,7 @@ class Fidelity {
     const bdrAttr = pbdrEl ? borderOrigin(pbdrEl, pbdrEdges) : ''
     // 第五边（v0.167）：`betweenCss` 非空 = 本段真把它画成了下边框
     const pbdrAttr = pbdrOrigin(pbdrEl, pbdrEdges, !!betweenCss)
+    const pbarAttr = barOrigin(pbdrEl)
     // 分页四件套（v0.143）：w:pageBreakBefore / w:keepNext / w:keepLines / w:widowControl。
     // Web 流式排版没有分页与孤行控制，屏上不兑现——只随 data-* 进出保往返。
     // onOff 三态：'1' 开、'0' 关（widowControl 在 Word 里默认就是开，「显式关」是真值，
@@ -2617,7 +2618,7 @@ class Fidelity {
     // 段落属性余量（v0.147）：pPr 里那批屏上不兑现的直接属性 → data-ppr 载荷
     const pprAttr = readPprPayload(effPPr)
     const body = this.layout(
-      `${tag}${shadeAttr ? ` data-shade="${shadeAttr}"` : ''}${shdAttr ? ` ${SHD_ATTR}="${shdAttr}"` : ''}${bdrAttr ? ` ${BDR_ATTR}="${bdrAttr}"` : ''}${pbdrAttr ? ` ${PBDR_ATTR}="${pbdrAttr}"` : ''}${tabsAttr ? ` data-tabs="${tabsAttr}"` : ''}${frameAttr ? ` data-frame="${frameAttr}"` : ''}${pprAttr ? ` ${PPR_ATTR}="${pprAttr}"` : ''}${flags.join('')}`,
+      `${tag}${shadeAttr ? ` data-shade="${shadeAttr}"` : ''}${shdAttr ? ` ${SHD_ATTR}="${shdAttr}"` : ''}${bdrAttr ? ` ${BDR_ATTR}="${bdrAttr}"` : ''}${pbdrAttr ? ` ${PBDR_ATTR}="${pbdrAttr}"` : ''}${pbarAttr ? ` ${PBAR_ATTR}="${pbarAttr}"` : ''}${tabsAttr ? ` data-tabs="${tabsAttr}"` : ''}${frameAttr ? ` data-frame="${frameAttr}"` : ''}${pprAttr ? ` ${PPR_ATTR}="${pprAttr}"` : ''}${flags.join('')}`,
       style,
       pieces,
     )
@@ -4159,6 +4160,31 @@ function pbdrOrigin(el: XEl | undefined, css: Record<string, string | undefined>
 }
 
 /**
+ * 段落第六条边 `w:bar` 的存盘原件（v0.168）：`data-pbar` 载荷。
+ *
+ * 比 between 简单：屏上没有替身（读手从来没画过它），所以没有 `screen`、也没有
+ * `hidden`——前七格与 `data-pbdr` 同一套定序，写侧「有就插一枚」。
+ */
+function barOrigin(el: XEl | undefined): string {
+  const b = el ? find(el, 'w:bar') : undefined
+  if (!b) return ''
+  const v = attr(b, 'w:val')
+  const sz = attr(b, 'w:sz')
+  const sp = attr(b, 'w:space')
+  const c = attr(b, 'w:color')
+  const parts = themeRefParts(b)
+  return pbdrPayload({
+    ...(v ? { val: v } : {}),
+    ...(sz ? { sz } : {}),
+    ...(sp !== undefined ? { space: sp } : {}),
+    ...(c ? { color: c } : {}),
+    ...(parts.ref ? { themeColor: parts.ref } : {}),
+    ...(parts.tint ? { themeTint: parts.tint } : {}),
+    ...(parts.shade ? { themeShade: parts.shade } : {}),
+  })
+}
+
+/**
  * 边框的存盘原件（v0.165）：`data-bdr` 载荷。
  *
  * `borderEdges` 交出去的是**解析后的屏上色**，模型里 `bd*` 那一格也只装得下它；源件
@@ -4180,6 +4206,9 @@ function borderOrigin(el: XEl | undefined, css: Record<string, string | undefine
     const screen = (borderParts(shown)?.hex ?? '').replace('#', '').toUpperCase()
     if (!screen) continue
     const color = attr(box, 'w:color')
+    // 显式 `w:space="0"`（v0.168）：CSS 的 padding 没有「0 与没写」的区别，写手发不回来，
+    // 所以只把这一档记进载荷。非零值不用记——padding 那条链已经能原样还原
+    const space = attr(box, 'w:space')
     // 三枚引用交给 themeRefParts：它是「按名查问这三枚」的唯一出口——在这里再手写一遍
     // attr 会让 no-themeshade 那条变异腿失真（查问多了一条不受注入影响的路径）
     const parts = themeRefParts(box)
@@ -4187,7 +4216,9 @@ function borderOrigin(el: XEl | undefined, css: Record<string, string | undefine
     const themeTint = parts.tint
     const themeShade = parts.shade
     const sameLiteral = (color ?? '').toLowerCase() === screen.toLowerCase()
-    if (!themeColor && !themeTint && !themeShade && sameLiteral) continue
+    // 显式 space="0" 也算「有话说」：字面与屏上色一致、没有主题引用时，这条边本来
+    // 什么都不用补——但 space=0 这一档只有载荷记得住（v0.168）
+    if (!themeColor && !themeTint && !themeShade && sameLiteral && space !== '0') continue
     out.push({
       edge,
       ...(color ? { color } : {}),
@@ -4195,6 +4226,7 @@ function borderOrigin(el: XEl | undefined, css: Record<string, string | undefine
       ...(themeTint ? { themeTint } : {}),
       ...(themeShade ? { themeShade } : {}),
       screen,
+      ...(space === '0' ? { space: '0' } : {}),
     })
   }
   return bdrPayload(out)

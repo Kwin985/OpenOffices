@@ -1081,6 +1081,80 @@ const THEME_COLORS =
   check('between 导出：串尾不带下边框', !block.includes('<w:bottom'), block)
 }
 
+// ───────────────── 11. 显式 space="0" 与第六条边 w:bar（v0.168）─────────────────
+
+{
+  // 显式 `w:space="0"`：CSS 的 padding 里 0 与「没写」同形，只有载荷记得住
+  const doc = {
+    type: 'doc',
+    content: [
+      {
+        type: 'paragraph',
+        attrs: { bdTop: '0.67px solid #4472c4', bdr: 'top;4472C4;;;FFF;4472c4;0' },
+        content: [{ type: 'text', text: '零间距' }],
+      },
+    ],
+  }
+  const xml = await (await JSZip.loadAsync(await prosemirrorToDocxBytes(doc))).file('word/document.xml').async('string')
+  const top = /<w:top(?=[\s/>])[^>]*>/.exec(xml)?.[0] ?? ''
+  has('space 导出：显式 0 写回', top, 'w:space="0"')
+}
+
+{
+  // 反例：用户把内边距调大了（padTop > 0）→ 以用户为准，载荷里的 0 不能用
+  const doc = {
+    type: 'doc',
+    content: [
+      {
+        type: 'paragraph',
+        attrs: { bdTop: '0.67px solid #4472c4', padTop: 4, bdr: 'top;4472C4;;;FFF;4472c4;0' },
+        content: [{ type: 'text', text: '调过边距' }],
+      },
+    ],
+  }
+  const xml = await (await JSZip.loadAsync(await prosemirrorToDocxBytes(doc))).file('word/document.xml').async('string')
+  const top = /<w:top(?=[\s/>])[^>]*>/.exec(xml)?.[0] ?? ''
+  check('space 导出：用户调过边距就不写 0', !top.includes('w:space="0"'), top)
+  has('space 导出：用户的边距照发', top, 'w:space="3"')
+}
+
+{
+  // 第六条边 w:bar：屏上没有替身，有载荷就插一枚，位置在 between 之后
+  const doc = {
+    type: 'doc',
+    content: [
+      {
+        type: 'paragraph',
+        attrs: {
+          bdTop: '0.67px solid #4472c4',
+          bdr: 'top;4472C4;;;FFF;4472c4',
+          pbdr: 'dotted;6;2;FF9900;accent2;99;;F8CBAD;1',
+          pbar: 'single;12;4;7030A0;accent4;99;;;',
+        },
+        content: [{ type: 'text', text: '带竖线' }],
+      },
+    ],
+  }
+  const xml = await (await JSZip.loadAsync(await prosemirrorToDocxBytes(doc))).file('word/document.xml').async('string')
+  const block = /<w:pBdr[\s\S]*?<\/w:pBdr>/.exec(xml)?.[0] ?? ''
+  has('bar 导出：元素插回去了', block, '<w:bar w:val="single"')
+  has('bar 导出：主题两枚跟着走', block, 'w:themeColor="accent4"')
+  has('bar 导出：字面色是原件', block, 'w:color="7030A0"')
+  check('bar 导出：位置在 between 之后（CT_PBdr 序）', block.indexOf('<w:bar') > block.indexOf('<w:between'), block)
+}
+
+{
+  // 反例：没有 bar 载荷就不该凭空插一枚
+  const doc = {
+    type: 'doc',
+    content: [
+      { type: 'paragraph', attrs: { bdTop: '0.67px solid #4472c4', bdr: 'top;4472C4;;;FFF;4472c4' }, content: [{ type: 'text', text: '无' }] },
+    ],
+  }
+  const xml = await (await JSZip.loadAsync(await prosemirrorToDocxBytes(doc))).file('word/document.xml').async('string')
+  check('bar 导出：没载荷就不插', !xml.includes('<w:bar'), '')
+}
+
 console.log(`通过 ${ok.length} 项` + (bad.length ? `，**失败 ${bad.length} 项**` : '，失败 0 项'))
 for (const b of bad) console.log(`FAIL ${b}`)
 if (bad.length) process.exitCode = 1

@@ -153,8 +153,11 @@ export const FIXTURE_DOC =
   // v0.167：段落第五边 w:between——只在「相邻两段边框签名一致」时才画，所以这里放两段
   // 一模一样的 pBdr（上边 + between，**没有下边**：显式下边会让 between 让位）。第一段
   // 的 between 落成它的下边框（data-pbdr 不带 hidden），第二段是串尾、不画（带 hidden）
-  `<w:p><w:pPr><w:pBdr><w:top w:val="single" w:sz="4" w:color="4472C4"/>` +
-  `<w:between w:val="dotted" w:sz="6" w:space="2" w:color="FF9900" w:themeColor="accent2" w:themeTint="99"/></w:pBdr></w:pPr>` +
+  // v0.168：上边带显式 space="0"（CSS 没有「0 与没写」的区别，只有载荷记得住）、
+  // 并挂第六条边 w:bar（段落侧边的竖线，屏上没有替身，只往返）
+  `<w:p><w:pPr><w:pBdr><w:top w:val="single" w:sz="4" w:space="0" w:color="4472C4"/>` +
+  `<w:between w:val="dotted" w:sz="6" w:space="2" w:color="FF9900" w:themeColor="accent2" w:themeTint="99"/>` +
+  `<w:bar w:val="single" w:sz="12" w:space="4" w:color="7030A0" w:themeColor="accent4" w:themeTint="99"/></w:pBdr></w:pPr>` +
   `<w:r><w:t>串一</w:t></w:r></w:p>` +
   `<w:p><w:pPr><w:pBdr><w:top w:val="single" w:sz="4" w:color="4472C4"/>` +
   `<w:between w:val="dotted" w:sz="6" w:space="2" w:color="FF9900" w:themeColor="accent2" w:themeTint="99"/></w:pBdr></w:pPr>` +

@@ -204,7 +204,12 @@ export function borderCss(style: string, pt: number, hex: string): string {
  * 否则 Word 按主题解析，用户换的颜色在屏上、在纸上都看不见。
  */
 export const BDR_ATTR = 'data-bdr'
-export const BDR_KEYS = ['color', 'themeColor', 'themeTint', 'themeShade', 'screen'] as const
+/**
+ * v0.168 补第 6 格 `space`：**只记显式 0**（其他值 CSS 的 padding 已经表达，写手发得回来）。
+ * `w:space="0"` 与「没写」在语义上是同一档（缺省即 0），但字面是源件说过的话——
+ * CSS 没有「0 与没写」的区别，只有载荷记得住。
+ */
+export const BDR_KEYS = ['color', 'themeColor', 'themeTint', 'themeShade', 'screen', 'space'] as const
 export type BdrOrigin = { edge: CellEdge } & Partial<Record<(typeof BDR_KEYS)[number], string>>
 
 /** 逐键形状闸门：脏键整键丢（猜出来的值写进包里比不写更坏） */
@@ -216,6 +221,7 @@ const BDR_FIELD: Record<(typeof BDR_KEYS)[number], RegExp> = {
   themeTint: /^[0-9A-Fa-f]{2}$/,
   themeShade: /^[0-9A-Fa-f]{2}$/,
   screen: /^[0-9A-Fa-f]{6}$/,
+  space: /^0$/,
 }
 
 /**
@@ -298,6 +304,22 @@ export function pbdrPayload(p: PbdrPayload): string {
 export function pbdrAttrsOf(raw: unknown): Record<string, string> {
   const payload = typeof raw === 'string' ? raw : ''
   return Object.keys(parsePbdrPayload(payload)).length ? { [PBDR_ATTR]: payload } : {}
+}
+
+/* ── 段落的第六条边 w:bar（v0.168）────────────────────────────────
+ * 段落左侧（或右侧）的竖线——合同/公文的「条」常用它。它比 between 简单：**没有
+ * 屏上替身**，读手也没为它画过任何东西（`borderEdges` 顺带算出来的那枚一直没人用），
+ * 所以写侧就是「有就插一枚」，不需要判据。
+ *
+ * 载荷与 between 同一套定序格（前七格有效）：线型/粗细/间距/颜色/主题三枚。
+ * 名字叫 `data-pbar`：与 `data-pbdr`（between）分开，两个元素各自的账各记各的。
+ */
+export const PBAR_ATTR = 'data-pbar'
+
+/** 屏上一条样式都不兑现，只为写回 */
+export function pbarAttrsOf(raw: unknown): Record<string, string> {
+  const payload = typeof raw === 'string' ? raw : ''
+  return Object.keys(parsePbdrPayload(payload)).length ? { [PBAR_ATTR]: payload } : {}
 }
 
 /** OOXML `w:sz`（1/8 磅）→ CSS 像素 */

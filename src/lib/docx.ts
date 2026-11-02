@@ -1693,6 +1693,16 @@ function bordersOf(attrs: Record<string, unknown> | undefined, noBottom = false)
  * 对不上就说明用户在编辑器里改过色——主题引用那时必须让位，否则 Word 按主题解析，
  * 用户换的颜色在屏上、在纸上都看不见。线型与粗细改了不影响颜色，照补。
  */
+function padTouched(attrs: Record<string, unknown> | undefined, edge: string): boolean {
+  const cap = edge[0].toUpperCase() + edge.slice(1)
+  // 段落落在 pad*、逐格落在 bdSpace*（v0.143 的两条通道）
+  for (const a of [`pad${cap}`, `bdSpace${cap}`]) {
+    const v = attrs?.[a]
+    if (typeof v === 'number' && v > 0) return true
+  }
+  return false
+}
+
 function bdrExtraOf(attrs: Record<string, unknown> | undefined): string {
   const out: string[] = []
   for (const o of parseBdrPayload(typeof attrs?.bdr === 'string' ? attrs.bdr : null)) {
@@ -1703,16 +1713,41 @@ function bdrExtraOf(attrs: Record<string, unknown> | undefined): string {
       o.themeColor ? `w:themeColor="${o.themeColor}"` : '',
       o.themeTint ? `w:themeTint="${o.themeTint}"` : '',
       o.themeShade ? `w:themeShade="${o.themeShade}"` : '',
+      // 显式 `w:space="0"`（v0.168）：包按 padding 发，0 与「没写」在 CSS 里同形，
+      // 只有载荷记得住；用户把内边距调大了就以用户为准（见 padTouched）
+      o.space === '0' && !padTouched(attrs, o.edge) ? 'w:space="0"' : '',
     ]
       .filter(Boolean)
       .join(' ')
     if (add) out.push(`${o.edge}|${add}`)
   }
-  // 第五边（v0.167）：与四边同一块、同一个数组——它插在 `<w:pBdr>` 里，
-  // 对位靠的就是这一块的出现序
+  // 第五边（v0.167）与第六条边（v0.168）：与四边同一块、同一个数组——它们都插在
+  // `<w:pBdr>` 里，对位靠的就是这一块的出现序
   const bt = betweenExtraOf(attrs)
   if (bt) out.push(`between|${bt}`)
+  const bar = barExtraOf(attrs)
+  if (bar) out.push(`bar|${bar}`)
   return out.join(';')
+}
+
+/**
+ * 段落第六条边（v0.168）：`data-pbar` 载荷 → 要写进 `<w:pBdr>` 的属性串。
+ * 屏上没有替身、界面上也改不了它——没有判据，有就插一枚。
+ */
+function barExtraOf(attrs: Record<string, unknown> | undefined): string {
+  const p = parsePbdrPayload(typeof attrs?.pbar === 'string' ? attrs.pbar : null)
+  if (!p.val && !p.color && !p.themeColor) return ''
+  return [
+    p.val ? `w:val="${p.val}"` : '',
+    p.sz ? `w:sz="${p.sz}"` : '',
+    p.space !== undefined ? `w:space="${p.space}"` : '',
+    p.color ? `w:color="${p.color}"` : '',
+    p.themeColor ? `w:themeColor="${p.themeColor}"` : '',
+    p.themeTint ? `w:themeTint="${p.themeTint}"` : '',
+    p.themeShade ? `w:themeShade="${p.themeShade}"` : '',
+  ]
+    .filter(Boolean)
+    .join(' ')
 }
 
 /**
@@ -3622,6 +3657,13 @@ async function patchBorderBlocks(bytes: Uint8Array, tag: 'w:pBdr' | 'w:tcBorders
           block = block.includes('<w:bar')
             ? block.replace(/<w:bar(?=[\s/>])/, `<w:between ${attrs}/><w:bar`)
             : block.replace('</w:pBdr>', `<w:between ${attrs}/></w:pBdr>`)
+        }
+        continue
+      }
+      // 第六条边（v0.168）：CT_PBdr 的序里它排在 between 之后、块尾
+      if (edge === 'bar') {
+        if (tag === 'w:pBdr' && !/<w:bar(?=[\s/>])/.test(block)) {
+          block = block.replace('</w:pBdr>', `<w:bar ${attrs}/></w:pBdr>`)
         }
         continue
       }
