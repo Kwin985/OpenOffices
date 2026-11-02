@@ -21,12 +21,12 @@
   "onOffBareElement": true
  },
  "totals": {
-  "read": 616,
-  "kept": 268,
+  "read": 617,
+  "kept": 269,
   "value": 17,
   "lost": 331,
   "part": 0,
-  "consulted": 669,
+  "consulted": 670,
   "srcParts": 7,
   "outParts": 7,
   "htmlBlocks": 37
@@ -2073,6 +2073,17 @@
     "悬停提示"
    ],
    "out": []
+  },
+  "i|val": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "1"
+   ],
+   "out": [
+    "0",
+    "1"
+   ]
   },
   "iCs|val": {
    "bucket": "kept",

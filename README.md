@@ -9987,6 +9987,41 @@ D30 顺延：表样式自己的 `w:rPr`（常驻 run）接到表内文字；`fld
 表/节一族（`col|w`/`col|space`、`wAfter|*`、`gridAfter|val`、`smartTag|*`、`legacy|*`）；
 承接未动项 `gridCol`/`tcW` 的 ±5 缇、`w:cols` 的 `equalWidth`、`ind|left` 的列表缩进覆盖、
 `docPr|id` 重排、`lvlJc` 深层 `center`。另有一件要定口径：`theme1.xml` 进不进普查清单。
+## v0.171（D30）——表样式的那一半：常驻 run 上屏，层序要摆对
+
+往返账**正文属性 80.8% → 80.9%**（240/297 → 241/298），整体 43.5% → 43.6%，掉了 331 不动、
+值变 17 不动。`i|val` 进分母且保留。保真账本 md5 仍 `95846f03…`/`aab9813c…`，四条变异腿与
+上轮一字不差。
+
+### v0.169 只接了条件层，常驻那半还在纸上
+
+表样式对文字有两份说法：常驻的 `w:style/w:rPr`（整张表都吃）与条件层的 `w:tblStylePr/w:rPr`
+（按位置吃）。上一轮接了后一半（首行加粗），前一半依旧只进样式快照、跟着 styles.xml 回去——
+Word 里是斜体的表，打开我们这边是正体。
+
+这一轮把它接上：`tableStyleRun` 沿样式链读一遍 `w:rPr`，当成 `baseRunProps` 的 seed。
+
+### 层序：表样式最弱
+
+Word 的次序是 **字符 > 段落 > 表**。`baseRunProps` 本来就是「先 seed、再逐层盖」，所以把表样式
+当 seed 正好。结构测试用反例钉死：表样式说斜体、段落样式写 `<w:i w:val="0"/>`，那一格**不该**
+斜体。`TableNormal` 不进链（Word 会用自己的定义换掉它）。
+
+### 这一轮账本为什么动了
+
+夹具给表样式加了裸元素 `<w:i/>`。普查那条「元素在场而无 `w:val` 记 `val=1`」的口径（v0.161）
+把它记成 `i|val=1`；写出包里的 run 也带 `<w:i/>`，同样归一 → `i|val` 从「宇宙里没有」变成
+「进分母且保留」。**这一动不是我们多写了属性，是夹具多了一种写法。** 显示那一半（`<em>`、
+以及「段落压过表」的反例）仍然只能靠结构测试。
+
+### 门禁
+
+tsc 0、build ✓；结构测试 **165 → 167 项**全绿。
+
+D31 顺延：`fldChar` 三对；`outline|val`；表/节一族（`col|w`/`col|space`、`wAfter|*`、
+`gridAfter|val`、`smartTag|*`、`legacy|*`）；承接未动项 `gridCol`/`tcW` 的 ±5 缇、
+`w:cols` 的 `equalWidth`、`ind|left` 的列表缩进覆盖、`docPr|id` 重排、`lvlJc` 深层 `center`。
+另有一件要定口径：`theme1.xml` 进不进普查清单。
 
 ## 性能（v0.3）
 
