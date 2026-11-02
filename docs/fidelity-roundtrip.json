@@ -21,15 +21,15 @@
   "onOffBareElement": true
  },
  "totals": {
-  "read": 603,
-  "kept": 252,
+  "read": 609,
+  "kept": 258,
   "value": 17,
   "lost": 334,
   "part": 0,
-  "consulted": 654,
+  "consulted": 661,
   "srcParts": 7,
   "outParts": 7,
-  "htmlBlocks": 35
+  "htmlBlocks": 37
  },
  "pairs": {
   "abstractNum|abstractNumId": {
@@ -356,6 +356,66 @@
    ],
    "out": [
     "single"
+   ]
+  },
+  "between|color": {
+   "bucket": "kept",
+   "n": 2,
+   "src": [
+    "ff9900"
+   ],
+   "out": [
+    "ff9900"
+   ]
+  },
+  "between|space": {
+   "bucket": "kept",
+   "n": 2,
+   "src": [
+    "2"
+   ],
+   "out": [
+    "2"
+   ]
+  },
+  "between|sz": {
+   "bucket": "kept",
+   "n": 2,
+   "src": [
+    "6"
+   ],
+   "out": [
+    "6"
+   ]
+  },
+  "between|themeColor": {
+   "bucket": "kept",
+   "n": 2,
+   "src": [
+    "accent2"
+   ],
+   "out": [
+    "accent2"
+   ]
+  },
+  "between|themeTint": {
+   "bucket": "kept",
+   "n": 2,
+   "src": [
+    "99"
+   ],
+   "out": [
+    "99"
+   ]
+  },
+  "between|val": {
+   "bucket": "kept",
+   "n": 2,
+   "src": [
+    "dotted"
+   ],
+   "out": [
+    "dotted"
    ]
   },
   "bidi|val": {
@@ -5424,15 +5484,17 @@
   },
   "top|color": {
    "bucket": "kept",
-   "n": 3,
+   "n": 5,
    "src": [
     "000000",
     "336699",
+    "4472c4",
     "ff0000"
    ],
    "out": [
     "000000",
     "336699",
+    "4472c4",
     "adbbd4",
     "auto",
     "ff0000"
@@ -5452,7 +5514,7 @@
   },
   "top|sz": {
    "bucket": "kept",
-   "n": 3,
+   "n": 5,
    "src": [
     "4",
     "8"
@@ -5494,7 +5556,7 @@
   },
   "top|val": {
    "bucket": "kept",
-   "n": 3,
+   "n": 5,
    "src": [
     "single"
    ],

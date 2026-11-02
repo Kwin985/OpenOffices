@@ -9828,6 +9828,49 @@ D26 顺延：`w:pBdr/w:between` 与 `w:bar`（要插元素不是合并属性）�
 `pgNumType|*`、`smartTag|*`、`legacy|*`）；承接未动项 `gridCol`/`tcW` 的 ±5 缇、
 `w:cols` 的 `equalWidth`、`ind|left` 的列表缩进覆盖、`docPr|id` 重排、`lvlJc` 深层
 `center`。另有一件要定口径：`theme1.xml` 进不进普查清单。
+## v0.167（D26）——段落第五边 `w:between`：真身插回去，替身按住
+
+往返账**正文属性 78.9% → 79.3%**（224/284 → 230/290），整体 41.8% → 42.4%，掉了 334 不动、
+值变 17 不动。六对新对进账（`between|val`/`sz`/`space`/`color`/`themeColor`/`themeTint`，
+全「保留」）。保真账本 md5 仍 `95846f03…`/`aab9813c…`，四条变异腿与上轮一字不差。
+
+### 它不是「又一条边」
+
+`w:between` 画在**相邻两段之间**，只在两段边框签名一致时才画。读手把它落在**本段的下边框**
+上（屏上正好是「这一段下面有根线」），于是模型里 `bdBottom` 多了一条源件根本没有的
+`w:bottom`——照常发它、再补一枚 `w:between`，Word 里就是两根线。第一版探针正是这个形状。
+
+所以这一轮的动作是两个：把真身插回 `<w:pBdr>`（CT_PBdr 的序在四条之后、`w:bar` 之前），
+同时把替身按住——屏上那条下边框的色与载荷里的 `screen` 一致，就认定它是替身，`w:bottom`
+不发；对不上说明用户换过色，那时 between 作废、下边框照发。
+
+### 四边那套「从 CSS 反推」在这里不成立
+
+四条边的线型/粗细能从 `bd*` 的规范串反推，`between` 没有 CSS 槽，反推不出来。所以
+`data-pbdr` 把 `val/sz/space` 原件一起带上，并用尾格 `hidden` 区分两种情形：
+
+```
+dotted;6;2;FF9900;accent2;99;;F8CBAD      ← 画了（串中间那段）：屏上有替身可比
+dotted;6;2;FF9900;accent2;99;;F8CBAD;1    ← 没画（串尾/被显式下边顶掉）：原样带回
+```
+
+### 一次及时的收手
+
+夹具里那两段的上边框最初写了 `w:space="0"`，跑账时 `top|space` 多出一笔值变——写侧把
+`0` 与「没写」并成一路（`w:space` 缺省就是 0，语义等价但字面丢）。这与 between 无关，
+收进来只会把「掉了 334 / 值变 17」这条基线搅浑。夹具改回不带 `w:space`，这一档记进顺延。
+
+### 门禁
+
+tsc 0、build ✓；结构测试 **138 → 147 项**全绿（含反例：改过色就不补 between、替身那条
+下边框不发、串尾那一段原样带回、插入位置在四条之后）。
+
+D27 顺延：`pBdr`/`tcBorders` 的显式 `w:space="0"`（并进 `data-bdr` 第 7 格即可）；
+`w:bar`（第六条边，写侧连替身都没有，得单独定判据）；`fldChar` 三对；`outline|val`；
+表/节一族（`tblStyle|val`、`col|w`/`col|space`、`wAfter|*`、`gridAfter|val`、`pgNumType|*`、
+`smartTag|*`、`legacy|*`）；承接未动项 `gridCol`/`tcW` 的 ±5 缇、`w:cols` 的 `equalWidth`、
+`ind|left` 的列表缩进覆盖、`docPr|id` 重排、`lvlJc` 深层 `center`。另有一件要定口径：
+`theme1.xml` 进不进普查清单。
 
 ## 性能（v0.3）
 

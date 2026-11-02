@@ -43,15 +43,15 @@ docx ──读手──▶ HTML ──TipTap schema──▶ PM 模型 ──写
 
 | | 值 |
 |---|---:|
-| 读到的对 | 603 |
-| 保留 | **252（41.8%）** |
+| 读到的对 | 609 |
+| 保留 | **258（42.4%）** |
 | 值变 | 17 |
 | 掉了 | 334 |
 | 缺件 | 0 |
 | 源包部件 | 7 |
 | 写出包部件 | 7 |
 
-探针在这一趟里记到 654 个查问对；源包在场而有 603 个既在场又被查问，构成上面的分母。
+探针在这一趟里记到 661 个查问对；源包在场而有 609 个既在场又被查问，构成上面的分母。
 
 ## 分两笔账：正文属性与图形壳
 
@@ -61,7 +61,7 @@ docx ──读手──▶ HTML ──TipTap schema──▶ PM 模型 ──写
 
 | 族 | 读到的 | 保留 | 值变 | 掉了 | 保留率 |
 |---|---:|---:|---:|---:|---:|
-| 正文属性（`w:*`） | 284 | 224 | 15 | 45 | **78.9%** |
+| 正文属性（`w:*`） | 290 | 230 | 15 | 45 | **79.3%** |
 | 图形壳（`a:`/`v:`/`wp:`/`pic:`/`wps:`/`o:`） | 319 | 28 | 2 | 289 | **8.8%** |
 
 口径说明：一个对算正文，当且仅当它在源包里**只**出现在 `w:*` 元素上（沾过图形壳就算图形壳）。
@@ -145,7 +145,7 @@ docx ──读手──▶ HTML ──TipTap schema──▶ PM 模型 ──写
 
 （空）
 
-### 保留（252）
+### 保留（258）
 
 这些是真的双向。列出来是为了让「保留」也可核对，而不是一个孤零零的百分比。
 
@@ -155,6 +155,9 @@ docx ──读手──▶ HTML ──TipTap schema──▶ PM 模型 ──写
 | `extent|cy` | 5 | 914400 | 914400, 638175, 2286000 |
 | `style|styleId` | 5 | normal, reporthead, report, reportchar | title, heading1, heading2, heading3 |
 | `style|type` | 5 | paragraph, character | paragraph, character |
+| `top|color` | 5 | ff0000, 4472c4, 336699, 000000 | ff0000, 4472c4, auto, 336699 |
+| `top|sz` | 5 | 8, 4 | 8, 4 |
+| `top|val` | 5 | single | single |
 | `tab|pos` | 4 | 720, 2880, 5760 | 720, 2880, 5760, 0 |
 | `tab|val` | 4 | left, center, right, clear | left, center, right, clear |
 | `basedOn|val` | 3 | normal | normal, defaultparagraphfont |
@@ -167,15 +170,12 @@ docx ──读手──▶ HTML ──TipTap schema──▶ PM 模型 ──写
 | `left|val` | 3 | dotted, dashed, single | dotted, single, dashed |
 | `picLocks|noChangeAspect` | 3 | 0, 1 | 0, 1 |
 | `spacing|after` | 3 | 240, 0, 120 | 240, 0, 120 |
-| `top|color` | 3 | ff0000, 336699, 000000 | ff0000, auto, 336699, 000000 |
 | `top|space` | 3 | 1, 2 | 1, 2 |
-| `top|sz` | 3 | 8, 4 | 8, 4 |
-| `top|val` | 3 | single | single |
-| `bookmarkStart|name` | 2 | _toc7, _cross | _toc7, _cross |
-| `bottom|color` | 2 | 0000ff, 000000 | 0000ff, auto, 000000, adbbd4 |
-| `bottom|space` | 2 | 4, 0 | 4, 0, 2 |
-| `bottom|sz` | 2 | 6, 4 | 6, 4 |
-| …共 252 条，完整清单见 `docs/fidelity-roundtrip.json` | | | |
+| `between|color` | 2 | ff9900 | ff9900 |
+| `between|space` | 2 | 2 | 2 |
+| `between|sz` | 2 | 6 | 6 |
+| `between|themeColor` | 2 | accent2 | accent2 |
+| …共 258 条，完整清单见 `docs/fidelity-roundtrip.json` | | | |
 
 ## 边界
 
