@@ -43,15 +43,15 @@ docx ──读手──▶ HTML ──TipTap schema──▶ PM 模型 ──写
 
 | | 值 |
 |---|---:|
-| 读到的对 | 609 |
-| 保留 | **258（42.4%）** |
+| 读到的对 | 615 |
+| 保留 | **264（42.9%）** |
 | 值变 | 17 |
 | 掉了 | 334 |
 | 缺件 | 0 |
 | 源包部件 | 7 |
 | 写出包部件 | 7 |
 
-探针在这一趟里记到 661 个查问对；源包在场而有 609 个既在场又被查问，构成上面的分母。
+探针在这一趟里记到 668 个查问对；源包在场而有 615 个既在场又被查问，构成上面的分母。
 
 ## 分两笔账：正文属性与图形壳
 
@@ -61,7 +61,7 @@ docx ──读手──▶ HTML ──TipTap schema──▶ PM 模型 ──写
 
 | 族 | 读到的 | 保留 | 值变 | 掉了 | 保留率 |
 |---|---:|---:|---:|---:|---:|
-| 正文属性（`w:*`） | 290 | 230 | 15 | 45 | **79.3%** |
+| 正文属性（`w:*`） | 296 | 236 | 15 | 45 | **79.7%** |
 | 图形壳（`a:`/`v:`/`wp:`/`pic:`/`wps:`/`o:`） | 319 | 28 | 2 | 289 | **8.8%** |
 
 口径说明：一个对算正文，当且仅当它在源包里**只**出现在 `w:*` 元素上（沾过图形壳就算图形壳）。
@@ -145,7 +145,7 @@ docx ──读手──▶ HTML ──TipTap schema──▶ PM 模型 ──写
 
 （空）
 
-### 保留（258）
+### 保留（264）
 
 这些是真的双向。列出来是为了让「保留」也可核对，而不是一个孤零零的百分比。
 
@@ -160,6 +160,7 @@ docx ──读手──▶ HTML ──TipTap schema──▶ PM 模型 ──写
 | `top|val` | 5 | single | single |
 | `tab|pos` | 4 | 720, 2880, 5760 | 720, 2880, 5760, 0 |
 | `tab|val` | 4 | left, center, right, clear | left, center, right, clear |
+| `top|space` | 4 | 1, 0, 2 | 1, 0, 2 |
 | `basedOn|val` | 3 | normal | normal, defaultparagraphfont |
 | `blip|embed` | 3 | rid# | rid# |
 | `cNvPr|id` | 3 | 3, 4, 11 | 3, 4, 0, 11 |
@@ -170,12 +171,11 @@ docx ──读手──▶ HTML ──TipTap schema──▶ PM 模型 ──写
 | `left|val` | 3 | dotted, dashed, single | dotted, single, dashed |
 | `picLocks|noChangeAspect` | 3 | 0, 1 | 0, 1 |
 | `spacing|after` | 3 | 240, 0, 120 | 240, 0, 120 |
-| `top|space` | 3 | 1, 2 | 1, 2 |
 | `between|color` | 2 | ff9900 | ff9900 |
 | `between|space` | 2 | 2 | 2 |
 | `between|sz` | 2 | 6 | 6 |
 | `between|themeColor` | 2 | accent2 | accent2 |
-| …共 258 条，完整清单见 `docs/fidelity-roundtrip.json` | | | |
+| …共 264 条，完整清单见 `docs/fidelity-roundtrip.json` | | | |
 
 ## 边界
 

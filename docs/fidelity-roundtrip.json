@@ -21,12 +21,12 @@
   "onOffBareElement": true
  },
  "totals": {
-  "read": 609,
-  "kept": 258,
+  "read": 615,
+  "kept": 264,
   "value": 17,
   "lost": 334,
   "part": 0,
-  "consulted": 661,
+  "consulted": 668,
   "srcParts": 7,
   "outParts": 7,
   "htmlBlocks": 37
@@ -264,6 +264,66 @@
    ],
    "out": [
     "bf"
+   ]
+  },
+  "bar|color": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "7030a0"
+   ],
+   "out": [
+    "7030a0"
+   ]
+  },
+  "bar|space": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "4"
+   ],
+   "out": [
+    "4"
+   ]
+  },
+  "bar|sz": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "12"
+   ],
+   "out": [
+    "12"
+   ]
+  },
+  "bar|themeColor": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "accent4"
+   ],
+   "out": [
+    "accent4"
+   ]
+  },
+  "bar|themeTint": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "99"
+   ],
+   "out": [
+    "99"
+   ]
+  },
+  "bar|val": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "single"
+   ],
+   "out": [
+    "single"
    ]
   },
   "basedOn|val": {
@@ -5502,12 +5562,14 @@
   },
   "top|space": {
    "bucket": "kept",
-   "n": 3,
+   "n": 4,
    "src": [
+    "0",
     "1",
     "2"
    ],
    "out": [
+    "0",
     "1",
     "2"
    ]

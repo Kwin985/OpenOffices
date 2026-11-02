@@ -9871,6 +9871,45 @@ D27 顺延：`pBdr`/`tcBorders` 的显式 `w:space="0"`（并进 `data-bdr` 第 
 `smartTag|*`、`legacy|*`）；承接未动项 `gridCol`/`tcW` 的 ±5 缇、`w:cols` 的 `equalWidth`、
 `ind|left` 的列表缩进覆盖、`docPr|id` 重排、`lvlJc` 深层 `center`。另有一件要定口径：
 `theme1.xml` 进不进普查清单。
+## v0.168（D27）——边框族收尾：显式 `w:space="0"` 与第六条边 `w:bar`
+
+往返账**正文属性 79.3% → 79.7%**（230/290 → 236/296），整体 42.4% → 42.9%，掉了 334 不动、
+值变 17 不动。六对新对进账（`bar|val`/`sz`/`space`/`color`/`themeColor`/`themeTint`，全「保留」），
+`top|space` 的那笔值变也回到「保留」。保真账本 md5 仍 `95846f03…`/`aab9813c…`，四条变异腿
+与上轮一字不差。
+
+### `w:space="0"`：语义上没用，字面是源件说过的话
+
+`borderSpacePt` 把「显式 0」与「没写」并成一路——写成 CSS 都是 0 padding，Word 缺省也是 0。
+语义没错，字面上丢了一枚源件真写过的属性。修法是给 `data-bdr` 补第 6 格 `space`，只记 `"0"`
+这一档（非零值 padding 那条链本来就能还原）。写回时多一道守卫：用户把内边距调大了就以用户
+为准，载荷里的 0 不能用。
+
+### 一个没想到的岔子
+
+第一版只加了「记 space」，夹具里却见不到 `<w:top w:space="0">`——`borderOrigin` 有一道取舍
+闸门（字面色与屏上一致、没有主题引用 → 这条边「什么都不用补」，整条不载荷），而「只有
+space=0 有话说」的边恰好落在闸门外面。**载荷的取舍条件本身就是一道闸**，加字段时得回头
+问一句「这条边进得来吗」。
+
+### `w:bar`：没有屏上替身，所以最省事
+
+段落侧边的竖线（合同/公文里的「条」）。屏上从没画过它，也就没有 `between` 那种「替身」问题
+——没有 `screen`、没有 `hidden`、没有判据，`data-pbar` 有值就插一枚，位置在 CT_PBdr 序的末尾。
+
+边框族到此闭环：四边走 `data-bdr`（按边分格 + screen 判据）、第五边走 `data-pbdr`（九格 +
+hidden）、第六条走 `data-pbar`（七格 + 无判据）。三种形状不是不统一，是三者「屏上有没有
+替身、能不能反推」各不相同。
+
+### 门禁
+
+tsc 0、build ✓；结构测试 **147 → 155 项**全绿（含反例：用户调过边距就不写 0、没 bar 载荷
+就不插、bar 位置在 between 之后）。
+
+D28 顺延：`fldChar` 三对；`outline|val`；表/节一族（`tblStyle|val`、`col|w`/`col|space`、
+`wAfter|*`、`gridAfter|val`、`pgNumType|*`、`smartTag|*`、`legacy|*`）；承接未动项
+`gridCol`/`tcW` 的 ±5 缇、`w:cols` 的 `equalWidth`、`ind|left` 的列表缩进覆盖、
+`docPr|id` 重排、`lvlJc` 深层 `center`。另有一件要定口径：`theme1.xml` 进不进普查清单。
 
 ## 性能（v0.3）
 
