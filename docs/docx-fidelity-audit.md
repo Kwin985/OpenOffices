@@ -2030,3 +2030,68 @@ const condRun = condRunFor(look, conds, ri, ri === last, c.gc, c.colspan, acct.l
 - 承接未动项：`gridCol`/`tcW` 的 ±5 缇、`w:cols` 的 `equalWidth`、`ind|left` 的列表
   缩进覆盖、`docPr|id` 重排、`lvlJc` 深层 `center`。
 - **`theme1.xml` 进不进普查清单**仍要定口径（部件账的可能性大于灌进 `PARTS`）。
+
+---
+
+## v0.170（D29）——页码型别与起始值：从「只读记账」升成往返
+
+| | 上一轮 | 这一轮 |
+|---|---:|---:|
+| 正文属性 | 238/297 = 80.1% | **240/297 = 80.8%** |
+| 图形壳 | 28/319 = 8.8% | 28/319 = 8.8% |
+| 合计 | 266/616 = 43.2% | **268/616 = 43.5%** |
+| 掉了 | 333 | **331** |
+| 值变 | 17 | 17（正文 15、图形壳 2） |
+
+两对从「掉了」变「保留」：`pgNumType|fmt`、`pgNumType|start`。保真账本按对仍 99.0%、
+md5 仍 `95846f03…`/`aab9813c…`；往返账 `75f2d72…`/`371687d…`，两次复跑逐字节相同。
+
+### 一、它在顺延里躺了十五轮，其实包一直有槽
+
+v0.155 把这枚记成「只读」：`attr(pgn,'w:fmt'); attr(pgn,'w:start')` 两行读出来就扔，
+注释写着「写侧没有对应槽（包只发纸型/页边距/分栏数这几枚）」。这一轮翻包的
+`ISectionPropertiesOptions` 才发现：
+
+```ts
+pageNumbers?: IPageNumberTypeAttributes   // 直接落成 <w:pgNumType>
+```
+
+`createPageNumberType` 把 `formatType` 原样写进 `w:fmt`、`start` 写进 `w:start`。
+所以这一轮没写任何打包后补丁，只是把渠道打通：`DocxSection.pageNum` → `PageSetup.pageNum`
+→ `resolvePage` → `sections[].properties.page.pageNumbers`，两枚值原样过。
+
+两条读腿都补了：读手那条走 `attr` 漏斗（进保真账本），`docxToDocMeta` 那条仍是正则
+（回退导入路径，否则从 mammoth 开局进来的件会丢这一档）。
+
+### 二、包的无条件 push 与「没写就别发」
+
+跑探针时发现件里多了一枚 `<w:pgNumType/>`——包的 `SectionProperties` 构造器是
+`this.root.push(createPageNumberType(pageNumbers))`，**没有 if**：没给 pageNumbers 也照样落一个空元素。
+Word 读它等于「全是默认」，渲染没差别，但这是源件没说过的一句话。
+
+于是加了一笔 `dropEmptyPgNum`：没有 pageNum 时把**空的**那一枚从包里摘掉（有属性的不动）。
+账本对这类事完全瞎（裸元素没有属性），只能靠结构测试钉——与 v0.169 那条同一条边界。
+
+### 三、no-attr 腿动了 0.2 个点，得说清楚
+
+`no-attr` 从 59.2% 到 **59.4%**。原因是新读的两枚里，`start` 走的是 `attrNum`，而
+`attrNum = attr ?? attrL`——`attr` 被注入掉之后它从 `attrL` 那一路照样读得到。所以这一对
+在 no-attr 腿上仍然算「查问过」。不是腿坏了，是这条读法本来就有两条路（数值档的统一写法）。
+
+### 教训
+
+1. **「只读记账」要定期复查「包里真没有槽吗」**（v0.170）：`pgNumType` 在顺延清单里躺了
+   十五轮，理由写得很像回事（「包只发纸型/页边距/分栏数」），实际包有 `pageNumbers`。
+   翻一眼 `.d.ts` 的成本，比写一笔打包后补丁低得多。
+2. **包的「无条件 push」会给每个件多一枚空元素**（v0.170）：账本看不见（没有属性），
+   只有探针/结构测试看得见。这类噪声值得单独摘掉——它不影响渲染，但影响「这份文件像不像
+   源件」。
+
+### 顺延清单（D30）
+
+- 表样式自己的 `w:rPr`（常驻 run）接到表内文字上。
+- `fldChar` 三对（域指令，模型无槽）；`outline|val`（文字镂空，包无原生槽）。
+- 表/节一族：`col|w`/`col|space`、`wAfter|*`、`gridAfter|val`、`smartTag|*`、`legacy|*`。
+- 承接未动项：`gridCol`/`tcW` 的 ±5 缇、`w:cols` 的 `equalWidth`、`ind|left` 的列表
+  缩进覆盖、`docPr|id` 重排、`lvlJc` 深层 `center`。
+- **`theme1.xml` 进不进普查清单**仍要定口径（部件账的可能性大于灌进 `PARTS`）。

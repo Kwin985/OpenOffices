@@ -22,9 +22,9 @@
  },
  "totals": {
   "read": 616,
-  "kept": 266,
+  "kept": 268,
   "value": 17,
-  "lost": 333,
+  "lost": 331,
   "part": 0,
   "consulted": 669,
   "srcParts": 7,
@@ -3544,20 +3544,24 @@
    ]
   },
   "pgNumType|fmt": {
-   "bucket": "lost",
+   "bucket": "kept",
    "n": 1,
    "src": [
     "lowerroman"
    ],
-   "out": []
+   "out": [
+    "lowerroman"
+   ]
   },
   "pgNumType|start": {
-   "bucket": "lost",
+   "bucket": "kept",
    "n": 1,
    "src": [
     "3"
    ],
-   "out": []
+   "out": [
+    "3"
+   ]
   },
   "pgSz|code": {
    "bucket": "lost",

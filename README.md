@@ -9950,6 +9950,43 @@ D29 顺延：表样式自己的 `w:rPr`（常驻 run）接到表内文字上；`
 `legacy|*`）；承接未动项 `gridCol`/`tcW` 的 ±5 缇、`w:cols` 的 `equalWidth`、`ind|left` 的
 列表缩进覆盖、`docPr|id` 重排、`lvlJc` 深层 `center`。另有一件要定口径：`theme1.xml` 进不进
 普查清单。
+## v0.170（D29）——页码型别与起始值：从「只读记账」升成往返
+
+往返账**正文属性 80.1% → 80.8%**（238/297 → 240/297），整体 43.2% → 43.5%，掉了 333 → **331**、
+值变 17 不动。`pgNumType|fmt` 与 `pgNumType|start` 两对从「掉了」变「保留」。保真账本 md5 仍
+`95846f03…`/`aab9813c…`。
+
+### 它在顺延清单里躺了十五轮，其实包一直有槽
+
+v0.155 把这枚记成「只读」：读出来就扔，注释写「写侧没有对应槽（包只发纸型/页边距/分栏数）」。
+这一轮翻 `ISectionPropertiesOptions` 才发现 `pageNumbers?: IPageNumberTypeAttributes`——直接落成
+`<w:pgNumType>`，`formatType` 原样写进 `w:fmt`、`start` 写进 `w:start`。
+
+所以这一轮没写任何打包后补丁，只是把渠道打通：`DocxSection.pageNum` → `PageSetup.pageNum` →
+`resolvePage` → `sections[].properties.page.pageNumbers`。两条读腿都补了（读手走 `attr` 漏斗进
+账本，`docxToDocMeta` 那条正则留给回退导入路径）。
+
+### 包的「无条件 push」
+
+跑探针时件里多了一枚 `<w:pgNumType/>`——包的 `SectionProperties` 构造器是无条件 push，没给
+pageNumbers 也照样落一个空元素。Word 读它等于全是默认、渲染没差别，但那是源件没说过的一句话。
+加了一笔 `dropEmptyPgNum`：没有 pageNum 时把空的那一枚摘掉，有属性的不动。账本对这类事完全瞎
+（裸元素没有属性），只能靠结构测试钉。
+
+### no-attr 腿动了 0.2 个点
+
+59.2% → **59.4%**：新读的 `start` 走 `attrNum`，而 `attrNum = attr ?? attrL`——`attr` 被注入掉
+之后仍能从 `attrL` 读到。不是腿坏了，是数值档本来就有两条路。
+
+### 门禁
+
+tsc 0、build ✓；结构测试 **159 → 165 项**全绿（含反例：没声明就不发 `w:pgNumType`、元素位置要
+在 `pgMar` 之后 `cols` 之前）。
+
+D30 顺延：表样式自己的 `w:rPr`（常驻 run）接到表内文字；`fldChar` 三对；`outline|val`；
+表/节一族（`col|w`/`col|space`、`wAfter|*`、`gridAfter|val`、`smartTag|*`、`legacy|*`）；
+承接未动项 `gridCol`/`tcW` 的 ±5 缇、`w:cols` 的 `equalWidth`、`ind|left` 的列表缩进覆盖、
+`docPr|id` 重排、`lvlJc` 深层 `center`。另有一件要定口径：`theme1.xml` 进不进普查清单。
 
 ## 性能（v0.3）
 
