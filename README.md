@@ -9736,6 +9736,56 @@ D24 顺延：边框的主题引用（`pBdr` 与 `tcBorders`——色是用户可
 `ind|left` 的列表缩进覆盖、`docPr|id` 重排、`lvlJc` 深层 `center`。另有一件要定口径：
 `theme1.xml` 进不进普查清单（加进 `PARTS` 会让四十来对主题槽一次进分母且全「保留」——
 那是灌水；更可能是单开一本部件账）。
+## v0.165（D24）——段落与逐格边框：主题引用按块补回，以及「补丁跑了一半」
+
+往返账**正文属性 78.4% → 78.6%**（218/278 → 221/281），整体 41.2% → 41.5%，掉了 334 不动、
+值变 17 不动。三对新对进账（`top|themeColor`/`themeTint`/`themeShade`，全「保留」）。
+保真账本按对仍 99.0%，md5 仍 `95846f03…`/`aab9813c…`；四条变异腿与上轮一字不差。
+
+### 边框的颜色：屏上色有槽，源件说的那三枚没有
+
+`edgeCss` 是「主题优先、字面兜底」：主题解析得出来时，`w:color` 那枚字面色就没有出口；
+而 `bd*` 那一格只装得下**解析后的屏上色**。导出时包按屏上色发 `w:color`，源件的
+`w:themeColor="accent1" w:themeTint="99" w:themeShade="BF"` 整笔消失，字面色也被换成
+了解析结果（`FF0000` → `adbbd4`）。
+
+新载荷 `data-bdr` 按边分格：`edge;color;themeColor;themeTint;themeShade;screen`。`screen`
+是导入那一刻的屏上色，写侧拿它当「用户改过色没有」的判据——对不上就整笔作废，否则
+Word 按主题解析，用户换的颜色在屏上、在纸上都看不见。
+
+### 为什么这一族不能按元素出现序贴
+
+`w:top` 在包里同是 `w:tblBorders`、`w:tcBorders`、`w:pBdr` 的子元素（`w:tcMar` 里还有
+同名的一枚），全局出现序分不清谁是谁。所以按**块**切：先切 `<w:pBdr>` / `<w:tcBorders>`，
+块内再按边名找。闸门是「块数 === 登记数」，而登记只在真发得出这个块时才 push——段落走
+`paraFormatOf`、逐格走 `bordersOf`，两族两本账。
+
+### 一个只成功了一半的补丁
+
+第一版逐枚抓 `\sw:xxx="…"`，而拼串时第一枚属性没有前导空格：`w:color` 整条被跳过，
+主题三枚照贴不误——写出来的字节是 `w:color="adbbd4" … w:themeColor="accent1"`。
+**既不是全哑**（那还有 `touched` 兜着），**也不是错位**（那会被计数闸门拦住），
+而是同一枚元素上一半属性生效、另一半静默丢掉。修法是把归一化写进 `mergeTagAttrs`
+自己，而不是要求每个调用方记得加那个空格。
+
+### 新读点会绕过变异腿的锚点
+
+第一版的 `borderOrigin` 自己 `attr(...)` 读三枚主题属性，`no-themeshade` 那条腿当场从
+96.5% 抬到 **97.7%**——注入锚点在 `themeRefParts` 里，新读点不在射程内。覆盖率**往上**
+跳不是成绩，是腿漏了一块。把读点收回 `themeRefParts` 之后，四条腿与上轮一字不差。
+
+### 门禁
+
+tsc 0、build ✓；结构测试 **118 → 131 项**全绿（含反例：改过色就不补主题引用、删掉的边
+不补、缺 `screen` 的段整段丢、脏键整键丢；以及「每一枚属性都到了」那几条——只断言
+「补丁跑过」是抓不住半失效的）。
+
+D25 顺延：字符边框 `w:bdr` 的主题引用（同形，可整族搬）；`w:pBdr/w:between` 与 `w:bar`
+（要补的是元素不是属性，与 `patchBeforeElem` 同族）；`fldChar` 三对；`outline|val`；
+表/节一族（`tblStyle|val`、`col|w`/`col|space`、`wAfter|*`、`gridAfter|val`、
+`pgNumType|*`、`smartTag|*`、`legacy|*`）；承接未动项 `gridCol`/`tcW` 的 ±5 缇、
+`w:cols` 的 `equalWidth`、`ind|left` 的列表缩进覆盖、`docPr|id` 重排、`lvlJc` 深层
+`center`。另有一件要定口径：`theme1.xml` 进不进普查清单。
 
 ## 性能（v0.3）
 

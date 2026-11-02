@@ -21,8 +21,8 @@
   "onOffBareElement": true
  },
  "totals": {
-  "read": 597,
-  "kept": 246,
+  "read": 600,
+  "kept": 249,
   "value": 17,
   "lost": 334,
   "part": 0,
@@ -2436,10 +2436,11 @@
   },
   "left|color": {
    "bucket": "kept",
-   "n": 2,
+   "n": 3,
    "src": [
     "000000",
-    "00ff00"
+    "00ff00",
+    "auto"
    ],
    "out": [
     "000000",
@@ -2450,7 +2451,7 @@
   },
   "left|space": {
    "bucket": "kept",
-   "n": 2,
+   "n": 3,
    "src": [
     "0",
     "2"
@@ -2463,7 +2464,7 @@
   },
   "left|sz": {
    "bucket": "kept",
-   "n": 2,
+   "n": 3,
    "src": [
     "4"
    ],
@@ -2473,12 +2474,14 @@
   },
   "left|val": {
    "bucket": "kept",
-   "n": 2,
+   "n": 3,
    "src": [
+    "dashed",
     "dotted",
     "single"
    ],
    "out": [
+    "dashed",
     "dotted",
     "single"
    ]
@@ -5391,13 +5394,15 @@
   },
   "top|color": {
    "bucket": "kept",
-   "n": 2,
+   "n": 3,
    "src": [
     "000000",
+    "336699",
     "ff0000"
    ],
    "out": [
     "000000",
+    "336699",
     "adbbd4",
     "auto",
     "ff0000"
@@ -5405,9 +5410,10 @@
   },
   "top|space": {
    "bucket": "kept",
-   "n": 2,
+   "n": 3,
    "src": [
-    "1"
+    "1",
+    "2"
    ],
    "out": [
     "1",
@@ -5416,7 +5422,7 @@
   },
   "top|sz": {
    "bucket": "kept",
-   "n": 2,
+   "n": 3,
    "src": [
     "4",
     "8"
@@ -5426,9 +5432,39 @@
     "8"
    ]
   },
-  "top|val": {
+  "top|themeColor": {
    "bucket": "kept",
    "n": 2,
+   "src": [
+    "accent1"
+   ],
+   "out": [
+    "accent1"
+   ]
+  },
+  "top|themeShade": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "bf"
+   ],
+   "out": [
+    "bf"
+   ]
+  },
+  "top|themeTint": {
+   "bucket": "kept",
+   "n": 2,
+   "src": [
+    "99"
+   ],
+   "out": [
+    "99"
+   ]
+  },
+  "top|val": {
+   "bucket": "kept",
+   "n": 3,
    "src": [
     "single"
    ],

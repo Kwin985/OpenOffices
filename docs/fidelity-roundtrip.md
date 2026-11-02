@@ -43,15 +43,15 @@ docx ──读手──▶ HTML ──TipTap schema──▶ PM 模型 ──写
 
 | | 值 |
 |---|---:|
-| 读到的对 | 597 |
-| 保留 | **246（41.2%）** |
+| 读到的对 | 600 |
+| 保留 | **249（41.5%）** |
 | 值变 | 17 |
 | 掉了 | 334 |
 | 缺件 | 0 |
 | 源包部件 | 7 |
 | 写出包部件 | 7 |
 
-探针在这一趟里记到 651 个查问对；源包在场而有 597 个既在场又被查问，构成上面的分母。
+探针在这一趟里记到 651 个查问对；源包在场而有 600 个既在场又被查问，构成上面的分母。
 
 ## 分两笔账：正文属性与图形壳
 
@@ -61,7 +61,7 @@ docx ──读手──▶ HTML ──TipTap schema──▶ PM 模型 ──写
 
 | 族 | 读到的 | 保留 | 值变 | 掉了 | 保留率 |
 |---|---:|---:|---:|---:|---:|
-| 正文属性（`w:*`） | 278 | 218 | 15 | 45 | **78.4%** |
+| 正文属性（`w:*`） | 281 | 221 | 15 | 45 | **78.6%** |
 | 图形壳（`a:`/`v:`/`wp:`/`pic:`/`wps:`/`o:`） | 319 | 28 | 2 | 289 | **8.8%** |
 
 口径说明：一个对算正文，当且仅当它在源包里**只**出现在 `w:*` 元素上（沾过图形壳就算图形壳）。
@@ -145,7 +145,7 @@ docx ──读手──▶ HTML ──TipTap schema──▶ PM 模型 ──写
 
 （空）
 
-### 保留（246）
+### 保留（249）
 
 这些是真的双向。列出来是为了让「保留」也可核对，而不是一个孤零零的百分比。
 
@@ -161,21 +161,21 @@ docx ──读手──▶ HTML ──TipTap schema──▶ PM 模型 ──写
 | `blip|embed` | 3 | rid# | rid# |
 | `cNvPr|id` | 3 | 3, 4, 11 | 3, 4, 0, 11 |
 | `cNvPr|name` | 3 | cnv 名, 浮动图, 图形余量 | cnv 名, 浮动图, , 图形余量 |
+| `left|color` | 3 | 00ff00, auto, 000000 | 00ff00, auto, 000000, adbbd4 |
+| `left|space` | 3 | 2, 0 | 2, 0, 3 |
+| `left|sz` | 3 | 4 | 4 |
+| `left|val` | 3 | dotted, dashed, single | dotted, single, dashed |
 | `picLocks|noChangeAspect` | 3 | 0, 1 | 0, 1 |
 | `spacing|after` | 3 | 240, 0, 120 | 240, 0, 120 |
+| `top|color` | 3 | ff0000, 336699, 000000 | ff0000, auto, 336699, 000000 |
+| `top|space` | 3 | 1, 2 | 1, 2 |
+| `top|sz` | 3 | 8, 4 | 8, 4 |
+| `top|val` | 3 | single | single |
 | `bookmarkStart|name` | 2 | _toc7, _cross | _toc7, _cross |
 | `bottom|color` | 2 | 0000ff, 000000 | 0000ff, auto, 000000, adbbd4 |
 | `bottom|space` | 2 | 4, 0 | 4, 0, 2 |
 | `bottom|sz` | 2 | 6, 4 | 6, 4 |
-| `bottom|val` | 2 | dashed, single | dashed, single |
-| `effectExtent|b` | 2 | 0 | 0 |
-| `effectExtent|l` | 2 | 19050, 0 | 19050, 0 |
-| `effectExtent|r` | 2 | 0 | 0 |
-| `effectExtent|t` | 2 | 9525, 0 | 9525, 0 |
-| `ext|cx` | 2 | 914400 | 914400, 1266825, 3048000 |
-| `ext|cy` | 2 | 914400 | 914400, 638175, 2286000 |
-| `graphicData|uri` | 2 | http://schemas.openxmlformats.org/drawingml/2006/picture | http://schemas.openxmlformats.org/drawingml/2006/picture |
-| …共 246 条，完整清单见 `docs/fidelity-roundtrip.json` | | | |
+| …共 249 条，完整清单见 `docs/fidelity-roundtrip.json` | | | |
 
 ## 边界
 
