@@ -216,6 +216,56 @@ export function pxToEighths(px: number): number {
 /** 往返载荷属性名：`图案|前景|背景`（hex 不带 #）。clear 不挂——纯色走 background 那一链 */
 export const SHADE_ATTR = 'data-shade'
 
+/* ── 底纹的存盘原件（v0.164）───────────────────────────────────
+ * 与 data-shade 分工：那一份管「CSS 画不出来的图案」（图案档位与前景色），这一份管
+ * 「屏上颜色把它盖住了的原件」。`w:shd` 的 `w:fill` 常与 `w:themeFill` 一起写（Word 的
+ * 默认写法），读手按主题解析出屏上色之后，那枚字面 fill 就没人记得——model 的
+ * `background` 只有一个格子，装的是**解析后的颜色**。
+ *
+ * 只挂「解析得出来」的那一档：没有主题引用时，`background` 与字面 fill 是同一个值，
+ * 回写时从 background 构造就够了，多挂一份只是噪音。
+ *
+ * 载荷 `key=value;…`（与 data-ppr / data-frame 同款 kv）；
+ * `bg` 是**导入那一刻的屏上色**，回写时拿它当「用户改没改过底纹色」的判据——
+ * 改了就把主题引用作废（改色是用户的显式决定，不能被主题盖回去）。
+ */
+export const SHD_ATTR = 'data-shd'
+
+/** 载荷键；`bg` 非 OOXML 属性，是上面说的那道判据 */
+export const SHD_KEYS = ['fill', 'themeFill', 'themeFillTint', 'themeFillShade', 'bg'] as const
+export type ShdPayload = Partial<Record<(typeof SHD_KEYS)[number], string>>
+
+/** 逐键形状闸门：脏值整键丢（猜出来的值写进包里比不写更坏） */
+const SHD_FIELD: Record<(typeof SHD_KEYS)[number], RegExp> = {
+  // 字面填充色：六位 hex；Word 也写 auto（与「没写」同义，源件真写了就照带）
+  fill: /^(?:[0-9A-Fa-f]{6}|auto)$/,
+  // 主题槽名（accent1 / background1 / tx1 …）
+  themeFill: /^[A-Za-z0-9]+$/,
+  themeFillTint: /^[0-9A-Fa-f]{2}$/,
+  themeFillShade: /^[0-9A-Fa-f]{2}$/,
+  bg: /^[0-9A-Fa-f]{6}$/,
+}
+
+/** data-shd 载荷 → kv 表；空串返回 {}，形状不对的键整键丢 */
+export function parseShdPayload(raw: string | null | undefined): ShdPayload {
+  const out: ShdPayload = {}
+  if (!raw) return out
+  for (const item of raw.split(';')) {
+    const i = item.indexOf('=')
+    if (i <= 0) continue
+    const k = item.slice(0, i).trim() as (typeof SHD_KEYS)[number]
+    const v = item.slice(i + 1).trim()
+    if (!SHD_KEYS.includes(k) || !SHD_FIELD[k].test(v)) continue
+    out[k] = v
+  }
+  return out
+}
+
+/** kv 表 → data-shd 载荷（与 parseShdPayload 互逆；按键序输出保稳定） */
+export function shdPayloadOf(p: ShdPayload): string {
+  return SHD_KEYS.filter((k) => p[k]).map((k) => `${k}=${p[k]}`).join(';')
+}
+
 /* ── 制表位（v0.144）─────────────────────────────────────────────
  * w:pPr/w:tabs/w:tab 三枚属性（@w:val 档位 / @w:pos 缇 / @w:leader 前导符）。
  * 屏上无对应物（Word 制表位由字符 tab 键驱动、按段落的档位表跳对齐），只往返。
@@ -807,6 +857,15 @@ export function shadeAttrs(raw: unknown): Record<string, string> {
   return css ? { [SHADE_ATTR]: payload, style: css } : { [SHADE_ATTR]: payload }
 }
 
+/**
+ * data-shd 载荷 → 段落/单元格上的属性（v0.164）。屏上不给样式：颜色由 `background`
+ * 那一链画，这一份只负责写回。载荷解析不出东西时整条不挂（与 data-tabs 同款纪律）
+ */
+export function shdAttrsOf(raw: unknown): Record<string, string> {
+  const payload = typeof raw === 'string' ? raw : ''
+  return Object.keys(parseShdPayload(payload)).length ? { [SHD_ATTR]: payload } : {}
+}
+
 function vAlignOf(raw: string | null | undefined): string | null {
   const v = (raw ?? '').trim().toLowerCase()
   if (v.startsWith('top')) return 'top'
@@ -891,6 +950,13 @@ export const CellStyle = Extension.create({
             default: null as string | null,
             parseHTML: (el: HTMLElement) => el.getAttribute(SHADE_ATTR) || null,
             renderHTML: (attrs: Record<string, unknown>) => shadeAttrs(attrs.shade),
+          },
+          // 底纹的存盘原件（v0.164）：主题引用在时那枚字面 fill 与三枚引用名。
+          // 屏上一条样式都不兑现——`background` 已经把颜色画出来了，这一份只为写回
+          shd: {
+            default: null as string | null,
+            parseHTML: (el: HTMLElement) => el.getAttribute(SHD_ATTR) || null,
+            renderHTML: (attrs: Record<string, unknown>) => shdAttrsOf(attrs.shd),
           },
           vAlign: {
             default: null as string | null,

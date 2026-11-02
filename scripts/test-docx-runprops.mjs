@@ -18,6 +18,7 @@ import fs from 'node:fs'
 import JSZip from 'jszip'
 import { docxToHtmlFidelity } from '../src/lib/docx-fidelity.ts'
 import { prosemirrorToDocxBytes } from '../src/lib/docx.ts'
+import { parseShdPayload } from '../src/lib/cell-style.ts'
 
 const ok = []
 const bad = []
@@ -744,6 +745,128 @@ const RF = '<w:rFonts w:ascii="Calibri" w:eastAsia="宋体" w:hint="eastAsia"/>'
   )
   // 屏上那一趟（分摊到格）照旧在跑：space 变成格边 padding，与存盘通道互不顶替
   has('tblBorders 导入：屏上分摊照旧（格边 bdSpace 那一趟没被顶替）', r.html, 'data-bdspace-top="1.33"')
+}
+
+// ---- 底纹的字面/主题双写 + 主题件透传（v0.164）------------------------------
+//
+// 三件事一起钉：读侧把「主题引用吃掉的那枚字面 fill」带进 data-shd；写侧按出现序把它
+// 合回 `<w:shd>`；主题件本身跟着走（否则写出去的主题引用全是悬空的）。
+
+/** 带色槽的主题件（上面那份 THEME 只有字体，颜色一个都解不出来） */
+const THEME_COLORS =
+  `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>` +
+  `<a:theme xmlns:a="${A}"><a:themeElements><a:clrScheme name="Office">` +
+  `<a:dk1><a:sysClr val="windowText" lastClr="000000"/></a:dk1><a:lt1><a:sysClr val="window" lastClr="FFFFFF"/></a:lt1>` +
+  `<a:dk2><a:srgbClr val="44546A"/></a:dk2><a:lt2><a:srgbClr val="E7E6E6"/></a:lt2>` +
+  `<a:accent1><a:srgbClr val="4472C4"/></a:accent1><a:accent2><a:srgbClr val="ED7D31"/></a:accent2>` +
+  `<a:hlink><a:srgbClr val="0563C1"/></a:hlink><a:folHlink><a:srgbClr val="954F72"/></a:folHlink>` +
+  `</a:clrScheme></a:themeElements></a:theme>`
+
+{
+  // 导入侧：pct25 + 主题填充（accent2/99/BF）+ 字面 fill=FFFFFF
+  const zip = new JSZip()
+  zip.file(
+    'word/document.xml',
+    `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:document xmlns:w="${W}"><w:body>` +
+      `<w:p><w:pPr><w:shd w:val="pct25" w:color="FF0000" w:fill="FFFFFF" w:themeFill="accent2" w:themeFillTint="99" w:themeFillShade="BF"/></w:pPr>` +
+      `<w:r><w:t>底色</w:t></w:r></w:p></w:body></w:document>`,
+  )
+  zip.file('word/styles.xml', `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:styles xmlns:w="${W}"></w:styles>`)
+  zip.file('word/theme/theme1.xml', THEME_COLORS)
+  const bytes = new Uint8Array(await zip.generateAsync({ type: 'arraybuffer', compression: 'STORE' }))
+  const r = await docxToHtmlFidelity(bytes)
+  has(
+    'shd 导入：字面 fill 与主题三枚进 data-shd（bg 是导入那一刻的屏上色）',
+    r.html,
+    'data-shd="fill=FFFFFF;themeFill=accent2;themeFillTint=99;themeFillShade=BF;bg=e0bea8"',
+  )
+  // 图案那一份载荷照旧：背景色跟着主题解析（屏上色），两份载荷各管各的
+  has('shd 导入：data-shade 的背景仍是解析后的主题色', r.html, 'data-shade="pct25|ff0000|e0bea8"')
+}
+
+{
+  // 导出侧：背景色没被改过 → 字面 fill 写回、主题三枚补上
+  const doc = {
+    type: 'doc',
+    content: [
+      {
+        type: 'paragraph',
+        attrs: { background: '#e0bea8', shd: 'fill=FFFFFF;themeFill=accent2;themeFillTint=99;themeFillShade=BF;bg=e0bea8' },
+        content: [{ type: 'text', text: '底色' }],
+      },
+    ],
+  }
+  const bytes = await prosemirrorToDocxBytes(doc)
+  const xml = await (await JSZip.loadAsync(bytes)).file('word/document.xml').async('string')
+  const shd = /<w:shd[^>]*>/.exec(xml)?.[0] ?? ''
+  has('shd 导出：字面 fill 写回（不是解析后的屏上色）', shd, 'w:fill="FFFFFF"')
+  has('shd 导出：主题引用三枚补上', shd, 'w:themeFill="accent2"')
+  has('shd 导出：themeFillTint', shd, 'w:themeFillTint="99"')
+  has('shd 导出：themeFillShade', shd, 'w:themeFillShade="BF"')
+  check('shd 导出：不给第二枚 w:fill（改名不是追加）', (shd.match(/w:fill=/g) ?? []).length === 1, shd)
+}
+
+{
+  // 用户改过底纹色：主题引用作废，按新色写——否则 Word 按主题解析，改色看不见
+  const doc = {
+    type: 'doc',
+    content: [
+      {
+        type: 'paragraph',
+        attrs: { background: '#ff0000', shd: 'fill=FFFFFF;themeFill=accent2;themeFillTint=99;bg=e0bea8' },
+        content: [{ type: 'text', text: '改过色' }],
+      },
+    ],
+  }
+  const bytes = await prosemirrorToDocxBytes(doc)
+  const xml = await (await JSZip.loadAsync(bytes)).file('word/document.xml').async('string')
+  const shd = /<w:shd[^>]*>/.exec(xml)?.[0] ?? ''
+  check('shd 导出：改过色就不补主题引用', !shd.includes('w:themeFill'), shd)
+  has('shd 导出：改过的色照写', shd, 'w:fill="ff0000"')
+}
+
+{
+  // 主题件透传：部件本体 + 关系 + Content_Types Override 三件齐全
+  const doc = { type: 'doc', content: [{ type: 'paragraph', content: [{ type: 'text', text: '带主题' }] }] }
+  const bytes = await prosemirrorToDocxBytes(doc, { themeXml: THEME_COLORS })
+  const zip = await JSZip.loadAsync(bytes)
+  const theme = zip.file('word/theme/theme1.xml')
+  check('主题件：写进包了', !!theme)
+  check('主题件：与源件逐字相同', (await theme?.async('string')) === THEME_COLORS)
+  const ct = (await zip.file('[Content_Types].xml')?.async('string')) ?? ''
+  has('主题件：Content_Types 有 Override', ct, 'PartName="/word/theme/theme1.xml"')
+  const rels = (await zip.file('word/_rels/document.xml.rels')?.async('string')) ?? ''
+  has('主题件：document.xml.rels 有 theme 关系', rels, 'relationships/theme')
+  // 没有主题件的源件不凭空造一枚
+  const plain = await prosemirrorToDocxBytes(doc)
+  check('主题件：源件没有就不造', !(await JSZip.loadAsync(plain)).file('word/theme/theme1.xml'))
+}
+
+{
+  // 单元格那一处：格底纹的 <w:shd> 在 <w:tcPr> 里，排在格内段落的之前——
+  // 登记顺序错了计数闸门会整笔放弃（静默），所以这条必须单独钉
+  const cell = {
+    type: 'tableCell',
+    attrs: { background: '#e0bea8', shd: 'fill=FFFFFF;themeFill=accent2;themeFillTint=99;bg=e0bea8' },
+    content: [{ type: 'paragraph', content: [{ type: 'text', text: '格' }] }],
+  }
+  const doc = {
+    type: 'doc',
+    content: [
+      { type: 'table', content: [{ type: 'tableRow', content: [cell] }] },
+    ],
+  }
+  const bytes = await prosemirrorToDocxBytes(doc)
+  const xml = await (await JSZip.loadAsync(bytes)).file('word/document.xml').async('string')
+  const tcPr = /<w:tcPr>[\s\S]*?<\/w:tcPr>/.exec(xml)?.[0] ?? ''
+  has('shd 导出（格）：主题引用补进 tcPr 那一枚', tcPr, 'w:themeFill="accent2"')
+  has('shd 导出（格）：字面 fill 写回', tcPr, 'w:fill="FFFFFF"')
+}
+
+{
+  // 载荷形状闸门：脏键整键丢，不许猜
+  const p = parseShdPayload('fill=XYZ;themeFill=accent 2;themeFillTint=9;themeFillShade=BF;bg=zzzzzz')
+  check('data-shd 解析：脏键整键丢', Object.keys(p).length === 1 && p.themeFillShade === 'BF', JSON.stringify(p))
 }
 
 console.log(`通过 ${ok.length} 项` + (bad.length ? `，**失败 ${bad.length} 项**` : '，失败 0 项'))

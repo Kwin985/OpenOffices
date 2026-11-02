@@ -150,7 +150,9 @@ export const FIXTURE_DOC =
   `<w:caps w:val="true"/><w:bdr w:val="single" w:sz="8" w:space="0" w:color="FF0000"/></w:rPr>` +
   `<w:t xml:space="preserve"> 带空白的正文 </w:t></w:r></w:p>` +
   // v0.142：主题色 run（accent1 + tint/shade 双戴）与图案底纹段（pct25 前景 FF0000/背景 FFFFFF）
-  `<w:p><w:pPr><w:shd w:val="pct25" w:color="FF0000" w:fill="FFFFFF"/></w:pPr>` +
+  // v0.164：底纹的背景色改成「主题引用 + 字面色」双戴（Word 的默认写法）——主题那一枚让
+  // 屏上色与字面 fill 分了家，字面值从此只有 data-shd 载荷记得住
+  `<w:p><w:pPr><w:shd w:val="pct25" w:color="FF0000" w:fill="FFFFFF" w:themeFill="accent2" w:themeFillTint="99" w:themeFillShade="BF"/></w:pPr>` +
   `<w:r><w:rPr><w:color w:val="FF0000" w:themeColor="accent1" w:themeTint="99" w:themeShade="BF"/></w:rPr>` +
   `<w:t>主题色与图案底纹</w:t></w:r></w:p>` +
   // v0.142：编号段——0 层子弹（符面 ·），与 numId=1 的 startOverride=3 无关（子弹不看起始号）

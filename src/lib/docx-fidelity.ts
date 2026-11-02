@@ -50,7 +50,7 @@ import { all, allDesc, attr, attrL, attrNum, els, find, findDesc, findL, local, 
 import { FieldEngine, fieldLabel, parseInstr, recomputable } from './docx-fields'
 import { embedHtml, inlineFlatten, unwrapEmbed, type EmbedHtml } from './ole'
 import { chartToHtml, smartArtToHtml } from './ooxml-graphics'
-import { CELL_EDGES, CNF_ATTR, CNF_KEYS, CSS_BORDER_STYLE, FRAME_NUMERIC_KEYS, FRAME_STR_KEYS, IMG_ATTR, PPR_ATTR, PPR_IND_KEYS, PPR_ONOFF_KEYS, PPR_STR_KEYS, TAB_LEADERS, TBLB_ATTR, TBLB_EDGES, TBLB_KEYS, TBLPR_ATTR, TLOOK_ATTR, bdSpaceAttrs, cnfPayload, eighthsToPx, framePayload, imgPayload, pprPayload, ptToPx, rgb2hex, shadeCss, tblbPayload, tblpPayload, tblPrPayload, tabsPayload, tlookPayload, type CellEdge, type CnfPayload, type FramePayload, type ImgPayload, type PprPayload, type TabSpec, type TblbPayload, type TblpPayload } from './cell-style'
+import { CELL_EDGES, CNF_ATTR, CNF_KEYS, CSS_BORDER_STYLE, FRAME_NUMERIC_KEYS, FRAME_STR_KEYS, IMG_ATTR, PPR_ATTR, PPR_IND_KEYS, PPR_ONOFF_KEYS, PPR_STR_KEYS, SHD_ATTR, TAB_LEADERS, TBLB_ATTR, TBLB_EDGES, TBLB_KEYS, TBLPR_ATTR, TLOOK_ATTR, bdSpaceAttrs, cnfPayload, eighthsToPx, framePayload, imgPayload, pprPayload, ptToPx, rgb2hex, shadeCss, shdPayloadOf, tblbPayload, tblpPayload, tblPrPayload, tabsPayload, tlookPayload, type CellEdge, type CnfPayload, type FramePayload, type ImgPayload, type PprPayload, type ShdPayload, type TabSpec, type TblbPayload, type TblpPayload } from './cell-style'
 import { ooxmlLine } from './paragraph-style'
 import {
   asTableCondType,
@@ -1444,8 +1444,12 @@ function readThemeColors(xml: string): ThemeColors | undefined {
     if (!key || out[key]) continue
     const srgb = findL(slot, 'srgbClr')
     const sys = findL(slot, 'sysClr')
-    // 两枚都走 attrL：主题色也是按名查问，探针在漏斗上记的是这一笔
-    const hex = (srgb ? attrL(srgb, 'val') : undefined) ?? (sys ? attrL(sys, 'lastClr') : undefined)
+    // 两枚都走 attrL：主题色也是按名查问，探针在漏斗上记的是这一笔。
+    // v0.164：两枚都**无条件**取原值——写成 `srgb ? attrL(…) : undefined ?? sys ? …`，
+    // 一槽写了 srgbClr 时 sysClr 那枚永不求值（同一形状的第三处，见 shd/边框那两处）
+    const srgbVal = srgb ? attrL(srgb, 'val') : undefined
+    const sysVal = sys ? attrL(sys, 'lastClr') : undefined
+    const hex = srgbVal ?? sysVal
     const norm = hex ? rgb2hex(`#${hex.replace(/^#/, '')}`) : null
     if (norm) out[key] = norm
   }
@@ -1781,7 +1785,11 @@ function readRPr(el: XEl | undefined, p: RunProps, tc?: ThemeColors): RunProps {
   const rf = find(el, 'w:rFonts')
   if (rf) {
     const fams: string[] = []
-    const ascii = attr(rf, 'w:ascii') ?? attr(rf, 'w:hAnsi')
+    // v0.164：两枚都无条件取原值。写成 `attr(w:ascii) ?? attr(w:hAnsi)` 时，写了 ascii 的
+    // rFonts 上 hAnsi 永不求值——而 Word 几乎每处都把两枚一起写（同一形状的第四处）
+    const asciiLit = attr(rf, 'w:ascii')
+    const hAnsiLit = attr(rf, 'w:hAnsi')
+    const ascii = asciiLit ?? hAnsiLit
     if (ascii) fams.push(ascii)
     const ea = attr(rf, 'w:eastAsia')
     if (ea && !fams.includes(ea)) fams.push(ea)
@@ -2556,6 +2564,8 @@ class Fidelity {
     // 图案底纹的往返载荷（v0.142）：CSS 的 background-image 画得出图案，回写时还要知道
     // 是哪一档图案、前景背景各是什么色——data-shade 三件套随标签进出（clear 不挂）
     const shadeAttr = shadePayload(find(effPPr, 'w:shd'), this.themeColors)
+    // 底纹的存盘原件（v0.164）：主题引用吃掉字面 fill 时，那一枚随 data-shd 走
+    const shdAttr = shdOriginOf(find(effPPr, 'w:shd'), this.themeColors)
     // 分页四件套（v0.143）：w:pageBreakBefore / w:keepNext / w:keepLines / w:widowControl。
     // Web 流式排版没有分页与孤行控制，屏上不兑现——只随 data-* 进出保往返。
     // onOff 三态：'1' 开、'0' 关（widowControl 在 Word 里默认就是开，「显式关」是真值，
@@ -2575,7 +2585,7 @@ class Fidelity {
     // 段落属性余量（v0.147）：pPr 里那批屏上不兑现的直接属性 → data-ppr 载荷
     const pprAttr = readPprPayload(effPPr)
     const body = this.layout(
-      `${tag}${shadeAttr ? ` data-shade="${shadeAttr}"` : ''}${tabsAttr ? ` data-tabs="${tabsAttr}"` : ''}${frameAttr ? ` data-frame="${frameAttr}"` : ''}${pprAttr ? ` ${PPR_ATTR}="${pprAttr}"` : ''}${flags.join('')}`,
+      `${tag}${shadeAttr ? ` data-shade="${shadeAttr}"` : ''}${shdAttr ? ` ${SHD_ATTR}="${shdAttr}"` : ''}${tabsAttr ? ` data-tabs="${tabsAttr}"` : ''}${frameAttr ? ` data-frame="${frameAttr}"` : ''}${pprAttr ? ` ${PPR_ATTR}="${pprAttr}"` : ''}${flags.join('')}`,
       style,
       pieces,
     )
@@ -2609,10 +2619,16 @@ class Fidelity {
       // 缇值先说话（c13 门面九枚「缇值 × 字符数双生」臂全 verdict=literal），字符那一枚只在缇值整枚没写时
       // 说话——缇值显式 0 时不接字符档（那一档的组合本轮没量过，不改道）；负数字面不上账
       // （c15w：w:leftChars="-49" 在 Word 门面报 wordPt=0）
-      const left = attrNum(ind, 'w:left') ?? attrNum(ind, 'w:start')
+      // v0.164：left/right 与 start/end 两套写法各查各的（`??` 右侧不求值 → 写了 left
+      // 的缩进上 start 永不进账；Word 的 bidi 件两枚都写，正落在短路那一支）
+      const leftLit = attrNum(ind, 'w:left')
+      const leftStart = attrNum(ind, 'w:start')
+      const left = leftLit ?? leftStart
       const leftChars = attrNum(ind, 'w:leftChars')
       const hang = attrNum(ind, 'w:hanging')
-      const right = attrNum(ind, 'w:right') ?? attrNum(ind, 'w:end')
+      const rightLit = attrNum(ind, 'w:right')
+      const rightEnd = attrNum(ind, 'w:end')
+      const right = rightLit ?? rightEnd
       const rightChars = attrNum(ind, 'w:rightChars')
       if (left) bits.push(`margin-left: ${Math.round(left * TWIP_PX)}px`)
       else if (left === undefined && leftChars && leftChars > 0) bits.push(`margin-left: ${Math.round((leftChars / 100) * charPx)}px`)
@@ -2913,8 +2929,13 @@ class Fidelity {
         if (align) para.align = align
         const ind = find(pPr, 'w:ind')
         if (ind) {
-          const left = attrNum(ind, 'w:left') ?? attrNum(ind, 'w:start')
-          const right = attrNum(ind, 'w:right') ?? attrNum(ind, 'w:end')
+          // 与 paraCss 那一处同款（v0.164）：left/right 与 start/end 两套写法各查各的
+          const leftLit = attrNum(ind, 'w:left')
+          const leftStart = attrNum(ind, 'w:start')
+          const left = leftLit ?? leftStart
+          const rightLit = attrNum(ind, 'w:right')
+          const rightEnd = attrNum(ind, 'w:end')
+          const right = rightLit ?? rightEnd
           const first = attrNum(ind, 'w:firstLine')
           const firstChars = attrNum(ind, 'w:firstLineChars')
           const hang = attrNum(ind, 'w:hanging')
@@ -3071,7 +3092,11 @@ class Fidelity {
         return
       }
       case 'fldChar': {
-        const k = attr(node, 'w:fldCharType') ?? attr(node, 'w:type')
+        // v0.164：两枚各查各的（`??` 的右侧在写了 fldCharType 的件上永不求值；
+        // w:type 是更早期的写法，兼容件里还见得到）
+        const fldType = attr(node, 'w:fldCharType')
+        const legacyType = attr(node, 'w:type')
+        const k = fldType ?? legacyType
         // 域属性两枚（v0.155）：fldLock（这一枚域锁住，不许更新）与 dirty（结果已过期，
         // 打开时要重算）。两枚都不改我们屏上的样子——域是打开时算一次就固定下来的，
         // **只读记账**：写侧发包时域一律重建（meta 里没有「哪一枚锁着」这一栏）
@@ -3173,7 +3198,10 @@ class Fidelity {
         const img = await this.bitmap(node)
         if (img) st.pieces.push({ kind: 'block', html: img })
         const ole = findDesc(node, 'OLEObject')
-        const prog = attr(ole, 'ProgID') ?? attr(ole, 'Type')
+        // v0.164：两枚各查各的（`??` 右侧在写了 ProgID 的件上永不求值）
+        const progId = attr(ole, 'ProgID')
+        const progType = attr(ole, 'Type')
+        const prog = progId ?? progType
         const rel = this.rels.get(attrL(ole, 'id') ?? '')
         const file = rel?.target.split('/').pop() ?? ''
         const what = [prog, file].filter(Boolean).join('，')
@@ -3882,6 +3910,9 @@ class Fidelity {
         const pat = patternVal(shd)
         if (pat) this.warn(`图案底纹（w:shd @w:val=${pat}）按 CSS 近似渲染：条纹族精确，pct 族密度近似`)
         const shadeAttr = shadePayload(shd, this.themeColors)
+        // 存盘原件（v0.164）：逐格/条件层/样式层取一之后那一枚 w:shd 的主题引用，
+        // 与屏上渲染同一个来源——否则「看到的色」与「写回去的色」会各说各的
+        const shdAttr = shdOriginOf(shd, this.themeColors)
         // 逐格边框间距（v0.143）：只从 direct 层 w:tcPr/w:tcBorders 读——条件层与表级的
         // space 不叠加（单元格共用边框，padding 会重复计数），忽略
         const tcBordersEl = tcPr ? find(tcPr, 'w:tcBorders') : undefined
@@ -3927,6 +3958,7 @@ class Fidelity {
         }, shadingCss(shd, this.themeColors)), mar].filter(Boolean).join('; ')
         if (style) attrs.push(`style="${style}"`)
         if (shadeAttr) attrs.push(`data-shade="${shadeAttr}"`)
+        if (shdAttr) attrs.push(`${SHD_ATTR}="${shdAttr}"`)
         // 单元格不换行（v0.152）：屏上那一半由 cellStyleCss 的 white-space 兑现，
         // 这一枚载荷只为写侧认回（白-space 会与用户手设的样式混，不放载荷里认）
         if (on(find(tcPr, 'w:noWrap'))) attrs.push('data-nowrap="1"')
@@ -4031,8 +4063,11 @@ function edgeCss(b: XEl, tc?: ThemeColors): string {
   // Word 门面把 w:sz="0" 的实线报成 LineWidth=2（0.25 磅，它那刻度的最小发墨档），而 0px 的 CSS 边框一滴墨都不落；
   // 4/6/8 原样通过（真件表级与改造件段落两臂同测），所以这是地板不是一律取最小
   const px = eighthsToPx(Math.max(2, attrNum(b, 'w:sz') ?? 8))
-  // 主题色优先（accent1 一族在边框上真件 34 枚），字面 w:color 是兜底
-  const hex = themeRefCss(tc, b) ?? rgb2hex(`#${(attr(b, 'w:color') ?? '').replace(/^#/, '').toLowerCase()}`) ?? '#000000'
+  // 主题色优先（accent1 一族在边框上真件 34 枚），字面 w:color 是兜底。
+  // v0.164：字面值恒查问（`??` 的右侧不进探针账；表级那一趟 v0.163 已改成无条件取原值，
+  // 这一处管的是段落 pBdr 与逐格 tcBorders——同一形状的两处，不能只改一处）
+  const literal = attr(b, 'w:color')
+  const hex = themeRefCss(tc, b) ?? rgb2hex(`#${(literal ?? '').replace(/^#/, '').toLowerCase()}`) ?? '#000000'
   return `${px}px ${style} ${hex}`
 }
 
@@ -4061,9 +4096,13 @@ function borderEdges(el: XEl | undefined, tc?: ThemeColors): Record<string, stri
 /** `w:shd` 的 `w:fill` → 规范 hex；auto/无填充/纯白都给 null（白底等于没底纹） */
 function shadingHex(shd: XEl | undefined, tc?: ThemeColors): string | null {
   if (!shd) return null
-  // 主题填充优先（真件 31 枚带 themeFill），字面 fill 是兜底；两枚都没有才按无底纹
+  // 主题填充优先（真件 31 枚带 themeFill），字面 fill 是兜底
   const themed = themeRefCss(tc, shd, 'w:themeFill', 'w:themeFillTint', 'w:themeFillShade')
-  const fill = themed ?? attr(shd, 'w:fill') ?? ''
+  // v0.164：字面值**无条件按名查问**。写成 `themed ?? attr(shd,'w:fill')` 时，主题解析
+  // 得出来那一支根本不求值——`w:fill` 那枚属性等于没被读过（与 v0.163 的 `w:color` 同形：
+  // 漏的方向是分母变小，账面上看不出来）。这里取原值只为了「读过」，主次仍按主题优先
+  const literal = attr(shd, 'w:fill')
+  const fill = themed ?? literal ?? ''
   if (!fill || fill.toLowerCase() === 'auto') return null
   const hex = rgb2hex(`#${fill.replace(/^#/, '')}`)
   return hex && hex !== '#ffffff' ? hex : null
@@ -4077,9 +4116,13 @@ function shadingHex(shd: XEl | undefined, tc?: ThemeColors): string | null {
 function shadeSpec(shd: XEl | undefined, tc?: ThemeColors): { pattern: string; fg: string | null; bg: string | null } | null {
   if (!shd) return null
   const v = (attr(shd, 'w:val') ?? 'clear').toLowerCase()
+  // v0.164：前景色**先按名查问**再谈档位。clear/none/nil 三档在 Word 里不画前景（那枚
+  // w:color 写了也不参与渲染），旧写法在这一行就 return，于是「只有 clear 底纹的件」上
+  // 这枚属性永不进账——查问与解析解耦，连明摆着不用的也得先问一声
+  const literal = attr(shd, 'w:color')
   if (v === 'clear' || v === 'none' || v === 'nil') return null
   // 前景色与字色/边框同一套优先级：主题引用优先，字面 w:color 兜底
-  const fg = themeRefCss(tc, shd) ?? rgb2hex(`#${(attr(shd, 'w:color') ?? '').replace(/^#/, '')}`)
+  const fg = themeRefCss(tc, shd) ?? rgb2hex(`#${(literal ?? '').replace(/^#/, '')}`)
   return { pattern: v, fg: fg && fg !== '#ffffff' ? fg : null, bg: shadingHex(shd, tc) }
 }
 
@@ -4093,6 +4136,31 @@ function shadingCss(shd: XEl | undefined, tc?: ThemeColors): string | null {
   const bg = shadingHex(shd, tc)
   if (!spec || !spec.fg) return bg ? `background-color: ${bg}` : null
   return shadeCss({ pattern: spec.pattern, fg: spec.fg, bg: spec.bg ?? bg ?? '#ffffff' })
+}
+
+/**
+ * 底纹的**存盘原件**（v0.164）→ data-shd 载荷。只在 `w:themeFill` 在场时给：
+ * 那一枚解析得出来，`background` 装的就成了「屏上色」，字面 `w:fill` 无处安放。
+ *
+ * 载荷里带一枚 `bg`（导入那一刻的屏上色，不带 #）：回写时拿它与当前的 background 比，
+ * 对不上就说明用户在编辑器里改过底纹色——那时主题引用作废，改色是显式决定。
+ */
+function shdOriginOf(shd: XEl | undefined, tc?: ThemeColors): string | null {
+  if (!shd) return null
+  const theme = themeRefParts(shd, 'w:themeFill', 'w:themeFillTint', 'w:themeFillShade')
+  if (!theme.ref) return null
+  const fill = attr(shd, 'w:fill')
+  const p: ShdPayload = {
+    ...(fill ? { fill } : {}),
+    themeFill: theme.ref,
+    ...(theme.tint ? { themeFillTint: theme.tint } : {}),
+    ...(theme.shade ? { themeFillShade: theme.shade } : {}),
+  }
+  // 判据取**解析结果**（不是 shadingHex 的出口）：后者把纯白折成 null，
+  // 白底件就没有比对基准了
+  const resolved = themeCssOf(tc, theme)
+  if (resolved) p.bg = resolved.replace('#', '')
+  return shdPayloadOf(p)
 }
 
 /**

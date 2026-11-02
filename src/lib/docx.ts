@@ -46,7 +46,7 @@ import {
   UnderlineType,
 } from 'docx'
 import { xml2js } from 'xml-js'
-import { borderParts, pxToEighths, pxToPt, parseCnfPayload, parseFramePayload, parseImgPayload, parsePprPayload, parseShadePayload, parseTabsPayload, parseTblbPayload, parseTblpPayload, parseTblPrPayload, parseTlookPayload, CELL_EDGES, CNF_KEYS, PPR_IND_KEYS, TBLB_EDGES, TBLB_KEYS, type CellEdge } from './cell-style'
+import { borderParts, pxToEighths, pxToPt, parseCnfPayload, parseFramePayload, parseImgPayload, parsePprPayload, parseShadePayload, parseShdPayload, parseTabsPayload, parseTblbPayload, parseTblpPayload, parseTblPrPayload, parseTlookPayload, CELL_EDGES, CNF_KEYS, PPR_IND_KEYS, TBLB_EDGES, TBLB_KEYS, type CellEdge } from './cell-style'
 import { lineToOoxml, type LineRule } from './paragraph-style'
 import { decodeEnt } from './ooxml'
 import { condLookBits } from './table-cond'
@@ -622,6 +622,12 @@ export interface DocMeta {
    * 它们要 post-pack 补丁，这一族不用）
    */
   background?: DocBackground
+  /**
+   * 主题件原文（v0.164）：`word/theme/theme1.xml` 整份。写手发出去的主题引用
+   * （`w:themeColor`/`w:themeFill`/`w:asciiTheme` 这一族）指着它，缺了就只能由 Word
+   * 拿默认主题顶上——所以导出时原样带回去（见 attachThemePart）
+   */
+  themeXml?: string
 }
 
 export async function docxToHtml(bytes: Uint8Array): Promise<string> {
@@ -725,6 +731,12 @@ export async function docxToDocMeta(bytes: Uint8Array): Promise<DocMeta> {
     if (gap && Math.abs(gap - DEFAULT_COL_GAP) > 0.6) page.colGap = rmm(gap)
   }
   if (Object.keys(page).length) out.page = page
+  // 主题件（v0.164）：整份原样带走，导出时原样放回（见 attachThemePart）
+  const themeFile = zip.file('word/theme/theme1.xml')
+  if (themeFile) {
+    const themeXml = await themeFile.async('string')
+    if (themeXml.trim()) out.themeXml = themeXml
+  }
   return out
 }
 
@@ -1491,9 +1503,12 @@ function spacingOf(node: PMNode): ISpacingProperties | undefined {
 /** 段落的直接格式（命名样式 / 行距段距 / 底纹 / 四边）一次拼好，供 new Paragraph 的参数展开。
  *  pstyle 由调用方决定给不给：heading 的样式标签由 HeadingLevel 承担（库会给 heading 和 style
  *  各写一枚 w:pStyle，并存会出两枚）；bullet 项库无条件补 ListParagraph 标签，同样不能并存 */
-function paraFormatOf(node: PMNode, pstyle?: string | null) {
+function paraFormatOf(node: PMNode, pstyle?: string | null, dt?: DocTrack) {
   const sp = spacingOf(node)
   const sh = shadingOf(node.attrs)
+  // 底纹的存盘原件（v0.164）：**只在真发得出 `<w:shd>` 时登记**——补丁按出现序对位，
+  // 多登记一条就把后面所有段落的那一枚都贴偏（少登记同样错位）
+  if (sh) dt?.shdExtras.push(shdExtraOf(node.attrs))
   const bd = bordersOf(node.attrs)
   // 分页四件套（v0.143）：data-* 三态 → docx 包原生槽。'0' 显式传 false
   // （widowControl 的「关」是真值），null 不传（落回 Word 默认的开）
@@ -1668,6 +1683,31 @@ function shadingOf(attrs: Record<string, unknown> | undefined) {
 const SHADING_TYPES: Record<string, (typeof ShadingType)[keyof typeof ShadingType]> = Object.fromEntries(
   (Object.values(ShadingType) as string[]).map((v) => [v.toLowerCase(), v as (typeof ShadingType)[keyof typeof ShadingType]]),
 )
+
+/**
+ * 底纹的存盘原件（v0.164）：data-shd 载荷 → 要**合进** `<w:shd>` 的属性串。
+ * 空串 = 这一枚底纹不补（补丁按出现序对位，空串占位）。
+ *
+ * 两道闸门：
+ * 1. **用户改过底纹色就整笔作废。** 载荷里的 `bg` 是导入那一刻的屏上色；当前
+ *    `background` 与它对不上，说明用户在编辑器里换了颜色。主题引用那时必须让位——
+ *    否则 Word 按主题解析，用户的改色在屏上、在纸上都看不见。
+ * 2. `background` 为空 = 包里根本不会发 `<w:shd>`（`shadingOf` 返回 undefined），
+ *    没有开标签可合，补也白补。
+ */
+function shdExtraOf(attrs: Record<string, unknown> | undefined): string {
+  const p = parseShdPayload(typeof attrs?.shd === 'string' ? attrs.shd : null)
+  if (!p.themeFill) return ''
+  const bg = typeof attrs?.background === 'string' ? attrs.background.replace('#', '').toLowerCase() : ''
+  if (!bg) return ''
+  if (p.bg && p.bg.toLowerCase() !== bg) return ''
+  return (
+    (p.fill ? ` w:fill="${xmlAttr(p.fill)}"` : '') +
+    ` w:themeFill="${xmlAttr(p.themeFill)}"` +
+    (p.themeFillTint ? ` w:themeFillTint="${xmlAttr(p.themeFillTint)}"` : '') +
+    (p.themeFillShade ? ` w:themeFillShade="${xmlAttr(p.themeFillShade)}"` : '')
+  )
+}
 
 /** 上下标：Word 把 vertAlign 记在 rPr，与粗斜体同级，所以是两个互斥的 run 属性 */
 function vertAlignOf(node: PMNode): { superScript?: boolean; subScript?: boolean } {
@@ -1907,6 +1947,14 @@ interface DocTrack {
    * （普通 run / 超链接 / 修订插入 / 修订删除 / 符号），少登记一条就整体错位
    */
   capsExtras: string[]
+  /**
+   * 底纹的存盘原件（v0.164）：与 document.xml 里每个 `<w:shd>` 一一对应、同序。
+   * 包只会发 `{val,color,fill}` 三枚（createShading），主题引用三枚在包外；而且它写的
+   * `w:fill` 是**解析后的屏上色**，源件的字面 fill 已经没人记得。补丁按出现序把这
+   * 几枚**合进**已有开标签（同名属性改值、缺的追加），而不是再插一枚元素——
+   * `w:shd` 在 CT_PPrBase / CT_TcPrBase 里都是单枚
+   */
+  shdExtras: string[]
 }
 
 type NoteKind = 'footnote' | 'endnote'
@@ -1934,6 +1982,7 @@ function newDocTrack(): DocTrack {
     cnfStyles: [],
     tblBorders: [],
     capsExtras: [],
+    shdExtras: [],
     uThemes: [],
     colorThemes: [],
   }
@@ -2254,7 +2303,7 @@ function blocksOf(
             indent: indentOf(main),
             // 有序项库见 style 会跳过 ListParagraph 标签，命名样式可并存；子弹项库无条件
             // 补 ListParagraph（两枚 pStyle 撞车），样式标签只好丢（挂账）
-            ...paraFormatOf(main, ordered ? pstyleOf(main) : undefined),
+            ...paraFormatOf(main, ordered ? pstyleOf(main) : undefined, dt),
           }),
         )
         out.push(...blocksOf(blocks.slice(1), depth, dt, contentTwips, lists))
@@ -2270,7 +2319,7 @@ function blocksOf(
           outlineLevel: Math.max(0, Math.min(8, level - 1)),
           indent: indentOf(node),
           alignment: alignOf(node),
-          ...paraFormatOf(node),
+          ...paraFormatOf(node, undefined, dt),
           heading:
             level === 1 ? HeadingLevel.HEADING_1
             : level === 2 ? HeadingLevel.HEADING_2
@@ -2398,6 +2447,9 @@ function blocksOf(
                   if (isCell) gc = start + cs
                   const borders = bordersOf(cell.attrs)
                   const bg = shadingOf(cell.attrs)
+                  // 底纹的存盘原件（v0.164）：与下面的 tcPr 那一枚同序——格底纹在
+                  // `<w:tcPr>` 里，排在格内段落的 `<w:shd>` 之前，所以必须**先**登记
+                  if (bg) dt.shdExtras.push(shdExtraOf(cell.attrs))
                   const va = cell.attrs?.vAlign
                   // 格边距（v0.97 起）：pad* 属性（px，0 是真值）→ 逐边 w:tcMar（缇）；
                   // 只在有声明时给 margins，不给默认值——Word 读侧对缺省边自己有表级账
@@ -2455,7 +2507,7 @@ function blocksOf(
         children: inlineBlockChildren(node, dt),
         alignment: alignOf(node),
         indent: indentOf(node),
-        ...paraFormatOf(node, pstyleOf(node)),
+        ...paraFormatOf(node, pstyleOf(node), dt),
       }),
     )
   }
@@ -2694,18 +2746,17 @@ export async function prosemirrorToDocxBytes(json: PMNode, meta?: DocMeta): Prom
     dt.tblBorders.some((x) => x)
   // 单元格不换行（v0.152）：包里没有 noWrap 的槽，按 <w:tc> 出现序插 <w:noWrap/>
   const withCell = dt.cellExtras.some((x) => x) ? await patchTcPr(withImg, dt.cellExtras) : withImg
+  // 底纹的存盘原件（v0.164）：按 <w:shd> 出现序**合并**属性（包只发 val/color/fill 三枚，
+  // 且 fill 写的是解析后的屏上色——源件的字面色与主题三枚都要改回来/补上去）
+  const withShd = await patchShdAttrs(withCell, dt.shdExtras)
   const withStyles = props.size || latent
-    ? await patchStylesXml(withCell, latent, props)
-    : withCell
-  if (numDefs.length) {
-    const withNum = await patchNumberingXml(withStyles, numDefs)
-    return needTbl
-      ? await patchTblLook(withNum, looks, dt.tblLooks, dt.tblPrs, dt.cellSps, dt.cnfStyles, dt.tblBorders)
-      : withNum
-  }
-  return needTbl
-    ? patchTblLook(withStyles, looks, dt.tblLooks, dt.tblPrs, dt.cellSps, dt.cnfStyles, dt.tblBorders)
-    : withStyles
+    ? await patchStylesXml(withShd, latent, props)
+    : withShd
+  const withNum = numDefs.length ? await patchNumberingXml(withStyles, numDefs) : withStyles
+  const packed = needTbl
+    ? await patchTblLook(withNum, looks, dt.tblLooks, dt.tblPrs, dt.cellSps, dt.cnfStyles, dt.tblBorders)
+    : withNum
+  return attachThemePart(packed, meta?.themeXml)
 }
 
 /**
@@ -3313,6 +3364,105 @@ async function patchBeforeElem(bytes: Uint8Array, anchor: string, extras: string
   if (!touched) return bytes
   out += xml.slice(cursor)
   zip.file('word/document.xml', out)
+  const buf = (await zip.generateAsync({ type: 'arraybuffer' })) as ArrayBuffer
+  return new Uint8Array(buf)
+}
+
+/**
+ * 给 document.xml 里每个 `<w:shd>` 合并属性（v0.164）：按**出现序**贴——第 i 枚合
+ * `extras[i]`（空串 = 这一枚不动）。
+ *
+ * 与 patchElemAttrs 的差别是**动作**：那一族只追加（包压根不发那几枚），这一族要
+ * **改值**——包的 createShading 会写 `w:fill`，而它写的是解析后的屏上色，源件的字面
+ * fill 与之不同。同名的追加会造出第二枚 `w:fill`（非法 XML），所以这里先改后加。
+ *
+ * `w:shd` 在 CT_PPrBase 与 CT_TcPrBase 里都是单枚元素，所以「合并」而不是「再插一枚」
+ * 是硬要求（v0.160 的 `<w:ind>` 同一条纪律）。计数闸门同前：条数对不上就整笔放弃。
+ */
+async function patchShdAttrs(bytes: Uint8Array, extras: string[]): Promise<Uint8Array> {
+  if (!extras.some((x) => x)) return bytes
+  const { default: JSZip } = await import('jszip')
+  const zip = await JSZip.loadAsync(bytes)
+  const file = zip.file('word/document.xml')
+  if (!file) return bytes
+  const xml = await file.async('string')
+  const opens = [...xml.matchAll(/<w:shd(?=[\s/>])[^>]*>/g)]
+  if (opens.length !== extras.length) return bytes
+  let out = ''
+  let cursor = 0
+  let touched = false
+  for (let i = 0; i < opens.length; i++) {
+    const m = opens[i]
+    const start = m.index ?? 0
+    const stop = start + m[0].length
+    const add = extras[i]
+    if (!add) {
+      out += xml.slice(cursor, stop)
+      cursor = stop
+      continue
+    }
+    let tag = m[0]
+    for (const am of add.matchAll(/\sw:([A-Za-z]+)="([^"]*)"/g)) {
+      const re = new RegExp(`(\\sw:${am[1]}=)"[^"]*"`)
+      tag = re.test(tag)
+        ? tag.replace(re, (_all, head: string) => `${head}"${am[2]}"`)
+        : tag.replace(/(\s*\/?>)$/, (_all, tail: string) => `${am[0]}${tail}`)
+    }
+    out += xml.slice(cursor, start) + tag
+    cursor = stop
+    touched = true
+  }
+  if (!touched) return bytes
+  out += xml.slice(cursor)
+  zip.file('word/document.xml', out)
+  const buf = (await zip.generateAsync({ type: 'arraybuffer' })) as ArrayBuffer
+  return new Uint8Array(buf)
+}
+
+/**
+ * 把源件的主题件带进写出包（v0.164）。
+ *
+ * 为什么必须带：写手会照原样发 `w:themeColor / w:themeFill / w:asciiTheme` 这一族引用
+ * （v0.150 起的表级边框、v0.159 的 w:u、v0.160 的 w:color、v0.161 的样式主题字体），
+ * 而 docx 包的成品里**根本没有 word/theme/theme1.xml**——引用全部悬空，Word 只能拿
+ * 自己的默认主题去解析：用户那套 accent 色在导出后集体变了色，而屏上是对的。
+ * 这一枚不是「补一个槽」，是给已经写出去的引用补上它们指着的东西。
+ *
+ * 三件事缺一不可：部件本体、`document.xml.rels` 里的关系、`[Content_Types].xml`
+ * 里的 Override。少任一件 Word 都会报包损坏。
+ */
+async function attachThemePart(bytes: Uint8Array, themeXml?: string): Promise<Uint8Array> {
+  if (!themeXml) return bytes
+  const { default: JSZip } = await import('jszip')
+  const zip = await JSZip.loadAsync(bytes)
+  const THEME = 'word/theme/theme1.xml'
+  if (await zip.file(THEME)?.async('string') === themeXml) return bytes
+  zip.file(THEME, themeXml)
+  const ct = await zip.file('[Content_Types].xml')?.async('string')
+  if (ct && !ct.includes('/word/theme/theme1.xml')) {
+    zip.file(
+      '[Content_Types].xml',
+      ct.replace(
+        '</Types>',
+        '<Override PartName="/word/theme/theme1.xml" ContentType="application/vnd.openxmlformats-officedocument.theme+xml"/></Types>',
+      ),
+    )
+  }
+  const relsPath = 'word/_rels/document.xml.rels'
+  const rels = await zip.file(relsPath)?.async('string')
+  if (rels && !rels.includes('/relationships/theme')) {
+    // 关系 id 不能与已有的撞：数一遍 rId 取下一个空号（包自己的编号从 rId1 起）
+    const used = new Set([...rels.matchAll(/Id="([^"]+)"/g)].map((m) => m[1]))
+    let n = 1
+    while (used.has(`rIdTheme${n}`)) n++
+    const rel = `<Relationship Id="rIdTheme${n}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/theme" Target="theme/theme1.xml"/>`
+    zip.file(
+      relsPath,
+      rels.includes('</Relationships>')
+        ? rels.replace('</Relationships>', `${rel}</Relationships>`)
+        : rels.replace(/<Relationships([^>]*)\/>/, `<Relationships$1>${rel}</Relationships>`),
+    )
+  }
   const buf = (await zip.generateAsync({ type: 'arraybuffer' })) as ArrayBuffer
   return new Uint8Array(buf)
 }

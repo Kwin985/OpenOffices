@@ -1,5 +1,5 @@
 import { Extension, Mark, type CommandProps, type Editor } from '@tiptap/core'
-import { CELL_EDGES, FRAME_ATTR, PPR_ATTR, SHADE_ATTR, TABS_ATTR, bdAttr, edgeAttrs, inlineBorder, parseFramePayload, parsePprPayload, parseTabsPayload, rgb2hex, shadeAttrs, type CellEdge } from './cell-style'
+import { CELL_EDGES, FRAME_ATTR, PPR_ATTR, SHADE_ATTR, SHD_ATTR, TABS_ATTR, bdAttr, edgeAttrs, inlineBorder, parseFramePayload, parsePprPayload, parseTabsPayload, rgb2hex, shadeAttrs, shdAttrsOf, type CellEdge } from './cell-style'
 
 /**
  * 段落的排版属性：行距、段前段后、底纹与四边边框。
@@ -200,6 +200,12 @@ export const ParagraphStyle = Extension.create({
             default: null as string | null,
             parseHTML: (el: HTMLElement) => el.getAttribute(SHADE_ATTR) || null,
             renderHTML: (attrs: Record<string, unknown>) => shadeAttrs(attrs.shade),
+          },
+          // 底纹的存盘原件（v0.164）：与单元格那一枚同源。屏上不兑现，只随 data-shd 进出
+          shd: {
+            default: null as string | null,
+            parseHTML: (el: HTMLElement) => el.getAttribute(SHD_ATTR) || null,
+            renderHTML: (attrs: Record<string, unknown>) => shdAttrsOf(attrs.shd),
           },
           // 制表位表（v0.144）：w:pPr/w:tabs/w:tab 的档位|缇|前导符。屏上无对应物
           // （Word 制表位由 tab 字符驱动跳对齐），只随 data-tabs 载荷往返
