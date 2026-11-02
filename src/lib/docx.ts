@@ -46,7 +46,7 @@ import {
   UnderlineType,
 } from 'docx'
 import { xml2js } from 'xml-js'
-import { borderParts, pxToEighths, pxToPt, parseCnfPayload, parseFramePayload, parseImgPayload, parsePprPayload, parseShadePayload, parseShdPayload, parseTabsPayload, parseTblbPayload, parseTblpPayload, parseTblPrPayload, parseTlookPayload, CELL_EDGES, CNF_KEYS, PPR_IND_KEYS, TBLB_EDGES, TBLB_KEYS, type CellEdge } from './cell-style'
+import { bdAttr, borderParts, pxToEighths, pxToPt, parseBdrPayload, parseCnfPayload, parseFramePayload, parseImgPayload, parsePprPayload, parseShadePayload, parseShdPayload, parseTabsPayload, parseTblbPayload, parseTblpPayload, parseTblPrPayload, parseTlookPayload, CELL_EDGES, CNF_KEYS, PPR_IND_KEYS, TBLB_EDGES, TBLB_KEYS, type CellEdge } from './cell-style'
 import { lineToOoxml, type LineRule } from './paragraph-style'
 import { decodeEnt } from './ooxml'
 import { condLookBits } from './table-cond'
@@ -1510,6 +1510,8 @@ function paraFormatOf(node: PMNode, pstyle?: string | null, dt?: DocTrack) {
   // 多登记一条就把后面所有段落的那一枚都贴偏（少登记同样错位）
   if (sh) dt?.shdExtras.push(shdExtraOf(node.attrs))
   const bd = bordersOf(node.attrs)
+  // 边框的存盘原件（v0.165）：同一条纪律——发不出 `<w:pBdr>` 就不登记
+  if (bd) dt?.paraBdrs.push(bdrExtraOf(node.attrs))
   // 分页四件套（v0.143）：data-* 三态 → docx 包原生槽。'0' 显式传 false
   // （widowControl 的「关」是真值），null 不传（落回 Word 默认的开）
   const flag = (a: string): boolean | undefined => {
@@ -1660,6 +1662,32 @@ function bordersOf(attrs: Record<string, unknown> | undefined) {
     right: withSpace('right', cellBorder(attrs?.bdRight)),
   }
   return Object.values(b).some(Boolean) ? b : undefined
+}
+
+/**
+ * 边框的存盘原件（v0.165）：`data-bdr` 载荷 → 每条边要**合并**进 `<w:top>` 的属性串，
+ * 段间用 `;` 连、边名与属性串用 `|` 分。空串 = 这一块不补。
+ *
+ * 判据与 data-shd 的 `bg` 同一条：`screen` 是导入那一刻的屏上色，当前 `bd*` 的色与它
+ * 对不上就说明用户在编辑器里改过色——主题引用那时必须让位，否则 Word 按主题解析，
+ * 用户换的颜色在屏上、在纸上都看不见。线型与粗细改了不影响颜色，照补。
+ */
+function bdrExtraOf(attrs: Record<string, unknown> | undefined): string {
+  const out: string[] = []
+  for (const o of parseBdrPayload(typeof attrs?.bdr === 'string' ? attrs.bdr : null)) {
+    const cur = borderParts(attrs?.[bdAttr(o.edge)] as string | undefined)
+    if (!cur || cur.hex.replace('#', '').toLowerCase() !== (o.screen ?? '').toLowerCase()) continue
+    const add = [
+      o.color ? `w:color="${o.color}"` : '',
+      o.themeColor ? `w:themeColor="${o.themeColor}"` : '',
+      o.themeTint ? `w:themeTint="${o.themeTint}"` : '',
+      o.themeShade ? `w:themeShade="${o.themeShade}"` : '',
+    ]
+      .filter(Boolean)
+      .join(' ')
+    if (add) out.push(`${o.edge}|${add}`)
+  }
+  return out.join(';')
 }
 
 /**
@@ -1955,6 +1983,19 @@ interface DocTrack {
    * `w:shd` 在 CT_PPrBase / CT_TcPrBase 里都是单枚
    */
   shdExtras: string[]
+  /**
+   * 段落边框的存盘原件（v0.165）：与 document.xml 里每个 `<w:pBdr>` 一一对应、同序。
+   * 包会发四条边、也会发 `w:color`——但写的是**解析后的屏上色**，源件那枚字面色与
+   * `w:themeColor/themeTint/themeShade` 三枚在包外。补丁按块贴：块内按边名找元素，
+   * 同名属性改值、缺的追加（同 shdExtras 的动作；点分的是「哪一块」，不是「第几遍」）
+   */
+  paraBdrs: string[]
+  /**
+   * 逐格边框的存盘原件（v0.165）：与 document.xml 里每个 `<w:tcBorders>` 一一对应、
+   * 同序。**只在真发得出这个块时登记**（`bordersOf` 有值），与 tblBorders 的区别是
+   * 它按格走，所以对位靠「哪些格带边框」这一条，而不是按格数硬套
+   */
+  cellBdrs: string[]
 }
 
 type NoteKind = 'footnote' | 'endnote'
@@ -1983,6 +2024,8 @@ function newDocTrack(): DocTrack {
     tblBorders: [],
     capsExtras: [],
     shdExtras: [],
+    paraBdrs: [],
+    cellBdrs: [],
     uThemes: [],
     colorThemes: [],
   }
@@ -2446,6 +2489,10 @@ function blocksOf(
                   const cellTw = isCell ? gridTw.slice(start, start + cs).reduce((s, w) => s + w, 0) : 0
                   if (isCell) gc = start + cs
                   const borders = bordersOf(cell.attrs)
+                  // 边框的存盘原件（v0.165）：只在真发得出 `<w:tcBorders>` 时登记。
+                  // 这一条必须在格内段落之前——XML 里 `<w:tcPr>` 排在格的 `<w:p>` 前面，
+                  // 而 pBdr 那本账是另一条线，两族各自按自己的元素出现序对位
+                  if (borders) dt.cellBdrs.push(bdrExtraOf(cell.attrs))
                   const bg = shadingOf(cell.attrs)
                   // 底纹的存盘原件（v0.164）：与下面的 tcPr 那一枚同序——格底纹在
                   // `<w:tcPr>` 里，排在格内段落的 `<w:shd>` 之前，所以必须**先**登记
@@ -2749,9 +2796,15 @@ export async function prosemirrorToDocxBytes(json: PMNode, meta?: DocMeta): Prom
   // 底纹的存盘原件（v0.164）：按 <w:shd> 出现序**合并**属性（包只发 val/color/fill 三枚，
   // 且 fill 写的是解析后的屏上色——源件的字面色与主题三枚都要改回来/补上去）
   const withShd = await patchShdAttrs(withCell, dt.shdExtras)
+  // 边框的存盘原件（v0.165）：按块合并属性（pBdr 与 tcBorders 两族，块级标签各自对位）
+  const withBdr = await patchBorderBlocks(
+    await patchBorderBlocks(withShd, 'w:pBdr', dt.paraBdrs),
+    'w:tcBorders',
+    dt.cellBdrs,
+  )
   const withStyles = props.size || latent
-    ? await patchStylesXml(withShd, latent, props)
-    : withShd
+    ? await patchStylesXml(withBdr, latent, props)
+    : withBdr
   const withNum = numDefs.length ? await patchNumberingXml(withStyles, numDefs) : withStyles
   const packed = needTbl
     ? await patchTblLook(withNum, looks, dt.tblLooks, dt.tblPrs, dt.cellSps, dt.cnfStyles, dt.tblBorders)
@@ -3369,6 +3422,26 @@ async function patchBeforeElem(bytes: Uint8Array, anchor: string, extras: string
 }
 
 /**
+ * 开标签 + `w:xxx="…"` 串 → 同名改值、缺的追加（v0.165 从 patchShdAttrs 抽出）。
+ *
+ * 这是「包自己会发这一枚属性」时的唯一动作：追加会造出第二枚同名属性 = 非法 XML，
+ * 而计数闸门不会替你发现。凡是要覆盖包里那个解析后的值，都得走这里。
+ */
+function mergeTagAttrs(tag: string, add: string): string {
+  let out = tag
+  // 属性串允许不带前导空格：匹配与追加都靠 `\sw:` 那一枚空白收边，而拼串的人很容易
+  // 只在第二枚起才记得加空格（v0.165 踩过：第一枚 w:color 被整条跳过，themeColor 一族
+  // 照贴不误——补丁「跑成功了一半」，账上只剩一笔没说法的值变）
+  for (const am of ` ${add}`.matchAll(/\sw:([A-Za-z]+)="([^"]*)"/g)) {
+    const re = new RegExp(`(\\sw:${am[1]}=)"[^"]*"`)
+    out = re.test(out)
+      ? out.replace(re, (_all, head: string) => `${head}"${am[2]}"`)
+      : out.replace(/(\s*\/?>)$/, (_all, tail: string) => `${am[0]}${tail}`)
+  }
+  return out
+}
+
+/**
  * 给 document.xml 里每个 `<w:shd>` 合并属性（v0.164）：按**出现序**贴——第 i 枚合
  * `extras[i]`（空串 = 这一枚不动）。
  *
@@ -3402,13 +3475,65 @@ async function patchShdAttrs(bytes: Uint8Array, extras: string[]): Promise<Uint8
       continue
     }
     let tag = m[0]
-    for (const am of add.matchAll(/\sw:([A-Za-z]+)="([^"]*)"/g)) {
-      const re = new RegExp(`(\\sw:${am[1]}=)"[^"]*"`)
-      tag = re.test(tag)
-        ? tag.replace(re, (_all, head: string) => `${head}"${am[2]}"`)
-        : tag.replace(/(\s*\/?>)$/, (_all, tail: string) => `${am[0]}${tail}`)
-    }
+    tag = mergeTagAttrs(tag, add)
     out += xml.slice(cursor, start) + tag
+    cursor = stop
+    touched = true
+  }
+  if (!touched) return bytes
+  out += xml.slice(cursor)
+  zip.file('word/document.xml', out)
+  const buf = (await zip.generateAsync({ type: 'arraybuffer' })) as ArrayBuffer
+  return new Uint8Array(buf)
+}
+
+/**
+ * 给每个 `<w:pBdr>` / `<w:tcBorders>` **块**里的单边元素合并属性（v0.165）。
+ *
+ * 为什么按块而不按 `<w:top>` 的出现序：`w:top` 在这份 XML 里同时长在
+ * `w:tblBorders`、`w:tcBorders`、`w:pBdr`（还有 `w:tcMar` 那一族同名元素）上，
+ * 一个全局出现序根本分不清哪一枚属于谁。块级标签是唯一的，块内再按边名找就没有歧义。
+ *
+ * 计数闸门比前几族更严：**块数对不上就整笔放弃**。登记只在「真发得出这个块」时
+ * 才 push（见 paraFormatOf / 表格那一趟），多一条少一条都说明两边看的世界不一样。
+ *
+ * extras[i] 的形状：`edge|<属性串>` 用 `;` 连，属性串即 `w:color="…" w:themeColor="…"`。
+ * 包会自己发 `w:color`（写的是解析后的屏上色），所以这一族同样是**改名不追加**。
+ */
+async function patchBorderBlocks(bytes: Uint8Array, tag: 'w:pBdr' | 'w:tcBorders', extras: string[]): Promise<Uint8Array> {
+  if (!extras.some((x) => x)) return bytes
+  const { default: JSZip } = await import('jszip')
+  const zip = await JSZip.loadAsync(bytes)
+  const file = zip.file('word/document.xml')
+  if (!file) return bytes
+  const xml = await file.async('string')
+  const blocks = [...xml.matchAll(new RegExp(`<${tag}(?=[\\s/>])[^>]*?(?:/>|>[\\s\\S]*?</${tag}>)`, 'g'))]
+  if (blocks.length !== extras.length) return bytes
+  let out = ''
+  let cursor = 0
+  let touched = false
+  for (let i = 0; i < blocks.length; i++) {
+    const m = blocks[i]
+    const start = m.index ?? 0
+    const stop = start + m[0].length
+    const add = extras[i]
+    if (!add) {
+      out += xml.slice(cursor, stop)
+      cursor = stop
+      continue
+    }
+    let block = m[0]
+    for (const chunk of add.split(';')) {
+      const bar = chunk.indexOf('|')
+      if (bar < 0) continue
+      const edge = chunk.slice(0, bar)
+      const attrs = chunk.slice(bar + 1)
+      const edgeRe = new RegExp(`<w:${edge}(?=[\\s/>])[^>]*>`)
+      // 块里没有这条边 = 写侧没发它（用户删了这一边），不是错位，跳过
+      if (!edgeRe.test(block)) continue
+      block = block.replace(edgeRe, (t) => mergeTagAttrs(t, attrs))
+    }
+    out += xml.slice(cursor, start) + block
     cursor = stop
     touched = true
   }

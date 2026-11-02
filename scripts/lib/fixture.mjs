@@ -131,7 +131,7 @@ export const FIXTURE_DOC =
   `<w:spacing w:before="120" w:after="240" w:line="360" w:lineRule="auto" w:beforeAutospacing="0" w:afterAutospacing="0"/>` +
   `<w:ind w:left="420" w:right="210" w:firstLineChars="200" w:hangingChars="0"/>` +
   `<w:jc w:val="both"/>` +
-  `<w:pBdr><w:top w:val="single" w:sz="8" w:space="1" w:color="FF0000"/>` +
+  `<w:pBdr><w:top w:val="single" w:sz="8" w:space="1" w:color="FF0000" w:themeColor="accent1" w:themeTint="99" w:themeShade="BF"/>` +
   `<w:left w:val="dotted" w:sz="4" w:space="2" w:color="00FF00"/>` +
   `<w:bottom w:val="dashed" w:sz="6" w:space="4" w:color="0000FF"/>` +
   `<w:right w:val="double" w:sz="6" w:space="3" w:color="FFFF00"/></w:pBdr></w:pPr>` +
@@ -372,7 +372,11 @@ export const FIXTURE_DOC =
   `</w:tblPr>` +
   `<w:tblGrid><w:gridCol w:w="5000"/></w:tblGrid>` +
   // v0.152：单元格不换行（w:tcPr/w:noWrap，排在 tcW 之后——CT_TcPr 序）
-  `<w:tr><w:tc><w:tcPr><w:tcW w:w="5000" w:type="dxa"/><w:noWrap/></w:tcPr>` +
+  // v0.165：逐格 tcBorders 的主题引用（上边 accent1+tint，左边 auto 字面色）——
+  // 屏上只画得出解析后的色，四条边各自的原件只有 data-bdr 载荷带得回来
+  `<w:tr><w:tc><w:tcPr><w:tcW w:w="5000" w:type="dxa"/><w:noWrap/>` +
+  `<w:tcBorders><w:top w:val="single" w:sz="8" w:space="2" w:color="336699" w:themeColor="accent1" w:themeTint="99"/>` +
+  `<w:left w:val="dashed" w:sz="4" w:space="0" w:color="auto"/></w:tcBorders></w:tcPr>` +
   `<w:p><w:r><w:t>浮动表格</w:t></w:r></w:p></w:tc></w:tr></w:tbl>` +
   // v0.146：书签区间——单段一枚（起终点夹住 run）+ 跨段一枚（本段开、下一段关，
   // 段末续挂每段各包一枚 span）。空书签（起终点相邻）不产 span，是记账内的已知边界
@@ -395,9 +399,9 @@ export const FIXTURE_DOC =
   `<w:bottom w:val="single" w:sz="4" w:space="0" w:color="000000"/>` +
   `<w:right w:val="single" w:sz="4" w:space="0" w:color="000000"/>` +
   // v0.150：insideH/insideV 带 themeColor 一族（主题色引用 + tint/shade）。
-  // 量具的 zip 不带 theme1.xml，主题解析不出来——但引用名的**按名查问**照样要做
-  // （v0.150 起 themeRefCss 把 attr 与「有没有主题」解耦，此前无主题的件这三枚
-  // 一直挂在 neverConsulted 里）
+  // 主题件在包内（v0.142 起 `word/theme/theme1.xml` 就挂在部件表里），所以这三枚
+  // 解析得出真色——「按名查问」与「解析结果」是两件事：v0.150 起 themeRefCss 把
+  // attr 与「有没有主题」解耦，此前无主题的件这三枚一直挂在 neverConsulted 里
   `<w:insideH w:val="single" w:sz="4" w:space="2" w:color="000000" w:themeColor="accent1" w:themeTint="99" w:themeShade="BF"/>` +
   `<w:insideV w:val="single" w:sz="4" w:space="3" w:color="000000" w:themeColor="accent1" w:themeTint="99" w:themeShade="BF"/>` +
   `</w:tblBorders></w:tblPr>` +

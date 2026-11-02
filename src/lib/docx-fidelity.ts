@@ -50,7 +50,7 @@ import { all, allDesc, attr, attrL, attrNum, els, find, findDesc, findL, local, 
 import { FieldEngine, fieldLabel, parseInstr, recomputable } from './docx-fields'
 import { embedHtml, inlineFlatten, unwrapEmbed, type EmbedHtml } from './ole'
 import { chartToHtml, smartArtToHtml } from './ooxml-graphics'
-import { CELL_EDGES, CNF_ATTR, CNF_KEYS, CSS_BORDER_STYLE, FRAME_NUMERIC_KEYS, FRAME_STR_KEYS, IMG_ATTR, PPR_ATTR, PPR_IND_KEYS, PPR_ONOFF_KEYS, PPR_STR_KEYS, SHD_ATTR, TAB_LEADERS, TBLB_ATTR, TBLB_EDGES, TBLB_KEYS, TBLPR_ATTR, TLOOK_ATTR, bdSpaceAttrs, cnfPayload, eighthsToPx, framePayload, imgPayload, pprPayload, ptToPx, rgb2hex, shadeCss, shdPayloadOf, tblbPayload, tblpPayload, tblPrPayload, tabsPayload, tlookPayload, type CellEdge, type CnfPayload, type FramePayload, type ImgPayload, type PprPayload, type ShdPayload, type TabSpec, type TblbPayload, type TblpPayload } from './cell-style'
+import { BDR_ATTR, CELL_EDGES, CNF_ATTR, CNF_KEYS, CSS_BORDER_STYLE, FRAME_NUMERIC_KEYS, FRAME_STR_KEYS, IMG_ATTR, PPR_ATTR, PPR_IND_KEYS, PPR_ONOFF_KEYS, PPR_STR_KEYS, SHD_ATTR, TAB_LEADERS, TBLB_ATTR, TBLB_EDGES, TBLB_KEYS, TBLPR_ATTR, TLOOK_ATTR, bdSpaceAttrs, bdrPayload, borderParts, cnfPayload, eighthsToPx, framePayload, imgPayload, pprPayload, ptToPx, rgb2hex, shadeCss, shdPayloadOf, tblbPayload, tblpPayload, tblPrPayload, tabsPayload, tlookPayload, type BdrOrigin, type CellEdge, type CnfPayload, type FramePayload, type ImgPayload, type PprPayload, type ShdPayload, type TabSpec, type TblbPayload, type TblpPayload } from './cell-style'
 import { ooxmlLine } from './paragraph-style'
 import {
   asTableCondType,
@@ -2566,6 +2566,10 @@ class Fidelity {
     const shadeAttr = shadePayload(find(effPPr, 'w:shd'), this.themeColors)
     // 底纹的存盘原件（v0.164）：主题引用吃掉字面 fill 时，那一枚随 data-shd 走
     const shdAttr = shdOriginOf(find(effPPr, 'w:shd'), this.themeColors)
+    // 边框的存盘原件（v0.165）：四边的字面色与主题三枚随 data-bdr 走。`paraCss` 里那
+    // 一趟算的是屏上色（它要拼 CSS），这里再取一次原件——同一个元素，两趟各问各的
+    const pbdrEl = find(effPPr, 'w:pBdr')
+    const bdrAttr = pbdrEl ? borderOrigin(pbdrEl, borderEdges(pbdrEl, this.themeColors)) : ''
     // 分页四件套（v0.143）：w:pageBreakBefore / w:keepNext / w:keepLines / w:widowControl。
     // Web 流式排版没有分页与孤行控制，屏上不兑现——只随 data-* 进出保往返。
     // onOff 三态：'1' 开、'0' 关（widowControl 在 Word 里默认就是开，「显式关」是真值，
@@ -2585,7 +2589,7 @@ class Fidelity {
     // 段落属性余量（v0.147）：pPr 里那批屏上不兑现的直接属性 → data-ppr 载荷
     const pprAttr = readPprPayload(effPPr)
     const body = this.layout(
-      `${tag}${shadeAttr ? ` data-shade="${shadeAttr}"` : ''}${shdAttr ? ` ${SHD_ATTR}="${shdAttr}"` : ''}${tabsAttr ? ` data-tabs="${tabsAttr}"` : ''}${frameAttr ? ` data-frame="${frameAttr}"` : ''}${pprAttr ? ` ${PPR_ATTR}="${pprAttr}"` : ''}${flags.join('')}`,
+      `${tag}${shadeAttr ? ` data-shade="${shadeAttr}"` : ''}${shdAttr ? ` ${SHD_ATTR}="${shdAttr}"` : ''}${bdrAttr ? ` ${BDR_ATTR}="${bdrAttr}"` : ''}${tabsAttr ? ` data-tabs="${tabsAttr}"` : ''}${frameAttr ? ` data-frame="${frameAttr}"` : ''}${pprAttr ? ` ${PPR_ATTR}="${pprAttr}"` : ''}${flags.join('')}`,
       style,
       pieces,
     )
@@ -3916,6 +3920,9 @@ class Fidelity {
         // 逐格边框间距（v0.143）：只从 direct 层 w:tcPr/w:tcBorders 读——条件层与表级的
         // space 不叠加（单元格共用边框，padding 会重复计数），忽略
         const tcBordersEl = tcPr ? find(tcPr, 'w:tcBorders') : undefined
+        // 边框的存盘原件（v0.165）：与 `cb` 同一层（只 direct）——条件层与表级那一趟
+        // 是「屏上分摊」，写侧并没有把它们发成逐格 tcBorders，补丁位对不上
+        const bdrAttr = tcBordersEl ? borderOrigin(tcBordersEl, cb) : ''
         const bdSpace: Partial<Record<CellEdge, number>> = {}
         for (const edge of CELL_EDGES) {
           const sp = edgeSpacePx(find(tcBordersEl, `w:${edge}`))
@@ -3959,6 +3966,7 @@ class Fidelity {
         if (style) attrs.push(`style="${style}"`)
         if (shadeAttr) attrs.push(`data-shade="${shadeAttr}"`)
         if (shdAttr) attrs.push(`${SHD_ATTR}="${shdAttr}"`)
+        if (bdrAttr) attrs.push(`${BDR_ATTR}="${bdrAttr}"`)
         // 单元格不换行（v0.152）：屏上那一半由 cellStyleCss 的 white-space 兑现，
         // 这一枚载荷只为写侧认回（白-space 会与用户手设的样式混，不放载荷里认）
         if (on(find(tcPr, 'w:noWrap'))) attrs.push('data-nowrap="1"')
@@ -4091,6 +4099,48 @@ function borderEdges(el: XEl | undefined, tc?: ThemeColors): Record<string, stri
   if (!el) return out
   for (const child of els(el)) out[local(child.name)] = edgeCss(child, tc)
   return out
+}
+
+/**
+ * 边框的存盘原件（v0.165）：`data-bdr` 载荷。
+ *
+ * `borderEdges` 交出去的是**解析后的屏上色**，模型里 `bd*` 那一格也只装得下它；源件
+ * 每条边上那四枚（字面色 + themeColor/tint/shade）于是在导出时整笔消失。这里按边把
+ * 它们另存一份，`screen` 记导入那一刻的屏上色——写侧拿它当「用户改过色没有」的判据。
+ *
+ * 只收「有话说」的边：字面色与屏上色一致、且三枚引用一枚都没有 —— 那种边写手本来
+ * 就写得对，进载荷只是给补丁位多添一条对不上的账。
+ */
+function borderOrigin(el: XEl | undefined, css: Record<string, string | undefined>): string {
+  if (!el) return ''
+  const out: BdrOrigin[] = []
+  for (const edge of CELL_EDGES) {
+    const shown = css[edge]
+    // 'none' 是显式去边：没有线可画，颜色与主题引用都不参与渲染
+    if (!shown || shown === 'none') continue
+    const box = find(el, `w:${edge}`)
+    if (!box) continue
+    const screen = (borderParts(shown)?.hex ?? '').replace('#', '').toUpperCase()
+    if (!screen) continue
+    const color = attr(box, 'w:color')
+    // 三枚引用交给 themeRefParts：它是「按名查问这三枚」的唯一出口——在这里再手写一遍
+    // attr 会让 no-themeshade 那条变异腿失真（查问多了一条不受注入影响的路径）
+    const parts = themeRefParts(box)
+    const themeColor = parts.ref || undefined
+    const themeTint = parts.tint
+    const themeShade = parts.shade
+    const sameLiteral = (color ?? '').toLowerCase() === screen.toLowerCase()
+    if (!themeColor && !themeTint && !themeShade && sameLiteral) continue
+    out.push({
+      edge,
+      ...(color ? { color } : {}),
+      ...(themeColor ? { themeColor } : {}),
+      ...(themeTint ? { themeTint } : {}),
+      ...(themeShade ? { themeShade } : {}),
+      screen,
+    })
+  }
+  return bdrPayload(out)
 }
 
 /** `w:shd` 的 `w:fill` → 规范 hex；auto/无填充/纯白都给 null（白底等于没底纹） */

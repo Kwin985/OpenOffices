@@ -192,6 +192,66 @@ export function borderCss(style: string, pt: number, hex: string): string {
   return `${round2(pt * (4 / 3))}px ${style} ${hex}`
 }
 
+/* ── 边框的存盘原件（v0.165）─────────────────────────────────────
+ * 单边元素上的 `w:color="FF0000" w:themeColor="accent1" w:themeTint="99"
+ * w:themeShade="BF"` 四枚。`bd*` 那一格装的是**解析后的屏上色**（用户可改的单一
+ * 事实源，v0.160 的判据），源件那三枚引用与那枚字面色在模型里没有容身之处——
+ * 回写时包按屏上色发 w:color，主题引用整笔丢（Word 只能拿默认主题顶上）。
+ *
+ * 载荷按边分格，四段用 `|` 连、段内用 `;` 分：`edge;color;themeColor;themeTint;
+ * themeShade;screen`。`screen` 不是 OOXML 属性，是**导入那一刻的屏上色**——写侧
+ * 拿它当「用户改过色没有」的判据（与 data-shd 的 bg 同一条纪律）：改过就整笔作废，
+ * 否则 Word 按主题解析，用户换的颜色在屏上、在纸上都看不见。
+ */
+export const BDR_ATTR = 'data-bdr'
+export const BDR_KEYS = ['color', 'themeColor', 'themeTint', 'themeShade', 'screen'] as const
+export type BdrOrigin = { edge: CellEdge } & Partial<Record<(typeof BDR_KEYS)[number], string>>
+
+/** 逐键形状闸门：脏键整键丢（猜出来的值写进包里比不写更坏） */
+const BDR_FIELD: Record<(typeof BDR_KEYS)[number], RegExp> = {
+  // 字面色：六位 hex；Word 也写 auto（与「没写」同义，源件真写了就照带）
+  color: /^(?:[0-9A-Fa-f]{6}|auto)$/,
+  // 主题槽名（accent1 / tx1 / background2 …）
+  themeColor: /^[A-Za-z0-9]+$/,
+  themeTint: /^[0-9A-Fa-f]{2}$/,
+  themeShade: /^[0-9A-Fa-f]{2}$/,
+  screen: /^[0-9A-Fa-f]{6}$/,
+}
+
+/**
+ * `data-bdr` 载荷 → 每条边的原件；`screen` 缺了的段整段丢——没有基准就分不清
+ * 「源件的色」与「用户刚换的色」，那种段宁可不补，也不能把用户的改色盖回去。
+ */
+export function parseBdrPayload(raw: string | null | undefined): BdrOrigin[] {
+  const out: BdrOrigin[] = []
+  for (const chunk of (raw ?? '').split('|')) {
+    const parts = chunk.split(';')
+    const edge = (parts[0] ?? '').trim().toLowerCase() as CellEdge
+    if (!CELL_EDGES.includes(edge)) continue
+    const spec: BdrOrigin = { edge }
+    BDR_KEYS.forEach((k, ki) => {
+      const v = (parts[ki + 1] ?? '').trim()
+      if (v && BDR_FIELD[k].test(v)) spec[k] = v
+    })
+    if (spec.screen) out.push(spec)
+  }
+  return out
+}
+
+/** 原件表 → `data-bdr` 载荷（与 parseBdrPayload 互逆；键序固定，段序按入参） */
+export function bdrPayload(origins: readonly BdrOrigin[]): string {
+  return origins
+    .filter((o) => o.screen)
+    .map((o) => [o.edge, ...BDR_KEYS.map((k) => o[k] ?? '')].join(';'))
+    .join('|')
+}
+
+/** 屏上一条样式都不兑现，只为写回（与 shdAttrsOf 同款） */
+export function bdrAttrsOf(raw: unknown): Record<string, string> {
+  const payload = typeof raw === 'string' ? raw : ''
+  return parseBdrPayload(payload).length ? { [BDR_ATTR]: payload } : {}
+}
+
 /** OOXML `w:sz`（1/8 磅）→ CSS 像素 */
 export function eighthsToPx(sz: number): number {
   return round2((sz / 8) * (4 / 3))
@@ -957,6 +1017,13 @@ export const CellStyle = Extension.create({
             default: null as string | null,
             parseHTML: (el: HTMLElement) => el.getAttribute(SHD_ATTR) || null,
             renderHTML: (attrs: Record<string, unknown>) => shdAttrsOf(attrs.shd),
+          },
+          // 边框的存盘原件（v0.165）：tcBorders 每条边的字面色与主题三枚。屏上不兑现
+          // ——`bd*` 已经把线画出来了，这一份只为写回（与段落那一枚同源）
+          bdr: {
+            default: null as string | null,
+            parseHTML: (el: HTMLElement) => el.getAttribute(BDR_ATTR) || null,
+            renderHTML: (attrs: Record<string, unknown>) => bdrAttrsOf(attrs.bdr),
           },
           vAlign: {
             default: null as string | null,

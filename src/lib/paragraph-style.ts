@@ -1,5 +1,5 @@
 import { Extension, Mark, type CommandProps, type Editor } from '@tiptap/core'
-import { CELL_EDGES, FRAME_ATTR, PPR_ATTR, SHADE_ATTR, SHD_ATTR, TABS_ATTR, bdAttr, edgeAttrs, inlineBorder, parseFramePayload, parsePprPayload, parseTabsPayload, rgb2hex, shadeAttrs, shdAttrsOf, type CellEdge } from './cell-style'
+import { BDR_ATTR, CELL_EDGES, FRAME_ATTR, PPR_ATTR, SHADE_ATTR, SHD_ATTR, TABS_ATTR, bdAttr, bdrAttrsOf, edgeAttrs, inlineBorder, parseFramePayload, parsePprPayload, parseTabsPayload, rgb2hex, shadeAttrs, shdAttrsOf, type CellEdge } from './cell-style'
 
 /**
  * 段落的排版属性：行距、段前段后、底纹与四边边框。
@@ -228,6 +228,13 @@ export const ParagraphStyle = Extension.create({
             },
           },
           ...Object.fromEntries(CELL_EDGES.map((edge) => [bdAttr(edge), borderAttr(edge)])),
+          // 边框的存盘原件（v0.165）：pBdr 每条边的字面色与主题三枚。屏上不兑现
+          // ——`bd*` 已经把线画出来了，这一份只为写回（与 shd 同款）
+          bdr: {
+            default: null as string | null,
+            parseHTML: (el: HTMLElement) => el.getAttribute(BDR_ATTR) || null,
+            renderHTML: (attrs: Record<string, unknown>) => bdrAttrsOf(attrs.bdr),
+          },
           // 边框与文字的距离（v0.143）：w:pBdr/@w:space（磅→px）。段落侧没有 tcMar 竞争，
           // padding-{side} 就是它自己，读回从同一条 CSS 解析；0 与未声明同路（不写）
           ...Object.fromEntries(

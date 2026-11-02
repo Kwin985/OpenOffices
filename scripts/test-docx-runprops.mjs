@@ -18,7 +18,7 @@ import fs from 'node:fs'
 import JSZip from 'jszip'
 import { docxToHtmlFidelity } from '../src/lib/docx-fidelity.ts'
 import { prosemirrorToDocxBytes } from '../src/lib/docx.ts'
-import { parseShdPayload } from '../src/lib/cell-style.ts'
+import { parseBdrPayload, parseShdPayload } from '../src/lib/cell-style.ts'
 
 const ok = []
 const bad = []
@@ -867,6 +867,97 @@ const THEME_COLORS =
   // 载荷形状闸门：脏键整键丢，不许猜
   const p = parseShdPayload('fill=XYZ;themeFill=accent 2;themeFillTint=9;themeFillShade=BF;bg=zzzzzz')
   check('data-shd 解析：脏键整键丢', Object.keys(p).length === 1 && p.themeFillShade === 'BF', JSON.stringify(p))
+}
+
+// ───────────────────── 8. 边框的存盘原件（v0.165）─────────────────────
+//
+// 四枚属性（字面色 + themeColor/tint/shade）在模型里没有槽：`bd*` 只装解析后的屏上色。
+// 这一组钉的是「补得回来」与「该作废时真作废」两头——只测前者等于自说自话。
+
+{
+  // 段落 pBdr：上边主题三枚 + 字面色。**注意第一枚属性没有前导空格**——v0.165 的
+  // 真 bug：`\sw:` 收边把 w:color 整条跳过，主题三枚却照贴，补丁「成功了一半」。
+  const doc = {
+    type: 'doc',
+    content: [
+      {
+        type: 'paragraph',
+        attrs: { bdTop: '1.33px solid #adbbd4', bdr: 'top;FF0000;accent1;99;BF;adbbd4' },
+        content: [{ type: 'text', text: '带主题边框' }],
+      },
+    ],
+  }
+  const xml = await (await JSZip.loadAsync(await prosemirrorToDocxBytes(doc))).file('word/document.xml').async('string')
+  const top = /<w:pBdr[\s\S]*?<\/w:pBdr>/.exec(xml)?.[0] ?? ''
+  has('pBdr 导出：主题三枚补回', top, 'w:themeColor="accent1"')
+  has('pBdr 导出：主题深浅两枚补回', top, 'w:themeShade="BF"')
+  has('pBdr 导出：字面色写回原件（不是解析后的屏上色）', top, 'w:color="FF0000"')
+  check('pBdr 导出：屏上色不留在包里', !top.includes('adbbd4'), top)
+}
+
+{
+  // 反例：用户换过色（当前 bdTop 的色与载荷里的基准对不上）→ 主题引用整笔作废
+  const doc = {
+    type: 'doc',
+    content: [
+      {
+        type: 'paragraph',
+        attrs: { bdTop: '1.33px solid #00ff00', bdr: 'top;FF0000;accent1;99;BF;adbbd4' },
+        content: [{ type: 'text', text: '改过色' }],
+      },
+    ],
+  }
+  const xml = await (await JSZip.loadAsync(await prosemirrorToDocxBytes(doc))).file('word/document.xml').async('string')
+  const top = /<w:pBdr[\s\S]*?<\/w:pBdr>/.exec(xml)?.[0] ?? ''
+  check('pBdr 导出：改过色就不补主题引用', !top.includes('w:themeColor'), top)
+  has('pBdr 导出：改过的色照写', top, 'w:color="00ff00"')
+}
+
+{
+  // 逐格 tcBorders：两条边各自的原件（一条主题色、一条 auto 字面色）。
+  // 块级对位是这一族的难点：<w:top> 在 tblBorders/tcBorders/pBdr 上都长着，只能按块找
+  const cell = {
+    type: 'tableCell',
+    attrs: {
+      bdTop: '1.33px solid #b4c7e7',
+      bdLeft: '0.67px dashed #000000',
+      bdr: 'top;336699;accent1;99;;B4C7E7|left;auto;;;;000000',
+    },
+    content: [{ type: 'paragraph', content: [{ type: 'text', text: '格' }] }],
+  }
+  const doc = { type: 'doc', content: [{ type: 'table', content: [{ type: 'tableRow', content: [cell] }] }] }
+  const xml = await (await JSZip.loadAsync(await prosemirrorToDocxBytes(doc))).file('word/document.xml').async('string')
+  const tc = /<w:tcBorders[\s\S]*?<\/w:tcBorders>/.exec(xml)?.[0] ?? ''
+  has('tcBorders 导出：主题名补回', tc, 'w:themeColor="accent1"')
+  has('tcBorders 导出：字面色写回原件', tc, 'w:color="336699"')
+  has('tcBorders 导出：auto 也是原件（不能被 000000 顶掉）', tc, 'w:color="auto"')
+}
+
+{
+  // 反例：用户把这条边删了（bdTop 没了）→ 那一条边不补，其余边照补。
+  // 补丁在块内找不到元素时跳过的是**那一条**，不是整块——整块放弃是计数闸门的活
+  const doc = {
+    type: 'doc',
+    content: [
+      {
+        type: 'paragraph',
+        attrs: { bdBottom: '0.67px solid #000000', bdr: 'top;FF0000;accent1;99;BF;adbbd4' },
+        content: [{ type: 'text', text: '删了上边' }],
+      },
+    ],
+  }
+  const xml = await (await JSZip.loadAsync(await prosemirrorToDocxBytes(doc))).file('word/document.xml').async('string')
+  const block = /<w:pBdr[\s\S]*?<\/w:pBdr>/.exec(xml)?.[0] ?? ''
+  check('pBdr 导出：删掉的边不补主题引用', !block.includes('w:themeColor'), block)
+  has('pBdr 导出：没删的边照发', block, '<w:bottom')
+}
+
+{
+  // 载荷闸门：缺 screen 的段整段丢（没有基准就分不清源件的色与用户改的色）
+  const parsed = parseBdrPayload('top;FF0000;accent1;99;BF|left;auto;;;;000000|bogus;1;2')
+  check('data-bdr 解析：缺 screen 的段整段丢', parsed.length === 1 && parsed[0].edge === 'left', JSON.stringify(parsed))
+  const dirty = parseBdrPayload('top;ZZZZZZ;accent 1;9;BF;000000')
+  check('data-bdr 解析：脏键整键丢', dirty.length === 1 && !dirty[0].color && dirty[0].screen === '000000', JSON.stringify(dirty))
 }
 
 console.log(`通过 ${ok.length} 项` + (bad.length ? `，**失败 ${bad.length} 项**` : '，失败 0 项'))
