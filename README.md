@@ -9686,6 +9686,56 @@ D23 顺延：`fldChar` 三对（域指令，模型无槽）；`outline|val`（�
 `gridCol`/`tcW` 的 ±5 缇、`w:cols` 的 `equalWidth`、`ind|left` 的列表缩进覆盖、
 `docPr|id` 重排、`lvlJc` 深层 `center`。
 
+## v0.164（D23）——主题件跟着走：`theme1.xml` 透传与底纹的字面/主题双写
+
+往返账**正文属性 78.2% → 78.4%**（215/275 → 218/278），整体 40.9% → 41.2%，掉了 334 不动、
+值变 17 不动。三对新对进账（`shd|themeFill`/`themeFillTint`/`themeFillShade`，全「保留」）。
+保真账本按对仍 99.0%，md5 仍 `95846f03…`/`aab9813c…`。
+
+### 写出去的主题引用，一直指着不存在的件
+
+量具顺手看了一眼写出包的部件表：**没有 `word/theme/theme1.xml`**。而写手从 v0.150 起就在发
+`w:themeColor`（表级边框）、v0.159 的 `w:u`、v0.160 的 `w:color`、v0.161 的样式
+`w:asciiTheme`——这些引用指着的就是它。引用悬空时 Word 拿自己的默认主题顶上：**用户那套
+accent 导出后集体变色，屏上却是对的**。账本看不见这一笔（`theme1.xml` 不在普查清单里，
+document.xml 里那几枚属性照样逐对「保留」）——百分比是逐对的，丢一整件部件不在任何一对里。
+
+`attachThemePart` 补的是三件：部件本体、`document.xml.rels` 的 theme 关系、
+`[Content_Types].xml` 的 Override。源件没有主题件就不凭空造一枚。
+
+### 底纹：主题引用把字面值盖住了
+
+`themed ?? attr(shd,'w:fill')` 的右侧在主题解析得出来时不求值——两枚都等于没读过；模型里
+`background` 又只装解析后的屏上色，源件那枚 `FFFFFF` 从此没有容身之处（回写时变成
+accent2+tint 解出来的 `e0bea8`）。新载荷 `data-shd="fill=FFFFFF;themeFill=accent2;…;bg=e0bea8"`
+把字面值与主题三枚一起带走，`bg` 是导入那一刻的屏上色。
+
+回写是新开的一笔打包后补丁 `patchShdAttrs`：包自己会发 `w:fill`（而且写的就是解析后的色），
+所以这一族是**改名**不是追加——`w:shd` 在 pPr/tcPr 里都是单枚，多一枚就是非法 XML。
+
+**改过底纹色的人不能被主题盖回去**：`background` 与载荷里的 `bg` 对不上就整笔作废、按新色发。
+
+### `??` 短路族扫一遍：九处恒查问
+
+`edgeCss`、`shadingHex`、`shadeSpec`，以及 `w:ascii`/`w:hAnsi`、`srgbClr`/`sysClr`、
+`w:left`/`w:start`、`fldCharType`/`type`、`ProgID`/`Type`——旧写法都是「左边空了才读右边」。
+保真账本一动不动（合成语料里另有路径查问过），变的是真实件的长尾：`no-attrL` 变异腿
+51.8% → **52.5%**，正是这批新查问的证据。
+
+### 门禁
+
+tsc 0、build ✓；结构测试 **101 → 118 项**全绿（含反例：不给第二枚 `w:fill`、改过色就不补
+主题引用、源件没主题件就不造、载荷脏键整键丢）；四条变异腿里 `no-attr`/`no-theme`/
+`no-themeshade` 与上轮一字不差（`no-theme` 必须不动）；往返账 `6793c9fa…`/`f0de790a…`
+两次复跑逐字节相同。
+
+D24 顺延：边框的主题引用（`pBdr` 与 `tcBorders`——色是用户可改的单槽，要做就把本轮这套
+「bg 基准 + 改过就作废」搬过去）；`fldChar` 三对；`outline|val`；表/节一族
+（`tblStyle|val`、`col|w`/`col|space`、`wAfter|*`、`gridAfter|val`、`pgNumType|*`、
+`smartTag|*`、`legacy|*`）；承接未动项 `gridCol`/`tcW` 的 ±5 缇、`w:cols` 的 `equalWidth`、
+`ind|left` 的列表缩进覆盖、`docPr|id` 重排、`lvlJc` 深层 `center`。另有一件要定口径：
+`theme1.xml` 进不进普查清单（加进 `PARTS` 会让四十来对主题槽一次进分母且全「保留」——
+那是灌水；更可能是单开一本部件账）。
 
 ## 性能（v0.3）
 

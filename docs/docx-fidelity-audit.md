@@ -1402,3 +1402,115 @@ const hex = themeRefCss(tc, b) ?? rgb2hex(`#${(attr(b, 'w:color') ?? '')…}`)
   `pgNumType|*`、`smartTag|*`、`legacy|*`。
 - 承接未动项：`gridCol`/`tcW` 的 ±5 缇、`w:cols` 的 `equalWidth`、`ind|left` 的列表
   缩进覆盖、`docPr|id` 重排、`lvlJc` 深层 `center`。
+
+---
+
+## v0.164（D23）——主题件跟着走：`theme1.xml` 透传 + 底纹的字面/主题双写
+
+| | 上一轮 | 这一轮 |
+|---|---:|---:|
+| 正文属性 | 215/275 = 78.2% | **218/278 = 78.4%** |
+| 图形壳 | 28/319 = 8.8% | 28/319 = 8.8% |
+| 合计 | 243/594 = 40.9% | **246/597 = 41.2%** |
+| 掉了 | 334 | 334 |
+| 值变 | 17 | 17（正文 15、图形壳 2） |
+
+三对新对进账：`shd|themeFill` / `shd|themeFillTint` / `shd|themeFillShade`，全「保留」；
+底纹原有的三对（`val`/`color`/`fill`）原样保留。保真账本按对仍 99.0%，md5 仍
+`95846f03…`/`aab9813c…`；往返账 `6793c9fa…`/`f0de790a…`，两次复跑逐字节相同。
+
+### 一、探底时撞见的事：写出去的主题引用全是悬空的
+
+量具跑到一半顺手看了一眼写出包的部件表：**没有 `word/theme/theme1.xml`**。而写手从
+v0.150 起就在发 `w:themeColor`（表级边框）、v0.159 的 `w:u` 三枚、v0.160 的 `w:color`
+三枚、v0.161 的样式 `w:asciiTheme` 一族——这些引用指着的就是这个件。包只发
+document/styles/numbering/footnotes/comments 这几件，于是引用全部悬空：Word 只能拿自己的
+默认主题顶上，**用户那套 accent 在导出后集体变色，而屏上是对的**。
+
+账本看不见这一笔的原因值得记：`theme1.xml` 不在普查的部件清单里，而 document.xml 里
+那几枚属性照样逐对「保留」。百分比是逐对的，**丢一整件部件不在任何一对里**。
+
+修法三件缺一不可：部件本体（原样拷）、`document.xml.rels` 的 theme 关系、
+`[Content_Types].xml` 的 Override。`DocMeta.themeXml` 从源件读、导出时放回；源件没有就
+不凭空造一枚（`attachThemePart` 的三条断言钉住了这四件事）。
+
+### 二、底纹：主题引用把字面值盖住了，模型只有一个格子
+
+`shadingHex` / `shadeSpec` 的写法是「主题优先、字面兜底」：
+
+```js
+const fill = themed ?? attr(shd, 'w:fill') ?? ''
+```
+
+主题解析得出来时右侧根本不求值——`w:fill` / `w:color` 两枚等于没读过（保真账的分子少一笔）。
+更要紧的是模型：`background` 装的是**解析后的屏上色**，源件那枚字面 fill 从此没有容身之处。
+回写时包按 `background` 发 `w:fill`，源件的 `FFFFFF` 变成了 accent2+tint 解出来的 `e0bea8`。
+
+A/B（同一份最小件：只一枚 clear 底纹，`w:fill="DEEAF6" w:themeFill="accent2"`）：
+
+| rev | 没查问的 | HTML 上的载荷 |
+|---|---|---|
+| `8599a14`（v0.163） | `shd\|fill`、`shd\|color` | （无） |
+| 本轮 | （无） | `fill=DEEAF6;themeFill=accent2;themeFillTint=99;bg=f8cbad` |
+
+载荷 `data-shd="fill=FFFFFF;themeFill=accent2;themeFillTint=99;themeFillShade=BF;bg=e0bea8"`：
+kv 形状（与 `data-ppr`/`data-frame` 同款），`bg` 是**导入那一刻的屏上色**——它是下面那道
+判据的基准，不是 OOXML 属性。
+
+### 三、补丁要「改名」而不是「追加」
+
+`patchElemAttrs` 只追加（包压根不发那几枚属性）；底纹不行——包自己会发 `w:fill`，而且写的
+正是解析后的色。再追加一枚 `w:fill` 就是非法 XML。所以另开一笔 `patchShdAttrs`：按
+`<w:shd>` 出现序取开标签、**同名的改值、缺的追加**。`w:shd` 在 CT_PPrBase 与 CT_TcPrBase
+里都是单枚元素，「合并」是硬要求（v0.160 那枚 `<w:ind>` 同一条纪律）。
+
+登记两处：段落的 `paraFormatOf`（三个调用点都传 `dt`）与表格的格构造（格底纹在 `<w:tcPr>`
+里，排在格内段落之前，所以必须先登记）。**只在真发得出 `<w:shd>` 时登记**——多一条少一条
+都会让计数闸门整笔放弃，而放弃是静默的。
+
+### 四、改过色的人不能被主题盖回去
+
+`background` 是用户可改的单一事实源（与 `textStyle.color` 同一条）。载荷里的 `bg` 与当前
+`background` 对不上 = 用户换过色，那时主题引用作废、按新色发。否则 Word 按主题解析，
+用户的改色在屏上和纸上都看不见。
+
+### 五、`??` 短路族：其余九处（七行）也恒查问
+
+| 位置 | 两枚属性 | 旧写法为什么漏 |
+|---|---|---|
+| `edgeCss` | `w:color` | 主题解析得出就不求值（v0.163 只修了表级那一趟） |
+| `shadingHex` | `w:fill` | 同上 |
+| `shadeSpec` | `w:color` | 同上，且 clear 档在配色那几行**之前**就 return |
+| `readRPr` | `w:ascii` / `w:hAnsi` | Word 两枚一起写，hAnsi 永不进账 |
+| `readThemeColors` | `srgbClr\|val` / `sysClr\|lastClr` | 一槽写了 srgbClr 就不看 sysClr |
+| `paraCss` 与表样式 `ind` | `w:left`/`w:start`、`w:right`/`w:end` | bidi 件两枚都写 |
+| `fldChar` / `OLEObject` | `fldCharType`/`type`、`ProgID`/`Type` | 兼容写法永不进账 |
+
+保真账本这几处**一动不动**（那几对在合成语料里已有别的路径查问过），变的是真实件的长尾。
+证据在变异腿上：`no-attrL` 从 51.8% 抬到 **52.5%**——本轮新查问的这一批全走 `attr` 漏斗，
+把 attrL 关掉时它们还在，覆盖率自然上去。`no-attr` 59.2%、`no-theme` 99.0%、
+`no-themeshade` 96.5% 三腿与上轮一字不差（`no-theme` 必须不动，它守的是「查问与解析解耦」）。
+
+### 教训
+
+1. **账本看不见「部件级」的丢。** theme1.xml 不在普查清单里，引用悬空这件事在逐对的账上
+   照样是「保留」。要盯这一层，得另开一本部件账，或者像本轮这样用结构测试钉住。
+2. **`??` 的短路有两种：一种是右侧不求值，一种是更早的 return。** `shadeSpec` 的 clear 档
+   在配色那几行之前就返回了——把「查问」写在解析之后，等于默认「这一档用不上就不问」。
+   查问纪律要往函数**入口**放。
+3. **补丁的动作要多问一句「包会不会自己发这一枚」。** 会发就得改名（`patchShdAttrs`），
+   不会发才能追加（`patchElemAttrs`）。搞反的后果是非法 XML，而计数闸门不会替你发现。
+4. **「改过色没有」这类判据要存基准值。** `bg` 这一格不是 OOXML 属性，是导入那一刻的
+   屏上色——没有它就分不清「源件的字面色」与「用户刚换的颜色」。
+
+### 顺延清单（D24）
+
+- **边框的主题引用**（`top|themeColor` 等，`pBdr` 与 `tcBorders` 两族）：色是用户可改的
+  单槽，按 v0.160 的判据不拆槽；真要做，得把本轮这套「bg 基准 + 改过就作废」一起搬过去。
+- `fldChar` 三对（域指令，模型无槽）；`outline|val`（文字镂空，包无原生槽）。
+- 表/节一族：`tblStyle|val`、`col|w`/`col|space`、`wAfter|*`、`gridAfter|val`、
+  `pgNumType|*`、`smartTag|*`、`legacy|*`。
+- 承接未动项：`gridCol`/`tcW` 的 ±5 缇、`w:cols` 的 `equalWidth`、`ind|left` 的列表
+  缩进覆盖、`docPr|id` 重排、`lvlJc` 深层 `center`。
+- **`theme1.xml` 进不进普查清单**要定口径：加进 `PARTS` 会让四十来对主题槽一次进分母且
+  全「保留」，那是灌水；更可能是单开一本「部件账」（源包部件 ∩ 写出包部件）。
