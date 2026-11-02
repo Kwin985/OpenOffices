@@ -9786,6 +9786,48 @@ D25 顺延：字符边框 `w:bdr` 的主题引用（同形，可整族搬）；`
 `pgNumType|*`、`smartTag|*`、`legacy|*`）；承接未动项 `gridCol`/`tcW` 的 ±5 缇、
 `w:cols` 的 `equalWidth`、`ind|left` 的列表缩进覆盖、`docPr|id` 重排、`lvlJc` 深层
 `center`。另有一件要定口径：`theme1.xml` 进不进普查清单。
+## v0.166（D25）——字符边框的主题三枚：先给属性名分家，再谈补丁
+
+往返账**正文属性 78.6% → 78.9%**（221/281 → 224/284），整体 41.5% → 41.8%，掉了 334 不动、
+值变 17 不动。三对新对进账（`bdr|themeColor`/`themeTint`/`themeShade`，全「保留」），
+连同原有的 `val`/`sz`/`space`/`color` 四对，字符边框七对齐全。保真账本 md5 仍
+`95846f03…`/`aab9813c…`；四条变异腿与上轮一字不差。
+
+### 一个属性名，两种 grammar
+
+v0.152 起字符边框的载荷叫 `data-bdr`，语法是定序四格 `val;sz;space;color`；上一轮给段落/
+逐格边框新开的那一枚也叫 `data-bdr`，语法却是「按边分格」。两枚今天不打架（一个长在
+`span`、一个长在 `p`/`td`），但同一个名字挂两种 grammar，读的人迟早按错的那一种解。
+字符这一枚改名 `data-rbdr`，段落/逐格保持 `data-bdr`。改动只碰临时 HTML，不涉及已存文件。
+
+### 这一族缺的比上一轮少
+
+包的 `IRunOptions.border` 有 `color` 槽，写手一直按字面色发得出来——真正掉队的只有主题
+三枚。于是补丁也不一样：`<w:bdr>` 在 document.xml 里只长在 run 的 `rPr` 上（表级/段落/
+逐格边框用的是逐边元素 `w:top`…），没有同名歧义，也不覆盖包自己写的属性，所以直接回到
+`patchElemAttrs` 的**元素级追加**，不需要上一轮那套块级对位。登记点选在 `withCharExtra`
+——它是发这个元素的唯一出口（五条 run 路径都过这里），与 caps 同一条纪律。
+
+### 没有可编辑槽，就没有「用户改过色」这一档
+
+上一轮的判据是「`screen` 与当前 `bd*` 的色对不上 = 用户改过色」。字符边框没有第二个槽：
+载荷就是唯一事实源，界面上也没有改这个颜色的命令——照搬那套 gate 只会写出一条永远不
+命中的判据。
+
+但两槽分工的另一半仍然有用：**屏上要画解析后的色**（主题优先是 Word 的语义，字面色只是
+兜底）。`RunProps.bdr` 因此多了一个 `screen`（解析结果，只给屏上），`color` 仍是源件的
+字面色、只往存盘走——与 v0.159 的 `w:u` 同一套分工。
+
+### 门禁
+
+tsc 0、build ✓；结构测试 **131 → 138 项**全绿（含反例：没主题三格就不补、脏格整格丢、
+主题件里没有 clrScheme 时屏上落回字面色而载荷不动）。
+
+D26 顺延：`w:pBdr/w:between` 与 `w:bar`（要插元素不是合并属性）；`fldChar` 三对；
+`outline|val`；表/节一族（`tblStyle|val`、`col|w`/`col|space`、`wAfter|*`、`gridAfter|val`、
+`pgNumType|*`、`smartTag|*`、`legacy|*`）；承接未动项 `gridCol`/`tcW` 的 ±5 缇、
+`w:cols` 的 `equalWidth`、`ind|left` 的列表缩进覆盖、`docPr|id` 重排、`lvlJc` 深层
+`center`。另有一件要定口径：`theme1.xml` 进不进普查清单。
 
 ## 性能（v0.3）
 

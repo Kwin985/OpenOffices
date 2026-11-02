@@ -21,12 +21,12 @@
   "onOffBareElement": true
  },
  "totals": {
-  "read": 600,
-  "kept": 249,
+  "read": 603,
+  "kept": 252,
   "value": 17,
   "lost": 334,
   "part": 0,
-  "consulted": 651,
+  "consulted": 654,
   "srcParts": 7,
   "outParts": 7,
   "htmlBlocks": 35
@@ -316,6 +316,36 @@
    ],
    "out": [
     "8"
+   ]
+  },
+  "bdr|themeColor": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "accent1"
+   ],
+   "out": [
+    "accent1"
+   ]
+  },
+  "bdr|themeShade": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "bf"
+   ],
+   "out": [
+    "bf"
+   ]
+  },
+  "bdr|themeTint": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "99"
+   ],
+   "out": [
+    "99"
    ]
   },
   "bdr|val": {

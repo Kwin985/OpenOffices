@@ -1632,3 +1632,81 @@ top|w:color="FF0000" w:themeColor="accent1" w:themeTint="99" w:themeShade="BF"
 - 承接未动项：`gridCol`/`tcW` 的 ±5 缇、`w:cols` 的 `equalWidth`、`ind|left` 的列表
   缩进覆盖、`docPr|id` 重排、`lvlJc` 深层 `center`。
 - **`theme1.xml` 进不进普查清单**仍要定口径（部件账的可能性大于灌进 `PARTS`）。
+
+---
+
+## v0.166（D25）——字符边框：同一枚属性名的两种 grammar，与「没有可编辑槽就没有判据」
+
+| | 上一轮 | 这一轮 |
+|---|---:|---:|
+| 正文属性 | 221/281 = 78.6% | **224/284 = 78.9%** |
+| 图形壳 | 28/319 = 8.8% | 28/319 = 8.8% |
+| 合计 | 249/600 = 41.5% | **252/603 = 41.8%** |
+| 掉了 | 334 | 334 |
+| 值变 | 17 | 17（正文 15、图形壳 2） |
+
+三对新对进账：`bdr|themeColor` / `bdr|themeTint` / `bdr|themeShade`，全「保留」；
+原有的 `bdr|val`/`sz`/`space`/`color` 四对原样保留，七对齐全。保真账本按对仍 99.0%、
+md5 仍 `95846f03…`/`aab9813c…`；往返账 `bc4b00f…`/`b0592bc…`，两次复跑逐字节相同；
+四条变异腿与上轮一字不差（52.5 / 59.2 / 99.0 / 96.5）。
+
+### 一、先拆一个隐患：一个属性名挂两种 grammar
+
+v0.152 起字符边框的载荷叫 `data-bdr`，语法是定序四格 `val;sz;space;color`；
+v0.165 给段落/逐格边框新开的那一枚**也叫 `data-bdr`**，语法却是「按边分格」的
+`top;FF0000;accent1;99;BF;adbbd4|left;auto;…`。
+
+两枚今天不打架（一枚长在 `span`、一枚长在 `p`/`td`），但这正是那种「今天不打架、
+明天换个入口就打架」的形状——同一个名字两种 grammar，读的人迟早按错的那一种解。
+字符这一枚改名 `data-rbdr`（run border），段落/逐格那一枚保持 `data-bdr`。
+
+改动只碰临时 HTML（文档存的是 .docx），不涉及任何已存文件。
+
+### 二、字符边框只丢三枚：包里 `border` 有 color 槽
+
+与段落/逐格不同，包的 `IRunOptions.border` 是 `{style,size,space,color}`——**颜色有槽**，
+写手一直按字面色发得出来。真正掉队的只有 `w:themeColor/themeTint/themeShade` 三枚，
+所以这一轮的范围比上一轮窄：不补 `w:color`，只补主题三枚。
+
+### 三、这一族回到最简单的元素级追加
+
+`<w:bdr>` 在 document.xml 里只长在 run 的 `w:rPr` 上——`w:tblBorders`/`w:tcBorders`/
+`w:pBdr` 用的是逐边元素（`w:top`…），不会撞名。既然没有同名歧义、又不覆盖包自己写的
+属性，就不需要块级那套：直接用 v0.164 的 `patchElemAttrs(bytes, 'bdr', extras)` 追加。
+
+登记点选在 `withCharExtra`——它是发 `<w:bdr>` 的**唯一出口**（五条 run 路径都过这里），
+与 caps 同一条纪律：只要发了这个元素就 push（空串占位），条数才对得上。
+
+### 四、没有可编辑槽，就没有「用户改过色」这一档
+
+上一轮的判据是「`screen` 与当前 `bd*` 的色对不上 = 用户改过色」。字符边框这里
+**没有第二个槽**：载荷自己就是唯一事实源，界面上也没有改字符边框颜色的命令。
+照搬那套 gate 只会写出一条永远不会命中的判据。
+
+但「两槽」还有另一半用处——**屏上要画解析后的色**。主题引用优先是 Word 的语义，
+字面色只是兜底；所以 `RunProps.bdr` 加了 `screen`（解析结果，只给屏上），`color`
+仍是源件的字面色（只往存盘走）。两个槽各管一段，与 v0.159 的 `w:u` 同一套分工。
+
+反例也在结构测试里：主题件里没有 clrScheme 时 `screen` 不存在，屏上落回 `#ff0000`，
+而载荷里那枚 `FF0000` 始终不动。
+
+### 教训
+
+1. **同一枚属性名不许挂两种 grammar**（v0.166）：今天靠「长在不同节点上」不打架，
+   明天换一个入口就打架。名字里带上宿主（`data-rbdr` vs `data-bdr`）比写注释可靠。
+2. **「同形」不等于「同一套机制」**（v0.166）：字符边框与段落边框都是边框，但一个没有
+   可编辑槽（不需要 gate）、一个没有同名歧义（不需要块级对位）。照搬上一轮的整套做法
+   会多出两条永不命中的判据——先问「这一族缺的是哪一段」。
+3. **登记点选唯一出口**（v0.166）：`withCharExtra` 管着五条 run 路径，caps 已经证明过
+   这里是对的；`<w:bdr>` 与它同住，就跟着走。
+
+### 顺延清单（D26）
+
+- `w:pBdr/w:between`（第五边）与 `w:bar`：写手没有这两枚的原生槽，要补是「插元素」，
+  与 `patchBeforeElem` 同族。
+- `fldChar` 三对（域指令，模型无槽）；`outline|val`（文字镂空，包无原生槽）。
+- 表/节一族：`tblStyle|val`、`col|w`/`col|space`、`wAfter|*`、`gridAfter|val`、
+  `pgNumType|*`、`smartTag|*`、`legacy|*`。
+- 承接未动项：`gridCol`/`tcW` 的 ±5 缇、`w:cols` 的 `equalWidth`、`ind|left` 的列表
+  缩进覆盖、`docPr|id` 重排、`lvlJc` 深层 `center`。
+- **`theme1.xml` 进不进普查清单**仍要定口径（部件账的可能性大于灌进 `PARTS`）。
