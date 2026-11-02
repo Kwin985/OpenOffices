@@ -1230,6 +1230,33 @@ const THEME_COLORS =
   check('pgNumType 导出：没声明就不发', !xml.includes('<w:pgNumType'), '')
 }
 
+// ───────────── 14. 表样式自己的常驻 w:rPr（v0.171）：比段落样式弱的那一层 ─────────────
+
+{
+  const zip = new JSZip()
+  zip.file(
+    'word/document.xml',
+    `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:document xmlns:w="${W}"><w:body>` +
+      `<w:tbl><w:tblPr><w:tblStyle w:val="TS"/></w:tblPr><w:tblGrid><w:gridCol w:w="2000"/></w:tblGrid>` +
+      `<w:tr><w:tc><w:p><w:r><w:t>跟样式</w:t></w:r></w:p></w:tc></w:tr>` +
+      `<w:tr><w:tc><w:p><w:pPr><w:pStyle w:val="NoI"/></w:pPr><w:r><w:t>段落压过</w:t></w:r></w:p></w:tc></w:tr>` +
+      `</w:tbl></w:body></w:document>`,
+  )
+  zip.file(
+    'word/styles.xml',
+    `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:styles xmlns:w="${W}">` +
+      `<w:style w:type="paragraph" w:default="1" w:styleId="Normal"><w:name w:val="Normal"/></w:style>` +
+      // 表样式自己那份常驻 rPr：斜体
+      `<w:style w:type="table" w:styleId="TS"><w:name w:val="T"/><w:rPr><w:i/></w:rPr></w:style>` +
+      // 段落样式显式说「不斜体」——层序上段落压过表
+      `<w:style w:type="paragraph" w:styleId="NoI"><w:name w:val="NoI"/><w:rPr><w:i w:val="0"/></w:rPr></w:style>` +
+      `</w:styles>`,
+  )
+  const r = await docxToHtmlFidelity(new Uint8Array(await zip.generateAsync({ type: 'arraybuffer', compression: 'STORE' })))
+  has('表样式常驻 run：斜体上屏', r.html, '<em>跟样式</em>')
+  check('表样式常驻 run：段落样式说「不斜体」时压过它', !r.html.includes('<em>段落压过</em>'), r.html.slice(0, 300))
+}
+
 console.log(`通过 ${ok.length} 项` + (bad.length ? `，**失败 ${bad.length} 项**` : '，失败 0 项'))
 for (const b of bad) console.log(`FAIL ${b}`)
 if (bad.length) process.exitCode = 1

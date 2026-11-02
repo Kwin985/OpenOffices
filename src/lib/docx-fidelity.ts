@@ -3730,6 +3730,9 @@ class Fidelity {
     // 那是应用默认而不是文档说了的数，铺进我们的账里就是把别人的默认写成用户的声明
     const styleId = val(tblPr, 'w:tblStyle')
     const styleMarEdges = styleCellMargins(this.book, styleId)
+    // 表样式自己那份常驻 run（v0.171）：字号/字体/斜体常写在这里。它此前只进样式快照、
+    // 跟着 styles.xml 回去，屏上从没兑现——Word 里是斜体的表，打开我们这边是正体
+    const styleRun = tableStyleRun(this.book, styleId, this.themeColors)
     const tblMarEdges = marginsOf(find(tblPr, 'w:tblCellMar'))
     // 条件层（`w:tblStylePr`）与它的闸门（`w:tblLook`）：闸门只吃表上那一枚，两格各归各的层——
     // 那块里 `w:tcPr/w:tcMar` 归条件那一层（落在表级之上、逐格 tcMar 之下），
@@ -3991,7 +3994,8 @@ class Fidelity {
         // 条件层的 run（v0.169）：目前只有「首行加粗」这一枚进了快照。它此前只跟着
         // styles.xml 回去、屏上从没兑现——表里首行该粗不粗，而 Word 打开是粗的
         const condRun = condRunFor(look, conds, ri, ri === last, c.gc, c.colspan, acct.length)
-        const cellRun: RunProps = condRun.bold ? { b: true } : NONE
+        // 两层合成一格种子：表样式常驻那层最弱，条件层盖在它上面（条件层说 bold 就是 bold）
+        const cellRun: RunProps = { ...styleRun, ...(condRun.bold ? { b: true } : {}) }
         const style = [cellStyleCss(tcPr, {
           top: cb.top ?? cb2.top ?? (ri === 0 ? tb.top : tb.insideH),
           bottom: cb.bottom ?? cb2.bottom ?? (ri === last ? tb.bottom : tb.insideH),
@@ -4665,6 +4669,22 @@ function condMarginsFor(
  * 逐边取一：梯子先说话的那一型把某条边定了，后面同边的型就改不动——角型在最前，于是角格的边框压住行型与列型。
  * 不同边互不 related（首行说 bottom、首列说 left，两枚各落各的）。
  */
+/**
+ * 表样式自己那份 `w:rPr`（v0.171）：常驻、不带条件。
+ *
+ * 层序上它比段落样式弱（Word 的次序是 字符 > 段落 > 表），所以当 `baseRunProps` 的
+ * seed 用——段落链与段落标记依次盖上去。`TableNormal` 不进链：Word 会用自己的定义换掉
+ * 那一枚，照抄等于把别家的默认写成用户的声明（与 `styleCondCells` 同一条纪律）。
+ */
+function tableStyleRun(book: StyleBook, id: string | undefined, tc?: ThemeColors): RunProps {
+  let p: RunProps = NONE
+  for (const s of styleChain(book, id)) {
+    if (SUBSTITUTED_TABLE_STYLES.has(s.id)) continue
+    if (s.rPr) p = readRPr(s.rPr, p, tc)
+  }
+  return p
+}
+
 /**
  * 这一格吃到的条件层 run（v0.169）：目前快照里只有 `bold` 一枚，按外观梯子取第一个
  * 说了话的档。表样式对表内文字的那份 `w:rPr`（非条件层）还没接——它是**常驻**的

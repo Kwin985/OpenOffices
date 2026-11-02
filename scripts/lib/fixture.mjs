@@ -84,8 +84,10 @@ export const FIXTURE_STYLES =
   // 这里给身份（name/basedOn）与一层条件格式（firstRow 加粗）：前者验「引用 + 定义」这一对，
   // 后者验条件层的型名与它那份 run（读手此前只把 run 塞进快照、屏上没兑现）。
   // 不给 tblPr：表样式的**外观**早已逐格塌进内联样式，本轮不碰那一层
+  // v0.171：样式自己那份常驻 `w:rPr`（斜体）——它此前只跟着 styles.xml 回去、屏上不兑现。
+  // CT_Style 的序是 name → basedOn → **rPr** → tblPr → tblStylePr，插在 basedOn 之后
   `<w:style w:type="table" w:styleId="TableGrid"><w:name w:val="Table Grid"/>` +
-  `<w:basedOn w:val="TableNormal"/>` +
+  `<w:basedOn w:val="TableNormal"/><w:rPr><w:i/></w:rPr>` +
   `<w:tblStylePr w:type="firstRow"><w:rPr><w:b/></w:rPr></w:tblStylePr></w:style>` +
   `</w:styles>`
 
