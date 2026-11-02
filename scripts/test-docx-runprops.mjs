@@ -38,7 +38,7 @@ const THEME =
   `</a:fontScheme></a:themeElements></a:theme>`
 
 /** 造一份最小 docx：一个段落挂 pStyle，run 的 rPr 由调用方给全 */
-async function importDocx(styles, runRPr, text = '正文文字') {
+async function importDocx(styles, runRPr, text = '正文文字', theme = THEME) {
   const zip = new JSZip()
   zip.file(
     'word/document.xml',
@@ -49,7 +49,7 @@ async function importDocx(styles, runRPr, text = '正文文字') {
       `</w:body></w:document>`,
   )
   zip.file('word/styles.xml', `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:styles xmlns:w="${W}">${styles}</w:styles>`)
-  zip.file('word/theme/theme1.xml', THEME)
+  zip.file('word/theme/theme1.xml', theme)
   const bytes = new Uint8Array(await zip.generateAsync({ type: 'arraybuffer', compression: 'STORE' }))
   const r = await docxToHtmlFidelity(bytes)
   if (r.blocks === 0) throw new Error('夹具没拆出块，导入没跑起来')
@@ -958,6 +958,56 @@ const THEME_COLORS =
   check('data-bdr 解析：缺 screen 的段整段丢', parsed.length === 1 && parsed[0].edge === 'left', JSON.stringify(parsed))
   const dirty = parseBdrPayload('top;ZZZZZZ;accent 1;9;BF;000000')
   check('data-bdr 解析：脏键整键丢', dirty.length === 1 && !dirty[0].color && dirty[0].screen === '000000', JSON.stringify(dirty))
+}
+
+// ───────────────────── 9. 字符边框的主题三枚（v0.166）─────────────────────
+//
+// 载荷是定序七格 `val;sz;space;color;themeColor;themeTint;themeShade`，挂在
+// `data-rbdr` 上（段落/逐格那一枚 `data-bdr` 是按边分格的另一种 grammar）。
+// 补丁走最简单的元素级追加：`<w:bdr>` 在 document.xml 里只长在 run 的 rPr 上。
+
+{
+  const run = (bdr) => ({
+    type: 'text',
+    text: '框',
+    marks: [{ type: 'charExtra', attrs: { bdr } }],
+  })
+  const doc = { type: 'doc', content: [{ type: 'paragraph', content: [run('single;8;0;FF0000;accent1;99;BF')] }] }
+  const xml = await (await JSZip.loadAsync(await prosemirrorToDocxBytes(doc))).file('word/document.xml').async('string')
+  const bdr = /<w:bdr(?=[\s/>])[^>]*>/.exec(xml)?.[0] ?? ''
+  has('w:bdr 导出：主题名补回', bdr, 'w:themeColor="accent1"')
+  has('w:bdr 导出：深浅两枚补回', bdr, 'w:themeShade="BF"')
+  has('w:bdr 导出：字面色照旧是原件', bdr, 'w:color="FF0000"')
+}
+
+{
+  // 反例：没有主题三格就不该凭空补；脏格（形如 accent 1 的槽名）整格丢
+  const mk = (bdr) => ({
+    type: 'doc',
+    content: [
+      { type: 'paragraph', content: [{ type: 'text', text: '框', marks: [{ type: 'charExtra', attrs: { bdr } }] }] },
+    ],
+  })
+  const plain = await (await JSZip.loadAsync(await prosemirrorToDocxBytes(mk('single;8;0;FF0000;;;')))).file('word/document.xml').async('string')
+  const b1 = /<w:bdr(?=[\s/>])[^>]*>/.exec(plain)?.[0] ?? ''
+  check('w:bdr 导出：没主题就不补', !b1.includes('w:theme'), b1)
+
+  const dirty = await (await JSZip.loadAsync(await prosemirrorToDocxBytes(mk('single;8;0;FF0000;accent 1;9;ZZ')))).file('word/document.xml').async('string')
+  const b2 = /<w:bdr(?=[\s/>])[^>]*>/.exec(dirty)?.[0] ?? ''
+  check('w:bdr 导出：脏格整格丢', !b2.includes('w:theme'), b2)
+}
+
+{
+  // 屏上那一份（v0.166）：主题解析得出就画解析后的色，字面色只留在载荷里往存盘走。
+  // 两槽混用会两头错：画字面色 = 屏上与 Word 不一致；把解析色写进载荷 = 源件的话被改掉
+  const html = await importDocx(
+    '',
+    '<w:bdr w:val="single" w:sz="8" w:space="0" w:color="FF0000" w:themeColor="accent1" w:themeTint="99" w:themeShade="BF"/>',
+    '框',
+    THEME_COLORS,
+  )
+  has('字符边框：主题解析结果上屏', html, 'border: 1.33px solid #adbbd4')
+  has('字符边框：字面色留在载荷里', html, 'data-rbdr="single;8;0;FF0000;accent1;99;BF"')
 }
 
 console.log(`通过 ${ok.length} 项` + (bad.length ? `，**失败 ${bad.length} 项**` : '，失败 0 项'))

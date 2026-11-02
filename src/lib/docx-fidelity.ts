@@ -1661,9 +1661,13 @@ interface RunProps {
   /**
    * w:bdr 四属性（v0.152）：字符边框。val 是线型枚举（single/dotted/…），sz 是
    * 八分之一磅，space 是磅，color 是 hex。屏上走 CSS border——sz/space 两枚要换算，
-   * 其余原样。四枚都没写不挂
+   * 其余原样。四枚都没写不挂。
+   *
+   * v0.166：`theme` 是同一枚元素上的主题引用原值（包外无槽，随 data-rbdr 走存盘通道）。
+   * `screen` 是主题解析出来的颜色（**只给屏上用**）——字面色仍留在 `color` 里往存盘走，
+   * 两个槽各管一段（v0.159 的 w:u 同一条纪律）。解析不出来时没有这一枚
    */
-  bdr?: { val: string; sz?: string; space?: string; color?: string }
+  bdr?: { val: string; sz?: string; space?: string; color?: string; screen?: string; theme?: ThemeRef }
   /**
    * w:u 的颜色三枚（v0.155）：字面色 w:color 与主题引用 w:themeColor + w:themeTint/Shade。
    * 屏上走 CSS text-decoration-color——这是 w:u 身上唯一能兑现的一枚（线型枚举 val 早已收，
@@ -1854,7 +1858,21 @@ function readRPr(el: XEl | undefined, p: RunProps, tc?: ThemeColors): RunProps {
     const bs = attr(bdrEl, 'w:sz')
     const bp = attr(bdrEl, 'w:space')
     const bc = attr(bdrEl, 'w:color')
-    if (bv || bs || bp || bc) o.bdr = { val: bv ?? 'single', ...(bs ? { sz: bs } : {}), ...(bp ? { space: bp } : {}), ...(bc ? { color: bc } : {}) }
+    // v0.166：主题三枚（与 w:u/w:color/表级边框同一族）。走 themeRefParts 是纪律：
+    // 那是「按名查问这三枚」的唯一出口，自己再 attr 一遍会让 no-themeshade 腿失真
+    const parts = themeRefParts(bdrEl)
+    const theme = parts.ref || parts.tint || parts.shade ? parts : undefined
+    // 屏上那一份：主题解析得出就画它（与 w:color/表级边框同一优先级），字面色只往存盘走
+    const shown = themeCssOf(tc, parts)
+    if (bv || bs || bp || bc || theme)
+      o.bdr = {
+        val: bv ?? 'single',
+        ...(bs ? { sz: bs } : {}),
+        ...(bp ? { space: bp } : {}),
+        ...(bc ? { color: bc } : {}),
+        ...(shown ? { screen: shown.replace('#', '').toUpperCase() } : {}),
+        ...(theme ? { theme } : {}),
+      }
   }
   return o
 }
@@ -1920,7 +1938,10 @@ function bdrCss(b: NonNullable<RunProps['bdr']>): string {
   const style = CSS_BORDER_STYLE[b.val.toLowerCase()] ?? 'solid'
   // sz 是八分之一磅；缺这一枚时按最细一档（1/8 磅）画——Word 少写也得有条线
   const w = b.sz !== undefined && Number(b.sz) > 0 ? eighthsToPx(Number(b.sz)) : eighthsToPx(1)
-  const c = b.color && b.color.toLowerCase() !== 'auto' ? `#${b.color.replace(/^#/, '').toLowerCase()}` : 'currentColor'
+  // 颜色两槽取一（v0.166）：`screen` 是主题解析后的结果，`color` 是源件的字面色。
+  // 屏上要的是最终生效色——Word 也是主题优先
+  const raw = b.screen ?? b.color
+  const c = raw && raw.toLowerCase() !== 'auto' ? `#${raw.replace(/^#/, '').toLowerCase()}` : 'currentColor'
   return `border: ${w}px ${style} ${c}`
 }
 
@@ -2076,7 +2097,11 @@ function marked(inner: string, p: RunProps): string {
     p.caps ? ' data-caps="1"' : '',
     // v0.154：隐藏文字。屏上那一半在 cssOf（visibility: hidden），载荷只为往返
     p.vanish ? ' data-vanish="1"' : '',
-    p.bdr ? ` data-bdr="${p.bdr.val};${p.bdr.sz ?? ''};${p.bdr.space ?? ''};${p.bdr.color ?? ''}"` : '',
+    // v0.166：后三格是主题引用原值——属性名改成 data-rbdr，与段落/逐格那一枚
+    // data-bdr（按边分格的另一种语法）分开：同一个名字挂两种 grammar 迟早出事
+    p.bdr
+      ? ` data-rbdr="${p.bdr.val};${p.bdr.sz ?? ''};${p.bdr.space ?? ''};${p.bdr.color ?? ''};${p.bdr.theme?.ref ?? ''};${p.bdr.theme?.tint ?? ''};${p.bdr.theme?.shade ?? ''}"`
+      : '',
     // v0.156：下划线线型 + 颜色（载荷 `线型;颜色;主题三枚`，颜色是 #RRGGBB 或空槽）。
     // 屏上那一半此前挂在 `<u>` 的 inline style 上，过不了 TipParse（underline mark 只认标签），
     // 存盘就丢了；线型更是一直没有出口。两枚一起随 data-u 进模型走往返

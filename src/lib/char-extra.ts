@@ -14,10 +14,11 @@
 //   w:iCs/@w:bCs   复杂文字的斜体/粗体（只管 cs 字族那一口，与 w:i/w:b 平级）
 //   w:smallCaps    小型大写——屏上走 font-variant，由本 mark 画（v0.143）
 //   w:caps/@w:val  全大写（v0.152）——屏上走 text-transform，同上
-//   w:bdr 四属性   字符边框（v0.152）——屏上走 CSS border，同上；val 是线型、sz 是
-//                  八分之一磅、space 是磅、color 是 hex，四枚一组缺一不可
+//   w:bdr 七属性   字符边框（v0.152；v0.166 补主题三枚）——屏上走 CSS border，同上；
+//                  val 是线型、sz 是八分之一磅、space 是磅、color 是 hex，后三枚是
+//                  主题引用原值（包外无槽，走 run 级补丁回 document.xml）
 // 读侧由 docx-fidelity 发成 span[data-cs|data-hint|data-szcs|data-lang|data-lang-ea|data-lang-bidi|
-// data-scale|data-pos|data-kern|data-ics|data-bcs|data-smallcaps|data-caps|data-bdr|data-u|
+// data-scale|data-pos|data-kern|data-ics|data-bcs|data-smallcaps|data-caps|data-rbdr|data-u|
 // data-ctheme|data-sym]，
 // 这个 mark 接住；写侧由 docx.ts 读回 mark 属性落回 rPr。
 //
@@ -176,13 +177,16 @@ export const CharExtra = Mark.create({
         parseHTML: (el: HTMLElement) => str(el.getAttribute('data-caps')),
         renderHTML: (attrs: Record<string, unknown>) => (str(attrs.caps) ? { 'data-caps': '1', style: 'text-transform: uppercase' } : {}),
       },
-      // bdr（v0.152）：字符边框四枚一组（val;sz;space;color，空槽 = 那枚没写）。
+      // bdr（v0.152）：字符边框。载荷七格
+      // `val;sz;space;color;themeColor;themeTint;themeShade`（空槽 = 那枚没写）。
       // 屏上走 CSS border——sz 是八分之一磅、space 是磅，两枚要换算；val 经
       // cell-style 的 CSS_BORDER_STYLE 映射（那张表是线型的单一真源）。
-      // 导入侧同 pos/kern 的规矩：inline style 过不了 TipParse，CSS 由 mark 自己发
+      // 导入侧同 pos/kern 的规矩：inline style 过不了 TipParse，CSS 由 mark 自己发。
+      // v0.166：属性名 data-rbdr——段落/逐格那一枚 data-bdr 是「按边分格」的另一种
+      // grammar，同一个名字挂两种格式迟早出事；后三格主题引用包外无槽，走 run 级补丁
       bdr: {
         default: null as string | null,
-        parseHTML: (el: HTMLElement) => str(el.getAttribute('data-bdr')),
+        parseHTML: (el: HTMLElement) => str(el.getAttribute('data-rbdr')),
         renderHTML: (attrs: Record<string, unknown>) => {
           const raw = str(attrs.bdr)
           if (!raw) return {}
@@ -193,7 +197,7 @@ export const CharExtra = Mark.create({
           // space 是「边框与文字的距离」（磅）——CSS inline 上只有水平内衬接得住，
           // 给了才垫（Word 少写这一枚时不垫，与它的默认同结果）
           const pad = /^\d+$/.test(space) && Number(space) > 0 ? `padding: 0 ${round2(Number(space) * (4 / 3))}px; ` : ''
-          return { 'data-bdr': raw, style: `${pad}border: ${w}px ${style} ${c}` }
+          return { 'data-rbdr': raw, style: `${pad}border: ${w}px ${style} ${c}` }
         },
       },
       // vanish（v0.154）：隐藏文字。CSS 用 visibility: hidden 而不是 display:none
@@ -290,7 +294,7 @@ export const CharExtra = Mark.create({
       { tag: 'span[data-bcs]' },
       { tag: 'span[data-smallcaps]' },
       { tag: 'span[data-caps]' },
-      { tag: 'span[data-bdr]' },
+      { tag: 'span[data-rbdr]' },
       { tag: 'span[data-vanish]' },
       { tag: 'span[data-u]' },
       { tag: 'span[data-ctheme]' },

@@ -1874,6 +1874,9 @@ function withCharExtra<T extends object>(opts: T, child: PMNode, dt?: DocTrack):
       ...(/^\d+$/.test(space) ? { space: Number(space) } : {}),
       ...(color && color.toLowerCase() !== 'auto' ? { color: color.replace(/^#/, '').toUpperCase() } : {}),
     }
+    // 主题三枚（v0.166）：包外无槽，按 `<w:bdr>` 出现序补回。**只要发了这个元素就登记**
+    // （与 caps 同一条纪律），空串占位
+    dt?.bdrExtras.push(bdrRunExtraOf(bdr))
   }
   // 全大写与小型大写同时要时，包只发 smallCaps（else-if），caps 那一枚由补丁位补。
   // **只要发了 smallCaps 就登记一格**（不管这枚 run 要不要 caps）——闸门对的是
@@ -1891,6 +1894,28 @@ const BDR_LINE: Record<string, (typeof BorderStyle)[keyof typeof BorderStyle]> =
   double: BorderStyle.DOUBLE,
   dotdash: BorderStyle.DOT_DASH,
   dashsmallgap: BorderStyle.DASH_SMALL_GAP,
+}
+
+/**
+ * 字符边框的主题三枚（v0.166）：`data-rbdr` 载荷 → 追加进 `<w:bdr>` 的属性串。
+ * 空串 = 这一枚不补（补丁按 `<w:bdr>` 出现序对位，空串占位）。
+ *
+ * 与段落/逐格那一族同形、不同槽：那个是「按边分格」的 `data-bdr`，这个是定序七格
+ * `val;sz;space;color;themeColor;themeTint;themeShade`。** `w:color` 不从载荷补**——
+ * 写手本来就按字面色发，包也发得出来，只有主题三枚是包外槽。
+ */
+function bdrRunExtraOf(raw: string): string {
+  const slots = raw.split(';')
+  const [ref = '', tint = '', shade = ''] = slots.slice(4, 7)
+  const okRef = /^[A-Za-z0-9]+$/.test(ref) ? ref : ''
+  const okTint = /^[0-9A-Fa-f]{2}$/.test(tint) ? tint : ''
+  const okShade = /^[0-9A-Fa-f]{2}$/.test(shade) ? shade : ''
+  if (!okRef && !okTint && !okShade) return ''
+  return (
+    (okRef ? ` w:themeColor="${okRef}"` : '') +
+    (okTint ? ` w:themeTint="${okTint}"` : '') +
+    (okShade ? ` w:themeShade="${okShade}"` : '')
+  )
 }
 
 interface DocTrack {
@@ -1996,6 +2021,12 @@ interface DocTrack {
    * 它按格走，所以对位靠「哪些格带边框」这一条，而不是按格数硬套
    */
   cellBdrs: string[]
+  /**
+   * 字符边框的主题三枚（v0.166）：与 document.xml 里每个 `<w:bdr>` 一一对应、同序。
+   * 与 capsExtras 同一条登记纪律——**只要发了这个元素就登记**（空串占位），
+   * 因为 `<w:bdr>` 只出现在 run 的 rPr 里，全部由 withCharExtra 那一处发出
+   */
+  bdrExtras: string[]
 }
 
 type NoteKind = 'footnote' | 'endnote'
@@ -2026,6 +2057,7 @@ function newDocTrack(): DocTrack {
     shdExtras: [],
     paraBdrs: [],
     cellBdrs: [],
+    bdrExtras: [],
     uThemes: [],
     colorThemes: [],
   }
@@ -2802,9 +2834,12 @@ export async function prosemirrorToDocxBytes(json: PMNode, meta?: DocMeta): Prom
     'w:tcBorders',
     dt.cellBdrs,
   )
+  // 字符边框的主题三枚（v0.166）：<w:bdr> 在 document.xml 里只长在 run 的 rPr 上，
+  // 没有同名歧义——所以这一族回到最简单的元素级追加（patchElemAttrs）
+  const withRunBdr = await patchElemAttrs(withBdr, 'bdr', dt.bdrExtras)
   const withStyles = props.size || latent
-    ? await patchStylesXml(withBdr, latent, props)
-    : withBdr
+    ? await patchStylesXml(withRunBdr, latent, props)
+    : withRunBdr
   const withNum = numDefs.length ? await patchNumberingXml(withStyles, numDefs) : withStyles
   const packed = needTbl
     ? await patchTblLook(withNum, looks, dt.tblLooks, dt.tblPrs, dt.cellSps, dt.cnfStyles, dt.tblBorders)

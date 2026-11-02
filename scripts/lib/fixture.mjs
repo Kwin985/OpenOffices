@@ -144,10 +144,11 @@ export const FIXTURE_DOC =
   // 断言 pos|val——夹具与读手在错误的名字上互锁自证，而宇宙里根本没有这对；position|val
   // （338 字面）因此从没进过分子，屏上的 vertical-align 升降对真实件一次都没生效
   `<w:lang w:val="en-US" w:eastAsia="zh-CN"/><w:kern w:val="2"/><w:position w:val="12"/>` +
-  // v0.152：全大写（caps，屏上 text-transform: uppercase）与字符边框四枚（bdr，
+  // v0.152：全大写（caps，屏上 text-transform: uppercase）与字符边框（bdr，
   // 屏上 CSS border——sz 是八分之一磅、space 是磅，两枚都要换算）。两枚都是包有
   // 原生槽的读写属性（IRunOptions.allCaps / IRunOptions.border）
-  `<w:caps w:val="true"/><w:bdr w:val="single" w:sz="8" w:space="0" w:color="FF0000"/></w:rPr>` +
+  // v0.166：边框上补主题三枚——包的 IRunOptions.border 只有 color 一枚槽
+  `<w:caps w:val="true"/><w:bdr w:val="single" w:sz="8" w:space="0" w:color="FF0000" w:themeColor="accent1" w:themeTint="99" w:themeShade="BF"/></w:rPr>` +
   `<w:t xml:space="preserve"> 带空白的正文 </w:t></w:r></w:p>` +
   // v0.142：主题色 run（accent1 + tint/shade 双戴）与图案底纹段（pct25 前景 FF0000/背景 FFFFFF）
   // v0.164：底纹的背景色改成「主题引用 + 字面色」双戴（Word 的默认写法）——主题那一枚让
