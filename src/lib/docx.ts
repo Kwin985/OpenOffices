@@ -14,6 +14,7 @@ import {
   Header,
   HeadingLevel,
   HeightRule,
+  NumberFormat,
   type IBorderOptions,
   type ICharacterStyleOptions,
   type IFontAttributesProperties,
@@ -150,6 +151,11 @@ export interface PageSetup {
   /** 分栏数（1=不分栏）；与 colGap（mm）一起贯穿视图/打印/docx/odt */
   cols?: number
   colGap?: number
+  /**
+   * 页码型别与起始值（v0.170）：`w:pgNumType/@w:fmt|@w:start`。屏上没有分页视图，
+   * 页码是域算的，但纸面上「这一节从 iii 开始、用罗马数字」是实打实的设置
+   */
+  pageNum?: { fmt?: string; start?: number }
 }
 
 /**
@@ -168,6 +174,8 @@ export interface DocxSection {
   cols?: number
   colGap?: number
   docGrid?: { type?: string; linePitch?: number; charSpace?: number }
+  /** 页码型别与起始值（v0.170）：`w:pgNumType` 的两枚属性，原样带回 `PageSetup.pageNum` */
+  pageNum?: { fmt?: string; start?: number }
 }
 
 /**
@@ -182,6 +190,7 @@ export function pageSetupOf(s: DocxSection): PageSetup {
   const rmm = (v?: number) => (v === undefined ? undefined : Math.round(v * 100) / 100)
   const mm = (t?: number) => (t === undefined || !(t > 0) ? undefined : rmm(t / MM_TWIPS))
   const page: PageSetup = {}
+  if (s.pageNum) page.pageNum = { ...s.pageNum }
   const pw = mm(s.w)
   const ph = mm(s.h)
   if (pw && ph) {
@@ -272,6 +281,7 @@ export function resolvePage(p?: PageSetup): {
   footer?: number
   orient?: 'portrait' | 'landscape'
   docGrid?: { type?: string; linePitch?: number; charSpace?: number }
+  pageNum?: { fmt?: string; start?: number }
 } {
   const preset = p?.size === 'Letter' ? PAGE_SIZES_MM.Letter : PAGE_SIZES_MM.A4
   const w = p?.size === 'custom' && p.w ? p.w : preset[0]
@@ -288,6 +298,7 @@ export function resolvePage(p?: PageSetup): {
     ...(p?.footer !== undefined ? { footer: p.footer } : {}),
     ...(p?.orient ? { orient: p.orient } : {}),
     ...(p?.docGrid ? { docGrid: p.docGrid } : {}),
+    ...(p?.pageNum ? { pageNum: p.pageNum } : {}),
   }
 }
 
@@ -691,6 +702,7 @@ export async function docxToDocMeta(bytes: Uint8Array): Promise<DocMeta> {
   const pgSz = docXml.match(/<w:pgSz[^>]*>/)?.[0]
   const pgMar = docXml.match(/<w:pgMar[^>]*>/)?.[0]
   const colsEl = docXml.match(/<w:cols[^>]*>/)?.[0]
+  const pgNumEl = docXml.match(/<w:pgNumType[^>]*>/)?.[0]
   const tw = (xml: string | undefined, attr: string) => {
     const v = Number(xml?.match(new RegExp(`w:${attr}="(\\d+)"`))?.[1])
     return Number.isFinite(v) && v > 0 ? v / MM_TWIPS : undefined
@@ -722,6 +734,15 @@ export async function docxToDocMeta(bytes: Uint8Array): Promise<DocMeta> {
       page.h = rmm(ph)
     }
     if (Object.keys(margin).length) page.margin = margin
+  }
+  // 页码型别（v0.170）：与 pgSz/pgMar 同路——回退导入也把它带进 page
+  if (pgNumEl) {
+    const fmt = pgNumEl.match(/w:fmt="([A-Za-z]+)"/)?.[1]
+    const st = Number(pgNumEl.match(/w:start="(\d+)"/)?.[1])
+    const pageNum: NonNullable<PageSetup['pageNum']> = {}
+    if (fmt) pageNum.fmt = fmt
+    if (Number.isFinite(st) && st >= 0) pageNum.start = st
+    if (Object.keys(pageNum).length) page.pageNum = pageNum
   }
   // 分栏：w:num>1 才算多栏；栏间距缺省时回退默认而不写进 meta
   const num = Number(colsEl?.match(/w:num="(\d+)"/)?.[1])
@@ -2691,7 +2712,12 @@ export async function prosemirrorToDocxBytes(json: PMNode, meta?: DocMeta): Prom
   const section: {
     children: (Paragraph | Table | TableOfContents)[]
     properties?: {
-      page: { size: { width: number; height: number; orientation?: 'landscape' | 'portrait' }; margin: Record<string, number> }
+      page: {
+        size: { width: number; height: number; orientation?: 'landscape' | 'portrait' }
+        margin: Record<string, number>
+        /** 页码型别与起始值（v0.170）：包的 sections[].properties.page.pageNumbers 原生槽 */
+        pageNumbers?: { start?: number; formatType?: (typeof NumberFormat)[keyof typeof NumberFormat] }
+      }
       column?: { count: number; space: number; equalWidth: true; separate: false }
     }
     headers?: { default: Header }
@@ -2719,6 +2745,18 @@ export async function prosemirrorToDocxBytes(json: PMNode, meta?: DocMeta): Prom
           // 装订线（v0.147）：说了才写（0 是真值——Word 里「装订线 0」与没写同源，仍写）
           ...(pg.gutter !== undefined ? { gutter: twips(pg.gutter) } : {}),
         },
+        // 页码型别与起始值（v0.170）：包有原生槽（w:pgNumType），只是我们的模型此前没带。
+        // start 是「这一节从第几页开始编号」，fmt 是「用阿拉伯数字还是罗马数字」
+        ...(pg.pageNum
+          ? {
+              pageNumbers: {
+                ...(pg.pageNum.start !== undefined ? { start: pg.pageNum.start } : {}),
+                ...(pg.pageNum.fmt
+                  ? { formatType: pg.pageNum.fmt as (typeof NumberFormat)[keyof typeof NumberFormat] }
+                  : {}),
+              },
+            }
+          : {}),
       },
       // 文档网格（v0.147）：档位与行间距（linePitch 缇）。屏上不兑现，只往返。
       // 包的 GridType 只认四档枚举，源文件里偶见的自造档照样透传（BuilderElement 不校验）
@@ -2930,7 +2968,10 @@ export async function prosemirrorToDocxBytes(json: PMNode, meta?: DocMeta): Prom
   const packed = needTbl
     ? await patchTblLook(withNum, looks, dt.tblLooks, dt.tblPrs, dt.cellSps, dt.cnfStyles, dt.tblBorders)
     : withNum
-  return attachThemePart(packed, meta?.themeXml)
+  // 包对 w:pgNumType 是「无条件 push」（SectionProperties 里那行没有 if）——没话说时也发
+  // 一枚空元素。源件没写过就不该凭空多这一枚（账本看不见，Word 的文件结构看得见）
+  const withPgNum = pg.pageNum ? packed : await dropEmptyPgNum(packed)
+  return attachThemePart(withPgNum, meta?.themeXml)
 }
 
 /**
@@ -3678,6 +3719,26 @@ async function patchBorderBlocks(bytes: Uint8Array, tag: 'w:pBdr' | 'w:tcBorders
   }
   if (!touched) return bytes
   out += xml.slice(cursor)
+  zip.file('word/document.xml', out)
+  const buf = (await zip.generateAsync({ type: 'arraybuffer' })) as ArrayBuffer
+  return new Uint8Array(buf)
+}
+
+/**
+ * 摘掉包里那枚**空**的 `<w:pgNumType/>`（v0.170）。
+ *
+ * 包的 SectionProperties 构造器无条件 push 这一枚（`this.root.push(createPageNumberType(pageNumbers))`），
+ * 没给 pageNumbers 时照样落一个空元素。Word 读它等于「全是默认」，渲染没差别，但那是
+ * 源件没说过的一句话——我们的口径是「没写就别发」。只在有属性时才留。
+ */
+async function dropEmptyPgNum(bytes: Uint8Array): Promise<Uint8Array> {
+  const { default: JSZip } = await import('jszip')
+  const zip = await JSZip.loadAsync(bytes)
+  const file = zip.file('word/document.xml')
+  if (!file) return bytes
+  const xml = await file.async('string')
+  const out = xml.replace(/<w:pgNumType(?:\s*\/>|>\s*<\/w:pgNumType>)/g, '')
+  if (out === xml) return bytes
   zip.file('word/document.xml', out)
   const buf = (await zip.generateAsync({ type: 'arraybuffer' })) as ArrayBuffer
   return new Uint8Array(buf)

@@ -5306,17 +5306,23 @@ function sectionOf(doc: XEl | undefined): DocxSection | undefined {
   // 写侧也没有对应槽（包只发纸型/页边距/分栏数这几枚），纯只读记账：
   //   type        —— 这一节从哪儿起（nextPage 另起一页 / continuous 接着排 / evenPage …）
   //   pgSz|code   —— 纸型的打印机档位号（Word 记住「用户选的是 A4 那一格」用的）
-  //   pgNumType   —— 页码型别与起始值（我们没有分页视图，页码是域算的）
+  //   pgNumType   —— 页码型别与起始值。**v0.170 起上了通道**（包的 page.pageNumbers 有槽）
   //   cols|equalWidth / col|w|space —— 逐栏不等宽的分栏表（我们只支持等宽 N 栏）
   //   rtlGutter   —— 装订线落在右侧（从右往左书写的件）
   //   formProt    —— 这一节受窗体保护（只填表单域，其余不可改）
   const ty = find(sect, 'w:type')
   if (ty) attr(ty, 'w:val')
   if (pg) attr(pg, 'w:code')
+  // 页码型别与起始值（v0.170）：两枚都原样带回 PageSetup.pageNum，写侧走包的
+  // `sections[].properties.page.pageNumbers`（w:pgNumType 的原生槽）
   const pgn = find(sect, 'w:pgNumType')
   if (pgn) {
-    attr(pgn, 'w:fmt')
-    attr(pgn, 'w:start')
+    const fmt = attr(pgn, 'w:fmt')
+    const start = attrNum(pgn, 'w:start')
+    const pn: NonNullable<DocxSection['pageNum']> = {}
+    if (fmt) pn.fmt = fmt
+    if (start !== undefined) pn.start = start
+    if (Object.keys(pn).length) out.pageNum = pn
   }
   if (cols) {
     attr(cols, 'w:equalWidth')

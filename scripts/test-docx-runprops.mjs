@@ -1187,6 +1187,49 @@ const THEME_COLORS =
   check('条件层 run：闸门关掉就不加粗', !/w:firstRow="0"[\s\S]*<strong>/.test(r.html), '')
 }
 
+// ─────────────────── 13. 页码型别与起始值 w:pgNumType（v0.170）───────────────────
+
+{
+  // 导入侧：两枚属性要进 DocxSection.pageNum（走 attr 漏斗，保真账本上能看见）
+  const zip = new JSZip()
+  zip.file(
+    'word/document.xml',
+    `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:document xmlns:w="${W}"><w:body><w:p><w:r><w:t>正文</w:t></w:r></w:p>` +
+      `<w:sectPr><w:pgSz w:w="11906" w:h="16838"/><w:pgMar w:top="1440" w:right="1800" w:bottom="1440" w:left="1800"/>` +
+      `<w:pgNumType w:fmt="lowerRoman" w:start="3"/><w:cols w:num="1" w:space="425"/></w:sectPr>` +
+      `</w:body></w:document>`,
+  )
+  zip.file('word/styles.xml', `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:styles xmlns:w="${W}"></w:styles>`)
+  const r = await docxToHtmlFidelity(new Uint8Array(await zip.generateAsync({ type: 'arraybuffer', compression: 'STORE' })))
+  check('pgNumType 导入：型别进 section', r.section?.pageNum?.fmt === 'lowerRoman', JSON.stringify(r.section?.pageNum))
+  check('pgNumType 导入：起始值进 section', r.section?.pageNum?.start === 3, JSON.stringify(r.section?.pageNum))
+}
+
+{
+  // 导出侧：page.pageNum → 包的 pageNumbers 原生槽，且落在 CT_SectPr 的序位上
+  const doc = { type: 'doc', content: [{ type: 'paragraph', content: [{ type: 'text', text: '正文' }] }] }
+  const xml = await (
+    await JSZip.loadAsync(await prosemirrorToDocxBytes(doc, { page: { size: 'A4', pageNum: { fmt: 'lowerRoman', start: 3 } } }))
+  )
+    .file('word/document.xml')
+    .async('string')
+  const sect = /<w:sectPr[\s\S]*?<\/w:sectPr>/.exec(xml)?.[0] ?? ''
+  has('pgNumType 导出：型别写回', sect, 'w:fmt="lowerRoman"')
+  has('pgNumType 导出：起始值写回', sect, 'w:start="3"')
+  check(
+    'pgNumType 导出：位置在 pgMar 之后、cols 之前（CT_SectPr 序）',
+    sect.indexOf('<w:pgNumType') > sect.indexOf('<w:pgMar') && (sect.indexOf('<w:cols') < 0 || sect.indexOf('<w:pgNumType') < sect.indexOf('<w:cols')),
+    sect.match(/<w:[A-Za-z]+/g)?.join(' '),
+  )
+}
+
+{
+  // 反例：没写这两枚就不该凭空长出一枚 w:pgNumType
+  const doc = { type: 'doc', content: [{ type: 'paragraph', content: [{ type: 'text', text: '正文' }] }] }
+  const xml = await (await JSZip.loadAsync(await prosemirrorToDocxBytes(doc, { page: { size: 'A4' } }))).file('word/document.xml').async('string')
+  check('pgNumType 导出：没声明就不发', !xml.includes('<w:pgNumType'), '')
+}
+
 console.log(`通过 ${ok.length} 项` + (bad.length ? `，**失败 ${bad.length} 项**` : '，失败 0 项'))
 for (const b of bad) console.log(`FAIL ${b}`)
 if (bad.length) process.exitCode = 1
