@@ -50,7 +50,7 @@ import { all, allDesc, attr, attrL, attrNum, els, find, findDesc, findL, local, 
 import { FieldEngine, fieldLabel, parseInstr, recomputable } from './docx-fields'
 import { embedHtml, inlineFlatten, unwrapEmbed, type EmbedHtml } from './ole'
 import { chartToHtml, smartArtToHtml } from './ooxml-graphics'
-import { BDR_ATTR, CELL_EDGES, PBAR_ATTR, PBDR_ATTR, CNF_ATTR, CNF_KEYS, CSS_BORDER_STYLE, FRAME_NUMERIC_KEYS, FRAME_STR_KEYS, IMG_ATTR, PPR_ATTR, PPR_IND_KEYS, PPR_ONOFF_KEYS, PPR_STR_KEYS, SHD_ATTR, TAB_LEADERS, TBLB_ATTR, TBLB_EDGES, TBLB_KEYS, TBLPR_ATTR, TLOOK_ATTR, bdSpaceAttrs, bdrPayload, borderParts, cnfPayload, eighthsToPx, framePayload, imgPayload, pprPayload, ptToPx, rgb2hex, shadeCss, shdPayloadOf, tblbPayload, tblpPayload, tblPrPayload, tabsPayload, tlookPayload, pbdrPayload, type BdrOrigin, type CellEdge, type CnfPayload, type FramePayload, type ImgPayload, type PprPayload, type ShdPayload, type TabSpec, type TblbPayload, type TblpPayload } from './cell-style'
+import { BDR_ATTR, CELL_EDGES, PBAR_ATTR, PBDR_ATTR, TRPR_ATTR, CNF_ATTR, CNF_KEYS, CSS_BORDER_STYLE, FRAME_NUMERIC_KEYS, FRAME_STR_KEYS, IMG_ATTR, PPR_ATTR, PPR_IND_KEYS, PPR_ONOFF_KEYS, PPR_STR_KEYS, SHD_ATTR, TAB_LEADERS, TBLB_ATTR, TBLB_EDGES, TBLB_KEYS, TBLPR_ATTR, TLOOK_ATTR, bdSpaceAttrs, bdrPayload, borderParts, cnfPayload, eighthsToPx, framePayload, imgPayload, pprPayload, ptToPx, rgb2hex, shadeCss, shdPayloadOf, tblbPayload, tblpPayload, tblPrPayload, tabsPayload, tlookPayload, pbdrPayload, trPrPayload, type BdrOrigin, type CellEdge, type CnfPayload, type FramePayload, type ImgPayload, type PprPayload, type ShdPayload, type TabSpec, type TblbPayload, type TblpPayload } from './cell-style'
 import { ooxmlLine } from './paragraph-style'
 import {
   asTableCondType,
@@ -3877,18 +3877,19 @@ class Fidelity {
           this.warn('固定行高（exact）按最小行高读入，超高内容不再裁剪')
         trStyle = `height: ${px2(thv * TWIP_PX)}px`
       }
-      // v0.155：行属性余量三枚——gridAfter（这一行末尾空过几格）与 wAfter（行末留白，
-      // w 是缇、type 是档位）。三枚都不改屏上：gridAfter 是网格记账用的补白格（我们按
-      // 网格列还原合并，补白格在 HTML 里本来就不画），行末留白是 Word 排版期的余量。
-      // 纯只读记账——写侧发不出（包没有这两枚元素的槽）
+      // 行余量（v0.172）：gridAfter（这一行末尾空过几格）与 wAfter（行末留白，w 是缇、
+      // type 是档位）。屏上都不兑现——gridAfter 是网格记账用的补白格，行末留白是排版
+      // 期余量。包没有它们的槽，按行随 data-trpr 往返，写侧在 `<w:trPr>` 里补回去
+      let trPrAttr = ''
       if (trPr) {
         const ga = find(trPr, 'w:gridAfter')
-        if (ga) attr(ga, 'w:val')
         const wa = find(trPr, 'w:wAfter')
-        if (wa) {
-          attr(wa, 'w:w')
-          attr(wa, 'w:type')
-        }
+        const payload = trPrPayload({
+          ...(attr(ga, 'w:val') !== undefined ? { gridAfter: attr(ga, 'w:val') as string } : {}),
+          ...(attr(wa, 'w:w') !== undefined ? { wAfterW: attr(wa, 'w:w') as string } : {}),
+          ...(attr(wa, 'w:type') ? { wAfterType: attr(wa, 'w:type') as string } : {}),
+        })
+        if (payload) trPrAttr = payload
       }
       // 条件行高（v0.117）：行上没直接写 w:trHeight 时才认条件层（direct > 条件）
       if (thv === undefined) {
@@ -3901,7 +3902,7 @@ class Fidelity {
       // 行条件层 w:tblPrEx 的格边距：它是 w:tr 的首子（排在 w:trPr 之前），只说边距这一样上账
       const exMar = marginsOf(find(find(rows[ri], 'w:tblPrEx'), 'w:tblCellMar'))
       const rowEnd = plan[ri].reduce((m, c) => Math.max(m, c.gc + c.colspan), 0)
-      s += `<tr${trStyle ? ` style="${trStyle}"` : ''}>`
+      s += `<tr${trStyle ? ` style="${trStyle}"` : ''}${trPrAttr ? ` ${TRPR_ATTR}="${trPrAttr}"` : ''}>`
       for (const c of plan[ri]) {
         if (c.cont) continue
         const tcPr = find(c.el, 'w:tcPr')

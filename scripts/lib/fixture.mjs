@@ -431,7 +431,9 @@ export const FIXTURE_DOC =
   `<w:tblGrid><w:gridCol w:w="2500"/><w:gridCol w:w="2500"/></w:tblGrid>` +
   // v0.155：行属性余量三枚——gridAfter（这一行末尾空过几格，网格记账用）与
   // wAfter 的两枚（行末留白的宽与档位）。屏上都不画，只读记账
-  `<w:tr><w:trPr><w:gridAfter w:val="0"/><w:wAfter w:w="120" w:type="dxa"/></w:trPr>` +
+  // v0.172：行余量两枚（gridAfter / wAfter）与一行高同住 trPr——写侧的补丁要按 CT_TrPr
+  // 的序把前两枚插在 trHeight **之前**（顺序错了 Word 判损坏件）
+  `<w:tr><w:trPr><w:gridAfter w:val="0"/><w:wAfter w:w="120" w:type="dxa"/><w:trHeight w:val="400" w:hRule="atLeast"/></w:trPr>` +
   `<w:tc><w:p><w:r><w:t>甲</w:t></w:r></w:p></w:tc>` +
   `<w:tc><w:p><w:r><w:t>乙</w:t></w:r></w:p></w:tc></w:tr>` +
   `<w:tr><w:tc><w:p><w:r><w:t>丙</w:t></w:r></w:p></w:tc>` +

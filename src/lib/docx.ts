@@ -47,7 +47,7 @@ import {
   UnderlineType,
 } from 'docx'
 import { xml2js } from 'xml-js'
-import { bdAttr, borderParts, parsePbdrPayload, pxToEighths, pxToPt, parseBdrPayload, parseCnfPayload, parseFramePayload, parseImgPayload, parsePprPayload, parseShadePayload, parseShdPayload, parseTabsPayload, parseTblbPayload, parseTblpPayload, parseTblPrPayload, parseTlookPayload, CELL_EDGES, CNF_KEYS, PPR_IND_KEYS, TBLB_EDGES, TBLB_KEYS, type CellEdge } from './cell-style'
+import { bdAttr, borderParts, parsePbdrPayload, parseTrPrPayload, pxToEighths, pxToPt, parseBdrPayload, parseCnfPayload, parseFramePayload, parseImgPayload, parsePprPayload, parseShadePayload, parseShdPayload, parseTabsPayload, parseTblbPayload, parseTblpPayload, parseTblPrPayload, parseTlookPayload, CELL_EDGES, CNF_KEYS, PPR_IND_KEYS, TBLB_EDGES, TBLB_KEYS, type CellEdge } from './cell-style'
 import { lineToOoxml, type LineRule } from './paragraph-style'
 import { decodeEnt } from './ooxml'
 import { condLookBits } from './table-cond'
@@ -1772,6 +1772,22 @@ function barExtraOf(attrs: Record<string, unknown> | undefined): string {
 }
 
 /**
+ * 表行余量（v0.172）：`data-trpr` 载荷 → 要贴进 `<w:trPr>` 的两枚元素。
+ *
+ * `w:gridAfter` 与 `w:wAfter` 包都没有槽（`TableRow` 的选项里也没有），只能打包后补。
+ * 两枚在 CT_TrPr 的序里排在 `cantSplit`/`trHeight`/`tblHeader` 之前——插错位置 Word 会
+ * 判损坏件，所以补丁里按锚点插而不是直接追加。
+ */
+function trPrExtraOf(attrs: Record<string, unknown> | undefined): string {
+  const p = parseTrPrPayload(typeof attrs?.trpr === 'string' ? attrs.trpr : null)
+  return (
+    (p.gridAfter !== undefined ? `<w:gridAfter w:val="${p.gridAfter}"/>` : '') +
+    // w:type 缺省是 dxa；只有 w 给了才发这一枚（w 是必填）
+    (p.wAfterW !== undefined ? `<w:wAfter w:w="${p.wAfterW}"${p.wAfterType ? ` w:type="${p.wAfterType}"` : ''}/>` : '')
+  )
+}
+
+/**
  * 段落第五边（v0.167）：`data-pbdr` 载荷 → 要写进 `<w:pBdr>` 的属性串。
  * 空串 = 这一块不补。
  *
@@ -2134,6 +2150,11 @@ interface DocTrack {
    * 因为 `<w:bdr>` 只出现在 run 的 rPr 里，全部由 withCharExtra 那一处发出
    */
   bdrExtras: string[]
+  /**
+   * 表行余量（v0.172）：与 document.xml 里每个 `<w:tr>` 一一对应、同序（含嵌套表）。
+   * `w:gridAfter` 与 `w:wAfter` 包没有槽，按行贴回 `<w:trPr>`（没有 trPr 就现开一枚）
+   */
+  rowPrs: string[]
 }
 
 type NoteKind = 'footnote' | 'endnote'
@@ -2165,6 +2186,7 @@ function newDocTrack(): DocTrack {
     paraBdrs: [],
     cellBdrs: [],
     bdrExtras: [],
+    rowPrs: [],
     uThemes: [],
     colorThemes: [],
   }
@@ -2609,6 +2631,9 @@ function blocksOf(
               // 行高（v0.97 起）：导入侧按 atLeast 读入（exact 的裁剪档 CSS 表达不了），
               // 导出同档回写，往返稳定在 atLeast
               const rh = num(r.attrs?.rowHeight)
+              // 行余量（v0.172）：一行一格，登记序 = <w:tr> 出现序（含嵌套表的行——
+              // 外层行先 push，XML 里外层 <w:tr> 也先出现）
+              dt.rowPrs.push(trPrExtraOf(r.attrs))
               return new TableRow({
                 // 表头行由行级 w:trPr/w:tblHeader 记账（TipTap 用 th 单元格类型表示）。
                 // 只在命中时给属性：写成 tableHeader:false 会落 <w:tblHeader w:val="false"/>，
@@ -2961,9 +2986,11 @@ export async function prosemirrorToDocxBytes(json: PMNode, meta?: DocMeta): Prom
   // 字符边框的主题三枚（v0.166）：<w:bdr> 在 document.xml 里只长在 run 的 rPr 上，
   // 没有同名歧义——所以这一族回到最简单的元素级追加（patchElemAttrs）
   const withRunBdr = await patchElemAttrs(withBdr, 'bdr', dt.bdrExtras)
+  // 表行余量（v0.172）：按 <w:tr> 出现序贴 gridAfter/wAfter
+  const withRow = await patchTrPr(withRunBdr, dt.rowPrs)
   const withStyles = props.size || latent
-    ? await patchStylesXml(withRunBdr, latent, props)
-    : withRunBdr
+    ? await patchStylesXml(withRow, latent, props)
+    : withRow
   const withNum = numDefs.length ? await patchNumberingXml(withStyles, numDefs) : withStyles
   const packed = needTbl
     ? await patchTblLook(withNum, looks, dt.tblLooks, dt.tblPrs, dt.cellSps, dt.cnfStyles, dt.tblBorders)
@@ -4064,6 +4091,66 @@ function insertTblPrKids(all: string, frag: string, after?: string[]): string {
  * 嵌套表安全：两族各自按自己的元素出现序对位（cellExtras 的 push 赶在格子内容之前，
  * 外层 tc 在内层表前面入账，与 XML 序一致）。
  */
+/**
+ * 给 document.xml 里每个 `<w:tr>` 的行属性补两枚元素（v0.172）：按**行出现序**贴——
+ * 第 i 行用 `extras[i]`（空串 = 这一行不动）。
+ *
+ * 两种落点：行里已有 `<w:trPr>` 就按 CT_TrPr 的序插在 `cantSplit`/`trHeight`/`tblHeader`
+ * 这些之后元素之前；没有就现开一枚 `<w:trPr>`（它必须是 `<w:tr>` 的第一个孩子）。
+ * 计数闸门同前：`<w:tr>` 枚数对不上就整笔放弃（嵌套表的行也在里面，两边都按文档序数）。
+ */
+async function patchTrPr(bytes: Uint8Array, extras: string[]): Promise<Uint8Array> {
+  if (!extras.some((x) => x)) return bytes
+  const { default: JSZip } = await import('jszip')
+  const zip = await JSZip.loadAsync(bytes)
+  const file = zip.file('word/document.xml')
+  if (!file) return bytes
+  const xml = await file.async('string')
+  const rows = [...xml.matchAll(/<w:tr(?=[\s>])[^>]*>/g)]
+  if (rows.length !== extras.length) return bytes
+  let out = ''
+  let cursor = 0
+  let touched = false
+  for (let i = 0; i < rows.length; i++) {
+    const start = rows[i].index ?? 0
+    const stop = start + rows[i][0].length
+    const add = extras[i]
+    if (!add) {
+      out += xml.slice(cursor, stop)
+      cursor = stop
+      continue
+    }
+    const open = /^\s*<w:trPr(?=[\s/>])[^>]*>/.exec(xml.slice(stop))
+    if (open && !open[0].trimEnd().endsWith('/>')) {
+      const blockStart = stop + open[0].indexOf('<w:trPr')
+      const blockEnd = xml.indexOf('</w:trPr>', blockStart)
+      if (blockEnd < 0) {
+        out += xml.slice(cursor, stop)
+        cursor = stop
+        continue
+      }
+      // CT_TrPr 的序：… gridBefore → gridAfter → wBefore → wAfter → cantSplit → trHeight …
+      const anchor = /<w:(?:cantSplit|trHeight|tblHeader|tblCellSpacing|jc|hidden)(?=[\s/>])/.exec(
+        xml.slice(blockStart, blockEnd),
+      )
+      const at = anchor ? blockStart + (anchor.index ?? 0) : blockEnd
+      out += xml.slice(cursor, at) + add
+      cursor = at
+      touched = true
+    } else {
+      // 没有 trPr：现开一枚（必须是 <w:tr> 的第一个孩子）
+      out += xml.slice(cursor, stop) + `<w:trPr>${add}</w:trPr>`
+      cursor = stop
+      touched = true
+    }
+  }
+  if (!touched) return bytes
+  out += xml.slice(cursor)
+  zip.file('word/document.xml', out)
+  const buf = (await zip.generateAsync({ type: 'arraybuffer' })) as ArrayBuffer
+  return new Uint8Array(buf)
+}
+
 async function patchTcPr(bytes: Uint8Array, extras: string[]): Promise<Uint8Array> {
   if (!extras.some((x) => x)) return bytes
   const { default: JSZip } = await import('jszip')

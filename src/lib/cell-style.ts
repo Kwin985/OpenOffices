@@ -316,6 +316,50 @@ export function pbdrAttrsOf(raw: unknown): Record<string, string> {
  */
 export const PBAR_ATTR = 'data-pbar'
 
+/* ── 表行余量（v0.172）──────────────────────────────────────────
+ * `w:trPr` 里那三枚：`w:gridAfter`（这一行末尾空过几格，网格记账用的补白）与 `w:wAfter`
+ * 的两枚（行末留白宽/档位，w 是缇）。包没有它们的槽，屏上也不兑现——按行随 `data-trpr`
+ * 往返，写侧在 `<w:trPr>` 里按 CT_TrPr 的序插回去（gridAfter → wBefore → wAfter，
+ * 都排在 cantSplit / trHeight / tblHeader 之前）。
+ */
+export const TRPR_ATTR = 'data-trpr'
+export const TRPR_KEYS = ['gridAfter', 'wAfterW', 'wAfterType'] as const
+export type TrPrPayload = Partial<Record<(typeof TRPR_KEYS)[number], string>>
+
+const TRPR_FIELD: Record<(typeof TRPR_KEYS)[number], RegExp> = {
+  // 空过的格数：非负整数
+  gridAfter: /^\d+$/,
+  // 行末留白：缇，非负整数
+  wAfterW: /^\d+$/,
+  // 档位：dxa（缇）/ pct（百分比）/ auto
+  wAfterType: /^(?:dxa|pct|auto)$/,
+}
+
+/** `data-trpr` 载荷 → kv 表；空串给空表，形状不对的键整键丢 */
+export function parseTrPrPayload(raw: string | null | undefined): TrPrPayload {
+  const out: TrPrPayload = {}
+  for (const item of (raw ?? '').split(';')) {
+    const i = item.indexOf('=')
+    if (i < 0) continue
+    const k = item.slice(0, i).trim() as (typeof TRPR_KEYS)[number]
+    const v = item.slice(i + 1).trim()
+    if (!TRPR_KEYS.includes(k) || !TRPR_FIELD[k].test(v)) continue
+    out[k] = v
+  }
+  return out
+}
+
+/** kv 表 → `data-trpr` 载荷（与 parseTrPrPayload 互逆；按键序输出保稳定） */
+export function trPrPayload(p: TrPrPayload): string {
+  return TRPR_KEYS.filter((k) => p[k] !== undefined).map((k) => `${k}=${p[k]}`).join(';')
+}
+
+/** 屏上一条样式都不兑现，只为写回（与 ppr 那几枚同款） */
+export function trPrAttrsOf(raw: unknown): Record<string, string> {
+  const payload = typeof raw === 'string' ? raw : ''
+  return Object.keys(parseTrPrPayload(payload)).length ? { [TRPR_ATTR]: payload } : {}
+}
+
 /** 屏上一条样式都不兑现，只为写回 */
 export function pbarAttrsOf(raw: unknown): Record<string, string> {
   const payload = typeof raw === 'string' ? raw : ''
@@ -1164,6 +1208,12 @@ export const CellStyle = Extension.create({
         attributes: {
           // 行高：docx 的 w:trHeight 落这里（v0.97 起）。HTML 里 tr 的高度本就是下限语义，
           // 与 OOXML 的 atLeast 恰好同形；exact 的"超高裁内容"CSS 表达不了，导入按 atLeast 记
+          // 行余量（v0.172）：gridAfter 与 wAfter 两枚（w:w / w:type），屏上不兑现只往返
+          trpr: {
+            default: null as string | null,
+            parseHTML: (el: HTMLElement) => el.getAttribute(TRPR_ATTR) || null,
+            renderHTML: (attrs: Record<string, unknown>) => trPrAttrsOf(attrs.trpr),
+          },
           rowHeight: {
             default: null as number | null,
             parseHTML: (el: HTMLElement) => {

@@ -1257,6 +1257,47 @@ const THEME_COLORS =
   check('表样式常驻 run：段落样式说「不斜体」时压过它', !r.html.includes('<em>段落压过</em>'), r.html.slice(0, 300))
 }
 
+// ─────────────────── 15. 表行余量 gridAfter / wAfter（v0.172）───────────────────
+
+{
+  const cell = (t) => ({ type: 'tableCell', content: [{ type: 'paragraph', content: [{ type: 'text', text: t }] }] })
+  const doc = {
+    type: 'doc',
+    content: [
+      {
+        type: 'table',
+        content: [
+          // 有行高：补丁要插在 trHeight **之前**（CT_TrPr 的序）
+          {
+            type: 'tableRow',
+            attrs: { rowHeight: 26.67, trpr: 'gridAfter=0;wAfterW=120;wAfterType=dxa' },
+            content: [cell('甲')],
+          },
+          // 没行高：补丁要现开一枚 <w:trPr>，且必须是 <w:tr> 的第一个孩子
+          { type: 'tableRow', attrs: { trpr: 'gridAfter=1;wAfterW=60' }, content: [cell('乙')] },
+          // 没载荷：不该凭空多一枚
+          { type: 'tableRow', content: [cell('丙')] },
+        ],
+      },
+    ],
+  }
+  const xml = await (await JSZip.loadAsync(await prosemirrorToDocxBytes(doc))).file('word/document.xml').async('string')
+  const trs = [...xml.matchAll(/<w:tr[\s>][\s\S]*?(?=<w:tr[\s>]|<\/w:tbl>)/g)].map((m) => m[0])
+  const first = trs[0] ?? ''
+  has('行余量：gridAfter 写回', first, '<w:gridAfter w:val="0"/>')
+  has('行余量：wAfter 两枚写回', first, '<w:wAfter w:w="120" w:type="dxa"/>')
+  check(
+    '行余量：插在 trHeight 之前（CT_TrPr 序）',
+    first.indexOf('<w:gridAfter') < first.indexOf('<w:trHeight') && first.indexOf('<w:trHeight') > 0,
+    first.slice(0, 200),
+  )
+  const second = trs[1] ?? ''
+  check('行余量：没有 trPr 时现开一枚且紧随 <w:tr>', /^<w:tr[^>]*><w:trPr>/.test(second), second.slice(0, 160))
+  has('行余量：现开的那枚里 w:type 缺省不发', second, '<w:wAfter w:w="60"/>')
+  const third = trs[2] ?? ''
+  check('行余量：没载荷就不开 trPr', !third.includes('<w:trPr'), third.slice(0, 120))
+}
+
 console.log(`通过 ${ok.length} 项` + (bad.length ? `，**失败 ${bad.length} 项**` : '，失败 0 项'))
 for (const b of bad) console.log(`FAIL ${b}`)
 if (bad.length) process.exitCode = 1
