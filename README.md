@@ -10022,6 +10022,34 @@ D31 顺延：`fldChar` 三对；`outline|val`；表/节一族（`col|w`/`col|spa
 `gridAfter|val`、`smartTag|*`、`legacy|*`）；承接未动项 `gridCol`/`tcW` 的 ±5 缇、
 `w:cols` 的 `equalWidth`、`ind|left` 的列表缩进覆盖、`docPr|id` 重排、`lvlJc` 深层 `center`。
 另有一件要定口径：`theme1.xml` 进不进普查清单。
+## v0.172（D31）——表行余量：补丁长到「容器可能不存在」这一档
+
+往返账**正文属性 80.9% → 82.0%**（241/298 → 246/300），整体 43.6% → 44.3%，掉了 331 → **328**、
+值变 17 不动。`gridAfter|val`、`wAfter|w`、`wAfter|type` 三对从「掉了」变「保留」，另有两对
+`trHeight|*` 随夹具新增进账。保真账本 md5 仍 `95846f03…`/`aab9813c…`，四条变异腿与上轮一字不差。
+
+### 它在 v0.155 是「纯只读记账」
+
+`w:trPr` 里的 `w:gridAfter`（这一行末尾空过几格）与 `w:wAfter`（行末留白：宽与档位）读出来就扔，
+注释写「包没有这两枚元素的槽」。这一轮接上：`data-trpr` kv 载荷随 `<tr>` 进出。
+
+### 补丁的第三档：容器自己也可能不存在
+
+前几族的落点分别是「改属性」（v0.164 shd）、「整片替换」（v0.163 tblBorders）、「往块里插
+子元素」（v0.167 between/bar）。这一族多一档麻烦：**连 `<w:trPr>` 本身都可能没有**——包只在
+行有高度/表头属性时才发它。
+
+于是补丁有两种落点：行里已有 `<w:trPr>` 就按 CT_TrPr 的序插在 `cantSplit`/`trHeight`/`tblHeader`
+之前；没有就现开一枚，位置必须是 `<w:tr>` 的第一个孩子。两条都在结构测试里钉着。
+
+### 门禁
+
+tsc 0、build ✓；结构测试 **167 → 173 项**全绿（含两条反例：没载荷就不开 trPr、`w:type` 缺省
+不发）。
+
+D32 顺延：`fldChar` 三对；`outline|val`；`col|w`/`col|space`（不等宽分栏）；`smartTag|*`、
+`legacy|*`；承接未动项 `gridCol`/`tcW` 的 ±5 缇、`w:cols` 的 `equalWidth`、`ind|left` 的列表
+缩进覆盖、`docPr|id` 重排、`lvlJc` 深层 `center`。另有一件要定口径：`theme1.xml` 进不进普查清单。
 
 ## 性能（v0.3）
 

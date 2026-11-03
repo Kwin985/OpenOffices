@@ -21,12 +21,12 @@
   "onOffBareElement": true
  },
  "totals": {
-  "read": 617,
-  "kept": 269,
+  "read": 619,
+  "kept": 274,
   "value": 17,
-  "lost": 331,
+  "lost": 328,
   "part": 0,
-  "consulted": 670,
+  "consulted": 672,
   "srcParts": 7,
   "outParts": 7,
   "htmlBlocks": 37
@@ -1866,12 +1866,14 @@
    ]
   },
   "gridAfter|val": {
-   "bucket": "lost",
+   "bucket": "kept",
    "n": 1,
    "src": [
     "0"
    ],
-   "out": []
+   "out": [
+    "0"
+   ]
   },
   "gridCol|w": {
    "bucket": "value",
@@ -5623,6 +5625,26 @@
     "0"
    ]
   },
+  "trHeight|hRule": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "atleast"
+   ],
+   "out": [
+    "atleast"
+   ]
+  },
+  "trHeight|val": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "400"
+   ],
+   "out": [
+    "400"
+   ]
+  },
   "type|val": {
    "bucket": "lost",
    "n": 1,
@@ -5710,20 +5732,24 @@
    ]
   },
   "wAfter|type": {
-   "bucket": "lost",
+   "bucket": "kept",
    "n": 1,
    "src": [
     "dxa"
    ],
-   "out": []
+   "out": [
+    "dxa"
+   ]
   },
   "wAfter|w": {
-   "bucket": "lost",
+   "bucket": "kept",
    "n": 1,
    "src": [
     "120"
    ],
-   "out": []
+   "out": [
+    "120"
+   ]
   },
   "widowControl|val": {
    "bucket": "kept",
