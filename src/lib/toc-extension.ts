@@ -1,19 +1,12 @@
 import { mergeAttributes, Node, type Editor } from '@tiptap/core'
+// v0.173：标题汇总搬到 lib/outline.ts，目录节点与导航窗格共用一份形状与同一段遍历。
+import { outlineOf, type OutlineEntry } from './outline'
 
-export interface TocEntry {
-  level: number
-  text: string
-  pos: number
-}
+export type TocEntry = OutlineEntry
 
 // 遍历当前文档收集标题（1-4 级）及其位置，供目录节点渲染与跳转
 export function collectHeadings(editor: Editor): TocEntry[] {
-  const out: TocEntry[] = []
-  editor.state.doc.descendants((node, pos) => {
-    if (node.type.name === 'heading' && node.textContent.trim())
-      out.push({ level: Number(node.attrs?.level ?? 1), text: node.textContent, pos })
-  })
-  return out
+  return outlineOf(editor.state.doc)
 }
 
 // 原子块节点：内容不落在 doc 里，放映时按标题实时汇总；导出 docx 由转换器映射为原生 TOC 字段

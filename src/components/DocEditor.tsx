@@ -65,6 +65,9 @@ import {
 } from '../lib/cell-style'
 import { ruleOf, type LineRule } from '../lib/paragraph-style'
 import { docExtensions } from '../lib/doc-schema'
+// v0.173：文档结构图与格式刷。形状住在 lib，组件只做接线与交互。
+import { outlineOf, activeOutlinePos } from '../lib/outline'
+import { captureFormat, marksForSchema, paintableMarkNames, type PaintFormat } from '../lib/format-painter'
 import { caretColumn, tableTargetPx } from '../lib/table-width'
 import { frPluginKey, activeIndexOf } from '../lib/find-replace'
 import { docTemplate } from '../lib/templates'
@@ -203,6 +206,16 @@ function DocEditor({ tab }: Props) {
   const frInputRef = useRef<HTMLInputElement>(null)
   const [histOpen, setHistOpen] = useState(false)
   const [hist, setHist] = useState<{ t: number; note: string; json: string; metaJson: string }[]>([])
+  // —— v0.173 文档结构图：只在打开时才遍历全文（关着时一次 doc.descendants 都不跑）
+  const [navOpen, setNavOpen] = useState(false)
+  // —— v0.173 格式刷：载荷与「待刷」状态分开。ref 是给 selectionUpdate / handleKeyDown
+  // 这两个非 React 回调读的（effect 只订阅一次，不能把状态并进依赖里反复重挂）
+  const [painter, setPainter] = useState<PaintFormat | null>(null)
+  const [painterLocked, setPainterLocked] = useState(false)
+  const painterRef = useRef<PaintFormat | null>(null)
+  const painterLockedRef = useRef(false)
+  const painterArmedRef = useRef<{ from: number; to: number } | null>(null)
+  const paintingRef = useRef(false)
   const [autoSavedAt, setAutoSavedAt] = useState<Date | null>(null)
   // 收尾那句的时钟与表格头（v0.69）、PDF 头（v0.70）共用模块那一份：两份 1500/5000 就是两把尺子。
   // 进度门这一头不挂——v0.71 实测 .docx/.odt 原地保存整趟 30~92ms、write_file 自身 6~62ms，
@@ -436,6 +449,56 @@ function DocEditor({ tab }: Props) {
     return () => {
       editor.off('update', h)
       editor.off('selectionUpdate', h)
+    }
+  }, [editor])
+
+  // 格式刷（v0.173）：按下按钮记下源格式，之后用户拖选目标文字，松开即刷。
+  // 双击按钮锁定连刷，Esc / 再点按钮退出。判据是「选区变了且非空」——捕获时那一枚
+  // 选区不算目标，否则按按钮的同一刻就把源文字自己刷一遍。
+  useEffect(() => {
+    if (!editor) return
+    const onSel = () => {
+      const payload = painterRef.current
+      if (!payload || paintingRef.current) return
+      const { from, to, empty } = editor.state.selection
+      if (empty) return
+      const armed = painterArmedRef.current
+      if (armed && from === armed.from && to === armed.to) return
+      paintingRef.current = true
+      try {
+        const chain = editor.chain().focus()
+        // 先清可刷的外观 mark 再重设：格式刷是「替换」不是「叠加」；身份型 mark
+        // 不在清名单里，别人的批注/修订/书签不会被这一刷抹掉
+        for (const name of paintableMarkNames(editor.state.schema)) chain.unsetMark(name)
+        for (const m of marksForSchema(editor.state.schema, payload)) chain.setMark(m.type.name, m.attrs)
+        if (payload.align) chain.setTextAlign(payload.align)
+        chain.run()
+        // 刚刷过的这一枚选区不再触发第二次（chain.focus 自己也会派发选区事件）
+        painterArmedRef.current = { from, to }
+        if (!painterLockedRef.current) {
+          painterRef.current = null
+          painterArmedRef.current = null
+          setPainter(null)
+        }
+      } finally {
+        paintingRef.current = false
+      }
+    }
+    // Esc 收刷放在 window 上而不是 editorProps.handleKeyDown 里：待刷时焦点可能在
+    // 工具条按钮上，编辑器的按键钩子接不到。只有这一处出口，不与别的 Esc 行为抢。
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape' || !painterRef.current) return
+      painterRef.current = null
+      painterArmedRef.current = null
+      painterLockedRef.current = false
+      setPainter(null)
+      setPainterLocked(false)
+    }
+    editor.on('selectionUpdate', onSel)
+    window.addEventListener('keydown', onKey)
+    return () => {
+      editor.off('selectionUpdate', onSel)
+      window.removeEventListener('keydown', onKey)
     }
   }, [editor])
 
@@ -1303,6 +1366,41 @@ function DocEditor({ tab }: Props) {
     </button>
   )
 
+  // —— v0.173 文档结构图：关着时连一次 doc.descendants 都不跑 ——
+  const outline = navOpen ? outlineOf(editor.state.doc) : []
+  const activeOutline = navOpen ? activeOutlinePos(outline, editor.state.selection.from) : -1
+  const jumpToHeading = (pos: number) => {
+    const el = editor.view.nodeDOM(pos) as HTMLElement | null
+    el?.scrollIntoView?.({ behavior: 'smooth', block: 'start' })
+    try {
+      editor.chain().focus().setTextSelection(pos + 1).run()
+    } catch {
+      /* 文档已变、pos 失效时只滚动 */
+    }
+  }
+
+  // —— v0.173 格式刷：源格式取自当前光标/选区起点；应用发生在下一次拖选（见上面的 effect）
+  const cancelPainter = () => {
+    painterRef.current = null
+    painterArmedRef.current = null
+    painterLockedRef.current = false
+    setPainter(null)
+    setPainterLocked(false)
+  }
+  const armPainter = (locked: boolean) => {
+    const { from, to } = editor.state.selection
+    const payload = captureFormat(editor.state)
+    painterRef.current = payload
+    painterArmedRef.current = { from, to }
+    painterLockedRef.current = locked
+    setPainter(payload)
+    setPainterLocked(locked)
+  }
+  const painterClick = () => {
+    if (painterRef.current) cancelPainter()
+    else armPainter(false)
+  }
+
   const paraBorders = (edges: readonly CellEdge[], value: string | null) =>
     editor.chain().focus().setParaBorders(edges, value).run()
   const cellBorders = (edges: readonly CellEdge[], value: string | null) =>
@@ -1382,6 +1480,7 @@ function DocEditor({ tab }: Props) {
         {btn('导出 docx', exportDocx)}
         {btn('导出 odt', exportOdt, false, '导出 OpenDocument 文本（LibreOffice 系通用）')}
         {btn('目录', tocAction, false, '插入/定位目录：按标题实时汇总；导出为 Word 原生 TOC 域')}
+        {btn('导航', () => setNavOpen((v) => !v), navOpen, '文档结构图：按标题 1-4 汇总，点击跳转，随编辑实时刷新')}
         {btn('分页符', () => editor.chain().focus().insertPageBreak().run(), false, 'Ctrl+Enter：打印与导出 PDF 时从此处另起一页（docx/odt 同步写分页）')}
         {btn('页眉页脚', () => setHfOpen((v) => !v), hfOpen || !!(meta.headerText || meta.footerText || meta.footerPageNumber), '设置页眉、页脚与页码')}
         {btn('页面设置', () => setPgOpen((v) => !v), pgOpen || !!meta.page, '纸张与页边距：同步应用到视图、打印与 docx/odt 导出')}
@@ -1609,6 +1708,16 @@ function DocEditor({ tab }: Props) {
         {btn('撤销', () => editor.chain().focus().undo().run())}
         {btn('重做', () => editor.chain().focus().redo().run())}
         <span className="tb-sep" />
+        <button
+          key="format-painter"
+          className={`tb-btn doc-painter-btn${painter ? ' tb-active' : ''}`}
+          onClick={painterClick}
+          onDoubleClick={() => armPainter(true)}
+          title={'格式刷：先点一下取源格式，再拖选目标文字即刷上；双击可连续刷，Esc 或再点按钮退出。' +
+            '只刷字符外观（粗斜、字色、高亮、字号等）与非默认对齐，不复制批注/书签/修订/超链接这些带身份的标记，也不搬缩进行距。'}
+        >
+          {painter ? (painterLocked ? '格式刷·连刷' : '格式刷·待刷') : '格式刷'}
+        </button>
         {btn('拼写', toggleSpell, spellOn, '拼写检查：常见错拼、中文误用、重复字。开着会随输入重扫')}
         {btn('协同', toggleCollabPanel, collabOpen, '实时协同：同一房间名的多个实例一起改同一份文档，改动自动合并，不用互相锁')}
         {btn('宏', () => setMacroOpen((v) => !v), macroOpen, '脚本宏：一段 JS 操作这篇文档（只跑自己写的）')}
@@ -2696,6 +2805,33 @@ function DocEditor({ tab }: Props) {
         </div>
       )}
       <div className="doc-body">
+        {navOpen && (
+          <aside className="doc-outline">
+            <div className="doc-outline-head">
+              <span>文档结构</span>
+              <button className="tb-btn doc-outline-close" onClick={() => setNavOpen(false)} title="收起导航窗格">
+                ✕
+              </button>
+            </div>
+            <div className="doc-outline-list">
+              {outline.length === 0 ? (
+                <div className="doc-outline-empty">给段落设「标题 1–4」，这里就会列出结构并随编辑刷新。</div>
+              ) : (
+                outline.map((h) => (
+                  <button
+                    key={h.pos}
+                    className={`doc-outline-item doc-outline-l${h.level}${h.pos === activeOutline ? ' doc-outline-active' : ''}`}
+                    onClick={() => jumpToHeading(h.pos)}
+                    title={h.text}
+                  >
+                    {h.text}
+                  </button>
+                ))
+              )}
+            </div>
+            <div className="doc-outline-foot">{outline.length} 个标题 · 点击跳转</div>
+          </aside>
+        )}
         <div className="doc-scroll">
           <div
             className="doc-page"

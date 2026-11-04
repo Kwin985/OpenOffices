@@ -1693,6 +1693,88 @@ button {
   min-height: 0;
 }
 
+/* v0.173 文档结构图（导航窗格）：与右侧批注侧栏分列，关着时整棵不渲染、也不遍历全文 */
+.doc-outline {
+  width: 224px;
+  flex-shrink: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  border-right: 1px solid var(--border);
+  background: var(--panel);
+}
+
+.doc-outline-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 10px;
+  font-size: 12px;
+  font-weight: 600;
+  border-bottom: 1px solid var(--border);
+}
+
+.doc-outline-close {
+  padding: 0 6px;
+  line-height: 20px;
+}
+
+.doc-outline-list {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 6px 4px;
+}
+
+.doc-outline-item {
+  display: block;
+  width: 100%;
+  box-sizing: border-box;
+  text-align: left;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text);
+  font-size: 12px;
+  line-height: 1.6;
+  padding: 4px 8px;
+  cursor: pointer;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.doc-outline-item:hover {
+  background: var(--bg);
+}
+
+.doc-outline-item.doc-outline-active {
+  color: var(--accent);
+  background: rgba(44, 102, 212, 0.1);
+  font-weight: 600;
+}
+
+.doc-outline-l2 { padding-left: 20px; }
+.doc-outline-l3 { padding-left: 34px; }
+.doc-outline-l4 { padding-left: 48px; }
+
+.doc-outline-empty,
+.doc-outline-foot {
+  color: var(--text-2);
+  font-size: 11px;
+  line-height: 1.6;
+  padding: 8px;
+}
+
+.doc-outline-foot {
+  border-top: 1px solid var(--border);
+}
+
+/* 格式刷待刷态：按钮高亮 + 光标提示，刷完自动退回 */
+.doc-painter-btn.tb-active {
+  cursor: copy;
+}
+
 .doc-comments {
   width: 268px;
   flex-shrink: 0;

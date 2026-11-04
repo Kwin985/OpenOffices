@@ -2387,8 +2387,9 @@ class Fidelity {
     this.comments = readComments(commentsXml, extXml)
   }
 
-  async run(documentXml: string): Promise<{ html: string; blocks: number }> {
-    const doc = parseXml(documentXml)
+  // v0.173：树由 docxToHtmlFidelity 一次建好传入。此前入口的 7 个「跑正文前按名查问」
+  // 与这里各 parseXml 一次，同一份 document.xml 累计建 8 棵树，其中 7 棵查完即丢。
+  async run(doc: XEl): Promise<{ html: string; blocks: number }> {
     // 主题引用在 document 树上落地（v0.138）：与 styles/numbering 同一趟，赶在一切读手之前
     applyThemeFonts(doc, this.theme)
     // w:body 是 w:document 的孩子，而 parseXml 的根是 '#doc'，所以要深找一层
@@ -5178,6 +5179,12 @@ export async function docxToHtmlFidelity(bytes: Uint8Array, depth = 0): Promise<
   const read = async (p: string): Promise<string> => (await zip.file(p)?.async('string')) ?? ''
   const documentXml = await read('word/document.xml')
   if (!documentXml) throw new Error('缺 word/document.xml')
+  // v0.173：整份导入只建一次 document 树。下面 7 个「跑正文前按名查问」的只读扫描、
+  // 正文序列化、文档背景与节属性，全部复用这一棵。此前这 8 处各自 parseXml 一次，
+  // 同一份最大部件被扫 8 遍、建 8 棵树（7 棵查完即丢）。
+  // 顺序纪律：bg/section 要在 run() 之前读——run() 里的 applyThemeFonts 会就地补
+  // rFonts 的具名字体属性；让它们读改动前的树，与优化前逐字同义。
+  const doc = parseXml(documentXml)
   // 主题字体（v0.138）：Normal 与各级标题只写 asciiTheme 一类引用，解析不了整篇掉回默认字体
   const themeXml = await read('word/theme/theme1.xml')
   const theme = readTheme(themeXml)
@@ -5195,29 +5202,29 @@ export async function docxToHtmlFidelity(bytes: Uint8Array, depth = 0): Promise<
   f.setComments(await read('word/comments.xml'), await read('word/commentsExtended.xml'))
   // 文档级标记（v0.150）：proofErr/Choice/Ignorable 三族不在任何读手路径上（块遍历不碰
   // proofErr、兼容分支不进分发、根属性没人读），在跑正文前先把它们按名查问一遍
-  noteDocumentMarks(parseXml(documentXml))
+  noteDocumentMarks(doc)
   // 形状壳（v0.151）：wsp 文本框的壳（样式矩阵引用/bodyPr/txBox/schemeClr）同上——
   // 段内无 blip，图片短路链够不着，跑正文前按名查问
-  noteShapeMarks(parseXml(documentXml))
+  noteShapeMarks(doc)
   // VML 壳余量（v0.153）：老式形状那一整片（roundrect/line/rect/shapetype/…）与它们的
   // 填充、描边、阴影、路径、手柄。与 noteShapeMarks 同款——段内可能没有 blip（pict 里
   // 压根没图时 bitmap() 第一步就返回 null），图片短路链够不着，跑正文前按名查问。
-  // 两份 documentXml 各 parse 一次是浪费，但这两族都在「跑正文前」这一格，与 run() 分开
-  noteVmlShellMarks(parseXml(documentXml))
+  // v0.173：这一族与下面几族共用入口那一棵树，不再各 parse 一次
+  noteVmlShellMarks(doc)
   // 表条件格式十三枚（v0.154）：w:cnfStyle 在 tblPr 与 tcPr 里都住，整树扫一遍
-  noteCnfStyleMarks(parseXml(documentXml))
+  noteCnfStyleMarks(doc)
   // DrawingML 图形余量（v0.155）：w:drawing 里那一整片（颜色变换/线端/效果/三维/浮动档位）。
   // 与 VML 壳同款：读手没有路径，跑正文前在 w:drawing 子树里按名查问
-  noteDrawingMarks(parseXml(documentXml))
-  const { html, blocks } = await f.run(documentXml)
+  noteDrawingMarks(doc)
   // 文档背景（v0.155）：屏上是整篇的底色，包在正文外层给出去——底色属于画布不属段落，
   // 塞进任何一段的 style 都会在选中/复制时跟着文字走，含义就变了
-  const bg = docBackgroundOf(parseXml(documentXml), themeColors)
-  const html2 = bg?.css ? `<div style="background-color: ${attrEsc(bg.css)}">${html}</div>` : html
+  const bg = docBackgroundOf(doc, themeColors)
   // 节属性（v0.147）：body 末尾 sectPr 走 attr 漏斗读一遍。这一族原本是 docxToDocMeta
   // 用正则读的（正则不进漏斗，保真账本上是盲区——读是读了，账上没有）；改由读手读、
   // 随 DocxImport 出来后调用方折成 PageSetup，同一份数只有一个读数出处
-  const section = sectionOf(parseXml(documentXml))
+  const section = sectionOf(doc)
+  const { html, blocks } = await f.run(doc)
+  const html2 = bg?.css ? `<div style="background-color: ${attrEsc(bg.css)}">${html}</div>` : html
   return {
     html: html2,
     comments: f.comments,
