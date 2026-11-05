@@ -1830,6 +1830,46 @@ button {
   background: var(--border);
 }
 
+/* v0.175 独立打印预览：同一棵 DOM 切只读，不改文档、不另画一份。
+   一条规则把 editor-pane 的所有直接子级（两条工具条 + 所有内联面板）收起来，
+   只留纸面与预览条——比逐个面板加条件渲染稳，新面板也不会漏。 */
+.editor-pane.is-preview > :not(.doc-body):not(.doc-preview-bar):not(.doc-ctx-menu) {
+  display: none;
+}
+
+.editor-pane.is-preview .doc-outline,
+.editor-pane.is-preview .doc-comments {
+  display: none;
+}
+
+.editor-pane.is-preview .doc-page {
+  box-shadow: 0 10px 34px rgba(31, 41, 55, 0.22);
+}
+
+.doc-preview-bar {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 4px;
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--border);
+  background: var(--panel);
+}
+
+.doc-preview-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--accent);
+  white-space: nowrap;
+}
+
+.doc-preview-pages {
+  font-size: 11px;
+  color: var(--text-2);
+  white-space: nowrap;
+  margin-right: 6px;
+}
+
 .doc-comments {
   width: 268px;
   flex-shrink: 0;

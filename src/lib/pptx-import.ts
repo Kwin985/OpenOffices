@@ -261,15 +261,32 @@ function bytesToDataUri(bytes: Uint8Array, mime: string): string {
   return `data:${mime};base64,${btoa(bin)}`
 }
 
-function parseRels(text: string): Map<string, string> {
-  const map = new Map<string, string>()
+/**
+ * v0.175：一份 `.rels` 只解析一次。此前 `parseRels`（形状/图片的 r:embed 用）与
+ * `relsEntries`（背景图、备注找 notesSlide 用）各建一棵树，主流程还为同一份
+ * `slideN.xml.rels` 解压三次（形状 / 背景 / 备注各一次）。
+ * 现在入口读一次、解析一次，给出 byId / entries 两种视图，三处共用。
+ * 每枚属性仍走 `ga` 漏斗按名查问——查问次数少了，consulted 集合一枚不少。
+ */
+interface SlideRels {
+  /** rels 文件是否在场（背景图那一支原来用 relsText 判空） */
+  present: boolean
+  byId: Map<string, string>
+  entries: { id?: string; type: string; target: string }[]
+}
+
+function slideRelsOf(text: string | undefined): SlideRels {
+  const out: SlideRels = { present: !!text, byId: new Map(), entries: [] }
+  if (!text) return out
   const doc = parseXml(text)
-  for (const rel of descendantsByName(doc, 'Relationship')) {
-    const id = ga(rel, 'Id')
-    const target = ga(rel, 'Target')
-    if (id && target) map.set(id, target)
+  for (const r of descendantsByName(doc, 'Relationship')) {
+    const id = ga(r, 'Id') ?? undefined
+    const type = ga(r, 'Type') ?? ''
+    const target = ga(r, 'Target') ?? ''
+    out.entries.push({ id, type, target })
+    if (id && target) out.byId.set(id, target)
   }
-  return map
+  return out
 }
 
 function resolveRel(baseDir: string, target: string): string {
@@ -312,24 +329,15 @@ function solidFillToHex(
   return colors[clrMap[scheme] ?? scheme] ?? colors[scheme]
 }
 
-function relsEntries(text: string): { id?: string; type: string; target: string }[] {
-  const doc = parseXml(text)
-  return descendantsByName(doc, 'Relationship').map((r) => ({
-    id: ga(r, 'Id') ?? undefined,
-    type: ga(r, 'Type') ?? '',
-    target: ga(r, 'Target') ?? '',
-  }))
-}
-
 async function imageFromRid(
   zip: JSZip,
-  relsText: string,
+  rels: SlideRels,
   rid: string,
   baseDir: string,
 ): Promise<string | undefined> {
-  const rel = relsEntries(relsText).find((e) => e.id === rid)
-  if (!rel?.target) return undefined
-  const mediaPath = resolveRel(baseDir, rel.target)
+  const target = rels.byId.get(rid)
+  if (!target) return undefined
+  const mediaPath = resolveRel(baseDir, target)
   const file = zip.file(mediaPath)
   if (!file) return undefined
   const bytes = await file.async('uint8array')
@@ -341,7 +349,7 @@ async function imageFromRid(
 async function bgOf(
   root: PEl,
   zip: JSZip,
-  relsText: string | undefined,
+  rels: SlideRels,
   baseDir: string,
   colors: Record<string, string>,
   clrMap: Record<string, string>,
@@ -350,11 +358,11 @@ async function bgOf(
   const bg = cSld ? childrenByName(cSld, 'bg')[0] : undefined
   if (!bg) return {}
   const fill = firstDesc(bg, 'blipFill')
-  if (fill && relsText) {
+  if (fill && rels.present) {
     const blip = firstDesc(fill, 'blip')
     const rid = ga(blip, 'r:embed')
     if (rid) {
-      const data = await imageFromRid(zip, relsText, rid, baseDir)
+      const data = await imageFromRid(zip, rels, rid, baseDir)
       if (data) return { bgImage: data }
     }
   }
@@ -412,10 +420,12 @@ async function parseMaster(zip: JSZip): Promise<{
 
   const masterRelText = await zip.file('ppt/slideMasters/_rels/slideMaster1.xml.rels')?.async('string')
   const master: MasterStyle = {}
+  // v0.175：母版 rels 与每页 rels 走同一个解析器；母版全库只有一份，
+  // 这里多建一棵小树的代价远小于给 bgOf 再开一条「字符串 vs 索引」的分支
   const bg = await bgOf(
     root,
     zip,
-    masterRelText,
+    slideRelsOf(masterRelText),
     'ppt/slideMasters',
     colors,
     clrMap,
@@ -443,13 +453,10 @@ async function parseMaster(zip: JSZip): Promise<{
 }
 
 // notesSlideN.xml 里的备注文本（跳过页码/占位噪声）
-async function parseNotes(zip: JSZip, slideName: string): Promise<string | undefined> {
-  const relsPath = slideName.replace(/slides\/(slide\d+\.xml)$/, 'slides/_rels/$1.rels')
-  const relsFile = zip.file(relsPath)
-  if (!relsFile) return undefined
-  const rel = relsEntries(await relsFile.async('string')).find((e) =>
-    /\/notesSlide$/.test(e.type),
-  )
+async function parseNotes(zip: JSZip, rels: SlideRels): Promise<string | undefined> {
+  // v0.175：不再为备注单独解压一次同一份 .rels；入口那份索引里已有 notesSlide 关系
+  if (!rels.present) return undefined
+  const rel = rels.entries.find((e) => /\/notesSlide$/.test(e.type))
   if (!rel?.target) return undefined
   const notesPath = resolveRel('ppt/slides', rel.target)
   const notesFile = zip.file(notesPath)
@@ -633,6 +640,13 @@ async function slideToDeckSlide(
 ): Promise<Slide> {
   const text = await slideXml.async('string')
   const root = parseXml(text)
+  // v0.175：同一页的 `slideN.xml.rels` 只解压 + 解析一次。此前形状（r:embed）、
+  // 单页背景图、演讲者备注三条路各读各解析，一页三次；60 页的件就是 180 次。
+  // 这份索引随本页一路传下去，三处共用。
+  const relsText = await zip
+    .file(slideXml.name.replace(/slides\/(slide\d+\.xml)$/, 'slides/_rels/$1.rels'))
+    ?.async('string')
+  const rels = slideRelsOf(relsText)
 
   // 占位符走版式槽；无占位符身份的自由文本框进形状层（v0.107）——不再摊进正文，
   // 位置/字号/颜色原样保住，这正是外部设计版版面此前整页丢失的地方。
@@ -644,9 +658,6 @@ async function slideToDeckSlide(
   // 它是 pptx 内部的号，不进 .opd——换一次存盘号就重排了
   const shapeSpids: string[] = []
   {
-    const relsPath = slideXml.name.replace(/slides\/(slide\d+\.xml)$/, 'slides/_rels/$1.rels')
-    const relsFile = zip.file(relsPath)
-    const rels = relsFile ? parseRels(await relsFile.async('string')) : undefined
     const ordered: PEl[] = []
     const walk = (n: PEl) => {
       for (const c of n.kids) {
@@ -728,8 +739,8 @@ async function slideToDeckSlide(
         // 有损近似；版式槽的 image 只留给用户在图片页手工插入与单页背景图回退
         const blip = firstDesc(el, 'blip')
         const embed = ga(blip, 'r:embed')
-        if (!embed || !rels) continue
-        const target = rels.get(embed)
+        if (!embed) continue
+        const target = rels.byId.get(embed)
         if (!target) continue
         const mediaPath = resolveRel('ppt/slides', target)
         const mediaFile = zip.file(mediaPath)
@@ -786,12 +797,10 @@ async function slideToDeckSlide(
   let autoAdvance: number | undefined
   let advClick: boolean | undefined
   try {
-    const relsText = await zip
-      .file(slideXml.name.replace(/slides\/(slide\d+\.xml)$/, 'slides/_rels/$1.rels'))
-      ?.async('string')
-    const slideBg = await bgOf(root, zip, relsText, 'ppt/slides', env.colors, env.clrMap)
+    // v0.175：背景与备注都吃入口那份 rels 索引，不再各自解压/解析同一份 .rels
+    const slideBg = await bgOf(root, zip, rels, 'ppt/slides', env.colors, env.clrMap)
     bg = slideBg.bg
-    notes = await parseNotes(zip, slideXml.name)
+    notes = await parseNotes(zip, rels)
     ;({ transition, autoAdvance, advClick } = parseTransition(root))
     if (slideBg.bgImage && !image) {
       // 单页背景图当作整页图片还原

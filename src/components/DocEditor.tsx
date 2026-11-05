@@ -71,6 +71,8 @@ import { captureFormat, marksForSchema, paintableMarkNames, type PaintFormat } f
 // v0.174：视图缩放与内容区右键菜单。刻度/条目表住在 lib，组件只做接线。
 import { ZOOM_STEPS, clampZoom, zoomByWheel, zoomPct, zoomStep } from '../lib/view-zoom'
 import { contextItems } from '../lib/context-menu'
+// v0.175：打印预览的状态与页数口径住在 lib，两处 UI 共用一份。
+import { previewUi, estimatePages } from '../lib/print-preview'
 import { caretColumn, tableTargetPx } from '../lib/table-width'
 import { frPluginKey, activeIndexOf } from '../lib/find-replace'
 import { docTemplate } from '../lib/templates'
@@ -224,6 +226,8 @@ function DocEditor({ tab }: Props) {
   // —— v0.174 内容区右键菜单：位置是视口坐标，条目由 lib 的纯函数按选区/表格语境生成
   const [ctxMenu, setCtxMenu] = useState<{ x: number; y: number } | null>(null)
   const scrollRef = useRef<HTMLDivElement | null>(null)
+  // —— v0.175 独立打印预览：同一棵 DOM 切到只读，不另画一份文档 ——
+  const [previewOpen, setPreviewOpen] = useState(false)
   const [autoSavedAt, setAutoSavedAt] = useState<Date | null>(null)
   // 收尾那句的时钟与表格头（v0.69）、PDF 头（v0.70）共用模块那一份：两份 1500/5000 就是两把尺子。
   // 进度门这一头不挂——v0.71 实测 .docx/.odt 原地保存整趟 30~92ms、write_file 自身 6~62ms，
@@ -541,6 +545,22 @@ function DocEditor({ tab }: Props) {
       window.removeEventListener('keydown', key)
     }
   }, [ctxMenu])
+
+  // 打印预览（v0.175）：切只读 + Esc 退出。标签常驻期间 previewOpen 回 false
+  // 会自动恢复可编辑；组件卸载时 editor 实例一并销毁，不必手动复位。
+  useEffect(() => {
+    if (!editor) return
+    editor.setEditable(!previewOpen)
+  }, [editor, previewOpen])
+
+  useEffect(() => {
+    if (!previewOpen) return
+    const key = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setPreviewOpen(false)
+    }
+    window.addEventListener('keydown', key)
+    return () => window.removeEventListener('keydown', key)
+  }, [previewOpen])
 
   // —— 分批喂那一路的"读全"账（v0.87）——
   // 形状照 v0.81 那四条规矩：按**这一趟载入的身份**记而不是布尔、持有在 ref 里、失败不记账、全仓不销账。
@@ -1488,6 +1508,30 @@ function DocEditor({ tab }: Props) {
     }
   }
 
+  // 缩放控件在工具条与打印预览条两处出现，定义一份，别让两串刻度走散
+  const zoomControls = (
+    <span className="doc-zoom" title="视图缩放：只改屏幕上的纸面，打印与导出 PDF 始终按 100% 出纸；也可在正文区按 Ctrl+滚轮">
+      <button className="tb-btn" onClick={() => setZoom((z) => zoomStep(z, -1))} title="缩小一档">
+        −
+      </button>
+      <select
+        className="tb-select"
+        value={String(zoom)}
+        onChange={(e) => setZoom(clampZoom(Number(e.target.value)))}
+      >
+        {ZOOM_STEPS.map((s) => (
+          <option key={s} value={s}>{zoomPct(s)}</option>
+        ))}
+      </select>
+      <button className="tb-btn" onClick={() => setZoom((z) => zoomStep(z, 1))} title="放大一档">
+        ＋
+      </button>
+      <button className="tb-btn" onClick={() => setZoom(1)} title="回到 100%">
+        100%
+      </button>
+    </span>
+  )
+
   const paraBorders = (edges: readonly CellEdge[], value: string | null) =>
     editor.chain().focus().setParaBorders(edges, value).run()
   const cellBorders = (edges: readonly CellEdge[], value: string | null) =>
@@ -1560,7 +1604,21 @@ function DocEditor({ tab }: Props) {
   }
 
   return (
-    <div className="editor-pane">
+    <div className={`editor-pane${previewOpen ? ' is-preview' : ''}`}>
+      {previewUi(previewOpen).showPreviewBar && (
+        <div className="doc-preview-bar">
+          <span className="doc-preview-title">打印预览 · 只读</span>
+          <span className="doc-preview-pages" title="按「正文高度 ÷ 版心高度」估算；真正的分页由系统打印样式决定">
+            约 {estimatePages(docH, effPx.h, effPx.top, effPx.bottom)} 页 · 单页纸面镜像，逐页翻页未做
+          </span>
+          <span className="tb-sep" />
+          {zoomControls}
+          <span className="tb-sep" />
+          {btn('打印', () => window.print(), false, '调用系统打印：按 @media print 出纸，预览缩放不影响纸面')}
+          {btn('导出 PDF', exportPdf, false, 'WebView2 原生 PrintToPdf：按打印样式矢量输出')}
+          {btn('关闭预览', () => setPreviewOpen(false), false, 'Esc 也可退出，回到可编辑状态')}
+        </div>
+      )}
       <div className="editor-toolbar">
         {btn('保存', () => saveOdoc(false), false, 'Ctrl+S：原地写回当前文件（.docx/.odt 各按自己的格式，其余存 .odoc）')}
         {btn('另存为', () => saveOdoc(true))}
@@ -1622,6 +1680,7 @@ function DocEditor({ tab }: Props) {
         )}
         {btn('查找替换', () => setFrOpen((v) => !v), frOpen, 'Ctrl+F 打开：查找、定位、替换')}
         {btn('历史版本', () => setHistOpen((v) => !v), histOpen, '会话内快照：每 60 秒自动留存，可一键恢复')}
+        {btn('打印预览', () => setPreviewOpen((v) => !v), previewOpen, '独立打印预览：纸面转只读、可缩放、可直接打印或导出 PDF；Esc 退出。逐页翻页未做')}
         {btn('打印 / PDF', () => window.print(), false, '调用系统打印，可选择另存为 PDF')}
         {btn('导出 PDF', exportPdf, false, 'WebView2 原生 PrintToPdf：按打印样式矢量输出，含高亮底色')}
         {status && (
@@ -1636,7 +1695,7 @@ function DocEditor({ tab }: Props) {
         )}
         <span className="editor-hint">
           字数 {counts.words} · 字符 {counts.chars} · 约{' '}
-          {Math.max(1, Math.ceil(docH / Math.max(1, effPx.h - effPx.top - effPx.bottom)))} 页
+          {estimatePages(docH, effPx.h, effPx.top, effPx.bottom)} 页
         </span>
       </div>
       <div className="doc-toolbar">
@@ -1809,26 +1868,7 @@ function DocEditor({ tab }: Props) {
         {btn('协同', toggleCollabPanel, collabOpen, '实时协同：同一房间名的多个实例一起改同一份文档，改动自动合并，不用互相锁')}
         {btn('宏', () => setMacroOpen((v) => !v), macroOpen, '脚本宏：一段 JS 操作这篇文档（只跑自己写的）')}
         <span className="tb-sep" />
-        <span className="doc-zoom" title="视图缩放：只改屏幕上的纸面，打印与导出 PDF 始终按 100% 出纸；也可在正文区按 Ctrl+滚轮">
-          <button className="tb-btn" onClick={() => setZoom((z) => zoomStep(z, -1))} title="缩小一档">
-            −
-          </button>
-          <select
-            className="tb-select"
-            value={String(zoom)}
-            onChange={(e) => setZoom(clampZoom(Number(e.target.value)))}
-          >
-            {ZOOM_STEPS.map((s) => (
-              <option key={s} value={s}>{zoomPct(s)}</option>
-            ))}
-          </select>
-          <button className="tb-btn" onClick={() => setZoom((z) => zoomStep(z, 1))} title="放大一档">
-            ＋
-          </button>
-          <button className="tb-btn" onClick={() => setZoom(1)} title="回到 100%">
-            100%
-          </button>
-        </span>
+        {zoomControls}
       </div>
       {editor.isActive('bulletList') && (
         <div className="doc-toolbar doc-bullet-bar">
@@ -2945,6 +2985,8 @@ function DocEditor({ tab }: Props) {
           ref={scrollRef}
           onContextMenu={(e) => {
             e.preventDefault()
+            // 预览态只读，不弹编辑用的右键菜单（也不放行浏览器原生菜单）
+            if (previewOpen) return
             setCtxMenu({ x: e.clientX, y: e.clientY })
           }}
         >

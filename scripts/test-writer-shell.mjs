@@ -12,6 +12,7 @@ import {
   clampZoom, zoomStep, zoomByWheel, zoomPct,
 } from '../src/lib/view-zoom.ts'
 import { contextItems } from '../src/lib/context-menu.ts'
+import { previewUi, estimatePages } from '../src/lib/print-preview.ts'
 
 const ok = []
 const bad = []
@@ -95,6 +96,48 @@ const read = (rel) => fs.readFileSync(new URL(rel, import.meta.url), 'utf8')
     !notes.includes('allDesc(pict, tag)') && !notes.includes('Object.keys(VML_SHELL_ATTRS)'))
   check('索引：查表口径单一（tagOf / kids）', notes.includes('tagOf(idx,') && notes.includes('idx.pictKids') && notes.includes('idx.drawingKids'))
   check('索引：schemeClr 仍只问第一枚', notes.includes('idx.firstSchemeClr'))
+}
+
+// ───────────────────── 5. 独立打印预览（v0.175）─────────────────────
+
+{
+  eq('预览：关着时是可编辑、无预览条', previewUi(false), {
+    editable: true, showEditorBars: true, showSidebars: true, showPreviewBar: false,
+  })
+  eq('预览：开着时只读、只留预览条', previewUi(true), {
+    editable: false, showEditorBars: false, showSidebars: false, showPreviewBar: true,
+  })
+  eq('预览：空文档也是一页', estimatePages(0, 1000, 100, 100), 1)
+  eq('预览：正好一版心', estimatePages(800, 1000, 100, 100), 1)
+  eq('预览：刚超一点算两页', estimatePages(801, 1000, 100, 100), 2)
+  eq('预览：三页半算四页', estimatePages(2800, 1000, 100, 100), 4)
+  eq('预览：版心非正时兜一页', estimatePages(5000, 100, 100, 100), 1)
+  eq('预览：非有限内容兜一页', estimatePages(Number.NaN, 1000, 100, 100), 1)
+  eq('预览：负内容兜一页', estimatePages(-500, 1000, 100, 100), 1)
+
+  const src = read('../src/components/DocEditor.tsx')
+  const css = read('../src/index.css')
+  const lib = read('../src/lib/print-preview.ts')
+  check('预览：工具条与预览条都接状态函数', src.includes('previewUi(previewOpen).showPreviewBar'))
+  check('预览：切只读（setEditable）', src.includes('editor.setEditable(!previewOpen)'))
+  check('预览：Esc 退出', /if \(!previewOpen\) return[\s\S]{0,200}setPreviewOpen\(false\)/.test(src))
+  check('预览：状态栏与预览条共用 estimatePages', (src.match(/estimatePages\(/g) ?? []).length >= 2 && !src.includes('Math.ceil(docH'))
+  check('预览：只读态不弹编辑右键菜单', /onContextMenu=\{\(e\) => \{[\s\S]{0,160}if \(previewOpen\) return/.test(src))
+  check('预览：一条 CSS 收起所有工具条/面板', css.includes('.editor-pane.is-preview > :not(.doc-body)'))
+  check('预览：预览条与侧栏样式在位', css.includes('.doc-preview-bar') && css.includes('.editor-pane.is-preview .doc-outline'))
+  check('预览：诚实边界写进 lib', lib.includes('逐页翻页'))
+}
+
+// ───────────────────── 6. pptx 导入：一页一份 .rels 索引（v0.175）─────────────────────
+
+{
+  const src = read('../src/lib/pptx-import.ts')
+  check('pptx：入口只解析一次', src.includes('const rels = slideRelsOf(relsText)'))
+  check('pptx：旧的两份解析器已退场', !src.includes('parseRels(') && !src.includes('relsEntries('))
+  check('pptx：形状用 byId、备注用 entries', src.includes('rels.byId.get(embed)') && src.includes('rels.entries.find('))
+  check('pptx：背景与备注都吃同一份索引', src.includes('bgOf(root, zip, rels,') && src.includes('parseNotes(zip, rels)'))
+  check('pptx：每枚关系属性仍走 ga 漏斗', ["ga(r, 'Id')", "ga(r, 'Type')", "ga(r, 'Target')"].every((s) => src.includes(s)))
+  check('pptx：同进程 A/B 基准在库', fs.existsSync(new URL('../scripts/bench-pptx-import.mjs', import.meta.url)))
 }
 
 console.log(`通过 ${ok.length} 项` + (bad.length ? `，**失败 ${bad.length} 项**` : '，失败 0 项'))
