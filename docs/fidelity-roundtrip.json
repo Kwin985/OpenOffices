@@ -22,9 +22,9 @@
  },
  "totals": {
   "read": 619,
-  "kept": 274,
+  "kept": 288,
   "value": 17,
-  "lost": 328,
+  "lost": 314,
   "part": 0,
   "consulted": 672,
   "srcParts": 7,
@@ -102,84 +102,109 @@
    "out": []
   },
   "anchor|allowOverlap": {
-   "bucket": "lost",
+   "bucket": "kept",
    "n": 1,
    "src": [
     "1"
    ],
-   "out": []
+   "out": [
+    "0",
+    "1"
+   ]
   },
   "anchor|behindDoc": {
-   "bucket": "lost",
+   "bucket": "kept",
    "n": 1,
    "src": [
     "0"
    ],
-   "out": []
+   "out": [
+    "0"
+   ]
   },
   "anchor|distB": {
-   "bucket": "lost",
+   "bucket": "kept",
    "n": 1,
    "src": [
     "0"
    ],
-   "out": []
+   "out": [
+    "0"
+   ]
   },
   "anchor|distL": {
-   "bucket": "lost",
+   "bucket": "kept",
    "n": 1,
    "src": [
     "114300"
    ],
-   "out": []
+   "out": [
+    "0",
+    "114300"
+   ]
   },
   "anchor|distR": {
-   "bucket": "lost",
+   "bucket": "kept",
    "n": 1,
    "src": [
     "114300"
    ],
-   "out": []
+   "out": [
+    "0",
+    "114300"
+   ]
   },
   "anchor|distT": {
-   "bucket": "lost",
+   "bucket": "kept",
    "n": 1,
    "src": [
     "0"
    ],
-   "out": []
+   "out": [
+    "0"
+   ]
   },
   "anchor|layoutInCell": {
-   "bucket": "lost",
+   "bucket": "kept",
    "n": 1,
    "src": [
     "1"
    ],
-   "out": []
+   "out": [
+    "0",
+    "1"
+   ]
   },
   "anchor|locked": {
-   "bucket": "lost",
+   "bucket": "kept",
    "n": 1,
    "src": [
     "0"
    ],
-   "out": []
+   "out": [
+    "0"
+   ]
   },
   "anchor|relativeHeight": {
-   "bucket": "lost",
+   "bucket": "kept",
    "n": 1,
    "src": [
     "1"
    ],
-   "out": []
+   "out": [
+    "1",
+    "914400"
+   ]
   },
   "anchor|simplePos": {
-   "bucket": "lost",
+   "bucket": "kept",
    "n": 1,
    "src": [
     "0"
    ],
-   "out": []
+   "out": [
+    "0"
+   ]
   },
   "appearance|val": {
    "bucket": "lost",
@@ -2261,8 +2286,7 @@
     "0"
    ],
    "out": [
-    "0",
-    "114300"
+    "0"
    ]
   },
   "inline|distT": {
@@ -3665,20 +3689,25 @@
    ]
   },
   "positionH|relativeFrom": {
-   "bucket": "lost",
+   "bucket": "kept",
    "n": 1,
    "src": [
     "page"
    ],
-   "out": []
+   "out": [
+    "page"
+   ]
   },
   "positionV|relativeFrom": {
-   "bucket": "lost",
+   "bucket": "kept",
    "n": 1,
    "src": [
     "margin"
    ],
-   "out": []
+   "out": [
+    "margin",
+    "page"
+   ]
   },
   "proofErr|type": {
    "bucket": "lost",
@@ -4718,20 +4747,26 @@
    ]
   },
   "simplePos|x": {
-   "bucket": "lost",
+   "bucket": "kept",
    "n": 1,
    "src": [
     "360"
    ],
-   "out": []
+   "out": [
+    "0",
+    "360"
+   ]
   },
   "simplePos|y": {
-   "bucket": "lost",
+   "bucket": "kept",
    "n": 1,
    "src": [
     "720"
    ],
-   "out": []
+   "out": [
+    "0",
+    "720"
+   ]
   },
   "sizeRelH|relativeFrom": {
    "bucket": "lost",

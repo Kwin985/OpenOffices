@@ -44,9 +44,9 @@ docx ──读手──▶ HTML ──TipTap schema──▶ PM 模型 ──写
 | | 值 |
 |---|---:|
 | 读到的对 | 619 |
-| 保留 | **274（44.3%）** |
+| 保留 | **288（46.5%）** |
 | 值变 | 17 |
-| 掉了 | 328 |
+| 掉了 | 314 |
 | 缺件 | 0 |
 | 源包部件 | 7 |
 | 写出包部件 | 7 |
@@ -62,12 +62,12 @@ docx ──读手──▶ HTML ──TipTap schema──▶ PM 模型 ──写
 | 族 | 读到的 | 保留 | 值变 | 掉了 | 保留率 |
 |---|---:|---:|---:|---:|---:|
 | 正文属性（`w:*`） | 300 | 246 | 15 | 39 | **82.0%** |
-| 图形壳（`a:`/`v:`/`wp:`/`pic:`/`wps:`/`o:`） | 319 | 28 | 2 | 289 | **8.8%** |
+| 图形壳（`a:`/`v:`/`wp:`/`pic:`/`wps:`/`o:`） | 319 | 42 | 2 | 275 | **13.2%** |
 
 口径说明：一个对算正文，当且仅当它在源包里**只**出现在 `w:*` 元素上（沾过图形壳就算图形壳）。
 对名按 local name 归并（与保真账本同口径），所以 `fill|type` 这种两族同名的会并成一笔。
 
-### 掉了（328）
+### 掉了（314）
 
 名字一次都没写出来。这里每一行都是一条**单边通道**：读手读了，模型或写手没有它的槽。
 
@@ -94,16 +94,6 @@ docx ──读手──▶ HTML ──TipTap schema──▶ PM 模型 ──写
 | `srgbClr|val` | 2 | ff0000, 0000ff | — |
 | `alpha|val` | 1 | 50000 | — |
 | `alphaOff|val` | 1 | 200 | — |
-| `anchor|allowOverlap` | 1 | 1 | — |
-| `anchor|behindDoc` | 1 | 0 | — |
-| `anchor|distB` | 1 | 0 | — |
-| `anchor|distL` | 1 | 114300 | — |
-| `anchor|distR` | 1 | 114300 | — |
-| `anchor|distT` | 1 | 0 | — |
-| `anchor|layoutInCell` | 1 | 1 | — |
-| `anchor|locked` | 1 | 0 | — |
-| `anchor|relativeHeight` | 1 | 1 | — |
-| `anchor|simplePos` | 1 | 0 | — |
 | `appearance|val` | 1 | normal | — |
 | `attr|name` | 1 | x | — |
 | `attr|val` | 1 | y | — |
@@ -113,7 +103,17 @@ docx ──读手──▶ HTML ──TipTap schema──▶ PM 模型 ──写
 | `bodyPr|bIns` | 1 | 91440 | — |
 | `bodyPr|compatLnSpc` | 1 | 0 | — |
 | `bodyPr|forceAA` | 1 | 0 | — |
-| …共 328 条，完整清单见 `docs/fidelity-roundtrip.json` | | | |
+| `bodyPr|fromWordArt` | 1 | 0 | — |
+| `bodyPr|horzOverflow` | 1 | overflow | — |
+| `bodyPr|lIns` | 1 | 91440 | — |
+| `bodyPr|numCol` | 1 | 1 | — |
+| `bodyPr|rIns` | 1 | 91440 | — |
+| `bodyPr|rot` | 1 | 0 | — |
+| `bodyPr|rtlCol` | 1 | 0 | — |
+| `bodyPr|spcCol` | 1 | 0 | — |
+| `bodyPr|spcFirstLastPara` | 1 | 0 | — |
+| `bodyPr|tIns` | 1 | 45720 | — |
+| …共 314 条，完整清单见 `docs/fidelity-roundtrip.json` | | | |
 
 ### 值变（17）
 
@@ -145,7 +145,7 @@ docx ──读手──▶ HTML ──TipTap schema──▶ PM 模型 ──写
 
 （空）
 
-### 保留（274）
+### 保留（288）
 
 这些是真的双向。列出来是为了让「保留」也可核对，而不是一个孤零零的百分比。
 
@@ -175,7 +175,7 @@ docx ──读手──▶ HTML ──TipTap schema──▶ PM 模型 ──写
 | `between|color` | 2 | ff9900 | ff9900 |
 | `between|space` | 2 | 2 | 2 |
 | `between|sz` | 2 | 6 | 6 |
-| …共 274 条，完整清单见 `docs/fidelity-roundtrip.json` | | | |
+| …共 288 条，完整清单见 `docs/fidelity-roundtrip.json` | | | |
 
 ## 边界
 

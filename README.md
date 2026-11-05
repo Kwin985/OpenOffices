@@ -10355,6 +10355,101 @@ mammoth 兜底路径里 `anchorOf(id)` 对每个批注各跑一次全文正则�
   相同锚文本的嵌套 span 语义（保真优先，留作独立 bug）；
   `docxToCommentHtml` 的 HTML 拼接循环（同上）；本轮 A/B 仍是合成夹具。
 
+## v0.177（D36）——正面碰图形壳：浮动图整族往返，账本第一次真的动了
+
+一句立项：连续几轮把外壳补齐后，评估里最大的一块欠账一直是**图形壳往返 8.8%**。
+这一轮不按 289 对逐个打补丁，而是挑一族同源、能整族闭环的做掉；顺带清掉上一轮
+明确留下的两笔（HTML 拼接循环、相同锚文本嵌套）。
+
+### 一、`wp:anchor` 浮动图：翻 `.d.ts` 才发现包一直有槽
+
+读手 v0.149 就把六枚闸门（`allowOverlap` / `behindDoc` / `layoutInCell` / `locked` /
+`relativeHeight` / `simplePos`）与四边避让存进 `data-img` 载荷，注释却写着
+「写侧只发内嵌图（**包没有 `wp:anchor` 的槽**）」——顺延清单上的这句判断躺了很多轮。
+翻 `node_modules/docx/dist/index.d.ts` 才看见 `CoreImageOptions.floating?: IFloating`，
+而包实现的 `Anchor` 类本来就发 `<wp:anchor distT=… distB=… allowOverlap=…>`。
+**教训 11 又应验了一次：清单上的「包没有槽」是判断，不是判决书。**
+
+这一轮三段接通：
+- **读手**：`data-img` 加一枚 `anKind=anchor`（源件是浮动图才标）；
+  `relativeHeight` 从 `onOff` 改成数值读取（它是 unsignedInt 层级号，真件里常是
+  `251658240`，用 onOff 解析会整枚丢掉），并把它从 `IMG_ONOFF_KEYS` 里摘出去。
+- **写手**：`imageRunOf` 按 `anKind` 给 `ImageRun` 传 `floating`（位置基准按
+  `posH/posV` 映射包的枚举，认不出的落 `page`），包这才发 `<wp:anchor>` 而不是 `<wp:inline>`。
+- **post-pack**：`patchImgXml` 按载荷原值回填十枚属性 —— 包发出的 `simplePos` 恒 0、
+  `relativeHeight` 在 zIndex 为 0 时会退化成图片高度，都不能当源件说过的话；
+  `wp:simplePos/@x|y` 也按 `spX/spY` 回填（包硬编码 0）。
+
+`scripts/test-anchor-roundtrip.mjs` 走**完整链路**（夹具 docx → 读手 HTML → TipTap
+schema → PM → 写手 → 解包），逐枚对撞 26 项，并钉住「内嵌图没被误伤」。
+
+**账本这次真的动了，而且每一对都说得出为什么**：
+
+| | 上一轮 | 这一轮 |
+|---|---:|---:|
+| 图形壳 | 28/319 = 8.8% | **42/319 = 13.2%** |
+| 合计 | 274/619 = 44.3% | **288/619 = 46.5%** |
+| 掉了 | 328 | **314** |
+| 值变 | 17 | 17（没新增） |
+
+14 对从「掉了」转「保留」：`anchor|distT/B/L/R`、`anchor|allowOverlap/behindDoc/
+layoutInCell/locked/relativeHeight/simplePos` 十枚，`positionH|relativeFrom` /
+`positionV|relativeFrom` 两枚（floating 的位置选项顺带带出），
+`simplePos|x/y` 两枚（回填补丁）。中途曾因 `simplePos|x/y` 只出现名字、值是 0
+而变成两笔「值变」，补完 x/y 后回到 17 —— **没有把「掉了」粉饰成「值变」**。
+
+### 二、变异腿往上跳了一下，是读点漏了锚点（当场修回）
+
+第一遍把 `relativeHeight` 改成 `attrNum` 后，`--mut no-attr` 腿从 **59.4% → 59.5%**、
+探针记录对 416 → 417。原因：`attrNum` 是 `attr ?? attrL` 两条漏斗，旧的
+`onOff(attr(...))` 只走 `attr` 一条；注入掉 attr 的腿靠 attrL 多问到了这一对。
+**覆盖率往上跳不是成绩，是读点换了漏斗**（教训 1）。改回 `attr` 单漏斗 +
+`Number()` 解析后，四条腿回到 **52.5 / 59.4 / 99.0 / 96.5**、记录对 416，
+保真账 99.0% / 98.4% 与探针记录对 715 全程一字未动。
+
+### 三、性能：批注 HTML 从每枚复制整串到一次规划 + 分段构建
+
+上一轮留下的 `docxToCommentHtml` 替换循环：每枚批注都
+`outHtml.slice(0, idx) + span + outHtml.slice(...)`，是 O(批注数 × HTML) 的整串复制。
+这一轮改成「在**原始 html** 里为每枚批注认领自己那一处 → 排序 → 一次分段拼接」，
+构建成本 O(HTML)。同一锚文本的第 n 枚批注认领第 n 次出现，顺带修掉
+**旧写法两枚批注套成嵌套 span** 的 bug（单独立账：测试第 9 条从「嵌套语义不变」
+改成「两枚各自独立」，13 项全绿）。逆序批注各自从头找，不按 id 推进游标，
+免得漏掉文档里排在前面的锚点。
+
+同进程 A/B（`scripts/bench-comment-anchor.mjs`，改前副本 + 输出逐字对撞）：
+
+| 批注数 | A 改前 | B 本轮 | 降幅 | 输出逐字相同 |
+|---:|---:|---:|---:|---|
+| 50 | 4.7ms | 2.4ms | **−49.7%** | ✓ |
+| 800 | 147.2ms | 10.0ms | **−93.2%** | ✓ |
+
+端到端 800 条从上一轮的 104.5ms → **10.7ms**。
+
+### 四、门禁与账上的数
+
+| 腿 | 数 |
+|---|---|
+| tsc / build | 0 / ✓ |
+| 结构测试 | runprops **173** + 外壳 **63** + v0.173 功能 **29** + PDF 替换 **23** + 浮动图往返 **26** + 批注等价 **13** + PDF 文本编辑全通过 |
+| 保真账 | **99.0% / 98.4%**、探针记录对 715、四条变异腿全不动；`docs/fidelity.*` 与 HEAD 逐字节相同 |
+| 往返账 | 见上表；`3f202013…` / `f29e31ac…` 两次复跑逐字节相同；**只有这一本账变了**（14 对） |
+| pptx 账 | 70.1% / 74.3%、42/19 全绿，`--mut no-ga` 42 条全红后复位，与 HEAD 逐字节相同 |
+| 账本 `modules` | **65 不动**（本轮没有新增 `src/lib` 文件，只改了已有模块与 scripts） |
+
+### 五、顺延（D37）与明确不做的
+
+- 第一档剩余：**图形壳 13.2% 的下一族**（`shape` 20 / `bodyPr` 19 / `rect` 15 /
+  `fill` 14 / `line` 14 等 VML 老式形状族，模型无槽、写手写不出，仍要整族设计）；
+  Writer 标尺 / 可交互状态栏 / 逐页翻页预览；Impress 母版编辑与缩放、Calc 视图缩放；
+  **pdf-lib 按需加载**仍等 `pdf-text-edit.ts` 那条线自行入库。
+- D32–D36 原账不动：`fldChar` 三对、`outline|val`、`col|w`/`col|space`、
+  `smartTag|*` / `legacy|*`、±5 缇、`w:cols` `equalWidth`、`ind|left`、
+  `docPr|id`、`lvlJc`；`theme1.xml` 进不进普查清单仍要定口径。
+- **不做**：`positionH/V` 的 `posOffset` 与环绕档位（包只发 posOffset=0，另立一轮）；
+  把浮动图在屏上真按锚点摆放（Web 流式排版没有环绕，壳只保真不上屏）；
+  Impress 视图缩放本轮没做（顺延，不冒充已补）。
+
 ## 性能（v0.3）
 
 
