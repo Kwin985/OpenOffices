@@ -4924,19 +4924,89 @@ function plainText(el: XEl): string {
 // ---- 入口 ------------------------------------------------------------------
 
 /**
+ * v0.174：一次遍历建标签索引，喂给下面 7 个「跑正文前按名查问」的只读扫描。
+ *
+ * 此前各族各自 `allDesc(doc, tag)` 把全树摊平一遍（7 趟）；VML / Drawing 两族更狠——
+ * 「每个 pict/drawing × 每个标签 × 一次子树摊平」，图形密集的件上重复访问成百上千倍。
+ * 索引一趟递归收齐三样：全局按 local name 分组的后代、每个 pict/drawing 自己的后代
+ * （**不含容器自身**，与 `allDesc` 同义）、深度优先的第一枚 `schemeClr`。
+ *
+ * 语义等价的六条纪律（账本会验）：① #doc 壳不进索引、`w:document` 进；② 匹配仍按
+ * local name（前缀无关）；③ VML 只在 pict 子树、Drawing 只在 drawing 子树；
+ * ④ 嵌套 pict/drawing 的后代对每一层祖先都算；⑤ schemeClr 只问第一枚；
+ * ⑥ 每枚属性的按名查问一次不少——只是取元素的来源从「再摊平一次」变成「查表」。
+ * 查问顺序变了，但账本存的是集合，不是顺序。
+ */
+interface DocIndex {
+  root?: XEl
+  firstSchemeClr?: XEl
+  byTag: Map<string, XEl[]>
+  pictKids: Map<XEl, XEl[]>
+  drawingKids: Map<XEl, XEl[]>
+}
+
+function buildDocIndex(doc: XEl): DocIndex {
+  const idx: DocIndex = {
+    root: els(doc)[0],
+    byTag: new Map(),
+    pictKids: new Map(),
+    drawingKids: new Map(),
+  }
+  const openPicts: XEl[][] = []
+  const openDrawings: XEl[][] = []
+  const byTag = (name: string, el: XEl) => {
+    let list = idx.byTag.get(name)
+    if (!list) {
+      list = []
+      idx.byTag.set(name, list)
+    }
+    list.push(el)
+  }
+  const walk = (el: XEl, isShell: boolean): void => {
+    const name = isShell ? '' : local(el.name)
+    if (!isShell) {
+      byTag(name, el)
+      if (!idx.firstSchemeClr && name === 'schemeClr') idx.firstSchemeClr = el
+      // 当前元素是每一层已打开 pict/drawing 的后代；容器自身不进自己的名单
+      for (const list of openPicts) list.push(el)
+      for (const list of openDrawings) list.push(el)
+    }
+    const pk = name === 'pict' ? [] : null
+    const dk = name === 'drawing' ? [] : null
+    if (pk) {
+      idx.pictKids.set(el, pk)
+      openPicts.push(pk)
+    }
+    if (dk) {
+      idx.drawingKids.set(el, dk)
+      openDrawings.push(dk)
+    }
+    for (const c of el.children) if (typeof c !== 'string') walk(c, false)
+    if (pk) openPicts.pop()
+    if (dk) openDrawings.pop()
+  }
+  walk(doc, true)
+  return idx
+}
+
+/** 索引查表：替代各族的 `allDesc(doc, tag)`。 */
+function tagOf(idx: DocIndex, name: string): XEl[] {
+  return idx.byTag.get(name) ?? []
+}
+
+/**
  * 文档级标记（v0.150）：`w:proofErr`（Word 的拼写/语法检查标记，body 直子——块遍历
  * 不碰它）、`mc:Choice`（AlternateContent 的兼容分支，dispatch 那一族只认首选）与
  * `w:document` 根上的 `mc:Ignorable`（「这些前缀不认识的读者可以忽略」的白名单）。
  * 三枚都不改屏上排版，也都没有 PM 承载点（编辑器不存「这里有个拼写错误」），所以是
  * **只读记账**：读手按名查问过、上保真账，写侧不写。
  */
-function noteDocumentMarks(doc: XEl | undefined): void {
-  if (!doc) return
-  // parseXml 出来的是 #doc 壳，真根在它下面一层
-  const root = els(doc)[0]
+function noteDocumentMarks(idx: DocIndex): void {
+  // parseXml 出来的是 #doc 壳，真根在它下面一层（建索引时已记下）
+  const root = idx.root
   if (root) attrL(root, 'Ignorable')
-  for (const pe of allDesc(doc, 'proofErr')) attr(pe, 'w:type')
-  for (const ch of allDesc(doc, 'Choice')) attrL(ch, 'Requires')
+  for (const pe of tagOf(idx, 'proofErr')) attr(pe, 'w:type')
+  for (const ch of tagOf(idx, 'Choice')) attrL(ch, 'Requires')
 }
 
 /**
@@ -4951,29 +5021,29 @@ function noteDocumentMarks(doc: XEl | undefined): void {
  * 与 noteDocumentMarks 同款**只读记账**：屏上零兑现（Web 没有文本框与样式矩阵），
  * 写侧也写不出（包只发 pic:pic 与内嵌图，wps 那一支出不来）。跑正文前按名查问一遍。
  */
-function noteShapeMarks(doc: XEl | undefined): void {
-  if (!doc) return
+function noteShapeMarks(idx: DocIndex): void {
   // 样式矩阵四枚引用：idx 是「用主题样式矩阵第几列」。fontRef 的 idx 是字体槽位名
   // （minor/major/none），另三枚是整数——查问时不解析，原值上账
-  for (const el of allDesc(doc, 'lnRef')) attrL(el, 'idx')
-  for (const el of allDesc(doc, 'fillRef')) attrL(el, 'idx')
-  for (const el of allDesc(doc, 'effectRef')) attrL(el, 'idx')
-  for (const el of allDesc(doc, 'fontRef')) attrL(el, 'idx')
+  for (const el of tagOf(idx, 'lnRef')) attrL(el, 'idx')
+  for (const el of tagOf(idx, 'fillRef')) attrL(el, 'idx')
+  for (const el of tagOf(idx, 'effectRef')) attrL(el, 'idx')
+  for (const el of tagOf(idx, 'fontRef')) attrL(el, 'idx')
   // txBox：这一枚形状是文本框（1）还是纯形状（0）。onOff 三态
-  for (const el of allDesc(doc, 'cNvSpPr')) onOff(attrL(el, 'txBox'))
+  for (const el of tagOf(idx, 'cNvSpPr')) onOff(attrL(el, 'txBox'))
   // bodyPr 一族：CT_TextBodyProperties 的全部属性。19 枚全查问（不逐枚判存在——
   // 每一枚的查问本身就是账本要的那一次按名访问）
-  for (const el of allDesc(doc, 'bodyPr')) {
+  for (const el of tagOf(idx, 'bodyPr')) {
     for (const n of BODYPR_ATTRS) attrL(el, n)
   }
   // 样式引用里的 schemeClr：val 是主题色槽位名。图片段那枚由 readImgPayload 收
-  // （段内有 blip，短路链通），这里补 wsp 段那枚——两处都查问，同对只记一次
-  const sc = findDesc(doc, 'schemeClr')
+  // （段内有 blip，短路链通），这里补 wsp 段那枚——两处都查问，同对只记一次。
+  // v0.174：索引记的是深度优先第一枚，与 findDesc(doc, 'schemeClr') 同义
+  const sc = idx.firstSchemeClr
   if (sc) attrL(sc, 'val')
   // a:spLocks（v0.154）：形状自己的两把锁——不许改箭头、不许改顶点。与 a:picLocks
   // （图片那一把，readImgPayload 收）是同一族的两支，壳上零兑现（Web 没有"锁定编辑"），
   // 只读记账
-  for (const el of allDesc(doc, 'spLocks')) {
+  for (const el of tagOf(idx, 'spLocks')) {
     onOff(attrL(el, 'noChangeArrowheads'))
     onOff(attrL(el, 'noEditPoints'))
   }
@@ -5058,23 +5128,23 @@ const VML_SHELL_ATTRS: Record<string, readonly string[]> = {
  * 同一标签的多枚元素都扫（不取首枚了事）：真实件里一个 pict 常有好几个 v:shape /
  * v:line，各自带自己的 id/style，只认第一枚等于把其余几枚的属性当不存在。
  */
-function noteVmlShellMarks(doc: XEl | undefined): void {
-  if (!doc) return
-  for (const pict of allDesc(doc, 'pict')) {
-    for (const tag of Object.keys(VML_SHELL_ATTRS)) {
-      for (const el of allDesc(pict, tag)) {
-        for (const n of VML_SHELL_ATTRS[tag]) attrL(el, n)
-      }
+function noteVmlShellMarks(idx: DocIndex): void {
+  // v0.174：原先是「每个 pict × 25 个标签 × 一次 allDesc 子树」。现在每个 pict 的
+  // 后代只走一趟，按 local name 分派到同一张表——查问的元素与属性一枚不少。
+  for (const [, kids] of idx.pictKids) {
+    for (const el of kids) {
+      const names = VML_SHELL_ATTRS[local(el.name)]
+      if (names) for (const n of names) attrL(el, n)
     }
   }
   // 嵌入对象那一支（w:object + o:OLEObject）不在 w:pict 下（与 w:drawing 平级），
   // 单列两条：dxaOrig/dyaOrig 是原始尺寸（缇），DrawAspect/ObjectID/ShapeID 是
   // OLE 的显示方式与两个身份号（ProgID/Type 已由 embed 路径读了）
-  for (const el of allDesc(doc, 'object')) {
+  for (const el of tagOf(idx, 'object')) {
     attrL(el, 'dxaOrig')
     attrL(el, 'dyaOrig')
   }
-  for (const el of allDesc(doc, 'OLEObject')) {
+  for (const el of tagOf(idx, 'OLEObject')) {
     attrL(el, 'DrawAspect')
     attrL(el, 'ObjectID')
     attrL(el, 'ShapeID')
@@ -5095,9 +5165,8 @@ function noteVmlShellMarks(doc: XEl | undefined): void {
 // 记账这一趟与往返那一趟必须读同一组名字——两份名单迟早会走散）
 const CNF_STYLE_ATTRS = CNF_KEYS
 
-function noteCnfStyleMarks(doc: XEl | undefined): void {
-  if (!doc) return
-  for (const el of allDesc(doc, 'cnfStyle')) {
+function noteCnfStyleMarks(idx: DocIndex): void {
+  for (const el of tagOf(idx, 'cnfStyle')) {
     for (const n of CNF_STYLE_ATTRS) attrL(el, n)
   }
 }
@@ -5154,13 +5223,14 @@ const DRAWING_SHELL_ATTRS: Record<string, readonly string[]> = {
   path: ['path'],
 }
 
-function noteDrawingMarks(doc: XEl | undefined): void {
-  if (!doc) return
-  for (const drawing of allDesc(doc, 'drawing')) {
-    for (const tag of Object.keys(DRAWING_SHELL_ATTRS)) {
-      for (const el of allDesc(drawing, tag)) {
-        for (const n of DRAWING_SHELL_ATTRS[tag]) attrL(el, n)
-      }
+function noteDrawingMarks(idx: DocIndex): void {
+  // v0.174：与 VML 同款——每个 drawing 的后代一趟走完，按 local name 分派。
+  // 仍只在 w:drawing 子树内（索引的 drawingKids 就是按这个上下文收的），
+  // 不会把 VML 的 v:path / OMML 的 m:f 记成自己这一族的账
+  for (const [, kids] of idx.drawingKids) {
+    for (const el of kids) {
+      const names = DRAWING_SHELL_ATTRS[local(el.name)]
+      if (names) for (const n of names) attrL(el, n)
     }
   }
 }
@@ -5200,22 +5270,26 @@ export async function docxToHtmlFidelity(bytes: Uint8Array, depth = 0): Promise<
   f.setRels(await read('word/_rels/document.xml.rels'))
   f.setNotes(await read('word/footnotes.xml'), await read('word/endnotes.xml'))
   f.setComments(await read('word/comments.xml'), await read('word/commentsExtended.xml'))
+  // v0.174：7 个只读扫描共用一份「一次遍历」建好的标签索引（v0.173 已经把 8 次
+  // parseXml 收成 1 次，这一轮把剩下的 7 趟全树摊平也收掉）。索引只读、建在
+  // applyThemeFonts 之前，与下面 bg/section 读改动前的树同一条顺序纪律。
+  const marksIndex = buildDocIndex(doc)
   // 文档级标记（v0.150）：proofErr/Choice/Ignorable 三族不在任何读手路径上（块遍历不碰
   // proofErr、兼容分支不进分发、根属性没人读），在跑正文前先把它们按名查问一遍
-  noteDocumentMarks(doc)
+  noteDocumentMarks(marksIndex)
   // 形状壳（v0.151）：wsp 文本框的壳（样式矩阵引用/bodyPr/txBox/schemeClr）同上——
   // 段内无 blip，图片短路链够不着，跑正文前按名查问
-  noteShapeMarks(doc)
+  noteShapeMarks(marksIndex)
   // VML 壳余量（v0.153）：老式形状那一整片（roundrect/line/rect/shapetype/…）与它们的
   // 填充、描边、阴影、路径、手柄。与 noteShapeMarks 同款——段内可能没有 blip（pict 里
   // 压根没图时 bitmap() 第一步就返回 null），图片短路链够不着，跑正文前按名查问。
-  // v0.173：这一族与下面几族共用入口那一棵树，不再各 parse 一次
-  noteVmlShellMarks(doc)
+  // v0.173 共用同一棵树；v0.174 共用同一份索引，不再每标签摊平一次子树
+  noteVmlShellMarks(marksIndex)
   // 表条件格式十三枚（v0.154）：w:cnfStyle 在 tblPr 与 tcPr 里都住，整树扫一遍
-  noteCnfStyleMarks(doc)
+  noteCnfStyleMarks(marksIndex)
   // DrawingML 图形余量（v0.155）：w:drawing 里那一整片（颜色变换/线端/效果/三维/浮动档位）。
   // 与 VML 壳同款：读手没有路径，跑正文前在 w:drawing 子树里按名查问
-  noteDrawingMarks(doc)
+  noteDrawingMarks(marksIndex)
   // 文档背景（v0.155）：屏上是整篇的底色，包在正文外层给出去——底色属于画布不属段落，
   // 塞进任何一段的 style 都会在选中/复制时跟着文字走，含义就变了
   const bg = docBackgroundOf(doc, themeColors)

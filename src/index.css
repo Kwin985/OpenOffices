@@ -1775,6 +1775,61 @@ button {
   cursor: copy;
 }
 
+/* v0.174 视图缩放：一组挨紧的按钮 + 刻度下拉，别和旁边的开关混成一片 */
+.doc-zoom {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.doc-zoom .tb-select {
+  width: 72px;
+}
+
+/* v0.174 内容区右键菜单：视口定位、点外部/Esc 收起；只用主题变量，暗色自动跟 */
+.doc-ctx-menu {
+  position: fixed;
+  z-index: 80;
+  min-width: 176px;
+  padding: 4px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--panel);
+  box-shadow: 0 8px 26px rgba(31, 41, 55, 0.18);
+}
+
+.doc-ctx-item {
+  display: block;
+  width: 100%;
+  box-sizing: border-box;
+  text-align: left;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text);
+  font-size: 12px;
+  line-height: 1.5;
+  padding: 5px 10px;
+  cursor: pointer;
+}
+
+.doc-ctx-item:hover:not(:disabled) {
+  background: var(--bg);
+  color: var(--accent);
+}
+
+.doc-ctx-item:disabled {
+  color: var(--text-2);
+  opacity: 0.55;
+  cursor: default;
+}
+
+.doc-ctx-sep {
+  height: 1px;
+  margin: 4px 6px;
+  background: var(--border);
+}
+
 .doc-comments {
   width: 268px;
   flex-shrink: 0;
@@ -3032,11 +3087,13 @@ button {
   }
 
   /* 版心几何由 React 内联 style 驱动（屏幕所见），内联优先级高于本块，必须 !important 才让得开；
-     否则页面自身的 padding 会和 PrintSettings 边距叠加成双份边距 */
+     否则页面自身的 padding 会和 PrintSettings 边距叠加成双份边距。
+     v0.174：视图缩放只服务于屏幕，纸上永远 100%——内联 zoom 也要 !important 压回去 */
   .doc-page {
     position: absolute;
     left: 0;
     top: 0;
+    zoom: 1 !important;
     width: 100% !important;
     max-width: none !important;
     min-height: 0 !important;

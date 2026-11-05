@@ -68,6 +68,9 @@ import { docExtensions } from '../lib/doc-schema'
 // v0.173：文档结构图与格式刷。形状住在 lib，组件只做接线与交互。
 import { outlineOf, activeOutlinePos } from '../lib/outline'
 import { captureFormat, marksForSchema, paintableMarkNames, type PaintFormat } from '../lib/format-painter'
+// v0.174：视图缩放与内容区右键菜单。刻度/条目表住在 lib，组件只做接线。
+import { ZOOM_STEPS, clampZoom, zoomByWheel, zoomPct, zoomStep } from '../lib/view-zoom'
+import { contextItems } from '../lib/context-menu'
 import { caretColumn, tableTargetPx } from '../lib/table-width'
 import { frPluginKey, activeIndexOf } from '../lib/find-replace'
 import { docTemplate } from '../lib/templates'
@@ -216,6 +219,11 @@ function DocEditor({ tab }: Props) {
   const painterLockedRef = useRef(false)
   const painterArmedRef = useRef<{ from: number; to: number } | null>(null)
   const paintingRef = useRef(false)
+  // —— v0.174 视图缩放：只改屏上纸面，打印/导出 PDF 由 @media print 压回 100%
+  const [zoom, setZoom] = useState(1)
+  // —— v0.174 内容区右键菜单：位置是视口坐标，条目由 lib 的纯函数按选区/表格语境生成
+  const [ctxMenu, setCtxMenu] = useState<{ x: number; y: number } | null>(null)
+  const scrollRef = useRef<HTMLDivElement | null>(null)
   const [autoSavedAt, setAutoSavedAt] = useState<Date | null>(null)
   // 收尾那句的时钟与表格头（v0.69）、PDF 头（v0.70）共用模块那一份：两份 1500/5000 就是两把尺子。
   // 进度门这一头不挂——v0.71 实测 .docx/.odt 原地保存整趟 30~92ms、write_file 自身 6~62ms，
@@ -501,6 +509,38 @@ function DocEditor({ tab }: Props) {
       window.removeEventListener('keydown', onKey)
     }
   }, [editor])
+
+  // 视图缩放（v0.174）：Ctrl+滚轮按档位走。监听挂在 .doc-scroll 而不是 window，
+  // 免得别的标签/面板也跟着缩放；依赖 editor 是因为 useEditor 异步建实例，
+  // 首次渲染时 ref 还没挂上 DOM，editor 到位后会重挂一次。
+  useEffect(() => {
+    const el = scrollRef.current
+    if (!el) return
+    const onWheel = (e: WheelEvent) => {
+      if (!e.ctrlKey) return
+      e.preventDefault()
+      setZoom((z) => zoomByWheel(z, e.deltaY))
+    }
+    el.addEventListener('wheel', onWheel, { passive: false })
+    return () => el.removeEventListener('wheel', onWheel)
+  }, [editor])
+
+  // 右键菜单（v0.174）：点菜单外 / Esc 收起。菜单开着时才订阅，不常驻占事件
+  useEffect(() => {
+    if (!ctxMenu) return
+    const off = (e: PointerEvent) => {
+      if (!(e.target as HTMLElement | null)?.closest('.doc-ctx-menu')) setCtxMenu(null)
+    }
+    const key = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setCtxMenu(null)
+    }
+    window.addEventListener('pointerdown', off)
+    window.addEventListener('keydown', key)
+    return () => {
+      window.removeEventListener('pointerdown', off)
+      window.removeEventListener('keydown', key)
+    }
+  }, [ctxMenu])
 
   // —— 分批喂那一路的"读全"账（v0.87）——
   // 形状照 v0.81 那四条规矩：按**这一趟载入的身份**记而不是布尔、持有在 ref 里、失败不记账、全仓不销账。
@@ -1401,6 +1441,53 @@ function DocEditor({ tab }: Props) {
     else armPainter(false)
   }
 
+  // —— v0.174 右键菜单动作：只有这一处碰 editor；条目表在 lib 里是纯函数 ——
+  const runCtx = async (id: string) => {
+    setCtxMenu(null)
+    if (!editor) return
+    const chain = editor.chain().focus()
+    switch (id) {
+      case 'undo': chain.undo().run(); return
+      case 'redo': chain.redo().run(); return
+      case 'selectAll': chain.selectAll().run(); return
+      case 'find':
+        setFrOpen(true)
+        setTimeout(() => frInputRef.current?.focus(), 0)
+        return
+      case 'painter': painterClick(); return
+      case 'nav': setNavOpen((v) => !v); return
+      case 'pageBreak': chain.insertPageBreak().run(); return
+      case 'addRow': chain.addRowAfter().run(); return
+      case 'deleteRow': chain.deleteRow().run(); return
+      case 'cut':
+      case 'copy': {
+        const { from, to } = editor.state.selection
+        const text = editor.state.doc.textBetween(from, to, '\n')
+        try {
+          await navigator.clipboard.writeText(text)
+          if (id === 'cut') editor.chain().focus().deleteSelection().run()
+        } catch {
+          setStatus('剪贴板不可用：请用系统快捷键 Ctrl+C / Ctrl+X')
+          setTimeout(() => setStatus(''), 2400)
+        }
+        return
+      }
+      case 'paste': {
+        try {
+          const text = await navigator.clipboard.readText()
+          // 走 text 节点而不是字符串：字符串会被当 HTML 解析，粘贴内容里的 '<' 会吞字
+          editor.chain().focus().insertContent({ type: 'text', text }).run()
+        } catch {
+          setStatus('剪贴板不可用：请用系统快捷键 Ctrl+V')
+          setTimeout(() => setStatus(''), 2400)
+        }
+        return
+      }
+      default:
+        return
+    }
+  }
+
   const paraBorders = (edges: readonly CellEdge[], value: string | null) =>
     editor.chain().focus().setParaBorders(edges, value).run()
   const cellBorders = (edges: readonly CellEdge[], value: string | null) =>
@@ -1721,6 +1808,27 @@ function DocEditor({ tab }: Props) {
         {btn('拼写', toggleSpell, spellOn, '拼写检查：常见错拼、中文误用、重复字。开着会随输入重扫')}
         {btn('协同', toggleCollabPanel, collabOpen, '实时协同：同一房间名的多个实例一起改同一份文档，改动自动合并，不用互相锁')}
         {btn('宏', () => setMacroOpen((v) => !v), macroOpen, '脚本宏：一段 JS 操作这篇文档（只跑自己写的）')}
+        <span className="tb-sep" />
+        <span className="doc-zoom" title="视图缩放：只改屏幕上的纸面，打印与导出 PDF 始终按 100% 出纸；也可在正文区按 Ctrl+滚轮">
+          <button className="tb-btn" onClick={() => setZoom((z) => zoomStep(z, -1))} title="缩小一档">
+            −
+          </button>
+          <select
+            className="tb-select"
+            value={String(zoom)}
+            onChange={(e) => setZoom(clampZoom(Number(e.target.value)))}
+          >
+            {ZOOM_STEPS.map((s) => (
+              <option key={s} value={s}>{zoomPct(s)}</option>
+            ))}
+          </select>
+          <button className="tb-btn" onClick={() => setZoom((z) => zoomStep(z, 1))} title="放大一档">
+            ＋
+          </button>
+          <button className="tb-btn" onClick={() => setZoom(1)} title="回到 100%">
+            100%
+          </button>
+        </span>
       </div>
       {editor.isActive('bulletList') && (
         <div className="doc-toolbar doc-bullet-bar">
@@ -2832,7 +2940,14 @@ function DocEditor({ tab }: Props) {
             <div className="doc-outline-foot">{outline.length} 个标题 · 点击跳转</div>
           </aside>
         )}
-        <div className="doc-scroll">
+        <div
+          className="doc-scroll"
+          ref={scrollRef}
+          onContextMenu={(e) => {
+            e.preventDefault()
+            setCtxMenu({ x: e.clientX, y: e.clientY })
+          }}
+        >
           <div
             className="doc-page"
             style={{
@@ -2840,6 +2955,7 @@ function DocEditor({ tab }: Props) {
               maxWidth: 'none',
               minHeight: effPx.h,
               padding: `${effPx.top}px ${effPx.right}px ${effPx.bottom}px ${effPx.left}px`,
+              zoom,
             }}
           >
             <div className="doc-pg-lines" style={{ '--pgh': `${effPx.h}px` } as CSSProperties} />
@@ -2964,6 +3080,35 @@ function DocEditor({ tab }: Props) {
           </aside>
         )}
       </div>
+      {ctxMenu && (
+        <div
+          className="doc-ctx-menu"
+          style={{
+            left: Math.min(ctxMenu.x, Math.max(8, window.innerWidth - 200)),
+            top: Math.min(ctxMenu.y, Math.max(8, window.innerHeight - 380)),
+          }}
+        >
+          {contextItems({
+            hasSelection: !editor.state.selection.empty,
+            inTable: editor.isActive('table'),
+            navOpen,
+            painterArmed: !!painter,
+          }).map((it) =>
+            it.separator ? (
+              <div key={it.id} className="doc-ctx-sep" />
+            ) : (
+              <button
+                key={it.id}
+                className="doc-ctx-item"
+                disabled={it.disabled}
+                onClick={() => void runCtx(it.id)}
+              >
+                {it.label}
+              </button>
+            ),
+          )}
+        </div>
+      )}
     </div>
   )
 }

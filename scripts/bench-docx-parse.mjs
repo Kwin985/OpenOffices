@@ -97,3 +97,95 @@ for (const n of NS) {
   }
   console.log(`端到端   N=${String(n).padStart(5)}  ${median(times).toFixed(1)}ms（5 趟中位，blocks=${blocks}）`)
 }
+
+// ④ 图形密集夹具（v0.174）：每段一枚 w:pict（VML 形状 + 填充/描边/阴影/路径/公式）
+// 与一枚 w:drawing（DrawingML 效果/三维/艺术字）。这两族的 note* 是按
+// 「每个 pict/drawing × 每个标签 × 一次 allDesc 子树」扫的，纯文字夹具量不出来。
+function graphicXml(n) {
+  let body = ''
+  for (let i = 0; i < n; i++) {
+    body += `<w:p><w:r><w:t>图形段 ${i}</w:t>` +
+      `<w:pict><v:shape id="s${i}" style="width:100pt;height:60pt" fillcolor="#ff0000" stroked="t">` +
+      `<v:fill type="gradient" color2="#00ff00" rotate="t"/>` +
+      `<v:stroke dashstyle="dash" startarrow="block" endarrow="block"/>` +
+      `<v:shadow on="t" dir="45" dist="5pt"/>` +
+      `<v:path arrowok="t" fillok="t" connecttype="rect"/>` +
+      `<v:formulas><v:f eqn="sum 0 0 0"/></v:formulas>` +
+      `</v:shape></w:pict>` +
+      `<w:drawing><wp:inline><a:graphic><a:graphicData>` +
+      `<a:prstDash val="dash"/><a:headEnd type="triangle" w="med" len="med"/>` +
+      `<a:outerShdw blurRad="50800" dir="2700000" dist="38100" algn="ctr" rotWithShape="0"/>` +
+      `<a:glow rad="127000"/><a:reflection blurRad="6350" stA="50000" endA="300"/>` +
+      `<a:lightRig dir="t" rig="threePt"/><a:sp3d contourW="12700" extrusionH="0" prstMaterial="plastic"/>` +
+      `<a:gradFill flip="none" rotWithShape="1"/><a:sizeRelH relativeFrom="page"/>` +
+      `<a:wrapSquare wrapText="bothSides"/><a:prstTxWarp prst="textNoShape"/>` +
+      `<a:spLocks noEditPoints="1"/><a:tint val="50000"/><a:alpha val="40000"/>` +
+      `<a:custGeom><a:pathLst><a:path path="M 0 0 L 10 10"/></a:pathLst></a:custGeom>` +
+      `</a:graphicData></a:graphic></wp:inline></w:drawing>` +
+      `</w:r></w:p>`
+  }
+  return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>` +
+    `<w:document xmlns:w="${W}"><w:body>${body}<w:sectPr><w:pgSz w:w="11906" w:h="16838"/></w:sectPr></w:body></w:document>`
+}
+
+async function graphicFixture(n) {
+  const zip = new JSZip()
+  zip.file('word/document.xml', graphicXml(n))
+  zip.file('word/styles.xml', STYLES)
+  zip.file('word/theme/theme1.xml', THEME)
+  return new Uint8Array(await zip.generateAsync({ type: 'arraybuffer', compression: 'STORE' }))
+}
+
+console.log('')
+for (const n of [100, 400, 1600]) {
+  const bytes = await graphicFixture(n)
+  await docxToHtmlFidelity(bytes)
+  await docxToHtmlFidelity(bytes)
+  const times = []
+  for (let r = 0; r < ROUNDS; r++) {
+    const t = performance.now()
+    await docxToHtmlFidelity(bytes)
+    times.push(performance.now() - t)
+  }
+  console.log(`图形密集 N=${String(n).padStart(5)}  ${median(times).toFixed(1)}ms（5 趟中位，每段 pict+drawing 各一枚）`)
+}
+
+// ⑤ 同进程 A/B（v0.174）：把改前读手导出成副本后，两腿在同一进程、同一夹具上
+// 交替跑，机器负载对两边相同；顺带逐字比对 HTML，钉住「提速没换语义」。
+//   准备副本：git archive HEAD src/lib | tar -x -C tmp/bench-old
+//   注意：跑这一腿时 HEAD 必须是**改前**那一笔提交；提交完本轮代码后副本要重新导出
+//   才能继续做 A/B（否则两腿是同一份代码）。
+const oldPath = new URL('../tmp/bench-old/src/lib/docx-fidelity.ts', import.meta.url)
+if (fs.existsSync(oldPath)) {
+  const { docxToHtmlFidelity: oldRead } = await import('../tmp/bench-old/src/lib/docx-fidelity.ts')
+  console.log('')
+  console.log('同进程 A/B（A=改前读手 B=当前读手，交替顺序 + 各 10 样本取中位）')
+  for (const [label, n, make] of [
+    ['纯文字', 8000, fixture],
+    ['图形密集', 1600, graphicFixture],
+  ]) {
+    const bytes = await make(n)
+    await oldRead(bytes)
+    await docxToHtmlFidelity(bytes)
+    const a = []
+    const b = []
+    for (let r = 0; r < 5; r++) {
+      let t = performance.now()
+      await oldRead(bytes)
+      a.push(performance.now() - t)
+      t = performance.now()
+      await docxToHtmlFidelity(bytes)
+      b.push(performance.now() - t)
+      t = performance.now()
+      await docxToHtmlFidelity(bytes)
+      b.push(performance.now() - t)
+      t = performance.now()
+      await oldRead(bytes)
+      a.push(performance.now() - t)
+    }
+    const ma = median(a)
+    const mb = median(b)
+    const htmlSame = (await oldRead(bytes)).html === (await docxToHtmlFidelity(bytes)).html
+    console.log(`${label} N=${n}  A=${ma.toFixed(1)}ms  B=${mb.toFixed(1)}ms  降幅=${(((ma - mb) / ma) * 100).toFixed(1)}%  HTML逐字相同=${htmlSame}`)
+  }
+}
