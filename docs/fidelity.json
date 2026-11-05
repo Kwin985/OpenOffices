@@ -2,7 +2,7 @@
   "measured": {
     "ref": "HEAD",
     "source": "git:HEAD",
-    "modules": 63,
+    "modules": 64,
     "injections": [
       "attr",
       "attrL",

@@ -10208,6 +10208,81 @@ tar -x -C tmp/bench-old`），两腿在同一进程、同一夹具上交替顺�
   任意百分比缩放（档位制已够用，且免去下拉错位）；本轮 A/B 数字仍是合成夹具，
   不冒充真件打开耗时。
 
+## v0.175（D34）——独立打印预览 + pptx 一页一份 `.rels` 索引
+
+一句立项：接着 `docs/wps-gap-assessment.md` 第一档顺延做。Writer 的导航/格式刷/
+缩放/右键已补齐，这一轮补**独立打印预览**；性能换到演示侧，收掉 pptx 导入里
+同一份 `.rels` 被解压解析三遍的固定开销。
+
+### 一、Writer 独立打印预览（`src/lib/print-preview.ts`）
+
+状态切换式，不另画一份文档：**同一棵 DOM 切到只读**——`editor.setEditable(false)`、
+一条 CSS 规则把 `editor-pane` 的所有直接子级（两条工具条 + 全部内联面板）收起来，
+只留纸面与预览条；侧栏另按一条规则隐藏。预览条给缩放（复用 v0.174 那份
+`zoomControls`，两处不各写一遍刻度）、打印、导出 PDF、关闭，Esc 也可退出。
+页数估算从状态栏那行 `Math.ceil(docH / …)` 抽成 `estimatePages`，状态栏与预览条
+共用一份口径。预览态不弹编辑右键菜单；`window.print()` 仍走既有 `@media print`，
+`zoom:1 !important` 保证纸面不被预览缩放带偏。
+
+**诚实边界**：这是**单张纸面的只读镜像 + 缩放**，不是逐页翻页的真预览；
+分页由 Chromium 的打印样式决定，屏幕上不重排、不切页。这句写在 lib 与 tooltip 里。
+
+### 二、性能：同一页 `.rels` 从 3 次解压 + 3 次建树收成 1 份索引
+
+`slideToDeckSlide` 里三条路各读各解析同一份 `slideN.xml.rels`：
+① 形状/图片的 `r:embed`（旧 `parseRels`）；② 单页背景图
+（`relsText` → `bgOf` → `imageFromRid` → 旧 `relsEntries`）；③ 演讲者备注
+（`parseNotes` 里再读一次文件 → 旧 `relsEntries`）。后两条每调用一次都重建整棵关系树。
+
+这一轮 `slideRelsOf(text)` 在页入口解析一次，给出 `byId` / `entries` 两种视图，
+三处共用；母版 rels 也走同一个解析器（全库只有一份，不值得为它再开一条分支）。
+每枚 `Id` / `Type` / `Target` 仍走 `ga` 漏斗按名查问——**查问次数少了，集合一枚不少**。
+
+判据 `scripts/bench-pptx-import.mjs`：合成 pptx（每页带背景图、形状图、备注与
+rels），同进程 A/B（改前读手副本 `git archive 36d27e8 src/lib | tar -x -C tmp/bench-old`，
+v0.174 未改 pptx-import.ts，故那份即改前），交替顺序各 10 样本取中位：
+
+| 页数 | A（改前） | B（本轮） | 降幅 | 导入结果签名相同 |
+|---:|---:|---:|---:|---|
+| 10 | 11.5ms | 4.9ms | **−57.5%** | ✓ |
+| 120 | 68.1ms | 49.7ms | **−27.1%** | ✓ |
+
+签名比的是页数 / 标题 / 备注 / 背景图在场与否（形状 id 带 `Date.now()`，不比）。
+端到端当前读手：10 页 7.3ms、40 页 16.2ms、120 页 67.8ms（5 趟中位）。
+
+### 三、门禁与账上的数
+
+| 腿 | 数 |
+|---|---|
+| tsc / build | 0 / ✓ |
+| 结构测试 | runprops **173** + v0.173 功能 **29** + 外壳 **63**（本轮 +23）+ PDF 文本编辑全通过 |
+| docx 保真 / 往返 | **99.0% / 98.4%**、**82.0% / 8.8% / 44.3%**（掉 328、值变 17）全不动；往返账 `def87db8…`/`da817a7…` 两次复跑一致；四条变异腿 52.5 / 59.4 / 99.0 / 96.5 一字不差，mut 后干净腿复位到 `a749b93d…`/`d5aa905f…` |
+| pptx 保真 | **70.1% / 74.3%**、selftest 42 应见 / 19 不应见双向断言全绿；`--mut no-ga` 42 条全红（探针有牙），复位到 `aed59e05…`/`0d57217c…` |
+| 账本变动 | 五份账本各一行 `modules`：docx 三本 **63 → 64**（新增 `print-preview.ts`）、pptx 两本 **58 → 64**（这本账自 v0.141 后首次重跑，一次补齐累计模块数） |
+
+### 四、一处**发现但按房规没落地**的优化（留给下一轮）
+
+构建一直挂着 `INEFFECTIVE_DYNAMIC_IMPORT`：`src/lib/pdf-text-edit.ts` 静态取了
+`rgb`，而 `PdfViewer` / `pdf-pages` 都动态 `import('pdf-lib')` ⇒ 整份 pdf-lib 被焊进
+PdfViewer chunk。实测把它改成纯动态后，**PdfViewer chunk 1,196,014 → 816,820 字节
+（−31.7%）**、警告消失、主包不变，pdf-lib 独立成 382,487 字节的按需 chunk。
+
+但 **`src/lib/pdf-text-edit.ts` 是工作树里另一条线未跟踪的新文件**（302 行不是本轮写的）。
+按房规「绝不代他们提交」，本轮**已完整还原那两行改动、不入库**，只把结论与复算方法记在这里：
+等那条线自行入库后，把顶部 import 改成 `import type { PDFDocument, PDFFont } from 'pdf-lib'`、
+在 `applyTextEdits` 的 `if (!edits.length) return` 之后加 `const { rgb } = await import('pdf-lib')`，
+再 `npm run build` 看 `PdfViewer-*.js` 的大小即可。本轮 `git status` 里该文件仍是 `??`。
+
+### 五、顺延（D35）与明确不做的
+
+- 第一档剩余：**图形壳往返 8.8%** 整族设计、Writer 标尺 / 可交互状态栏 / 逐页翻页预览、
+  Impress 母版编辑与缩放、Calc 视图缩放、PDF 查找替换。
+- D32–D34 原账不动：`fldChar` 三对、`outline|val`、`col|w`/`col|space`、
+  `smartTag|*` / `legacy|*`、±5 缇、`w:cols` `equalWidth`、`ind|left`、
+  `docPr|id`、`lvlJc`；`theme1.xml` 进不进普查清单仍要定口径。
+- **不做**：预览里的逐页翻页 / 多页并排（要自己算分页，屏幕与打印会两套结果）；
+  打印预览里再开一套模态设置面板；本轮 A/B 数字仍是合成夹具，不冒充真件打开耗时。
+
 ## 性能（v0.3）
 
 

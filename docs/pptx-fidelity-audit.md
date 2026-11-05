@@ -85,3 +85,67 @@
   1. 标题/正文版式槽导出成无占位符的文本框，再导入会多出两枚自由文本形状（`Text 0`/`Text 1`）；
   2. 母版的标题/正文占位矩形（`titleRect`/`bodyRect`）导出时不写回 slideMaster，再导入读到的是
      pptxgenjs 默认母版的几何。
+
+---
+
+## v0.175（D34）——一页一份 `.rels` 索引，覆盖率一分没动
+
+这一轮**没有补任何一对属性**，改的是关系文件的读取结构。账本因此是最好的判据：
+覆盖率、consulted 集合、selftest 双向断言若有一处动了，就是索引把某条关系喂漏了。
+
+| | 上一轮 | 这一轮 |
+|---|---:|---:|
+| pptx 按对 / 按字面 | 70.1% / 74.3% | 70.1% / 74.3% |
+| selftest 应见 / 不应见 | 42 / 19 | 42 / 19（全绿） |
+| 探针记录对 | 54 | 54 |
+| `--mut no-ga` | 42 条全红 | 42 条全红 |
+
+### 一、三条路各读各解析同一份文件
+
+`slideToDeckSlide` 里同一份 `ppt/slides/_rels/slideN.xml.rels` 被读三次：
+
+1. 形状/图片的 `r:embed` → 旧 `parseRels(text)` 建一棵树，出 `Map<Id, Target>`；
+2. 单页背景图 → 主流程再 `async('string')` 一次 → `bgOf` → `imageFromRid` →
+   旧 `relsEntries(text)` 又建一棵树；
+3. 演讲者备注 → `parseNotes` 里第三次 `async('string')` → 旧 `relsEntries` 第三棵树。
+
+后两条每次调用都重新 `parseXml` 整棵关系树；60 页的件就是约 180 次「解压 + 建树」，
+其中 ③ 即使这一页根本没有备注也照跑。
+
+### 二、`slideRelsOf`：一次解析，两种视图
+
+页入口读一次文本、`slideRelsOf(text)` 解析一次，产出
+`{ present, byId: Map, entries: [{id,type,target}] }`：形状的 `r:embed` 用 `byId`，
+备注按 `Type` 找 `notesSlide` 用 `entries`，背景图仍走 `imageFromRid` 但改查 `byId`。
+`present` 保留旧代码「rels 文件不在场就跳过背景图」的判定；母版 rels 也走同一解析器
+（全库一份，不值得为它再开一条「字符串 vs 索引」的分支）。
+
+**等价纪律**：每枚 `Id` / `Type` / `Target` 仍走 `ga` 漏斗按名查问。
+旧两份解析器查的是同一组名字，新的一份也是——查问次数从 3 次降到 1 次，
+consulted **集合**一枚不少（账本存集合不存次数）。`--mut no-ga` 仍 42 条全红，
+说明漏斗没有被这个重构绕过去。
+
+### 三、性能：同进程 A/B
+
+`scripts/bench-pptx-import.mjs` 造每页带背景图、形状图、备注与 rels 的合成 pptx，
+把改前读手导出成副本（`git archive 36d27e8 src/lib | tar -x -C tmp/bench-old`；
+v0.174 未改 pptx-import.ts，故那份即改前），两腿同进程同夹具交替顺序各 10 样本取中位：
+
+| 页数 | A 改前 | B 本轮 | 降幅 | 导入结果签名相同 |
+|---:|---:|---:|---:|---|
+| 10 | 11.5ms | 4.9ms | **−57.5%** | ✓ |
+| 120 | 68.1ms | 49.7ms | **−27.1%** | ✓ |
+
+签名比页数 / 标题 / 备注 / 背景图在场与否（形状 id 带 `Date.now()`，两趟必然不同，不比）。
+页数少时降幅更大，正合「每页固定开销」的形状：省掉的是 2 次解压 + 2 次建树，
+与每页内容量无关。
+
+### 四、门禁与账本元信息
+
+tsc 0、build ✓；结构测试 173（docx runprops）+ 29（v0.173 功能）+ **63**（外壳，
+本轮 +23）+ PDF 文本编辑全通过。docx 两本账与四条变异腿全不动（本轮没碰 docx 读手）。
+
+**本账 `modules` 58 → 64**：这本账上次生成是 v0.141，此后陆续新增 lib 文件，
+本轮是首次重跑，一次补齐累计的 6 个模块；不是本轮 +6。覆盖率与逐对清单逐字未动。
+rst：`docs/pptx-fidelity.md` md5 `aed59e05…` / `.json` `0d57217c…`。
+

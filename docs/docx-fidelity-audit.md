@@ -2363,3 +2363,29 @@ tsc 0、build ✓；结构测试 runprops **173** + v0.173 功能 **29** + v0.17
 - D32/D33 原账不动：`fldChar` 三对、`outline|val`、`col|w`/`col|space`、
   `smartTag|*` / `legacy|*`、±5 缇、`w:cols` `equalWidth`、`ind|left`、
   `docPr|id`、`lvlJc`；`theme1.xml` 进不进普查清单仍要定口径。
+
+---
+
+## v0.175（D34）——docx 读手一寸未动，账本只跟了一次模块数
+
+本轮改的是 Writer 打印预览与 **pptx** 的关系文件读取（见 `docs/pptx-fidelity-audit.md`
+的 v0.175 节），docx 读手、写手、schema 一律没碰。两本账照跑作回归：
+
+| 腿 | 数 |
+|---|---|
+| 保真 | **99.0% / 98.4%**，探针记录对 715，已查问字面 23396 |
+| 往返 | 正文 246/300 = 82.0%、图形壳 28/319 = 8.8%、合计 274/619 = 44.3%；掉 328、值变 17 |
+| 四条变异腿 | 52.5 / 59.4 / 99.0 / 96.5，与上轮一字不差；mut 后干净腿复位到 `a749b93d…`/`d5aa905f…` |
+| 往返账 md5 | `def87db8…`/`da817a7…`，两次复跑逐字节相同 |
+
+**唯一变动**：三份 docx 账本各一行 `modules` **63 → 64**（新增 `src/lib/print-preview.ts`）。
+与前两轮同一条纪律：modules 数的是 `src/lib` 模块数，是元信息不是覆盖对；
+变异腿复位后仍回到同一个 md5。
+
+### 顺延清单（D35）
+
+- 差距评估第一档剩余：**图形壳 8.8%** 整族设计、Writer 标尺 / 可交互状态栏 /
+  逐页翻页预览、Impress 母版编辑与缩放、Calc 视图缩放、PDF 查找替换。
+- D32–D34 原账不动：`fldChar` 三对、`outline|val`、`col|w`/`col|space`、
+  `smartTag|*` / `legacy|*`、±5 缇、`w:cols` `equalWidth`、`ind|left`、
+  `docPr|id`、`lvlJc`；`theme1.xml` 进不进普查清单仍要定口径。
