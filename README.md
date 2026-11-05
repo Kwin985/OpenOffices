@@ -10283,6 +10283,78 @@ PdfViewer chunk。实测把它改成纯动态后，**PdfViewer chunk 1,196,014 �
 - **不做**：预览里的逐页翻页 / 多页并排（要自己算分页，屏幕与打印会两套结果）；
   打印预览里再开一套模态设置面板；本轮 A/B 数字仍是合成夹具，不冒充真件打开耗时。
 
+## v0.176（D35）——PDF 查找替换 + docx 批注锚文本单次预扫
+
+一句立项：接着 D35 顺延做。前三轮一直在 Writer 外壳与导入链上挖，这一轮换到
+**PDF 组件**补一个 WPS 高频缺口；性能换成兜底导入链上的一处 O(批注数 × 全文)。
+
+### 一、PDF 查找替换（`src/lib/pdf-replace.ts`）
+
+搜索条多一枚「替换为…」输入框与「替换 / 全部替换」两个按钮。命中在 `runSearch`
+里多带一枚 `from`（切自 `PageText.full`，保留原始大小写）；替换时
+`replacementPlan` 按「页 + 原文」给每处命中编号，`locateReplace` 在文字项几何序列里
+按编号定位覆盖区间、并集成一个盒，再排进**既有改字队列** `textEdits`——
+保存（Ctrl+S）时才由 `applyTextEdits` 写回，与手动改字同一条链路。
+
+**为什么不用 `Match.bItem` 去索引几何**：`loadPageGeom` 会丢掉 `textItemBox` 返回
+null 的项，两边下标未必一一对应；`locateReplace` 改用 **geoms 自己的 str 拼串**
+定位，自洽。底色仍从已渲染画布采样（页面没渲出来兜白），旋转档位照旧取 `/Rotate`。
+
+**诚实边界**：定位不了的一处如实跳过并报数，不假装成功；写回前页面仍显示原文，
+所以搜索结果不清空；替换走的是「盖底色 + 画新字」的内容流改字，新字明显长于原字
+时不自动缩放（与手动改字同一条限制）。大小写折叠沿用搜索的 `toLowerCase`，
+长度会变的 Unicode 折叠长尾未处理。
+
+### 二、性能：`docxToCommentHtml` 的锚文本从「逐批注扫全文」到「一次预扫」
+
+mammoth 兜底路径里 `anchorOf(id)` 对每个批注各跑一次全文正则、一次
+`docXml.slice(bodyStart)` 大串复制、一次全文 `indexOf` —— O(批注数 × 全文)。
+`commentAnchorsOf` 一趟 `matchAll` 收齐所有 `commentRangeStart/End` 并按 id 配对，
+变成 O(全文 + 各锚点片段)。**HTML 里包 span 的替换循环一字未动**，
+不碰「相同锚文本会嵌套」这类既有语义（那是另一笔账）。
+
+等价纪律四条：每个 id 只认第一对 Start/End；仍取 Start 之后第一个同 id End；
+`indexOf('</w:p>', start) < endAt` 跨段判据原样保留（含返回 -1 时 `-1 < endAt`
+为真的边界）；`joinT` 与旧路径同一份实现。`scripts/test-comment-anchor.mjs`
+把**改前算法原样复刻**一份，对九种边界逐例对撞输出 HTML（12 项全绿）。
+
+判据 `scripts/bench-comment-anchor.mjs`（合成 docx，同进程 A/B 用改前副本
+`git archive HEAD src/lib | tar -x -C tmp/bench-docx-old`，交替顺序各 10 样本）：
+
+| 批注数 | A（改前） | B（本轮） | 降幅 | 输出逐字相同 |
+|---:|---:|---:|---:|---|
+| 50 | 5.1ms | 3.6ms | **−28.1%** | ✓ |
+| 800 | 153.3ms | 102.7ms | **−33.0%** | ✓ |
+
+800 条时仍要 102.7ms，因为 HTML 替换循环还在每次整串拼接——这一层按上面说的
+语义原因留到下一轮，数字不粉饰。
+
+### 三、门禁与账上的数
+
+| 腿 | 数 |
+|---|---|
+| tsc / build | 0 / ✓（`INEFFECTIVE_DYNAMIC_IMPORT` 是 v0.175 已记录、按房规留给另一条线的既有项） |
+| 结构测试 | runprops **173** + 外壳 **63** + PDF 替换 **23** + 批注等价 **12** + PDF 文本编辑全通过 |
+| docx 保真 / 往返 | **99.0% / 98.4%**、**82.0% / 8.8% / 44.3%**（掉 328、值变 17）全不动；往返 `ed7a2737…`/`da817a7…` 两次一致；四条变异腿 52.5 / 59.4 / 99.0 / 96.5，复位 `1979f813…`/`72ff93c1…` |
+| pptx 保真 | 70.1% / 74.3%、42/19 全绿，`--mut no-ga` 42 条全红后复位 `d06e404b…`/`b7e4d706…` |
+| 账本变动 | 五份账本各一行 `modules` **64 → 65**（新增 `pdf-replace.ts`），覆盖率与逐对清单逐字未动 |
+
+房规复核：`src/lib/pdf-text-edit.ts` 仍是工作树里另一条线**未跟踪**的文件，
+本轮只 import 它现有的 `sampleBackdrop` / `applyTextEdits` / `TextEdit`，
+没有改它、没有代提交（`git status` 里仍是 `??`）。
+
+### 四、顺延（D36）与明确不做的
+
+- 第一档剩余：**图形壳往返 8.8%** 整族设计、Writer 标尺 / 可交互状态栏 /
+  逐页翻页预览、Impress 母版编辑与缩放、Calc 视图缩放；
+  **pdf-lib 按需加载**仍等 `pdf-text-edit.ts` 那条线自行入库。
+- D32–D35 原账不动：`fldChar` 三对、`outline|val`、`col|w`/`col|space`、
+  `smartTag|*` / `legacy|*`、±5 缇、`w:cols` `equalWidth`、`ind|left`、
+  `docPr|id`、`lvlJc`；`theme1.xml` 进不进普查清单仍要定口径。
+- **不做**：替换时自动缩放/重排新字（要动内容流排版，另立一轮）；
+  相同锚文本的嵌套 span 语义（保真优先，留作独立 bug）；
+  `docxToCommentHtml` 的 HTML 拼接循环（同上）；本轮 A/B 仍是合成夹具。
+
 ## 性能（v0.3）
 
 

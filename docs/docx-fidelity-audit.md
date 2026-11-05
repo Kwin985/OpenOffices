@@ -2389,3 +2389,78 @@ tsc 0、build ✓；结构测试 runprops **173** + v0.173 功能 **29** + v0.17
 - D32–D34 原账不动：`fldChar` 三对、`outline|val`、`col|w`/`col|space`、
   `smartTag|*` / `legacy|*`、±5 缇、`w:cols` `equalWidth`、`ind|left`、
   `docPr|id`、`lvlJc`；`theme1.xml` 进不进普查清单仍要定口径。
+
+---
+
+## v0.176（D35）——兜底导入的批注重锚，从逐 id 扫全文到一次预扫
+
+| | 上一轮 | 这一轮 |
+|---|---:|---:|
+| 正文属性 | 246/300 = 82.0% | 246/300 = 82.0% |
+| 图形壳 | 28/319 = 8.8% | 28/319 = 8.8% |
+| 合计 | 274/619 = 44.3% | 274/619 = 44.3% |
+| 掉了 / 值变 | 328 / 17 | 328 / 17 |
+| 保真按对 / 字面 | 99.0% / 98.4% | 99.0% / 98.4% |
+
+### 一、改的是兜底路径，不是保真读手
+
+`docxToCommentHtml` 只在 mammoth 兜底导入时走（保真导入按区间原位包 span，
+不进这个函数，也不进保真账本）。所以这一轮**账本必不可能动覆盖对**——
+它量的不是这条链。改的是它内部 `anchorOf(id)` 的形状：
+
+```
+每个批注 ×（全文正则 exec + docXml.slice(bodyStart) 大串复制 + 全文 indexOf）
+```
+
+`commentAnchorsOf(docXml, joinT)` 一趟 `matchAll` 收齐所有
+`commentRangeStart/End` 并按 id 配对，变成 O(全文 + 各锚点片段)。
+HTML 里包 span 的替换循环**一字未动**：相同锚文本会嵌套是既有语义，
+本轮不借性能优化顺手改它（要改就单独立账、单独立断言）。
+
+### 二、等价性：把改前算法复刻一份逐例对撞
+
+`scripts/test-comment-anchor.mjs` 里 `legacyAnchors` / `legacyHtml` 是改前实现的
+逐字复刻，两边不共用实现；九种形状 + 两条源码形状断言共 **12 项**：
+正常三枚、跨段、缺 End、全文无 `</w:p>`、重复 id 只认第一对、属性乱序、
+实体解码、空锚、相同锚文本的嵌套语义不变。
+
+四条等价纪律：① 每个 id 只认第一对；② 仍取 Start 之后第一个同 id End；
+③ `indexOf('</w:p>', start) < endAt` 原样保留（**含 indexOf 返回 -1 时
+`-1 < endAt` 为真的边界**，这一条最容易在重写时丢）；④ `joinT` 由调用方传入，
+与旧路径同一份实现。
+
+### 三、性能：同进程 A/B
+
+`scripts/bench-comment-anchor.mjs` 造合成 docx（1600 填充段 + C 条批注），
+改前副本 `git archive HEAD src/lib | tar -x -C tmp/bench-docx-old`，
+两腿同夹具交替顺序各 10 样本取中位，并逐字比对输出 HTML 与 comments：
+
+| 批注数 | A 改前 | B 本轮 | 降幅 | 输出逐字相同 |
+|---:|---:|---:|---:|---|
+| 50 | 5.1ms | 3.6ms | **−28.1%** | ✓ |
+| 800 | 153.3ms | 102.7ms | **−33.0%** | ✓ |
+
+800 条仍要 102.7ms：省掉的是 docXml 那一半，HTML 替换循环还在每次整串拼接，
+按上面的语义原因留到下一轮。跨进程端到端：50/200/800 条为
+3.4 / 7.4 / 104.5ms（5 趟中位），与 A/B 同量级。
+
+### 四、门禁与账本元信息
+
+tsc 0、build ✓；结构测试 runprops **173** + 外壳 **63** + PDF 替换 **23** +
+批注等价 **12** + PDF 文本编辑全通过。docx 两本账、四条变异腿
+（52.5 / 59.4 / 99.0 / 96.5）与上轮一字不差，mut 后干净腿复位到
+`1979f813…` / `72ff93c1…`，往返账 `ed7a2737…` / `da817a7…` 两次复跑一致。
+pptx 账 70.1% / 74.3% 与 42/19 双向断言全绿，`--mut no-ga` 42 条全红后复位
+`d06e404b…` / `b7e4d706…`。
+
+**五份账本唯一变动**：`modules` **64 → 65**（新增 `src/lib/pdf-replace.ts`），
+覆盖率与逐对清单逐字未动。
+
+### 顺延清单（D36）
+
+- 差距评估第一档剩余：**图形壳 8.8%** 整族设计、Writer 标尺 / 可交互状态栏 /
+  逐页翻页预览、Impress 母版编辑与缩放、Calc 视图缩放；
+  **pdf-lib 按需加载**仍等 `src/lib/pdf-text-edit.ts` 那条线自行入库。
+- D32–D35 原账不动：`fldChar` 三对、`outline|val`、`col|w`/`col|space`、
+  `smartTag|*` / `legacy|*`、±5 缇、`w:cols` `equalWidth`、`ind|left`、
+  `docPr|id`、`lvlJc`；`theme1.xml` 进不进普查清单仍要定口径。
