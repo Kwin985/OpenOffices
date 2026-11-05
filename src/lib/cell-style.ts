@@ -901,7 +901,8 @@ export const IMG_ONOFF_KEYS = [
   'anBehind',
   'anCell',
   'anLocked',
-  'anRelH',
+  // v0.177：anRelH 不是 onOff——wp:anchor/@relativeHeight 是 unsignedInt 的层级号，
+  // 用 '1'/'0' 闸门会把真件里 251658240 这样的值整枚挡掉（夹具里的 "1" 恰好兼容）
   'anSimple',
   'shFill',
   'shStroke',

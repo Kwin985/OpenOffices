@@ -44,6 +44,8 @@ import {
   type   TabStopDefinition,
   type IFrameOptions,
   type ITableFloatOptions,
+  HorizontalPositionRelativeFrom,
+  VerticalPositionRelativeFrom,
   UnderlineType,
 } from 'docx'
 import { xml2js } from 'xml-js'
@@ -855,21 +857,39 @@ export async function docxToCommentHtml(
       .map((m) => m.replace(/<[^>]+>/g, ''))
       .join('')
   const esc = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
-  // v0.176：锚文本一次扫齐，下面只查表；替换那一段的语义一字未动
   const anchors = commentAnchorsOf(docXml, joinT)
   const comments = commentRowsOf(commentsXml, extXml)
-  let outHtml = html
+  // v0.177：一次规划 + 分段构建，替掉「每枚批注把整串 outHtml 复制两遍」的
+  // O(批注数 × HTML) 循环。每枚批注在**原始 html** 里认领自己那一处：
+  // 同一锚文本的第 n 枚批注认领第 n 次出现（旧写法每次在累积串里从头找，
+  // 第二枚会命中刚插进去的 span，把两枚批注套成嵌套——这里顺手修掉，
+  // 单独立账，见 test-comment-anchor.mjs 第 9 条）。逆序批注也各自从头找，
+  // 不按 id 顺序推进游标，免得把文档里排在前面的锚点漏掉。
+  const used = new Map<string, number>()
+  const marks: { at: number; id: number; needle: string }[] = []
   for (const comment of comments) {
     const anchor = anchors.get(comment.id)
     if (!anchor) continue
     const needle = esc(anchor)
-    const idx = outHtml.indexOf(needle)
-    if (idx < 0) continue
-    outHtml =
-      outHtml.slice(0, idx) +
-      `<span data-oo-comment="${comment.id}">${needle}</span>` +
-      outHtml.slice(idx + needle.length)
+    const nth = used.get(needle) ?? 0
+    let at = -1
+    for (let k = 0; k <= nth; k++) {
+      at = html.indexOf(needle, at + 1)
+      if (at < 0) break
+    }
+    if (at < 0) continue
+    used.set(needle, nth + 1)
+    marks.push({ at, id: comment.id, needle })
   }
+  marks.sort((a, b) => a.at - b.at || a.id - b.id)
+  let outHtml = ''
+  let cursor = 0
+  for (const m of marks) {
+    if (m.at < cursor) continue // 锚文本重叠时后一枚让步，不造交叉 span
+    outHtml += html.slice(cursor, m.at) + `<span data-oo-comment="${m.id}">${m.needle}</span>`
+    cursor = m.at + m.needle.length
+  }
+  outHtml += html.slice(cursor)
   return { html: outHtml, comments }
 }
 
@@ -1121,6 +1141,11 @@ function childToRuns(child: PMNode, inherited: Inherited, cs?: CommentTrack, dt?
  * 两头对着演，谁也没碰到真实的形状。往返账第一次跑就撞上了：PM 里 5 张图，写出包 0 个
  * `w:drawing`。
  */
+/** 位置基准：载荷里存的是源件的 relativeFrom 字面，认不出的落回 page（不猜别的档） */
+function relFrom<T extends Record<string, string>>(table: T, raw: string | undefined, fallback: T[keyof T]): T[keyof T] {
+  return (Object.values(table).find((v) => v === raw) as T[keyof T] | undefined) ?? fallback
+}
+
 function imageRunOf(child: PMNode, dt?: DocTrack): TextRun | null {
   const src = (child.attrs?.src as string) ?? ''
   const bytes = src.startsWith('data:') ? dataUriToBytes(src) : null
@@ -1131,7 +1156,36 @@ function imageRunOf(child: PMNode, dt?: DocTrack): TextRun | null {
   const alt = typeof child.attrs?.alt === 'string' ? child.attrs.alt : ''
   // 容器壳（v0.148）：一枚 ImageRun 正对一个 `<w:drawing>`，登记顺序即出现序。
   // 只有真发得出位图的这一支才登记（另一支退化成 `[图片: src]` 字面，没有壳）
-  dt?.imgExtras.push(typeof child.attrs?.img === 'string' ? child.attrs.img : '')
+  const shell = typeof child.attrs?.img === 'string' ? child.attrs.img : ''
+  dt?.imgExtras.push(shell)
+  // v0.177：源件是浮动图（wp:anchor）时给 ImageRun 传 floating——包有原生槽
+  // （翻 .d.ts 的 CoreImageOptions 才发现，此前注释一直写「包没有 wp:anchor 的槽」）。
+  // 传了它包才发 <wp:anchor> 而不是 <wp:inline>；十枚 anchor 属性的**原值**
+  // 仍由 patchImgXml 按载荷回填（包发出的是默认值/退化值，不能当源件说过的话）。
+  const kv = parseImgPayload(shell)
+  const floating = kv.anKind === 'anchor'
+    ? {
+        horizontalPosition: {
+          relative: relFrom(HorizontalPositionRelativeFrom, kv.posH, HorizontalPositionRelativeFrom.PAGE),
+          offset: 0,
+        },
+        verticalPosition: {
+          relative: relFrom(VerticalPositionRelativeFrom, kv.posV, VerticalPositionRelativeFrom.PAGE),
+          offset: 0,
+        },
+        allowOverlap: kv.anOver === '1',
+        behindDocument: kv.anBehind === '1',
+        lockAnchor: kv.anLocked === '1',
+        layoutInCell: kv.anCell === '1',
+        ...(kv.anRelH !== undefined && Number.isFinite(Number(kv.anRelH)) ? { zIndex: Number(kv.anRelH) } : {}),
+        margins: {
+          top: Number(kv.distT) || 0,
+          bottom: Number(kv.distB) || 0,
+          left: Number(kv.distL) || 0,
+          right: Number(kv.distR) || 0,
+        },
+      }
+    : undefined
   return new TextRun({
     children: [
       new ImageRun({
@@ -1142,6 +1196,7 @@ function imageRunOf(child: PMNode, dt?: DocTrack): TextRun | null {
           height: Number(child.attrs?.height) || 240,
         },
         ...(alt ? { altText: { name: alt, description: alt } } : {}),
+        ...(floating ? { floating } : {}),
       }),
     ],
   })
@@ -4260,8 +4315,9 @@ function retag(chunk: string, tag: string, kv: Record<string, string>): string {
  * prstGeom / xfrm 的 off+ext 全都发出来了，只是值硬编码（dist*=0、effectExtent 四边=0、
  * locks 恒 1、cNvPr 的 name 干脆是空串）。所以这一族不像段落余量那样要插元素——
  * 按 `<w:drawing>` 出现序逐块**改值**即可。计数闸门同款：块数与登记条数对不上整笔放弃。
- * 浮动锚点四枚（simplePos / positionH / positionV）不在此列：写侧只发内嵌图，
- * 那一层壳出不来，读了也写不回（审计里记为只读一半）。
+ * v0.177：载荷带 anKind=anchor 时写手给 ImageRun 传 floating，包会发 `<wp:anchor>`；
+ * 本函数再把六枚闸门与 relativeHeight 按源件原值回填（包发出的是默认值/退化值）。
+ * positionH/V 的 posOffset 与 simplePos 的 x/y 仍不在此列，账继续记。
  */
 async function patchImgXml(bytes: Uint8Array, shells: string[]): Promise<Uint8Array> {
   if (!shells.some((x) => x)) return bytes
@@ -4292,6 +4348,31 @@ async function patchImgXml(bytes: Uint8Array, shells: string[]): Promise<Uint8Ar
     if (Object.keys(box).length) {
       chunk = retag(chunk, 'wp:inline', box)
       chunk = retag(chunk, 'wp:anchor', box)
+    }
+    // v0.177：浮动图六枚闸门 + relativeHeight。包把 simplePos 硬编码成 "0"、
+    // relativeHeight 在 zIndex 为 0 时退化成图片高度，其余四枚用布尔默认值——
+    // 都不是源件说过的话，一律按载荷原值回填（tagWithAttrs 已有则改、没有则补）
+    if (kv.anKind === 'anchor') {
+      const an: Record<string, string> = {}
+      for (const [k, n] of [
+        ['anOver', 'allowOverlap'],
+        ['anBehind', 'behindDoc'],
+        ['anCell', 'layoutInCell'],
+        ['anLocked', 'locked'],
+        ['anSimple', 'simplePos'],
+        ['anRelH', 'relativeHeight'],
+      ] as const) {
+        if (kv[k] !== undefined) an[n] = kv[k]
+      }
+      if (Object.keys(an).length) chunk = retag(chunk, 'wp:anchor', an)
+      // 包的 createSimplePos() 把 x/y 硬编码成 0，源件的绝对坐标（spX/spY）得按载荷回填；
+      // 不补的话这两对会从「掉了」变成「值变」——名字在、值不对，反而更难看
+      if (kv.spX !== undefined || kv.spY !== undefined) {
+        const sp: Record<string, string> = {}
+        if (kv.spX !== undefined) sp.x = kv.spX
+        if (kv.spY !== undefined) sp.y = kv.spY
+        chunk = retag(chunk, 'wp:simplePos', sp)
+      }
     }
     // wp:effectExtent 四边（载荷键 eeL/eeT/eeR/eeB，回写成 l/t/r/b）
     const ee: Record<string, string> = {}

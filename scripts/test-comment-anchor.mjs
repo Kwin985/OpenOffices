@@ -1,9 +1,10 @@
-// v0.176 批注锚文本预扫的等价性断言。
+// v0.176 批注锚文本预扫的等价性断言（v0.177 增补一例语义修复）。
 //
 // `commentAnchorsOf` 把「每个批注各扫一次全文」换成「一次预扫」。提速之外更要紧的是
-// 语义逐字不变：这里把**改前的 anchorOf 算法**原样复刻一份，对九种边界形状逐例对撞
-// 产品 `docxToCommentHtml` 的输出 HTML。两边不共用实现（comments 的解析共用产品那份，
-// 锚文本与包 span 的逻辑各自一份），撞得上才算等价。
+// 语义逐字不变：这里把**改前的 anchorOf / 替换循环**原样复刻一份，对八种边界形状
+// 逐例对撞产品 `docxToCommentHtml` 的输出 HTML。两边不共用实现（comments 的解析共用
+// 产品那份，锚文本与包 span 的逻辑各自一份），撞得上才算等价。
+// 第九例「相同锚文本」是 v0.177 单独立账的修复（改前的嵌套是 bug），不参与对撞。
 //
 // 跑法：npx vite-node scripts/test-comment-anchor.mjs
 
@@ -53,7 +54,7 @@ function legacyHtml(html, comments, anchors) {
   return out
 }
 
-async function run(name, body, ids, html) {
+async function run(name, body, ids, html, compareLegacy = true) {
   const docXml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>` +
     `<w:document xmlns:w="${W}"><w:body>${body}</w:body></w:document>`
   const commentsXml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>` +
@@ -66,7 +67,8 @@ async function run(name, body, ids, html) {
   const bytes = new Uint8Array(await zip.generateAsync({ type: 'arraybuffer', compression: 'STORE' }))
   const got = await docxToCommentHtml(bytes, html)
   const expected = legacyHtml(html, got.comments, legacyAnchors(docXml, got.comments.map((c) => c.id)))
-  check(name, got.html === expected, `新=${JSON.stringify(got.html.slice(0, 160))} 旧=${JSON.stringify(expected.slice(0, 160))}`)
+  // v0.177 起「相同锚文本」那一例是有意的语义修复，不参与改前算法的等价比对
+  if (compareLegacy) check(name, got.html === expected, `新=${JSON.stringify(got.html.slice(0, 160))} 旧=${JSON.stringify(expected.slice(0, 160))}`)
   return got
 }
 
@@ -115,11 +117,17 @@ await run('空锚不重锚',
   `<w:p><w:commentRangeStart w:id="0"/><w:commentRangeEnd w:id="0"/></w:p>`,
   [0], '<p>什么都不写</p>')
 
-// 9. 两枚批注锚文本相同：旧循环会嵌套，本轮**故意保留**这个既有语义
+// 9. 两枚批注锚文本相同（v0.177 单独立账的语义修复）：
+//    改前循环每次在累积串里从头找，第二枚会命中刚插进去的 span，把两枚套成嵌套；
+//    现在按「原文第 n 次出现」各认领一处。用两处原文才能看出两枚都落了位。
 {
-  const got = await run('相同锚文本的既有嵌套语义不变',
-    anchorP(0, '同字') + anchorP(1, '同字'), [0, 1], '<p>同字</p>')
-  check('相同锚文本：嵌套 span 仍在', got.html.includes('data-oo-comment="1"') && got.html.includes('data-oo-comment="0"'))
+  const got = await run('相同锚文本各占一处',
+    anchorP(0, '同字') + anchorP(1, '同字'), [0, 1],
+    '<p>同字</p><p>同字</p>', false)
+  check('相同锚文本：两枚批注都回得来', got.html.includes('data-oo-comment="0"') && got.html.includes('data-oo-comment="1"'))
+  check('相同锚文本：两枚 span 各自独立（不再嵌套）',
+    (got.html.match(/<span data-oo-comment=/g) ?? []).length === 2)
+  check('相同锚文本：没有 span 套 span', !/<span data-oo-comment="\d+"><span data-oo-comment=/.test(got.html))
 }
 
 // 10. 产品源码形状：不再逐 id 全文正则

@@ -230,11 +230,11 @@ export const FIXTURE_DOC =
   `</pic:spPr></pic:pic>` +
   `</a:graphicData></a:graphic></wp:inline></w:drawing></w:r></w:p>` +
   // v0.148：浮动图（wp:anchor）——simplePos 的绝对坐标与 positionH/V 的基准。
-  // 一个 w:drawing 里 inline 与 anchor 二选一，所以另开一段；写侧只发内嵌图，
-  // 这一层壳读了写不回（审计里的已知边界），但读手查问照样进分子
+  // 一个 w:drawing 里 inline 与 anchor 二选一，所以另开一段。
+  // v0.177 起写侧按 data-img 里的 anKind 发浮动图，这一层壳能回写了
   `<w:p><w:r><w:drawing>` +
   // v0.149：六枚闸门（allowOverlap / behindDoc / layoutInCell / locked / relativeHeight /
-  // simplePos）——写侧只发内嵌图，这一层壳读了写不回，但读手查问照样进分子
+  // simplePos）——v0.177 起由 patchImgXml 按载荷原值回填，不再是只读账
   `<wp:anchor distT="0" distB="0" distL="114300" distR="114300" simplePos="0" allowOverlap="1"` +
   ` behindDoc="0" layoutInCell="1" locked="0" relativeHeight="1">` +
   `<wp:simplePos x="360" y="720"/>` +

@@ -772,6 +772,9 @@ function readImgPayload(el: XEl): string {
   // wp:inline（内嵌）/ wp:anchor（浮动）各有四边避让；两者同名元素不同名，各查各的
   const inline = findDesc(el, 'inline')
   const anchor = findDesc(el, 'anchor')
+  // v0.177：把「这一枚 drawing 是浮动图」记进载荷。写侧据此给 ImageRun 传
+  // floating（包有原生槽），否则浮动图会被写成内嵌图，整层 anchor 属性全掉
+  if (anchor) kv.anKind = 'anchor'
   const box = inline ?? anchor
   if (box) {
     for (const k of ['distT', 'distB', 'distL', 'distR']) {
@@ -848,8 +851,8 @@ function readImgPayload(el: XEl): string {
     if (v && kv.bwMode === undefined) kv.bwMode = v
   }
   // wp:anchor 六枚闸门（v0.149）：allowOverlap / behindDoc / layoutInCell / locked /
-  // relativeHeight / simplePos。与 dist 四边同一枚元素，但只有浮动图才有——写侧只发
-  // 内嵌图（包没有 wp:anchor 的槽），这一组只读不写（与 simplePos/positionH/V 同款）
+  // relativeHeight / simplePos。v0.177 起写侧按 anKind 发浮动图，这一组由
+  // patchImgXml 按载荷原值回填，不再是只读账。
   const anchorEl = findDesc(el, 'anchor')
   if (anchorEl) {
     for (const [k, n] of [
@@ -857,12 +860,18 @@ function readImgPayload(el: XEl): string {
       ['anBehind', 'behindDoc'],
       ['anCell', 'layoutInCell'],
       ['anLocked', 'locked'],
-      ['anRelH', 'relativeHeight'],
       ['anSimple', 'simplePos'],
     ] as const) {
       const v = onOff(attr(anchorEl, n))
       if (v !== undefined) kv[k] = v ? '1' : '0'
     }
+    // relativeHeight 是层级号（unsignedInt），不是 onOff：按数值原样存，
+    // 此前用 onOff 解析会把真件里的大整数整枚丢掉。
+    // **走 attr 单漏斗**：attrNum 是 attr ?? attrL 两条路，换过去会让 no-attr
+    // 变异腿靠 attrL 多问到这一对、覆盖率往上跳（59.4→59.5），腿一动就是读点变了。
+    const relRaw = attr(anchorEl, 'relativeHeight')
+    const relH = relRaw === undefined ? undefined : Number(relRaw)
+    if (relH !== undefined && Number.isFinite(relH)) kv.anRelH = String(relH)
   }
   // wp:inline 的两个流水号（v0.150）：anchorId 与 editId。Word 给内嵌图也发（锚点序号与
   // 编辑会话号），与 dist 四边同一枚元素——只读不写（包不认这两个槽）
