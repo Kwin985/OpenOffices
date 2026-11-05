@@ -3557,6 +3557,24 @@ button {
   white-space: nowrap;
 }
 
+/* v0.176 查找替换：与搜索条同一行，窄窗时整组换行而不是挤掉命中计数 */
+.pdf-search {
+  flex-wrap: wrap;
+}
+
+.pdf-replace {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding-left: 6px;
+  margin-left: 2px;
+  border-left: 1px solid var(--border);
+}
+
+.pdf-replace-input {
+  width: 128px;
+}
+
 /* v0.27 侧栏：缩略图 + 大纲，与主滚动区并排 */
 .pdf-body {
   flex: 1;

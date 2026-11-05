@@ -798,6 +798,42 @@ export function commentRowsOf(commentsXml: string, extXml: string): DocComment[]
   return out
 }
 
+/**
+ * v0.176：一次扫完 `document.xml`，收齐每个批注的锚文本。
+ *
+ * 此前 `anchorOf(id)` 对每个批注各跑一次全文正则、一次 `docXml.slice(bodyStart)`
+ * 大串复制、一次全文 `indexOf` —— O(批注数 × 全文)。这里一趟 `matchAll` 收齐
+ * 所有 Start/End，再按 id 配对，是 O(全文 + 各锚点片段)。
+ *
+ * 等价纪律（结构测试逐例对撞旧算法）：① 每个 id 只认第一对 Start/End；
+ * ② 仍取「Start 之后第一个同 id End」；③ `indexOf('</w:p>', start) < endAt`
+ * 这条跨段判据原样保留（含 indexOf 返回 -1 时 -1 < endAt 为真的边界）；
+ * ④ joinT 由调用方传入，与旧路径同一份实现。
+ */
+function commentAnchorsOf(docXml: string, joinT: (xml: string) => string): Map<number, string> {
+  const out = new Map<number, string>()
+  const opens = new Map<number, number>()
+  const seen = new Set<number>()
+  const re = /<w:commentRange(Start|End)[^>]*w:id="(\d+)"[^>]*>/g
+  for (const m of docXml.matchAll(re)) {
+    const id = Number(m[2])
+    if (seen.has(id)) continue
+    const at = m.index ?? 0
+    if (m[1] === 'Start') {
+      if (!opens.has(id)) opens.set(id, at + m[0].length)
+      continue
+    }
+    const bodyStart = opens.get(id)
+    if (bodyStart === undefined) continue
+    opens.delete(id)
+    seen.add(id)
+    if (docXml.indexOf('</w:p>', bodyStart) < at) continue
+    const text = decodeEnt(joinT(docXml.slice(bodyStart, at)))
+    if (text) out.set(id, text)
+  }
+  return out
+}
+
 // mammoth 会丢弃批注：兜底路径直读 word/comments.xml 取内容/作者，document.xml 里 commentRangeStart/End
 // 取锚文本，在 HTML 中把锚文本包成 <span data-oo-comment>，由 Comment mark 还原。
 // （保真导入路径按区间原位包 span，不走这里，只用 commentRowsOf）
@@ -819,24 +855,12 @@ export async function docxToCommentHtml(
       .map((m) => m.replace(/<[^>]+>/g, ''))
       .join('')
   const esc = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
-  // 锚文本限定在单段落内；跨段批注不重锚（侧栏仍显示，标记为未定位）
-  const anchorOf = (id: number): string | undefined => {
-    const startRe = new RegExp(`<w:commentRangeStart[^>]*w:id="${id}"[^>]*>`)
-    const sm = startRe.exec(docXml)
-    if (!sm) return undefined
-    const bodyStart = sm.index + sm[0].length
-    const endRe = new RegExp(`<w:commentRangeEnd[^>]*w:id="${id}"[^>]*>`)
-    const em = endRe.exec(docXml.slice(bodyStart))
-    if (!em) return undefined
-    const endIdx = bodyStart + em.index
-    if (docXml.indexOf('</w:p>', bodyStart) < endIdx) return undefined
-    const text = decodeEnt(joinT(docXml.slice(bodyStart, endIdx)))
-    return text || undefined
-  }
+  // v0.176：锚文本一次扫齐，下面只查表；替换那一段的语义一字未动
+  const anchors = commentAnchorsOf(docXml, joinT)
   const comments = commentRowsOf(commentsXml, extXml)
   let outHtml = html
   for (const comment of comments) {
-    const anchor = anchorOf(comment.id)
+    const anchor = anchors.get(comment.id)
     if (!anchor) continue
     const needle = esc(anchor)
     const idx = outHtml.indexOf(needle)

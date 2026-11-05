@@ -14,6 +14,8 @@ import { failRaw, failStatus, statusText, statusTip } from '../lib/fail-msg'
 import { exportPdfWithOverlay } from '../lib/pdfprint'
 import { PWD_MEMORY_NOTE, pwdCancelledText, pwdPromptText, pwdReason, type PwdReason } from '../lib/pdf-password'
 import { findCountText, shouldPublish, type FindStatus } from '../lib/pdf-search'
+// v0.176 查找替换：规划与定位是纯函数，这里只做几何/底色适配与入队
+import { replacementPlan, locateReplace } from '../lib/pdf-replace'
 import { PDF_OBJECTS_PER_TICK } from '../lib/pdf-ticks'
 import {
   fromDisplayPoints,
@@ -180,6 +182,8 @@ interface Match {
   bOff: number
   eItem: number
   eOff: number
+  /** v0.176：命中处的原文（保留原始大小写），替换时按它在文字项几何里定位 */
+  from: string
 }
 
 interface PageSlot {
@@ -205,6 +209,8 @@ function PdfViewer({ tab }: Props) {
   const [curPage, setCurPage] = useState(1)
   const [searchOpen, setSearchOpen] = useState(false)
   const [query, setQuery] = useState('')
+  // v0.176：替换文字。只在按下「替换 / 全部替换」时读，不触发重搜
+  const [replaceText, setReplaceText] = useState('')
   const [matches, setMatches] = useState<Match[]>([])
   const [activeIdx, setActiveIdx] = useState(-1)
   // 搜索这一趟走到哪儿了：扫完之前界面只报"扫到第几页"，绝不报"无匹配"
@@ -1077,7 +1083,11 @@ function PdfViewer({ tab }: Props) {
       while (pos !== -1) {
         const b = locate(t, pos)
         const e = locate(t, pos + q.length - 1)
-        found.push({ page: n, bItem: b.item, bOff: b.off, eItem: e.item, eOff: e.off + q.length })
+        // 大小写折叠用 JS toLowerCase；命中原文按同样的长度切出来供替换定位
+        found.push({
+          page: n, bItem: b.item, bOff: b.off, eItem: e.item, eOff: e.off + q.length,
+          from: t.full.slice(pos, pos + q.length),
+        })
         sinceHits++
         if (found.length >= SEARCH_MAX_HITS) {
           capped = true
@@ -1107,6 +1117,65 @@ function PdfViewer({ tab }: Props) {
     }
     // 命中一直等到扫完才出现（或中途只发过没命中的进度）时，这一趟的最后一次定位仍要说得出
     if (!focused) focusFirst()
+  }
+
+  /**
+   * v0.176 查找替换：把命中转成 TextEdit 排进**既有改字队列**，保存时才真正写回。
+   * 定位不了的一处如实跳过并报数，不假装成功；写回前页面仍显示原文，
+   * 所以搜索结果保留、不擅自清空。
+   */
+  const replaceMatches = async (all: boolean) => {
+    const d = docRef.current
+    const to = replaceText.trim()
+    if (!d || !query.trim() || !to || !matches.length) return
+    const picked = matches[activeIdx >= 0 ? activeIdx : 0]
+    const targets = all ? matches : picked ? [picked] : []
+    if (!targets.length) return
+    const plan = replacementPlan(targets.map((m) => ({ page: m.page, from: m.from })), to)
+    const byPage = new Map<number, typeof plan>()
+    for (const item of plan) {
+      const list = byPage.get(item.page) ?? []
+      list.push(item)
+      byPage.set(item.page, list)
+    }
+    const edits: TextEdit[] = []
+    let skipped = 0
+    for (const [n, list] of byPage) {
+      let geoms: TextItemGeom[]
+      try {
+        geoms = await loadPageGeom(d, n)
+      } catch {
+        skipped += list.length
+        continue
+      }
+      const canvas = pageEl(n)?.querySelector('canvas') ?? null
+      let rot = normRot(0)
+      try {
+        rot = normRot((await d.getPage(n)).rotate ?? 0)
+      } catch {
+        /* 读不到 /Rotate 就按 0 度 */
+      }
+      for (const item of list) {
+        const g = locateReplace(geoms, item.from, item.occurrence)
+        if (!g) {
+          skipped++
+          continue
+        }
+        // 底色从已渲染的画布采样；页面还没渲出来时兜白，不阻塞替换
+        const bg = canvas
+          ? sampleBackdrop(canvas, window.devicePixelRatio || 1, scaleRef.current, g.box)
+          : '#ffffff'
+        edits.push({
+          page: n, x: g.x, y: g.y, size: g.size, rect: g.box, rot,
+          text: item.to, bg, from: item.from,
+        })
+      }
+    }
+    if (edits.length) setTextEdits((prev) => [...prev, ...edits])
+    setStatus(
+      `已排队 ${edits.length} 处替换${skipped ? `，${skipped} 处定位失败跳过` : ''}；` +
+        '保存（Ctrl+S）时写回，写回前页面仍显示原文',
+    )
   }
 
   const gotoMatch = (delta: number) => {
@@ -2441,6 +2510,23 @@ function PdfViewer({ tab }: Props) {
             </span>
             {btn('▲', () => gotoMatch(-1), !matches.length, '上一个匹配 (Shift+Enter)')}
             {btn('▼', () => gotoMatch(1), !matches.length, '下一个匹配 (Enter)')}
+            <span className="pdf-replace">
+              <input
+                className="tb-input pdf-replace-input"
+                type="text"
+                placeholder="替换为…"
+                value={replaceText}
+                onChange={(e) => setReplaceText(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') {
+                    e.preventDefault()
+                    void replaceMatches(false)
+                  }
+                }}
+              />
+              {btn('替换', () => void replaceMatches(false), !matches.length || !replaceText.trim(), '把当前命中排进改字队列，保存时写回')}
+              {btn('全部替换', () => void replaceMatches(true), !matches.length || !replaceText.trim(), '把全部命中排进改字队列，保存时写回')}
+            </span>
             {btn('✕', () => {
               setSearchOpen(false)
               setQuery('')
