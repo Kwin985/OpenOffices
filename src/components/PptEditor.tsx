@@ -54,6 +54,7 @@ import { saveDoneTimer } from '../lib/save-status'
 import { autoDelayMs, autoFailStatus, autoOkTip, createAutoSaveLedger, onFocusBack, staleFailureClaim } from '../lib/auto-save'
 import type { FailureClaim } from '../lib/auto-save'
 import { pptTemplate } from '../lib/templates'
+import { ZOOM_STEPS, clampZoom, stageZoomStyle, zoomByWheel, zoomPct, zoomStep } from '../lib/view-zoom'
 import StaticSlide from './StaticSlide'
 
 interface Props {
@@ -217,6 +218,9 @@ function PptEditor({ tab }: Props) {
   const revealedRef = useRef(1)
   const [showNotes, setShowNotes] = useState(false)
   const [showSequence, setShowSequence] = useState(false) // v0.115：播放顺序面板
+  // v0.178 视图缩放：与 Writer 同一串档位。只改屏幕上那张舞台，导出/放映读的都是 deck
+  const [zoom, setZoom] = useState(1)
+  const stageWrapRef = useRef<HTMLDivElement>(null)
   const [status, setStatus] = useState<string>(tab.path ? '正在加载…' : '')
   const [loaded, setLoaded] = useState(!tab.path)
   const [autoSavedAt, setAutoSavedAt] = useState<Date | null>(null)
@@ -325,6 +329,21 @@ function PptEditor({ tab }: Props) {
     setRevealed(1)
     setPresentIdx((i) => Math.max(i - 1, 0))
   }
+
+  // 视图缩放（v0.178）：Ctrl+滚轮按档位走，监听挂在舞台的滚动容器而非 window
+  // （放映态覆盖层压在它上面，滚轮不会漏进去）。形状拖动仍按舞台自身的
+  // getBoundingClientRect 折算分数——CSS zoom 会等比缩放这个矩形，比例不受影响
+  useEffect(() => {
+    const el = stageWrapRef.current
+    if (!el) return
+    const onWheel = (e: WheelEvent) => {
+      if (!e.ctrlKey) return
+      e.preventDefault()
+      setZoom((z) => zoomByWheel(z, e.deltaY))
+    }
+    el.addEventListener('wheel', onWheel, { passive: false })
+    return () => el.removeEventListener('wheel', onWheel)
+  }, [loaded])
 
   // 放映按键
   useEffect(() => {
@@ -752,14 +771,19 @@ function PptEditor({ tab }: Props) {
   const m = deck.master
   const fgColor = m?.bodyColor ?? t.fg
   const accentColor = m?.titleColor ?? t.accent
-  const stageStyle: CSSProperties = m?.bgImage
-    ? {
-        backgroundImage: `url(${m.bgImage})`,
-        backgroundSize: 'cover',
-        backgroundPosition: 'center',
-        color: fgColor,
-      }
-    : { background: slide.bg ?? m?.bg ?? t.bg, color: fgColor }
+  const stageStyle: CSSProperties = {
+    ...(m?.bgImage
+      ? {
+          backgroundImage: `url(${m.bgImage})`,
+          backgroundSize: 'cover',
+          backgroundPosition: 'center',
+          color: fgColor,
+        }
+      : { background: slide.bg ?? m?.bg ?? t.bg, color: fgColor }),
+    // v0.178：屏幕缩放只落在这张 DOM 上。deckToPptxBytes 与离屏 .ppt-print-page
+    // 都不读它，放映用的是另一棵 StaticSlide，所以导出/放映天然 100%
+    ...stageZoomStyle(zoom),
+  }
 
   // 播放顺序那一列（v0.115）：正文逐条与带动画的形状各一票，次序在这一份数组里
   const seqItems = slide ? revealOrder(slide) : []
@@ -968,6 +992,22 @@ function PptEditor({ tab }: Props) {
         >
           放映
         </button>
+        <span className="tool-sep" />
+        {/* v0.178：七档刻度，与 Writer 的视图缩放同一份定义；只改屏幕，打印/导出/放映按 100% */}
+        <span className="ppt-zoom" title="视图缩放：只改屏幕上的舞台，导出 pptx/PDF 与放映始终按 100%；也可在舞台区按 Ctrl+滚轮">
+          <button className="tool-btn" onClick={() => setZoom((z) => zoomStep(z, -1))} title="缩小一档">−</button>
+          <select
+            className="tool-select"
+            value={String(zoom)}
+            onChange={(e) => setZoom(clampZoom(Number(e.target.value)))}
+          >
+            {ZOOM_STEPS.map((s) => (
+              <option key={s} value={s}>{zoomPct(s)}</option>
+            ))}
+          </select>
+          <button className="tool-btn" onClick={() => setZoom((z) => zoomStep(z, 1))} title="放大一档">＋</button>
+          <button className="tool-btn" onClick={() => setZoom(1)} title="回到 100%">100%</button>
+        </span>
         {status && (
           <span className="editor-status" title={statusTip(status)}>
             {statusText(status)}
@@ -1029,7 +1069,7 @@ function PptEditor({ tab }: Props) {
           ))}
         </div>
 
-        <div className="ppt-stage-wrap">
+        <div className="ppt-stage-wrap" ref={stageWrapRef}>
           <div
             ref={stageRef}
             className="ppt-stage"

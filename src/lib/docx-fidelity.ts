@@ -840,6 +840,22 @@ function readImgPayload(el: XEl): string {
       const v = attrNum(src, n)
       if (v !== undefined) kv[k] = String(v)
     }
+    // v0.178：变换三枚（rot 六万分之一度、flipH/flipV 翻转）。屏上那一半由
+    // imgTransformCss 折成 CSS transform 读过了，这里只是把**同一份原值**存进载荷
+    // 供写手回写——走 attrL 单漏斗，与屏上那一处相同：不能改走 attrNum（两条漏斗
+    // 会让 no-attr 变异腿多问到这一对，覆盖率往上跳）。
+    for (const [k, n] of [['xfRot', 'rot'], ['xfFlipH', 'flipH'], ['xfFlipV', 'flipV']] as const) {
+      const v = attrL(xfrm, n)
+      if (v !== undefined && v.trim() && kv[k] === undefined) kv[k] = v
+    }
+  }
+  // v0.178：浮动图的文字环绕档位（wp:wrapSquare/@wrapText）。包只会发
+  // <wp:wrapNone/>，写手按这枚载荷把那一枚整片换成 wrapSquare，元素名与值同时回来。
+  // 与 noteDrawingMarks 的查问同走 attrL，不新开漏斗
+  const wrapSq = findDesc(el, 'wrapSquare')
+  if (wrapSq) {
+    const v = attrL(wrapSq, 'wrapText')
+    if (v !== undefined && v.trim()) kv.wrapText = v
   }
   // a:picLocks 的箭头锁（v0.149）：与纵横比锁同一枚元素，包两个属性都发，都能写回
   const arrow = onOff(attr(findDesc(el, 'picLocks'), 'noChangeArrowheads'))

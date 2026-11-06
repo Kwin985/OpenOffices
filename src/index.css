@@ -2205,6 +2205,26 @@ button {
   padding: 26px;
 }
 
+/* v0.178：舞台缩放控件与 Writer 的 .doc-zoom 同一套档位，用 Impress 自己的按钮皮肤 */
+.ppt-zoom {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  flex-shrink: 0;
+}
+
+.ppt-zoom .tool-select {
+  width: 72px;
+}
+
+/* 屏幕缩放不上纸/不进导出：Impress 的 PDF 走离屏 .ppt-print-page（本就不读 zoom），
+   这条是给直接 window.print() 的兜底——内联 zoom 优先级高，必须 !important 压回去 */
+@media print {
+  .ppt-stage {
+    zoom: 1 !important;
+  }
+}
+
 .ppt-stage {
   width: min(100%, 900px);
   aspect-ratio: 16 / 9;

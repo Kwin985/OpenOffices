@@ -2804,6 +2804,39 @@ function blocksOf(
   return out
 }
 
+/**
+ * post-pack 会话（v0.178）：一次解包、共享 zip、一次打包。
+ *
+ * 此前十余个补丁各自 `loadAsync(bytes)` → 改一枚部件 → `generateAsync()` 重压整包，
+ * 写一份带图文档要解包/压包十余遍（实测占端到端 20.5%）。现在主链建一枚会话，
+ * 所有补丁在同一 zip 实例上读写：写回后下一枚补丁读到的是刚改过的文本
+ * （JSZip 的 file(name, data) 会替换条目，等价于原来「打包→解包」那一趟），
+ * 末尾只 generate 一次。补丁仍保留 `sess` 缺省的独立路径，供 A/B 对照腿与调用方直用。
+ */
+async function loadZipOf(bytes: Uint8Array) {
+  const { default: JSZip } = await import('jszip')
+  return JSZip.loadAsync(bytes)
+}
+
+interface PackSession {
+  zip: Awaited<ReturnType<typeof loadZipOf>>
+  touched: boolean
+}
+
+/** 补丁落地：有会话就只标脏（末尾统一打包），没有会话就照旧各自重压 */
+async function finishPatch(
+  bytes: Uint8Array,
+  zip: PackSession['zip'],
+  sess?: PackSession,
+): Promise<Uint8Array> {
+  if (sess) {
+    sess.touched = true
+    return bytes
+  }
+  const buf = (await zip.generateAsync({ type: 'arraybuffer' })) as ArrayBuffer
+  return new Uint8Array(buf)
+}
+
 export async function prosemirrorToDocxBytes(json: PMNode, meta?: DocMeta): Promise<Uint8Array> {
   const dt = newDocTrack()
   // 编号注册表（v0.142）：blocksOf 一路往里传，收齐全篇的自定义档位后进 Document.numbering。
@@ -3032,16 +3065,20 @@ export async function prosemirrorToDocxBytes(json: PMNode, meta?: DocMeta): Prom
   const latent = meta?.latentStyles
   // 编号定义账（v0.150）：按 w:abstractNum 出现序贴回 numbering.xml
   const numDefs = meta?.numbering?.defs ?? []
+  // v0.178：整条 post-pack 链共用一枚解包会话，末尾只 generate 一次。
+  // 各补丁仍取「上一步的 bytes」作参数，但有会话时那个值只是占位——真正的数据在
+  // sess.zip 里，串行顺序与原来「打包→解包」的链逐字同义
+  const sess: PackSession = { zip: await loadZipOf(out), touched: false }
   // 段落属性余量（v0.147）：按出现序贴回各自的 <w:pPr>，与上面两笔同一路数
-  const withPara = await patchParaProps(out, dt.pprExtras)
+  const withPara = await patchParaProps(out, dt.pprExtras, sess)
   // 下划线主题三枚（v0.159）：按 <w:u> 出现序补属性——包只有 {type,color} 两枚槽
-  const withU = await patchElemAttrs(withPara, 'u', dt.uThemes)
+  const withU = await patchElemAttrs(withPara, 'u', dt.uThemes, sess)
   // 文字色主题三枚（v0.160）：按 <w:color> 出现序补——包只写 w:val 一枚
-  const withColor = await patchElemAttrs(withU, 'color', dt.colorThemes)
+  const withColor = await patchElemAttrs(withU, 'color', dt.colorThemes, sess)
   // 被包吞掉的全大写（v0.161）：按 <w:smallCaps> 出现序在它前面插 <w:caps/>
-  const withCaps = await patchBeforeElem(withColor, 'smallCaps', dt.capsExtras)
+  const withCaps = await patchBeforeElem(withColor, 'smallCaps', dt.capsExtras, sess)
   // 图片容器壳（v0.148）：按 <w:drawing> 出现序逐块改值（包发得出壳，只是值硬编码）
-  const withImg = await patchImgXml(withCaps, dt.imgExtras)
+  const withImg = await patchImgXml(withCaps, dt.imgExtras, sess)
   // 表闸门三样都要补：样式推出来的（looks）与表自己带的（dt.tblLooks），
   // v0.152 起再加表级条件格式尺寸两枚（dt.tblPrs，与 tblLook 同住 tblPr）
   const needTbl =
@@ -3052,32 +3089,38 @@ export async function prosemirrorToDocxBytes(json: PMNode, meta?: DocMeta): Prom
     dt.cnfStyles.some((x) => x) ||
     dt.tblBorders.some((x) => x)
   // 单元格不换行（v0.152）：包里没有 noWrap 的槽，按 <w:tc> 出现序插 <w:noWrap/>
-  const withCell = dt.cellExtras.some((x) => x) ? await patchTcPr(withImg, dt.cellExtras) : withImg
+  const withCell = dt.cellExtras.some((x) => x) ? await patchTcPr(withImg, dt.cellExtras, sess) : withImg
   // 底纹的存盘原件（v0.164）：按 <w:shd> 出现序**合并**属性（包只发 val/color/fill 三枚，
   // 且 fill 写的是解析后的屏上色——源件的字面色与主题三枚都要改回来/补上去）
-  const withShd = await patchShdAttrs(withCell, dt.shdExtras)
+  const withShd = await patchShdAttrs(withCell, dt.shdExtras, sess)
   // 边框的存盘原件（v0.165）：按块合并属性（pBdr 与 tcBorders 两族，块级标签各自对位）
   const withBdr = await patchBorderBlocks(
-    await patchBorderBlocks(withShd, 'w:pBdr', dt.paraBdrs),
+    await patchBorderBlocks(withShd, 'w:pBdr', dt.paraBdrs, sess),
     'w:tcBorders',
     dt.cellBdrs,
+    sess,
   )
   // 字符边框的主题三枚（v0.166）：<w:bdr> 在 document.xml 里只长在 run 的 rPr 上，
   // 没有同名歧义——所以这一族回到最简单的元素级追加（patchElemAttrs）
-  const withRunBdr = await patchElemAttrs(withBdr, 'bdr', dt.bdrExtras)
+  const withRunBdr = await patchElemAttrs(withBdr, 'bdr', dt.bdrExtras, sess)
   // 表行余量（v0.172）：按 <w:tr> 出现序贴 gridAfter/wAfter
-  const withRow = await patchTrPr(withRunBdr, dt.rowPrs)
+  const withRow = await patchTrPr(withRunBdr, dt.rowPrs, sess)
   const withStyles = props.size || latent
-    ? await patchStylesXml(withRow, latent, props)
+    ? await patchStylesXml(withRow, latent, props, sess)
     : withRow
-  const withNum = numDefs.length ? await patchNumberingXml(withStyles, numDefs) : withStyles
+  const withNum = numDefs.length ? await patchNumberingXml(withStyles, numDefs, sess) : withStyles
   const packed = needTbl
-    ? await patchTblLook(withNum, looks, dt.tblLooks, dt.tblPrs, dt.cellSps, dt.cnfStyles, dt.tblBorders)
+    ? await patchTblLook(withNum, looks, dt.tblLooks, dt.tblPrs, dt.cellSps, dt.cnfStyles, dt.tblBorders, sess)
     : withNum
   // 包对 w:pgNumType 是「无条件 push」（SectionProperties 里那行没有 if）——没话说时也发
   // 一枚空元素。源件没写过就不该凭空多这一枚（账本看不见，Word 的文件结构看得见）
-  const withPgNum = pg.pageNum ? packed : await dropEmptyPgNum(packed)
-  return attachThemePart(withPgNum, meta?.themeXml)
+  const withPgNum = pg.pageNum ? packed : await dropEmptyPgNum(packed, sess)
+  await attachThemePart(withPgNum, meta?.themeXml, sess)
+  // v0.178：链上所有改动都落在 sess.zip 里；没改动就原样放回 Packer 的字节，
+  // 有改动才 generate 一次。两腿逐部件字符串必须完全一致（scripts/bench-docx-pack.mjs）
+  if (!sess.touched) return out
+  const buf = (await sess.zip.generateAsync({ type: 'arraybuffer' })) as ArrayBuffer
+  return new Uint8Array(buf)
 }
 
 /**
@@ -3109,9 +3152,9 @@ async function patchStylesXml(
   bytes: Uint8Array,
   latent: DocxLatentStyles | undefined,
   props: Map<string, StyleExtraProps>,
+  sess?: PackSession,
 ): Promise<Uint8Array> {
-  const { default: JSZip } = await import('jszip')
-  const zip = await JSZip.loadAsync(bytes)
+  const zip = sess ? sess.zip : await loadZipOf(bytes)
   const file = zip.file('word/styles.xml')
   if (!file) return bytes
   let xml = await file.async('string')
@@ -3170,8 +3213,7 @@ async function patchStylesXml(
   }
   if (!touched) return bytes
   zip.file('word/styles.xml', xml)
-  const buf = (await zip.generateAsync({ type: 'arraybuffer' })) as ArrayBuffer
-  return new Uint8Array(buf)
+  return finishPatch(bytes, zip, sess)
 }
 
 /** `DocxLatentStyles` → `<w:latentStyles>` 整块 XML（含全部 lsdException）；没话说的件给空容器 */
@@ -3280,9 +3322,8 @@ function setTagAttrKeepPrefix(tag: string, name: string, value: string): string 
  * 插入位次都按 schema 序：三枚身份属性排在 name/styleLink/numStyleLink/lvl 之前
  * （nsid → multiLevelType → tmpl）；suff 排在 lvlText 之前。乱序写会被 Word 判损坏件。
  */
-async function patchNumberingXml(bytes: Uint8Array, defs: DocxAbstractNumMeta[]): Promise<Uint8Array> {
-  const { default: JSZip } = await import('jszip')
-  const zip = await JSZip.loadAsync(bytes)
+async function patchNumberingXml(bytes: Uint8Array, defs: DocxAbstractNumMeta[], sess?: PackSession): Promise<Uint8Array> {
+  const zip = sess ? sess.zip : await loadZipOf(bytes)
   const file = zip.file('word/numbering.xml')
   if (!file) return bytes
   const xml = await file.async('string')
@@ -3323,8 +3364,7 @@ async function patchNumberingXml(bytes: Uint8Array, defs: DocxAbstractNumMeta[])
   out += xml.slice(cursor)
   if (!touched) return bytes
   zip.file('word/numbering.xml', out)
-  const buf = (await zip.generateAsync({ type: 'arraybuffer' })) as ArrayBuffer
-  return new Uint8Array(buf)
+  return finishPatch(bytes, zip, sess)
 }
 
 /** 一枚 `<w:abstractNum>` 块 → 层序列：按 ilvl 序的 `ilvl:numFmt|lvlText` */
@@ -3559,10 +3599,9 @@ function pprExtraXml(node: PMNode | undefined): string {
  * 只能按序；序会不会错由**计数闸门**兜底：document.xml 里 `<w:p>` 的枚数与走查时
  * 登记的条目数对不上就整笔放弃（宁可不补，也绝不补到别的段落上）。
  */
-async function patchParaProps(bytes: Uint8Array, extras: string[]): Promise<Uint8Array> {
+async function patchParaProps(bytes: Uint8Array, extras: string[], sess?: PackSession): Promise<Uint8Array> {
   if (!extras.some((x) => x)) return bytes
-  const { default: JSZip } = await import('jszip')
-  const zip = await JSZip.loadAsync(bytes)
+  const zip = sess ? sess.zip : await loadZipOf(bytes)
   const file = zip.file('word/document.xml')
   if (!file) return bytes
   const xml = await file.async('string')
@@ -3591,8 +3630,7 @@ async function patchParaProps(bytes: Uint8Array, extras: string[]): Promise<Uint
   if (!touched) return bytes
   out += xml.slice(cursor)
   zip.file('word/document.xml', out)
-  const buf = (await zip.generateAsync({ type: 'arraybuffer' })) as ArrayBuffer
-  return new Uint8Array(buf)
+  return finishPatch(bytes, zip, sess)
 }
 
 /**
@@ -3615,10 +3653,9 @@ async function patchParaProps(bytes: Uint8Array, extras: string[]): Promise<Uint
  * 而 run 级补丁位管的就是正文里那一枚。脚注/批注的正文在我们的写手里走简单文本
  * （不带 charExtra），不会登记进这一族，所以计数是对得上的
  */
-async function patchElemAttrs(bytes: Uint8Array, tag: string, extras: string[]): Promise<Uint8Array> {
+async function patchElemAttrs(bytes: Uint8Array, tag: string, extras: string[], sess?: PackSession): Promise<Uint8Array> {
   if (!extras.some((x) => x)) return bytes
-  const { default: JSZip } = await import('jszip')
-  const zip = await JSZip.loadAsync(bytes)
+  const zip = sess ? sess.zip : await loadZipOf(bytes)
   const file = zip.file('word/document.xml')
   if (!file) return bytes
   const xml = await file.async('string')
@@ -3647,8 +3684,7 @@ async function patchElemAttrs(bytes: Uint8Array, tag: string, extras: string[]):
   if (!touched) return bytes
   out += xml.slice(cursor)
   zip.file('word/document.xml', out)
-  const buf = (await zip.generateAsync({ type: 'arraybuffer' })) as ArrayBuffer
-  return new Uint8Array(buf)
+  return finishPatch(bytes, zip, sess)
 }
 
 /**
@@ -3662,10 +3698,9 @@ async function patchElemAttrs(bytes: Uint8Array, tag: string, extras: string[]):
  * 插在前面而不是后面，是因为 CT_RPrBase 这类 sequence 有次位要求：`<w:caps>` 排在
  * `<w:smallCaps>` 之前，反了就是 Word 认不得的 rPr。
  */
-async function patchBeforeElem(bytes: Uint8Array, anchor: string, extras: string[]): Promise<Uint8Array> {
+async function patchBeforeElem(bytes: Uint8Array, anchor: string, extras: string[], sess?: PackSession): Promise<Uint8Array> {
   if (!extras.some((x) => x)) return bytes
-  const { default: JSZip } = await import('jszip')
-  const zip = await JSZip.loadAsync(bytes)
+  const zip = sess ? sess.zip : await loadZipOf(bytes)
   const file = zip.file('word/document.xml')
   if (!file) return bytes
   const xml = await file.async('string')
@@ -3685,8 +3720,7 @@ async function patchBeforeElem(bytes: Uint8Array, anchor: string, extras: string
   if (!touched) return bytes
   out += xml.slice(cursor)
   zip.file('word/document.xml', out)
-  const buf = (await zip.generateAsync({ type: 'arraybuffer' })) as ArrayBuffer
-  return new Uint8Array(buf)
+  return finishPatch(bytes, zip, sess)
 }
 
 /**
@@ -3720,10 +3754,9 @@ function mergeTagAttrs(tag: string, add: string): string {
  * `w:shd` 在 CT_PPrBase 与 CT_TcPrBase 里都是单枚元素，所以「合并」而不是「再插一枚」
  * 是硬要求（v0.160 的 `<w:ind>` 同一条纪律）。计数闸门同前：条数对不上就整笔放弃。
  */
-async function patchShdAttrs(bytes: Uint8Array, extras: string[]): Promise<Uint8Array> {
+async function patchShdAttrs(bytes: Uint8Array, extras: string[], sess?: PackSession): Promise<Uint8Array> {
   if (!extras.some((x) => x)) return bytes
-  const { default: JSZip } = await import('jszip')
-  const zip = await JSZip.loadAsync(bytes)
+  const zip = sess ? sess.zip : await loadZipOf(bytes)
   const file = zip.file('word/document.xml')
   if (!file) return bytes
   const xml = await file.async('string')
@@ -3751,8 +3784,7 @@ async function patchShdAttrs(bytes: Uint8Array, extras: string[]): Promise<Uint8
   if (!touched) return bytes
   out += xml.slice(cursor)
   zip.file('word/document.xml', out)
-  const buf = (await zip.generateAsync({ type: 'arraybuffer' })) as ArrayBuffer
-  return new Uint8Array(buf)
+  return finishPatch(bytes, zip, sess)
 }
 
 /**
@@ -3768,10 +3800,9 @@ async function patchShdAttrs(bytes: Uint8Array, extras: string[]): Promise<Uint8
  * extras[i] 的形状：`edge|<属性串>` 用 `;` 连，属性串即 `w:color="…" w:themeColor="…"`。
  * 包会自己发 `w:color`（写的是解析后的屏上色），所以这一族同样是**改名不追加**。
  */
-async function patchBorderBlocks(bytes: Uint8Array, tag: 'w:pBdr' | 'w:tcBorders', extras: string[]): Promise<Uint8Array> {
+async function patchBorderBlocks(bytes: Uint8Array, tag: 'w:pBdr' | 'w:tcBorders', extras: string[], sess?: PackSession): Promise<Uint8Array> {
   if (!extras.some((x) => x)) return bytes
-  const { default: JSZip } = await import('jszip')
-  const zip = await JSZip.loadAsync(bytes)
+  const zip = sess ? sess.zip : await loadZipOf(bytes)
   const file = zip.file('word/document.xml')
   if (!file) return bytes
   const xml = await file.async('string')
@@ -3826,8 +3857,7 @@ async function patchBorderBlocks(bytes: Uint8Array, tag: 'w:pBdr' | 'w:tcBorders
   if (!touched) return bytes
   out += xml.slice(cursor)
   zip.file('word/document.xml', out)
-  const buf = (await zip.generateAsync({ type: 'arraybuffer' })) as ArrayBuffer
-  return new Uint8Array(buf)
+  return finishPatch(bytes, zip, sess)
 }
 
 /**
@@ -3837,17 +3867,15 @@ async function patchBorderBlocks(bytes: Uint8Array, tag: 'w:pBdr' | 'w:tcBorders
  * 没给 pageNumbers 时照样落一个空元素。Word 读它等于「全是默认」，渲染没差别，但那是
  * 源件没说过的一句话——我们的口径是「没写就别发」。只在有属性时才留。
  */
-async function dropEmptyPgNum(bytes: Uint8Array): Promise<Uint8Array> {
-  const { default: JSZip } = await import('jszip')
-  const zip = await JSZip.loadAsync(bytes)
+async function dropEmptyPgNum(bytes: Uint8Array, sess?: PackSession): Promise<Uint8Array> {
+  const zip = sess ? sess.zip : await loadZipOf(bytes)
   const file = zip.file('word/document.xml')
   if (!file) return bytes
   const xml = await file.async('string')
   const out = xml.replace(/<w:pgNumType(?:\s*\/>|>\s*<\/w:pgNumType>)/g, '')
   if (out === xml) return bytes
   zip.file('word/document.xml', out)
-  const buf = (await zip.generateAsync({ type: 'arraybuffer' })) as ArrayBuffer
-  return new Uint8Array(buf)
+  return finishPatch(bytes, zip, sess)
 }
 
 /**
@@ -3862,10 +3890,9 @@ async function dropEmptyPgNum(bytes: Uint8Array): Promise<Uint8Array> {
  * 三件事缺一不可：部件本体、`document.xml.rels` 里的关系、`[Content_Types].xml`
  * 里的 Override。少任一件 Word 都会报包损坏。
  */
-async function attachThemePart(bytes: Uint8Array, themeXml?: string): Promise<Uint8Array> {
+async function attachThemePart(bytes: Uint8Array, themeXml?: string, sess?: PackSession): Promise<Uint8Array> {
   if (!themeXml) return bytes
-  const { default: JSZip } = await import('jszip')
-  const zip = await JSZip.loadAsync(bytes)
+  const zip = sess ? sess.zip : await loadZipOf(bytes)
   const THEME = 'word/theme/theme1.xml'
   if (await zip.file(THEME)?.async('string') === themeXml) return bytes
   zip.file(THEME, themeXml)
@@ -3894,8 +3921,7 @@ async function attachThemePart(bytes: Uint8Array, themeXml?: string): Promise<Ui
         : rels.replace(/<Relationships([^>]*)\/>/, `<Relationships$1>${rel}</Relationships>`),
     )
   }
-  const buf = (await zip.generateAsync({ type: 'arraybuffer' })) as ArrayBuffer
-  return new Uint8Array(buf)
+  return finishPatch(bytes, zip, sess)
 }
 
 /** 一段 `<w:p>…</w:p>` → 补过 `<w:pPr>` 的那一段（没有 pPr 就现开一枚） */
@@ -4088,9 +4114,9 @@ async function patchTblLook(
   spacing: string[] = [],
   cnf: string[] = [],
   borders: string[] = [],
+  sess?: PackSession,
 ): Promise<Uint8Array> {
-  const { default: JSZip } = await import('jszip')
-  const zip = await JSZip.loadAsync(bytes)
+  const zip = sess ? sess.zip : await loadZipOf(bytes)
   const file = zip.file('word/document.xml')
   if (!file) return bytes
   const xml = await file.async('string')
@@ -4142,8 +4168,7 @@ async function patchTblLook(
   })
   if (!touched) return bytes
   zip.file('word/document.xml', patched)
-  const buf = (await zip.generateAsync({ type: 'arraybuffer' })) as ArrayBuffer
-  return new Uint8Array(buf)
+  return finishPatch(bytes, zip, sess)
 }
 
 /**
@@ -4178,10 +4203,9 @@ function insertTblPrKids(all: string, frag: string, after?: string[]): string {
  * 这些之后元素之前；没有就现开一枚 `<w:trPr>`（它必须是 `<w:tr>` 的第一个孩子）。
  * 计数闸门同前：`<w:tr>` 枚数对不上就整笔放弃（嵌套表的行也在里面，两边都按文档序数）。
  */
-async function patchTrPr(bytes: Uint8Array, extras: string[]): Promise<Uint8Array> {
+async function patchTrPr(bytes: Uint8Array, extras: string[], sess?: PackSession): Promise<Uint8Array> {
   if (!extras.some((x) => x)) return bytes
-  const { default: JSZip } = await import('jszip')
-  const zip = await JSZip.loadAsync(bytes)
+  const zip = sess ? sess.zip : await loadZipOf(bytes)
   const file = zip.file('word/document.xml')
   if (!file) return bytes
   const xml = await file.async('string')
@@ -4226,14 +4250,12 @@ async function patchTrPr(bytes: Uint8Array, extras: string[]): Promise<Uint8Arra
   if (!touched) return bytes
   out += xml.slice(cursor)
   zip.file('word/document.xml', out)
-  const buf = (await zip.generateAsync({ type: 'arraybuffer' })) as ArrayBuffer
-  return new Uint8Array(buf)
+  return finishPatch(bytes, zip, sess)
 }
 
-async function patchTcPr(bytes: Uint8Array, extras: string[]): Promise<Uint8Array> {
+async function patchTcPr(bytes: Uint8Array, extras: string[], sess?: PackSession): Promise<Uint8Array> {
   if (!extras.some((x) => x)) return bytes
-  const { default: JSZip } = await import('jszip')
-  const zip = await JSZip.loadAsync(bytes)
+  const zip = sess ? sess.zip : await loadZipOf(bytes)
   const file = zip.file('word/document.xml')
   if (!file) return bytes
   const xml = await file.async('string')
@@ -4261,8 +4283,7 @@ async function patchTcPr(bytes: Uint8Array, extras: string[]): Promise<Uint8Arra
   if (!touched) return bytes
   out += xml.slice(cursor)
   zip.file('word/document.xml', out)
-  const buf = (await zip.generateAsync({ type: 'arraybuffer' })) as ArrayBuffer
-  return new Uint8Array(buf)
+  return finishPatch(bytes, zip, sess)
 }
 
 /** CT_TcPrBase 里排在 noWrap 之后的元素（锚点表）——按 schema 序插 */
@@ -4311,6 +4332,15 @@ function retag(chunk: string, tag: string, kv: Record<string, string>): string {
 }
 
 /**
+ * 环绕档位整片换（v0.178）：包恒发 `<wp:wrapNone/>`，源件说的是四周环绕。
+ * 元素名与 wrapText 都是源件说过的话，不能只改名或只追加——直接换整片，
+ * 位置（effectExtent 之后、docPr 之前）保持不动，符合 CT_Anchor 的 schema 序。
+ */
+function retagWrap(chunk: string, wrapText: string): string {
+  return chunk.replace(/<wp:wrapNone\s*\/>/, `<wp:wrapSquare wrapText="${wrapText}"/>`)
+}
+
+/**
  * 图片容器壳（v0.148）：包把 wp:inline / effectExtent / docPr / cNvPr / 两枚 locks /
  * prstGeom / xfrm 的 off+ext 全都发出来了，只是值硬编码（dist*=0、effectExtent 四边=0、
  * locks 恒 1、cNvPr 的 name 干脆是空串）。所以这一族不像段落余量那样要插元素——
@@ -4319,10 +4349,9 @@ function retag(chunk: string, tag: string, kv: Record<string, string>): string {
  * 本函数再把六枚闸门与 relativeHeight 按源件原值回填（包发出的是默认值/退化值）。
  * positionH/V 的 posOffset 与 simplePos 的 x/y 仍不在此列，账继续记。
  */
-async function patchImgXml(bytes: Uint8Array, shells: string[]): Promise<Uint8Array> {
+async function patchImgXml(bytes: Uint8Array, shells: string[], sess?: PackSession): Promise<Uint8Array> {
   if (!shells.some((x) => x)) return bytes
-  const { default: JSZip } = await import('jszip')
-  const zip = await JSZip.loadAsync(bytes)
+  const zip = sess ? sess.zip : await loadZipOf(bytes)
   const file = zip.file('word/document.xml')
   if (!file) return bytes
   const xml = await file.async('string')
@@ -4373,7 +4402,29 @@ async function patchImgXml(bytes: Uint8Array, shells: string[]): Promise<Uint8Ar
         if (kv.spY !== undefined) sp.y = kv.spY
         chunk = retag(chunk, 'wp:simplePos', sp)
       }
+      // v0.178：环绕档位。包恒发 <wp:wrapNone/>，源件说的是四周环绕时整片换掉。
+      // 只在浮动图这一支做——内嵌图（wp:inline）本来就没有环绕元素，别凭空插一枚
+      if (kv.wrapText !== undefined) chunk = retagWrap(chunk, kv.wrapText)
     }
+    // v0.178：wp:inline 的两个流水号（anchorId/editId）。v0.150 的注释写「包不认
+    // 这两个槽」——包确实不发，但壳本身发得出，tagWithAttrs 追加即可，不必造元素
+    const boxId: Record<string, string> = {}
+    if (kv.anId !== undefined) boxId.anchorId = kv.anId
+    if (kv.anEdit !== undefined) boxId.editId = kv.anEdit
+    if (Object.keys(boxId).length) chunk = retag(chunk, 'wp:inline', boxId)
+    // v0.178：a:srcRect 源裁剪框四边。包发 <a:srcRect/> 这枚空壳（屏上由
+    // clip-path 兑现），此前只记不写——纯属性回填，零插元素、零 schema 风险
+    const sr: Record<string, string> = {}
+    for (const [k, n] of [['srT', 't'], ['srR', 'r'], ['srB', 'b'], ['srL', 'l']] as const) {
+      if (kv[k] !== undefined) sr[n] = kv[k]
+    }
+    if (Object.keys(sr).length) chunk = retag(chunk, 'a:srcRect', sr)
+    // v0.178：a:xfrm 的变换三枚（与 off/ext 同一枚元素，分开补各补各的）
+    const xf: Record<string, string> = {}
+    if (kv.xfRot !== undefined) xf.rot = kv.xfRot
+    if (kv.xfFlipH !== undefined) xf.flipH = kv.xfFlipH
+    if (kv.xfFlipV !== undefined) xf.flipV = kv.xfFlipV
+    if (Object.keys(xf).length) chunk = retag(chunk, 'a:xfrm', xf)
     // wp:effectExtent 四边（载荷键 eeL/eeT/eeR/eeB，回写成 l/t/r/b）
     const ee: Record<string, string> = {}
     for (const [k, n] of [['eeL', 'l'], ['eeT', 't'], ['eeR', 'r'], ['eeB', 'b']] as const) {
@@ -4419,6 +4470,5 @@ async function patchImgXml(bytes: Uint8Array, shells: string[]): Promise<Uint8Ar
   if (!touched) return bytes
   out += xml.slice(cursor)
   zip.file('word/document.xml', out)
-  const buf = (await zip.generateAsync({ type: 'arraybuffer' })) as ArrayBuffer
-  return new Uint8Array(buf)
+  return finishPatch(bytes, zip, sess)
 }
