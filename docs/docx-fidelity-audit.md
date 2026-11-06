@@ -2539,15 +2539,54 @@ tsc 0、build ✓；结构测试 173 + 63 + 29 + 23 + **26**（浮动图完整�
 往返账 `3f202013…` / `f29e31ac…` 两次复跑逐字节相同。**保真账、pptx 账与 HEAD
 逐字节相同**；本轮没有新增 `src/lib` 文件，`modules` 保持 65。
 
-### 顺延清单（D37）
+### D38 追加节（v0.178）
 
-- 图形壳剩余族：`shape`(20) / `bodyPr`(19) / `rect`(15) / `fill`(14) / `line`(14)
-  / `reflection`(13) / `shadow`(13) 等 VML 老式形状族——模型无槽、写手写不出，
-  仍要整族设计，别按榜单逐个打补丁。
-- `positionH/V` 的 `posOffset` 与环绕档位（包只发 0，另立一轮）；
-  浮动图的屏上锚点摆放（Web 流式排版没有环绕，壳只保真不上屏）。
-- 第一档剩余：Writer 标尺 / 可交互状态栏 / 逐页翻页预览、Impress 母版编辑与缩放、
-  Calc 视图缩放；**pdf-lib 按需加载**仍等 `pdf-text-edit.ts` 那条线入库。
-- D32–D36 原账不动：`fldChar` 三对、`outline|val`、`col|w`/`col|space`、
+**图片壳一族 10 对 `lost → kept`。** 这一族与 D37 里那 275 对不是同一回事：
+D37 的模型无槽、写手根本发不出 `w:pict`；这一族是**包发得出壳，只是属性漏接
+或元素名不同**。挑族的办法是扫「读手已存 `data-img` 载荷、写手 `patchImgXml`
+没接」的差集——86 个载荷键里 61 个未接，但其中一大半长在 VML 上（发不出壳），
+真正零风险的是四枚 DrawingML 壳：
+
+| 壳 | 动作 | 为什么不用插元素 |
+|---|---|---|
+| `wp:inline` | `anchorId`/`editId` 追加属性 | 包发壳；`tagWithAttrs` 已有则改、没有则补 |
+| `a:srcRect` | `t/r/b/l` 补属性 | 包发 `<a:srcRect/>` 空壳（`retag` 能命中） |
+| `a:xfrm` | `rot`/`flipH`/`flipV` 补属性 | 包发 `<a:xfrm>`，此前只接了 off/ext |
+| `wp:wrapSquare` | `<wp:wrapNone/>` **整片换** | 位置不动（effectExtent 后、docPr 前），符合 CT_Anchor 序 |
+
+`a:xfrm` 三枚屏上由 `imgTransformCss` 折 CSS transform 读过了，只是没存盘。
+新增读点刻意走 **`attrL` 单漏斗**（与屏上同一处）：v0.177 把 `relativeHeight`
+换成 `attrNum` 时，`attr ?? attrL` 两条漏斗让 `--mut no-attr` 腿多问到一对、
+覆盖率 59.4 → 59.5。本轮四条变异腿 52.5 / 59.4 / 99.0 / 96.5 与上轮一字不差，
+探针记录对仍是 715，证明新读点没绕过量具锚点。
+
+**一个测试写作上的坑**：初版断言用「全文第一枚 `<a:srcRect>`」取值，红 7 项。
+写出包里每枚 drawing 都发一枚空壳，带载荷的只是第 1 块（0 起）与第 4 块；
+取第一枚必然拿到无载荷的空壳。改成**按 `<w:drawing>` 分块对位**，并顺带钉住
+「只有一块带属性」「另一枚浮动图仍是 wrapNone」——这才是「对位纪律」该有的断言。
+不是改代码凑测试。
+
+**写手 post-pack 单次解包**（性能，与保真无关但改的是写手源）：13 个补丁此前
+各自解包+重压整包，夹具上 15 次 load / 15 次 generate，占端到端 20.5%。
+收成一枚 `PackSession`：共享 zip 实例、补丁只标脏、末尾 generate 一次。
+判据 `scripts/bench-docx-pack.mjs` 是**同进程 A/B**（改前副本 `git archive HEAD src/lib`、
+交替顺序各 10 样本）加**逐部件字符串逐字相同**；签名归一掉 `core.xml` 时间戳
+与超链接随机 `rId`（与保真账同一口径），否则两腿天然假红。60.5 → 28.4ms（−53.1%）。
+
+**账**：往返 288/619 (46.5%) → **298/619 (48.1%)**，图形壳 42/319 (13.2%) →
+**52/319 (16.3%)**，掉了 314 → 304、值变 17 不增，`modules` 保持 65。
+`docs/fidelity.*` 与 pptx 两本账与 HEAD 逐字节相同；往返账两次复跑
+`2f3f0770…` / `c72c0d33…` 一致。
+
+### 顺延清单（D38）
+
+- 图形壳剩余 **265 对**：`shape`(20) / `bodyPr`(19) / `rect`(15) / `fill`(14) /
+  `line`(14) / `reflection`(13) / `shadow`(13) 等 VML 老式形状族——模型无槽、
+  写手写不出 `w:pict`，要整族设计；`sizeRelH`/`sizeRelV` 是 wp14 扩展，
+  包完全不发，得先建 `wp:anchor` 的插入锚点表（本轮刻意没碰，零插元素是本轮安全边界）。
+- `positionH/V` 的 `posOffset`；浮动图的屏上锚点摆放（Web 流式排版没有环绕）。
+- Writer 标尺 / 可交互状态栏 / 逐页翻页预览；Impress 母版编辑、Calc 视图缩放；
+  Impress 视图缩放 v0.178 已补；**pdf-lib 按需加载**仍等 `pdf-text-edit.ts` 那条线入库。
+- D32–D37 原账不动：`fldChar` 三对、`outline|val`、`col|w`/`col|space`、
   `smartTag|*` / `legacy|*`、±5 缇、`w:cols` `equalWidth`、`ind|left`、
   `docPr|id`、`lvlJc`；`theme1.xml` 进不进普查清单仍要定口径。

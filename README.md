@@ -10450,6 +10450,101 @@ layoutInCell/locked/relativeHeight/simplePos` 十枚，`positionH|relativeFrom` 
   把浮动图在屏上真按锚点摆放（Web 流式排版没有环绕，壳只保真不上屏）；
   Impress 视图缩放本轮没做（顺延，不冒充已补）。
 
+## 发行说明 v0.178 —— Impress 缩放、图片壳整族往返、写手单次解包
+
+### 一、Impress 视图缩放（D37 顺延里挂了四轮的一项）
+
+`PptEditor` 工具条加一组七档缩放（50%–200%）：加减按钮 / 下拉 / 100% 复位 /
+Ctrl+滚轮走**同一串刻度**，共用 Writer 的 `src/lib/view-zoom.ts`（新增
+`stageZoomStyle` 作单一事实源，见 `scripts/test-impress-zoom.mjs` 28 项）。
+
+只改屏幕上那张 `.ppt-stage` 的 CSS `zoom`。`deckToPptxBytes` 吃的是 deck 数据、
+PDF 走离屏 `.ppt-print-page`、放映走另一棵 `StaticSlide`，三者都不读缩放值；
+`@media print` 另有 `zoom: 1 !important` 兜底。形状拖动仍按舞台自身的
+`getBoundingClientRect()` 折分数——CSS zoom 等比缩放这个矩形，比例不变。
+监听挂在 `.ppt-stage-wrap` 而非 window，放映覆盖层压在上面时滚轮不会漏进去。
+
+### 二、图片壳整族往返（承接 v0.177，账本再动 10 对）
+
+上一轮在 `wp:anchor` 上打通 14 对。这一轮扫「读手已存载荷、写手漏接」的清单，
+挑出**包本来发得出壳、只是属性漏接或元素名不同**的一族，四枚壳一次接通：
+
+| 壳 | 源件说的 | 包发的 | 动作 |
+|---|---|---|---|
+| `wp:inline` | `anchorId` / `editId` | 壳在，两枚属性不发 | `tagWithAttrs` 追加（不造元素） |
+| `a:srcRect` | `t/r/b/l` 裁剪四边 | `<a:srcRect/>` 空壳 | 按载荷补属性 |
+| `a:xfrm` | `rot` / `flipH` / `flipV` | `<a:xfrm>` 带 off/ext | 按载荷补属性 |
+| `wp:wrapSquare` | `wrapText="bothSides"` | 恒发 `<wp:wrapNone/>` | **整片换**（元素名 + 值一起回来） |
+
+`a:xfrm` 的变换三枚屏上由 `imgTransformCss` 折成 CSS transform，此前只读不写；
+现在用 `attrL` 单漏斗把同一份原值存进 `data-img`。环绕档位走 `retagWrap`，
+只在浮动图那一支做——内嵌图本来没有环绕元素，不凭空插一枚。
+
+**10 对全部 `lost → kept`**：`inline|anchorId`、`inline|editId`、
+`srcRect|b/l/r/t`、`xfrm|flipH/flipV/rot`、`wrapSquare|wrapText`。
+
+| | v0.177 | v0.178 |
+|---|---:|---:|
+| 图形壳 | 42/319 = 13.2% | **52/319 = 16.3%** |
+| 合计 | 288/619 = 46.5% | **298/619 = 48.1%** |
+| 掉了 / 值变 | 314 / 17 | **304** / 17（没新增） |
+
+逐对变动都能说出「为什么是这一对」，没有把「掉了」粉饰成「值变」。
+保真账 **99.0% / 98.4%**、探针记录对 715、四条变异腿 52.5 / 59.4 / 99.0 / 96.5
+一字不动——新读点与既有屏上读点同走 `attrL`，没绕过量具锚点（v0.177 的教训）。
+`scripts/test-image-shell.mjs` 32 项走完整链路（夹具 → 读手 → PM → 写手 → 解包），
+并逐块钉住「不带载荷的 drawing 仍是空壳」。
+
+### 三、性能：写手 post-pack 从「每个补丁各自解包」收成一次
+
+`prosemirrorToDocxBytes` 的补丁链上 13 个函数此前各自 `JSZip.loadAsync(bytes)`
+→ 改一枚部件 → `generateAsync()` 重压**整份包**。探针数出来：夹具上一份文档
+要解包 15 次、打包 15 次，占端到端 **20.5%**（其中打包 36.1ms）。
+
+现在主链建一枚 `PackSession`（`loadZipOf` / `finishPatch`），所有补丁在同一 zip
+实例上读写、只标脏，末尾 `generateAsync` 一次。JSZip 的 `file(name, data)` 会
+替换条目，下一枚补丁读到的是刚改过的文本——与原来「打包→解包」的串行链逐字同义。
+补丁仍保留 `sess` 缺省时的独立路径，A/B 对照腿与直接调用方都还能用。
+
+判据 `scripts/bench-docx-pack.mjs`（改前副本 `git archive HEAD src/lib`，
+两腿**同进程交替顺序**各 10 样本，比的是逐部件字符串而非压缩字节）：
+
+| | 改前 | 本轮 | 变化 |
+|---|---:|---:|---|
+| 端到端（夹具） | 60.5ms | **28.4ms** | **−53.1%** |
+| 逐部件字符串 | — | — | ✓ 完全相同 |
+
+签名里归一了两类天然不可复现量：`docProps/core.xml` 的时间戳、docx 包给超链接
+发的随机 `rId`（与保真账同一口径）。不归一就会假红。
+
+### 四、门禁与账上的数
+
+| 腿 | 数 |
+|---|---|
+| tsc / build | 0 / ✓ |
+| 结构测试 | runprops **173** + 外壳 **63** + v0.173 功能 **29** + PDF 替换 **23** + 浮动图往返 **26** + 批注等价 **13** + **图片壳 32** + **Impress 缩放 28** + PDF 文本编辑全通过 |
+| 保真账 | **99.0% / 98.4%**、记录对 715、四条变异腿不动；`docs/fidelity.*` 与 HEAD 逐字节相同 |
+| pptx 账 | 70.1% / 74.3%、自检 42/19 全绿、`--mut no-ga` 42 条全红后复位；两本与 HEAD 逐字节相同 |
+| 往返账 | 见上表；`2f3f0770…` / `c72c0d33…` 两次复跑逐字节相同；**只有这一本账变了**（10 对） |
+
+`modules` 保持 **65**：本轮没新增 `src/lib` 文件（缩放复用 `view-zoom.ts`）。
+
+### 五、顺延清单（D38）
+
+- 图形壳剩余 265 对：`shape`(20) / `bodyPr`(19) / `rect`(15) / `fill`(14) /
+  `line`(14) / `reflection`(13) / `shadow`(13) 等 **VML 老式形状族**——模型无槽、
+  写手写不出 `w:pict`，要整族设计；`sizeRelH`/`sizeRelV` 是 wp14 扩展，
+  包完全不发，得先建 `wp:anchor` 的插入锚点表（本轮刻意没碰，零插元素是本轮的安全边界）。
+- `positionH/V` 的 `posOffset`；浮动图在屏上按锚点摆放。
+- Writer 标尺 / 可交互状态栏 / 逐页翻页预览；Impress 母版编辑、Calc 视图缩放；
+  **pdf-lib 按需加载**仍等 `src/lib/pdf-text-edit.ts` 那条线自行入库。
+- D32–D37 原账不动：`fldChar` 三对、`outline|val`、`col|w`/`col|space`、
+  `smartTag|*` / `legacy|*`、±5 缇、`w:cols` `equalWidth`、`ind|left`、
+  `docPr|id`、`lvlJc`；`theme1.xml` 进不进普查清单仍要定口径。
+- **诚实边界**：A/B 数字来自纯合成夹具（STORE 压缩），不是真件打开耗时；
+  CSS zoom 的拖动比例自洽是代码级推理，没有真机浏览器对撞；Impress 缩放只做了
+  视图档位，没做「适应窗口 / 适应页宽」这类自动档。
+
 ## 性能（v0.3）
 
 

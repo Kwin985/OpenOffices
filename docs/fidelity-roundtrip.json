@@ -22,9 +22,9 @@
  },
  "totals": {
   "read": 619,
-  "kept": 288,
+  "kept": 298,
   "value": 17,
-  "lost": 314,
+  "lost": 304,
   "part": 0,
   "consulted": 672,
   "srcParts": 7,
@@ -2251,12 +2251,14 @@
    ]
   },
   "inline|anchorId": {
-   "bucket": "lost",
+   "bucket": "kept",
    "n": 1,
    "src": [
     "00000001"
    ],
-   "out": []
+   "out": [
+    "00000001"
+   ]
   },
   "inline|distB": {
    "bucket": "kept",
@@ -2301,12 +2303,14 @@
    ]
   },
   "inline|editId": {
-   "bucket": "lost",
+   "bucket": "kept",
    "n": 1,
    "src": [
     "00000002"
    ],
-   "out": []
+   "out": [
+    "00000002"
+   ]
   },
   "ins|author": {
    "bucket": "kept",
@@ -4943,36 +4947,44 @@
    ]
   },
   "srcRect|b": {
-   "bucket": "lost",
+   "bucket": "kept",
    "n": 1,
    "src": [
     "10000"
    ],
-   "out": []
+   "out": [
+    "10000"
+   ]
   },
   "srcRect|l": {
-   "bucket": "lost",
+   "bucket": "kept",
    "n": 1,
    "src": [
     "5000"
    ],
-   "out": []
+   "out": [
+    "5000"
+   ]
   },
   "srcRect|r": {
-   "bucket": "lost",
+   "bucket": "kept",
    "n": 1,
    "src": [
     "0"
    ],
-   "out": []
+   "out": [
+    "0"
+   ]
   },
   "srcRect|t": {
-   "bucket": "lost",
+   "bucket": "kept",
    "n": 1,
    "src": [
     "25000"
    ],
-   "out": []
+   "out": [
+    "25000"
+   ]
   },
   "srgbClr|val": {
    "bucket": "lost",
@@ -5841,36 +5853,44 @@
    "out": []
   },
   "wrapSquare|wrapText": {
-   "bucket": "lost",
+   "bucket": "kept",
    "n": 1,
    "src": [
     "bothsides"
    ],
-   "out": []
+   "out": [
+    "bothsides"
+   ]
   },
   "xfrm|flipH": {
-   "bucket": "lost",
+   "bucket": "kept",
    "n": 1,
    "src": [
     "1"
    ],
-   "out": []
+   "out": [
+    "1"
+   ]
   },
   "xfrm|flipV": {
-   "bucket": "lost",
+   "bucket": "kept",
    "n": 1,
    "src": [
     "0"
    ],
-   "out": []
+   "out": [
+    "0"
+   ]
   },
   "xfrm|rot": {
-   "bucket": "lost",
+   "bucket": "kept",
    "n": 1,
    "src": [
     "5400000"
    ],
-   "out": []
+   "out": [
+    "5400000"
+   ]
   }
  }
 }
