@@ -14,7 +14,7 @@ through the single `ga` accessor every named lookup in `pptx-import.ts` goes thr
 | **never consulted** | the pair appears in real files and no code path asks for it | the actionable list: fidelity we do not claim |
 | **noise** | *(empty tier)* | pptx has no Word-style save-session bookkeeping (`rsid*`/`paraId`); nothing qualifies |
 
-Measured on the committed product at `HEAD` (`git:HEAD`, 66 modules,
+Measured on the committed product at `HEAD` (`git:HEAD`, 67 modules,
 probe injected into 1 accessor: ga).
 
 > **Fixture mode.** No .pptx corpus was on disk when this report was generated, so the universe

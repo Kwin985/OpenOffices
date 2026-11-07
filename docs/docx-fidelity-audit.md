@@ -2642,15 +2642,54 @@ D37 的模型无槽、写手根本发不出 `w:pict`；这一族是**包发得�
 `modules` 65 → **66** 这行元信息（新增 `src/lib/ruler.ts`），逐对分值一字不差；
 往返账两次复跑 `ccc19b39…` / `e86e017f…` 一致。
 
-### 顺延清单（D39）
+### v0.180：第一次为「包连构造器都没有」的子元素建插入通道
 
-- 图形壳剩余 **262 对**：VML 老式形状族仍是模型无槽、写手发不出 `w:pict` 的
-  整族缺口；`a:headEnd`/`tailEnd`/`outerShdw`/`glow`/`reflection` 包连构造器都没有，
-  要新建插入通道与 `wp:anchor` 锚点表（本轮刻意没碰，零插元素是安全边界）。
+**新机制**：在 `patchImgXml` 的单个 `w:drawing` 块内，按 CT_LineProperties 的
+schema 序把四枚自闭合子元素插在 `</a:ln>` 之前。此前 post-pack 只有
+`patchBeforeElem`（按标签前插）与 `pprOrder` / `insertTblPrKids`（按锚点表插
+容器内部），**没有「在已有父元素内部按序补子元素」**这一格。v0.179 的
+`CoreImageOptions.outline` 让 `<a:ln>` 发得出来之后这格才成立——D39 把它判成
+「要新建 `wp:anchor` 锚点表」是高估了风险：父壳在场时不需要外层锚点表。
+
+**为什么是这 8 对**：扫 `DRAWING_SHELL_ATTRS` 与账本的交集，四枚子元素的 8 对
+全为 `lost`，且读手（v0.151 / v0.155）早已按名查问过，只差载荷与写手：
+- `headEnd|len/type/w` 3、`tailEnd|len/type/w` 3（夹具 494 行，父 `a:ln`）
+- `prstDash|val` 1（夹具 493）、`miter|lim` 1（夹具 229；载荷键 `miterLim`
+  早在 v0.151 就存了，写手一直没接）
+
+**纪律**：
+- 查问只走 `attrL` 单漏斗，与 `noteDrawingMarks` 的清单同批键；新增 7 枚载荷键
+  不扩保真账的 consulted 集合（99.0% / 98.4%、记录对 715、四条变异腿
+  52.5 / 59.4 / 99.0 / 96.5 全不动）。
+- `tagWithAttrs` 生成自闭合子元素，不手搓属性串；幂等守卫让已有同名元素改为
+  改属性而非再插（第二枚同名子元素 = 非法 XML，计数闸门抓不到）；`<a:ln/>`
+  自闭合与 `<a:ln>…</a:ln>` 两态都处理；只动块内第一枚 `a:ln`。
+- **不碰**：`wp:anchor` 锚点表、`mc:AlternateContent` / wp14、`a:effectLst`
+  整片、新模型槽。零插元素的安全边界本轮只在「父壳已在场」这一格放开。
+
+**账**：往返 301/619 (48.6%) → **309/619 (49.9%)**，图形壳 55/319 (17.2%) →
+**63/319 (19.7%)**，掉了 301 → **293**、值变 17 不增；8 对逐对 `lost → kept`
+且 out 值等于 src 原值。四本账只动 `modules` 66 → **67**（新增
+`src/lib/status-bar.ts` 的元信息），逐对分值一字不差；往返账两次复跑
+`520b9933…` / `ded1baa5…` 一致。
+
+**另两件**：Writer 可交互状态栏（`status-bar.ts` 纯函数 + 底部独立条，36 项
+断言）；打开路径 `openDocxZip` 共享 zip 会话（可选参数，A/B 两腿同源，
+`loadAsync` 2 → 1、部件文本解压 24 → 18，端到端 −6~11%，16 项断言）。
+
+### 顺延清单（D40）
+
+- 图形壳剩余 **254 对**：`a:effectLst` 整片（`outerShdw` 5 / `reflection` 13 /
+  `glow` 1 / `sp3d` 3 / `props3d` 3 …）——包没有整片的发射器，要新建并插在
+  `a:ln` 之后、`a:spLocks` 之前，**不能复用本轮 `a:ln` 内插的锚点表**（同一形状
+  两处位次不同）；VML 老式形状族 `shape`(20) / `bodyPr`(19) / `rect`(15) /
+  `fill`(14) / `line`(14) 仍是模型无槽、写手发不出 `w:pict`。
 - `wp:posOffset`：值在元素文本里（不是属性）、读手没载荷键、往返账压根没这一对，
   **动 0 对**。要修先定「文本值算不算一对」的口径，且新读点会走 `attr`/`attrL`
-  漏斗之外的路径（变异腿敏感）。
-- Writer 可交互状态栏 / 逐页翻页预览；Impress 母版编辑、Calc 视图缩放
-  （落点在预存改动文件 `SheetEditor.tsx`，按房规换落点或只记结论）；
-  Writer 标尺 v0.179 已补；**pdf-lib 按需加载**仍等 `pdf-text-edit.ts` 入库。
-- D32–D38 原账不动（同上）。
+  漏斗之外的路径（变异腿敏感）。`sizeRelH`/`sizeRelV` 是 wp14 扩展，夹具写的是
+  `wp:` 前缀，真件要 `mc:AlternateContent`。
+- Writer 逐页翻页预览；Impress 母版编辑；Calc 视图缩放（落点在预存改动文件
+  `SheetEditor.tsx`，按房规换落点或只记结论）；**pdf-lib 按需加载**仍等
+  `pdf-text-edit.ts` 入库。Writer 标尺 v0.179、可交互状态栏 v0.180 已补。
+- D32–D39 原账不动（同上）。
+

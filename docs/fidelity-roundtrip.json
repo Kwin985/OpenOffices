@@ -22,9 +22,9 @@
  },
  "totals": {
   "read": 619,
-  "kept": 301,
+  "kept": 309,
   "value": 17,
-  "lost": 301,
+  "lost": 293,
   "part": 0,
   "consulted": 672,
   "srcParts": 7,
@@ -2010,28 +2010,34 @@
    "out": []
   },
   "headEnd|len": {
-   "bucket": "lost",
+   "bucket": "kept",
    "n": 1,
    "src": [
     "sm"
    ],
-   "out": []
+   "out": [
+    "sm"
+   ]
   },
   "headEnd|type": {
-   "bucket": "lost",
+   "bucket": "kept",
    "n": 1,
    "src": [
     "triangle"
    ],
-   "out": []
+   "out": [
+    "triangle"
+   ]
   },
   "headEnd|w": {
-   "bucket": "lost",
+   "bucket": "kept",
    "n": 1,
    "src": [
     "med"
    ],
-   "out": []
+   "out": [
+    "med"
+   ]
   },
   "headerReference|id": {
    "bucket": "lost",
@@ -3138,12 +3144,14 @@
    "out": []
   },
   "miter|lim": {
-   "bucket": "lost",
+   "bucket": "kept",
    "n": 1,
    "src": [
     "800000"
    ],
-   "out": []
+   "out": [
+    "800000"
+   ]
   },
   "multiLevelType|val": {
    "bucket": "kept",
@@ -3760,12 +3768,14 @@
    "out": []
   },
   "prstDash|val": {
-   "bucket": "lost",
+   "bucket": "kept",
    "n": 1,
    "src": [
     "dash"
    ],
-   "out": []
+   "out": [
+    "dash"
+   ]
   },
   "prstGeom|prst": {
    "bucket": "kept",
@@ -5287,28 +5297,34 @@
    ]
   },
   "tailEnd|len": {
-   "bucket": "lost",
+   "bucket": "kept",
    "n": 1,
    "src": [
     "lg"
    ],
-   "out": []
+   "out": [
+    "lg"
+   ]
   },
   "tailEnd|type": {
-   "bucket": "lost",
+   "bucket": "kept",
    "n": 1,
    "src": [
     "arrow"
    ],
-   "out": []
+   "out": [
+    "arrow"
+   ]
   },
   "tailEnd|w": {
-   "bucket": "lost",
+   "bucket": "kept",
    "n": 1,
    "src": [
     "lg"
    ],
-   "out": []
+   "out": [
+    "lg"
+   ]
   },
   "tblCellSpacing|type": {
    "bucket": "kept",

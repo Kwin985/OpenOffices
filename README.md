@@ -10644,6 +10644,100 @@ Writer 工具条加「标尺」开关，水平标尺挂在 `.doc-page` 内随内
   只有纯函数与源码级断言，没有真机浏览器对撞；`a:ln` 只保真三枚属性，
   源件描边里的 `a:solidFill/a:schemeClr` 填充仍没回写（包发的是 `a:noFill`）。
 
+## 发行说明 v0.180（可交互状态栏 / 线端族插入通道 / 打开路径单次解包）
+
+本轮三件事都有硬判据。仍是「代码 + 文档」两笔提交、逐文件 add，没碰那 7 个
+任务无关的预存改动与 `pdf-text-edit.ts` 等未跟踪文件。
+
+### 一、Writer 可交互状态栏（D39 里挂了六轮）
+
+- 新增 `src/lib/status-bar.ts`：条目表、`字数 N · 字符 M` / `约 N 页` 文案、
+  消息首行与悬停提示、缩放百分比全是纯函数。状态首行转调 `fail-msg.ts` 的
+  `statusText/statusTip`，页数转调 `print-preview.ts` 的 `estimatePages`（预览条
+  同源），缩放转调 `view-zoom.ts` 的 `zoomPct`——不复制第二份口径。
+- UI 从「工具条尾部三段不可点的 span」改成 editor-pane 底部独立一条
+  `.doc-status-bar`：消息 / 统计 / 页数（点击开预览）/ 修订 / 拼写 / 历史版本 /
+  缩放三枚（− / 100% / ＋）。每个 action 都映射到**既有入口**，没发明新面板；
+  静态条目渲染成 span 而不是 disabled button。
+- 纯函数不碰 `Date` / `Intl`：`toLocaleTimeString()` 由调用方算好传进来，数字也
+  不做千分位格式化（locale 不同输出就不同，逐字断言会假红）。预览态由已有的
+  `.is-preview` 通配规则藏掉，`@media print` 显式 `display:none`——
+  `visibility:hidden` 会留 28px 空位。`test-writer-status-bar.mjs` 36 项。
+
+### 二、`a:ln` 线端族：第一次为子元素新建插入通道
+
+- D39 把 `a:headEnd` / `a:tailEnd` 判成「包连构造器都没有，要新建插入通道 +
+  `wp:anchor` 锚点表」。本轮探查发现**不需要那张锚点表**：v0.179 的
+  `CoreImageOptions.outline` 已让 `<a:ln>` 这枚父壳发得出来，四枚子元素只要按
+  CT_LineProperties 的 schema 序（`fill → prstDash → miter → headEnd → tailEnd`）
+  插在 `</a:ln>` 之前即可，天然满足位次。
+- 读手补 7 枚载荷键（`dashVal` / `he*` / `te*`），`miterLim` 本来就在（v0.151 存了
+  但写手没接）。全部走 `attrL` 单漏斗，与 `noteDrawingMarks` 的
+  `DRAWING_SHELL_ATTRS` 同批键——查问集合不变。
+- 写手 `patchImgXml` 在单个 `w:drawing` 块内插：`tagWithAttrs` 生成自闭合子元素、
+  幂等守卫（已有同名元素改为改属性而非再插，否则第二枚同名子元素 = 非法 XML）、
+  自闭合 `<a:ln/>` 与有内容 `<a:ln>…</a:ln>` 两态都处理。零新模型槽、零
+  `mc:AlternateContent`、零 wp14、零 `a:effectLst` 整片。
+- **8 对全部 `lost → kept`**：`headEnd|len/type/w`、`tailEnd|len/type/w`、
+  `prstDash|val`、`miter|lim`。图形壳 **55/319 → 63/319（17.2% → 19.7%）**、
+  合计 **301/619 → 309/619（48.6% → 49.9%）**、掉了 301 → 293、值变仍是 17。
+  `test-line-ends.mjs` 28 项（完整链路 + schema 序 + 幂等 + 按块对位）。
+
+### 三、打开 .docx：两个入口共享一次解包
+
+- 此前 `docxToDocMeta` 与 `docxToHtmlFidelity` 各自 `JSZip.loadAsync(bytes)`，
+  `word/document.xml`、`word/theme/theme1.xml`、`word/_rels/document.xml.rels`
+  三份部件各解压 + 转 UTF-8 两次。v0.173 收的是读手内部「同一份 document.xml
+  parseXml 8 次」，本轮收的是**跨入口的 zip 解包**，两层不同。
+- `openDocxZip(bytes)` 建一枚会话（zip 实例 + 带 Map 缓存的 `read`），两个入口都收
+  可选 `shared` 参数。**不传就走原来的各自解包路径**——A/B 两腿同源、只差一个
+  参数，不再依赖会过期的手工 `git archive` 副本（v0.179 的教训）。
+  `docxToDocMeta` 的 `theme1.xml` 也改走共享 `read`（缺件返回空串，与原来的
+  `if (themeFile)` 门逐字同义）。
+- 判据 `scripts/bench-docx-open.mjs`：同进程交替顺序各 10 样本取中位，两腿
+  `JSON.stringify(meta)` 与读手关键字段**逐字相同**；`JSZip.loadAsync`
+  **2 → 1** 次、部件文本解压 **24 → 18** 次。
+
+| 夹具 | 改前 | 本轮 | 降幅 |
+|---:|---:|---:|---:|
+| 原夹具 21KB | 7.4ms | 6.7ms | −9.1% |
+| ×20 270KB | 59.4ms | 52.9ms | −10.9% |
+| ×60 793KB | 140.1ms | 131.8ms | −5.9% |
+
+  大件上 document.xml 的解析成本两腿都要付，收益百分比被稀释；省掉的
+  「一整包解包 + 6 次部件解压」是固定收益，不随放大倍数变。数字写实测区间
+  **−6~11%**，不挑最好看的一次。`test-docx-zip-session.mjs` 16 项。
+
+### 门禁与账本
+
+- tsc 0、build ✓；十三组结构测试全绿（173+63+29+36+**36**+23+26+13+40+28+
+  **28**+**16** + PDF 文本编辑）。
+- 保真 docx 99.0% / 98.4%、探针记录对 715、四条变异腿 52.5 / 59.4 / 99.0 /
+  96.5 一字不动；pptx 70.1% / 74.3%、42/19 全绿、`--mut no-ga` 42 条全红后复位。
+- 往返账 `520b9933…` / `ded1baa5…` 两次复跑一致。四本账的 `modules`
+  **66 → 67**（新增 `status-bar.ts` 的元信息，不是覆盖对）。
+- 两组既有断言因本轮改动过期，按纪律**改断言不改代码**：状态栏搬进 lib 后
+  `test-writer-shell.mjs` 的「组件里 `estimatePages` 出现 ≥2 次」改成「组件一处 +
+  lib 转调一处」；`test-image-shell.mjs` 的「全文不许出现 `<a:ln` 字符串」收窄到
+  **发壳路径 `imageRunOf`**（post-pack 的查找正则与注释不算手搓壳）。
+
+### 顺延（D40）
+
+- 图形壳剩 **254 对**：`a:effectLst` 那一整片（`outerShdw` 5 / `reflection` 13 /
+  `glow` 1 / `sp3d` 3 / `props3d` 3 …）要新建整片并插在 `a:ln` 之后、
+  `a:spLocks` 之前，**不能复用本轮 `a:ln` 内插的锚点表**（同一形状两处位次不同，
+  与 v0.169 的 `insertTblPrKids` 两张表同理）；VML 老式形状族仍是模型无槽。
+- `wp:posOffset` 值在元素文本里、读手没载荷键、账本压根没这一对——动 0 对，
+  要修先定「文本值算不算一对」的口径。
+- Writer 逐页翻页预览；Impress 母版编辑；Calc 缩放（落点在预存改动
+  `SheetEditor.tsx`，按房规换落点或只记结论）；**pdf-lib 按需加载**仍等
+  `pdf-text-edit.ts` 入库（两行，照 v0.175 节复算）。D32–D39 长尾原账不动。
+- **诚实边界**：本轮及历轮 A/B 数字都是合成夹具，不是真件打开耗时；状态栏交互
+  与预览/打印隐藏只有源码级断言，没做真机浏览器对撞；线端族只保真四枚子元素
+  的属性，源件描边里的 `a:solidFill/a:schemeClr` 填充仍没回写（包发的是
+  `a:noFill`）；共享会话只在主打开链接入，mammoth 回退路径的
+  `docxToCommentHtml` 仍自解一次。
+
 ## 性能（v0.3）
 
 
