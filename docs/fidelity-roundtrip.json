@@ -22,9 +22,9 @@
  },
  "totals": {
   "read": 619,
-  "kept": 328,
-  "value": 17,
-  "lost": 274,
+  "kept": 331,
+  "value": 16,
+  "lost": 272,
   "part": 0,
   "consulted": 672,
   "srcParts": 7,
@@ -1019,21 +1019,26 @@
    "out": []
   },
   "col|space": {
-   "bucket": "lost",
+   "bucket": "kept",
    "n": 2,
    "src": [
     "400"
    ],
-   "out": []
+   "out": [
+    "400"
+   ]
   },
   "col|w": {
-   "bucket": "lost",
+   "bucket": "kept",
    "n": 2,
    "src": [
     "2000",
     "3000"
    ],
-   "out": []
+   "out": [
+    "2000",
+    "3000"
+   ]
   },
   "color|themeColor": {
    "bucket": "kept",
@@ -1076,13 +1081,13 @@
    ]
   },
   "cols|equalWidth": {
-   "bucket": "value",
+   "bucket": "kept",
    "n": 1,
    "src": [
     "0"
    ],
    "out": [
-    "1"
+    "0"
    ]
   },
   "cols|num": {

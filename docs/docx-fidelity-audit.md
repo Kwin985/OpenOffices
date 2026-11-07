@@ -2712,18 +2712,51 @@ pptx 两本账与 HEAD **逐字节相同**（本轮没有新增 `src/lib` 文件
 各物化一次复用（可选 `cacheDesc:false` 使 A/B 同源，查询 14 → 8 次，
 放大件 −8~18%，17 项断言）。
 
-### 顺延清单（D41）
+### v0.182：正文族第一次动账——不等宽分栏
+
+**为什么不是图形壳**：D41 的三维族要先修夹具非法结构、VML 族模型无槽，
+都不是单轮能干净闭环的；反而顺延清单里挂了多轮的 `col|w` / `col|space` 有
+**包原生槽**（`createColumns({equalWidth:false, children: Column[]})`），
+读手 5 个查问点齐备、模型已有 `cols/colGap`、UI 已有分栏面板。
+
+**通道**：读手 `sectionOf` 把 `w:cols/@w:equalWidth` 与逐枚 `w:col/@w:w|@w:space`
+从「只读记账」升成带值载荷（`attr` 单漏斗，与原有查问同批键、不扩 consulted
+集合）；`DocxSection` / `PageSetup` 加同形 `colsLayout`；`pageSetupOf` 与
+`resolvePage` 原样透传（缇，**不做 mm 换算**——换算误差会写成源件没说过的话）；
+写手按载荷生成 `new Column({width, space})` 序列。post-pack 没有新建插入通道。
+
+**一处字面回填**：包的 `equalWidth` 是 boolean、发 `w:equalWidth="false"`，
+源件按 ST_OnOff 写 `"0"`。`patchColsOnOff` 只把 `<w:cols>` 开标签上的 `false`
+换成 `0`（幂等），与 v0.179 的 `FLAT/flat` 同款：包发壳、字面按源件回填。
+不等宽分支不再传 `separate`，避免包发非法的 `w:sep="false"`。
+
+**账**：往返 328/619 (53.0%) → **331/619 (53.5%)**，正文 246/300 (82.0%) →
+**249/300 (83.0%)**，掉了 274 → **272**、值变 17 → **16**；3 对逐对说得清：
+`col|w`(lost→kept，src/out 同为 2000/3000)、`col|space`(lost→kept，400)、
+`cols|equalWidth`(**value→kept**，src/out 同为 "0"，不是把掉了粉饰成值变)。
+保真账 `docs/fidelity.*`、pptx 两本账与 HEAD 逐字节相同（`modules` 保持 67）；
+往返账两次复跑 `699706e8…` / `94685d37…` 一致。
+
+**另两件**：Impress 母版配色面板（`withMaster` 换引用穿过 `memo(StaticSlide)`、
+`stageColors` 优先级同源、33 项断言；占位矩形仍不编辑）；pptx 导出只在
+`next !== original` 时写回 slide（`legacyWriteBack:true` 保留旧写法供 A/B，
+逐部件字符串逐字相同，−3~20%，12 项断言）。
+
+### 顺延清单（D42）
 
 - 图形壳剩余 **235 对**：三维族 `sp3d`(3) / `props3d`(3) / `lightRig`(2)
   要先定「夹具结构非法、真件应写成 effectLst 之后的兄弟」的口径；VML
   老式形状族 `shape`(20) / `bodyPr`(19) / `rect`(15) / `fill`(14) /
-  `line`(14) 仍是模型无槽、写手发不出 `w:pict`。
-- `wp:posOffset`：值在元素文本里、读手没载荷键、账本压根没这一对，
-  **动 0 对**。`sizeRelH`/`sizeRelV` 是 wp14 扩展，夹具写 `wp:` 前缀、
-  真件要 `mc:AlternateContent`。
-- Impress 母版编辑（背景/配色可单轮闭环，占位矩形要第二套拖拽状态机）；
-  Calc 视图缩放（落点在预存改动文件 `SheetEditor.tsx`，按房规换落点或只记结论）；
-  **pdf-lib 按需加载**仍等 `pdf-text-edit.ts` 入库。Writer 标尺 v0.179、
-  可交互状态栏 v0.180、逐页翻页预览 v0.181 已补。
-- D32–D40 原账不动（同上）。
+  `line`(14) 仍是模型无槽、写手发不出 `w:pict`。`wp:posOffset` 值在元素
+  文本里、账本压根没这一对，**动 0 对**；`sizeRelH/V` 是 wp14 扩展，
+  夹具写 `wp:` 前缀、真件要 `mc:AlternateContent`。
+- 正文长尾：`fldChar|fldCharType`(3 个源值) / `fldChar|fldLock`、
+  `outline|val`、`smartTag|*`、`legacy|*`、±5 缇、`ind|left` 列表缩进覆盖、
+  `docPr|id`、`lvlJc`、`w:color` 字面 val；`theme1.xml` 口径未定。
+- Impress 占位矩形编辑（第二套拖拽状态机）；Calc 视图缩放（落点在预存
+  改动文件 `SheetEditor.tsx`，按房规换落点或只记结论）；**pdf-lib 按需加载**
+  仍等 `pdf-text-edit.ts` 入库。Writer 标尺 v0.179、状态栏 v0.180、
+  逐页翻页预览 v0.181、Impress 母版配色 v0.182 已补。
+- D32–D41 原账不动（同上）。
+
 

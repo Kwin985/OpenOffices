@@ -10828,6 +10828,95 @@ Writer 工具条加「标尺」开关，水平标尺挂在 `.doc-page` 内随内
   没回写；翻页预览只有纯函数与源码级断言，没做真机浏览器对撞；ODT 的
   node 判据依赖 DOM polyfill，浏览器端收益未实测。
 
+## 发行说明 v0.182（不等宽分栏 / Impress 母版配色 / pptx 导出少写回）
+
+本轮换到**正文族**动账（前五轮都在图形壳），另补一项连续顺延的功能与一处导出链热点。
+仍是「代码 + 文档」两笔提交、逐文件 add，没碰那 7 个预存改动与
+`pdf-text-edit.ts` 等未跟踪文件。
+
+### 一、不等宽分栏（`w:cols` / `w:col`），3 对
+
+- 包本来就有 `createColumns({equalWidth:false, children: Column[]})` 原生槽
+  （`docx` 9.7.1），**post-pack 不用新建插入通道**：读手 `sectionOf` 把
+  `w:cols/@equalWidth` 与逐枚 `w:col/@w|@space` 从「只读记账」升成带值载荷，
+  `DocxSection` / `PageSetup` 加同形 `colsLayout`，`pageSetupOf` 与
+  `resolvePage` 原样透传（缇，**不做 mm 换算**——换算误差会写成源件没说过的话），
+  写手按载荷生成 `new Column({width, space})` 序列。
+- 一处字面回填：包的 `equalWidth` 是 boolean、序列化成 `w:equalWidth="false"`，
+  而 OOXML 的 ST_OnOff 字面是 `"0"`。与 v0.179 的 `FLAT/flat` 同款——只让包
+  发壳，字面由 `patchColsOnOff` 按源件回填；不等宽分支不再传 `separate`，
+  免得包发出非法的 `w:sep="false"`。
+- Writer 页面设置面板补「不等宽」开关与逐栏宽输入（缇）。**屏上 CSS columns
+  只能等宽**，逐栏宽只用于 docx 往返、不屏现（title 里写明）。
+- **3 对全部落地**：`col|w` / `col|space` 两对 `lost → kept`，
+  `cols|equalWidth` 一对 `value → kept`（不是把掉了粉饰成值变，是值变修好）。
+  正文 **246/300 → 249/300（82.0% → 83.0%）**、合计
+  **328/619 → 331/619（53.0% → 53.5%）**、掉了 274 → 272、值变 17 → 16。
+  `test-columns.mjs` 25 项。
+
+### 二、Impress 母版配色面板（D41 顺延）
+
+- `MasterStyle` 的 8 字段、`.opd` 序列化/解析、pptx 导出六字段落点、导入回读、
+  舞台/缩略图/放映的配色链**全是现成的**，本轮只补 UI：工具条「母版配色」
+  开关 + 条件面板（底色 / 标题色 / 正文色 / 背景图 / 清除 / 恢复主题），
+  复用 `.ppt-seq-panel` 与 `.ppt-shape-color`，CSS 零改动。
+- 写入抽成 `ppt.ts` 的 `withMaster`（**换 master 引用**——`StaticSlide` 是 memo，
+  原地改字段缩略图与放映不会重渲染）与 `stageColors`（母版 > 主题、
+  单页背景只盖底色的优先级链），两个纯函数供结构测试钉。
+- 背景图上传另起一枚 `fileRef`，不走写单页 `s.image` 的 `pickImage`；
+  改 `bg` 不触发 `luminance` 重算（那只在 pptx 导入时算一次），
+  `deck.theme` 也不动。**占位矩形仍不开放编辑**（要第二套拖拽状态机）。
+  `test-impress-master.mjs` 33 项（含 `.opd` 往返与配色优先级）。
+
+### 三、pptx 导出：没改过的 slide 不再回写
+
+- `deckToPptxBytes` 在 `pptx.write()` 后解包注入动画/alt；旧写法对**进了循环
+  但内容没变**的 slide 也 `zip.file(name, xml)` 写回。JSZip 对未被替换的条目
+  复用原有压缩数据，替换过就得重新 DEFLATE——末尾那次 `generateAsync`
+  因此把整包（含媒体、theme、其它 slide）重压一遍。
+- 现在先留一份 `original`，只在 `next !== original` 时写回；真有
+  `<p:transition>` / `<p:timing>` 注入的页照旧写回（专门有断言钉这条）。
+- `deckToPptxBytes(deck, {legacyWriteBack:true})` 保留旧写法作 A/B 对照腿，
+  两腿同源只差一个开关。判据 `scripts/bench-pptx-export.mjs`：两腿 zip 的
+  部件名集合 + 逐部件字符串**逐字相同**（`docProps/core.xml` 时间戳按既有
+  口径排除）；同进程交替各 10 样本取中位。
+
+| 夹具 | 改前 | 本轮 | 降幅 |
+|---:|---:|---:|---:|
+| 4 页 | 8.7ms | 7.4ms | −15.3% |
+| 24 页 | 14.8ms | 14.4ms | −2.6% |
+| 80 页 | 38.4ms | 37.4ms | −2.5% |
+
+  复跑一次为 −3.0% / −20.2% / −6.2%，写区间 **−3~20%**；这类夹具的收益
+  上限就是「未改 slide 数 × slide XML 重压成本」，页多时 `pptx.write()` 主导、
+  比例被稀释，10ms 级噪声也明显。`test-pptx-export.mjs` 12 项。
+
+### 门禁与账本
+
+- tsc 0、build ✓；十九组结构测试全绿。
+- 保真 docx 99.0% / 98.4%、记录对 715、四条变异腿 52.5 / 59.4 / 99.0 / 96.5
+  一字不动，**`docs/fidelity.*` 与 HEAD 逐字节相同**；pptx 70.1% / 74.3%、
+  42/19 全绿、`--mut no-ga` 42 条全红后复位。
+- 往返账 `699706e8…` / `94685d37…` 两次复跑一致。`modules` 保持 **67**
+  （本轮没有新增 `src/lib` 文件）。
+
+### 顺延（D42）
+
+- 图形壳剩 **235 对**：三维族 `sp3d`(3) / `props3d`(3) / `lightRig`(2) 要先定
+  「夹具结构非法、真件应写成 effectLst 之后兄弟」的口径；VML 老式形状族
+  `shape`(20) / `bodyPr`(19) / `rect`(15) / `fill`(14) / `line`(14) 仍是
+  模型无槽、写手发不出 `w:pict`。`wp:posOffset` 动 0 对的口径问题照旧。
+- 正文长尾：`fldChar|fldCharType`(3 个源值) / `fldChar|fldLock`、`outline|val`、
+  `smartTag|*`、`legacy|*`、±5 缇、`ind|left` 列表缩进覆盖、`docPr|id`、
+  `lvlJc`、`w:color` 字面 val；`theme1.xml` 口径未定。
+- Impress 占位矩形编辑（第二套拖拽状态机）；Calc 缩放（落点在预存改动
+  `SheetEditor.tsx`，按房规换落点）；**pdf-lib 按需加载**仍等
+  `pdf-text-edit.ts` 入库。D32–D41 长尾原账不动。
+- **诚实边界**：本轮及历轮 A/B 都是合成夹具，不是真件打开耗时；不等宽分栏
+  屏上仍按等宽显示，逐栏宽只往返；ODT 写手的 `style:columns` 没跟着扩，
+  不等宽只走 docx；母版配色只有纯函数与源码级断言，没做真机浏览器对撞；
+  pptx 导出的降幅在 10ms 级有明显噪声，结构性收益是未改 slide 不再回写。
+
 ## 性能（v0.3）
 
 

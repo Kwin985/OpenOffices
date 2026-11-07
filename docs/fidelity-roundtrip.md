@@ -44,9 +44,9 @@ docx ──读手──▶ HTML ──TipTap schema──▶ PM 模型 ──写
 | | 值 |
 |---|---:|
 | 读到的对 | 619 |
-| 保留 | **328（53.0%）** |
-| 值变 | 17 |
-| 掉了 | 274 |
+| 保留 | **331（53.5%）** |
+| 值变 | 16 |
+| 掉了 | 272 |
 | 缺件 | 0 |
 | 源包部件 | 7 |
 | 写出包部件 | 7 |
@@ -61,13 +61,13 @@ docx ──读手──▶ HTML ──TipTap schema──▶ PM 模型 ──写
 
 | 族 | 读到的 | 保留 | 值变 | 掉了 | 保留率 |
 |---|---:|---:|---:|---:|---:|
-| 正文属性（`w:*`） | 300 | 246 | 15 | 39 | **82.0%** |
+| 正文属性（`w:*`） | 300 | 249 | 14 | 37 | **83.0%** |
 | 图形壳（`a:`/`v:`/`wp:`/`pic:`/`wps:`/`o:`） | 319 | 82 | 2 | 235 | **25.7%** |
 
 口径说明：一个对算正文，当且仅当它在源包里**只**出现在 `w:*` 元素上（沾过图形壳就算图形壳）。
 对名按 local name 归并（与保真账本同口径），所以 `fill|type` 这种两族同名的会并成一笔。
 
-### 掉了（274）
+### 掉了（272）
 
 名字一次都没写出来。这里每一行都是一条**单边通道**：读手读了，模型或写手没有它的槽。
 
@@ -77,8 +77,6 @@ docx ──读手──▶ HTML ──TipTap schema──▶ PM 模型 ──写
 | `gs|pos` | 4 | 0, 100000 | — |
 | `fldChar|fldCharType` | 3 | begin, separate, end | — |
 | `lumMod|val` | 3 | 50000, 80000 | — |
-| `col|space` | 2 | 400 | — |
-| `col|w` | 2 | 2000, 3000 | — |
 | `ext|uri` | 2 | {1234-5678-9abc-def0}, {1234-5678-9abc-def1} | — |
 | `imagedata|id` | 2 | rid# | — |
 | `path|h` | 2 | 1000 | — |
@@ -113,9 +111,11 @@ docx ──读手──▶ HTML ──TipTap schema──▶ PM 模型 ──写
 | `bodyPr|spcFirstLastPara` | 1 | 0 | — |
 | `bodyPr|tIns` | 1 | 45720 | — |
 | `bodyPr|upright` | 1 | 0 | — |
-| …共 274 条，完整清单见 `docs/fidelity-roundtrip.json` | | | |
+| `bodyPr|vert` | 1 | horz | — |
+| `bodyPr|vertOverflow` | 1 | overflow | — |
+| …共 272 条，完整清单见 `docs/fidelity-roundtrip.json` | | | |
 
-### 值变（17）
+### 值变（16）
 
 名字在，但某个源值没写回去。比「掉了」更隐蔽——普查看着它在场，屏上也像那么回事。
 
@@ -133,7 +133,6 @@ docx ──读手──▶ HTML ──TipTap schema──▶ PM 模型 ──写
 | `abstractNum|abstractNumId` | 1 | 0 | 1, 2, 3 |
 | `abstractNumId|val` | 1 | 0 | 1, 3 |
 | `color|val` | 1 | ff0000 | adbbd4 |
-| `cols|equalWidth` | 1 | 0 | 1 |
 | `ins|id` | 1 | 7 | 1 |
 | `numId|val` | 1 | 1 | 2 |
 | `startOverride|val` | 1 | 3 | 1 |
@@ -145,7 +144,7 @@ docx ──读手──▶ HTML ──TipTap schema──▶ PM 模型 ──写
 
 （空）
 
-### 保留（328）
+### 保留（331）
 
 这些是真的双向。列出来是为了让「保留」也可核对，而不是一个孤零零的百分比。
 
@@ -175,7 +174,7 @@ docx ──读手──▶ HTML ──TipTap schema──▶ PM 模型 ──写
 | `b|val` | 2 | 0, 1 | 0, 1 |
 | `between|color` | 2 | ff9900 | ff9900 |
 | `between|space` | 2 | 2 | 2 |
-| …共 328 条，完整清单见 `docs/fidelity-roundtrip.json` | | | |
+| …共 331 条，完整清单见 `docs/fidelity-roundtrip.json` | | | |
 
 ## 边界
 
