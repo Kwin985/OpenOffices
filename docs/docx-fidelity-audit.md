@@ -2677,19 +2677,53 @@ schema 序把四枚自闭合子元素插在 `</a:ln>` 之前。此前 post-pack 
 断言）；打开路径 `openDocxZip` 共享 zip 会话（可选参数，A/B 两腿同源，
 `loadAsync` 2 → 1、部件文本解压 24 → 18，端到端 −6~11%，16 项断言）。
 
-### 顺延清单（D40）
+### v0.181：`a:effectLst` 整片，第二张插入锚点表
 
-- 图形壳剩余 **254 对**：`a:effectLst` 整片（`outerShdw` 5 / `reflection` 13 /
-  `glow` 1 / `sp3d` 3 / `props3d` 3 …）——包没有整片的发射器，要新建并插在
-  `a:ln` 之后、`a:spLocks` 之前，**不能复用本轮 `a:ln` 内插的锚点表**（同一形状
-  两处位次不同）；VML 老式形状族 `shape`(20) / `bodyPr`(19) / `rect`(15) /
-  `fill`(14) / `line`(14) 仍是模型无槽、写手发不出 `w:pict`。
-- `wp:posOffset`：值在元素文本里（不是属性）、读手没载荷键、往返账压根没这一对，
-  **动 0 对**。要修先定「文本值算不算一对」的口径，且新读点会走 `attr`/`attrL`
-  漏斗之外的路径（变异腿敏感）。`sizeRelH`/`sizeRelV` 是 wp14 扩展，夹具写的是
-  `wp:` 前缀，真件要 `mc:AlternateContent`。
-- Writer 逐页翻页预览；Impress 母版编辑；Calc 视图缩放（落点在预存改动文件
-  `SheetEditor.tsx`，按房规换落点或只记结论）；**pdf-lib 按需加载**仍等
-  `pdf-text-edit.ts` 入库。Writer 标尺 v0.179、可交互状态栏 v0.180 已补。
-- D32–D39 原账不动（同上）。
+**新机制**：`patchImgXml` 里另起 `['a:scene3d','a:sp3d','a:extLst','a:spLocks']`
+锚点表，在单个 `w:drawing` 块的 `pic:spPr` 内找第一枚「排在 effectLst 之后」
+的在场兄弟，插在它前面；写出包只发到 `a:ln`，退化到 `</pic:spPr>` 前。
+与 v0.180 的 `a:ln` 内插表（落点在 `</a:ln>` 内部）位次不同，不能共用——
+D40 的判断成立。
+
+**为什么是这 19 对**：`DRAWING_SHELL_ATTRS` 里 `outerShdw`(5) / `glow`(1) /
+`reflection`(13) 早已按名查问、账本 19 对全为 `lost`；读手此前一枚载荷键都没有。
+属性名→键名的映射抽成 `cell-style.ts` 的 `EFFECT_ATTRS` + `effectKey`，
+读写手共用（名单不同源会静默漏接，不报错）。新读点走 `attrL` 单漏斗，与
+`noteDrawingMarks` 同批键，查问集合不扩。
+
+**纪律**：
+- `a:glow` 写成自闭合、不带 `<a:schemeClr>`。若把源件那 4 个 `schemeClr`
+  值中的 2 个写回，`schemeClr|val` 会从 lost 变 value——「掉了」变「值变」
+  不算修好（v0.177 教训）。
+- 三维族 `scene3d`/`sp3d`/`props3d` 在夹具里被塞进 effectLst 内部，按
+  CT_ShapeProperties 应是 effectLst 之后的兄弟；`props3d` 甚至不是元素名。
+  本轮不复刻坏件，`lightRig`(2) / `sp3d`(3) / `props3d`(3) 留在账上。
+- 幂等守卫 + `tagWithAttrs` 生成自闭合元素 + 只动块内第一枚 `pic:spPr`；
+  零新模型槽、零 `mc:AlternateContent`、零 wp14。
+
+**账**：往返 309/619 (49.9%) → **328/619 (53.0%)**，图形壳 63/319 (19.7%)
+→ **82/319 (25.7%)**，掉了 293 → **274**、值变 17 不增；19 对逐对
+`lost → kept` 且 out 值等于 src 原值。保真账 `docs/fidelity.*`、
+pptx 两本账与 HEAD **逐字节相同**（本轮没有新增 `src/lib` 文件，`modules`
+保持 67）；往返账两次复跑 `70f83a6d…` / `a1961f82…` 一致。
+
+**另两件**：Writer 逐页翻页预览（`print-preview.ts` 三枚纯函数 + 预览条
+翻页控件，等距页距定位、非真分页，29 项断言）；ODT 导入 `cdoc`/`sdoc`
+各物化一次复用（可选 `cacheDesc:false` 使 A/B 同源，查询 14 → 8 次，
+放大件 −8~18%，17 项断言）。
+
+### 顺延清单（D41）
+
+- 图形壳剩余 **235 对**：三维族 `sp3d`(3) / `props3d`(3) / `lightRig`(2)
+  要先定「夹具结构非法、真件应写成 effectLst 之后的兄弟」的口径；VML
+  老式形状族 `shape`(20) / `bodyPr`(19) / `rect`(15) / `fill`(14) /
+  `line`(14) 仍是模型无槽、写手发不出 `w:pict`。
+- `wp:posOffset`：值在元素文本里、读手没载荷键、账本压根没这一对，
+  **动 0 对**。`sizeRelH`/`sizeRelV` 是 wp14 扩展，夹具写 `wp:` 前缀、
+  真件要 `mc:AlternateContent`。
+- Impress 母版编辑（背景/配色可单轮闭环，占位矩形要第二套拖拽状态机）；
+  Calc 视图缩放（落点在预存改动文件 `SheetEditor.tsx`，按房规换落点或只记结论）；
+  **pdf-lib 按需加载**仍等 `pdf-text-edit.ts` 入库。Writer 标尺 v0.179、
+  可交互状态栏 v0.180、逐页翻页预览 v0.181 已补。
+- D32–D40 原账不动（同上）。
 

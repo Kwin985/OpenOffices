@@ -22,9 +22,9 @@
  },
  "totals": {
   "read": 619,
-  "kept": 309,
+  "kept": 328,
   "value": 17,
-  "lost": 293,
+  "lost": 274,
   "part": 0,
   "consulted": 672,
   "srcParts": 7,
@@ -1847,12 +1847,14 @@
    "out": []
   },
   "glow|rad": {
-   "bucket": "lost",
+   "bucket": "kept",
    "n": 1,
    "src": [
     "63500"
    ],
-   "out": []
+   "out": [
+    "63500"
+   ]
   },
   "gradFill|flip": {
    "bucket": "lost",
@@ -3362,44 +3364,54 @@
    "out": []
   },
   "outerShdw|algn": {
-   "bucket": "lost",
+   "bucket": "kept",
    "n": 1,
    "src": [
     "tl"
    ],
-   "out": []
+   "out": [
+    "tl"
+   ]
   },
   "outerShdw|blurRad": {
-   "bucket": "lost",
+   "bucket": "kept",
    "n": 1,
    "src": [
     "63500"
    ],
-   "out": []
+   "out": [
+    "63500"
+   ]
   },
   "outerShdw|dir": {
-   "bucket": "lost",
+   "bucket": "kept",
    "n": 1,
    "src": [
     "5400000"
    ],
-   "out": []
+   "out": [
+    "5400000"
+   ]
   },
   "outerShdw|dist": {
-   "bucket": "lost",
+   "bucket": "kept",
    "n": 1,
    "src": [
     "38100"
    ],
-   "out": []
+   "out": [
+    "38100"
+   ]
   },
   "outerShdw|rotWithShape": {
-   "bucket": "lost",
+   "bucket": "kept",
    "n": 1,
    "src": [
     "0"
    ],
-   "out": []
+   "out": [
+    "0"
+   ]
   },
   "outline|val": {
    "bucket": "lost",
@@ -3945,108 +3957,134 @@
    "out": []
   },
   "reflection|algn": {
-   "bucket": "lost",
+   "bucket": "kept",
    "n": 1,
    "src": [
     "bl"
    ],
-   "out": []
+   "out": [
+    "bl"
+   ]
   },
   "reflection|blurRad": {
-   "bucket": "lost",
+   "bucket": "kept",
    "n": 1,
    "src": [
     "6350"
    ],
-   "out": []
+   "out": [
+    "6350"
+   ]
   },
   "reflection|dir": {
-   "bucket": "lost",
+   "bucket": "kept",
    "n": 1,
    "src": [
     "5400000"
    ],
-   "out": []
+   "out": [
+    "5400000"
+   ]
   },
   "reflection|dist": {
-   "bucket": "lost",
+   "bucket": "kept",
    "n": 1,
    "src": [
     "0"
    ],
-   "out": []
+   "out": [
+    "0"
+   ]
   },
   "reflection|endA": {
-   "bucket": "lost",
+   "bucket": "kept",
    "n": 1,
    "src": [
     "1000"
    ],
-   "out": []
+   "out": [
+    "1000"
+   ]
   },
   "reflection|endPos": {
-   "bucket": "lost",
+   "bucket": "kept",
    "n": 1,
    "src": [
     "10000"
    ],
-   "out": []
+   "out": [
+    "10000"
+   ]
   },
   "reflection|fadeDir": {
-   "bucket": "lost",
+   "bucket": "kept",
    "n": 1,
    "src": [
     "5400000"
    ],
-   "out": []
+   "out": [
+    "5400000"
+   ]
   },
   "reflection|kx": {
-   "bucket": "lost",
+   "bucket": "kept",
    "n": 1,
    "src": [
     "0"
    ],
-   "out": []
+   "out": [
+    "0"
+   ]
   },
   "reflection|ky": {
-   "bucket": "lost",
+   "bucket": "kept",
    "n": 1,
    "src": [
     "0"
    ],
-   "out": []
+   "out": [
+    "0"
+   ]
   },
   "reflection|stA": {
-   "bucket": "lost",
+   "bucket": "kept",
    "n": 1,
    "src": [
     "0"
    ],
-   "out": []
+   "out": [
+    "0"
+   ]
   },
   "reflection|stPos": {
-   "bucket": "lost",
+   "bucket": "kept",
    "n": 1,
    "src": [
     "0"
    ],
-   "out": []
+   "out": [
+    "0"
+   ]
   },
   "reflection|sx": {
-   "bucket": "lost",
+   "bucket": "kept",
    "n": 1,
    "src": [
     "100000"
    ],
-   "out": []
+   "out": [
+    "100000"
+   ]
   },
   "reflection|sy": {
-   "bucket": "lost",
+   "bucket": "kept",
    "n": 1,
    "src": [
     "100000"
    ],
-   "out": []
+   "out": [
+    "100000"
+   ]
   },
   "rFonts|ascii": {
    "bucket": "kept",

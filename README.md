@@ -10738,6 +10738,96 @@ Writer 工具条加「标尺」开关，水平标尺挂在 `.doc-page` 内随内
   `a:noFill`）；共享会话只在主打开链接入，mammoth 回退路径的
   `docxToCommentHtml` 仍自解一次。
 
+## 发行说明 v0.181（效果整片 / 逐页翻页预览 / ODT 导入单次物化）
+
+三件事都有硬判据。仍是「代码 + 文档」两笔提交、逐文件 add，没碰那 7 个预存改动
+与 `pdf-text-edit.ts` 等未跟踪文件。
+
+### 一、`a:effectLst` 效果整片：第二张插入锚点表
+
+- D40 说这一族「要新建整片并插在 `a:ln` 之后、`a:spLocks` 之前，不能复用 v0.180
+  的 `a:ln` 内插锚点表」——确实如此：v0.180 那张表的落点是 `</a:ln>` **内部**
+  （子元素），而 effectLst 是 `a:ln` 的**兄弟**。本轮在 `patchImgXml` 里另起一张
+  `['a:scene3d','a:sp3d','a:extLst','a:spLocks']` 锚点表：找第一枚排在
+  effectLst 之后的在场兄弟插在它前面；写出包实际只发到 `a:ln`，退化到
+  `</pic:spPr>` 前——那也正好是 `a:ln` 之后，schema 位次成立。
+- 读手补 19 枚载荷键（`outerShdw` 5 / `glow` 1 / `reflection` 13），`attrL`
+  单漏斗、与 `DRAWING_SHELL_ATTRS` 同批键；属性名→键名的规则抽成
+  `cell-style.ts` 的 `EFFECT_ATTRS` + `effectKey`，读写手共用一份，避免
+  「存了 `osBlurRad`、写手找 `osBlur`」这种不报错的静默漏接。
+- 写手用 `tagWithAttrs` 生成三枚自闭合元素、幂等守卫（已有整片改为改属性）。
+  `a:glow` 写成自闭合、不带 `<a:schemeClr>`——否则 `schemeClr|val` 会从 lost
+  变 value，把「掉了」粉饰成「值变」。
+- **刻意不碰三维族**：夹具把 `scene3d`/`sp3d`/`props3d` 塞进了 effectLst
+  内部，按 CT_ShapeProperties 它们应是 effectLst 之后的兄弟，`props3d` 甚至
+  不是 OOXML 元素名。复刻就是写一份结构非法的坏件，另立一轮。
+- **19 对全部 `lost → kept`**：图形壳 **63/319 → 82/319（19.7% → 25.7%）**、
+  合计 **309/619 → 328/619（49.9% → 53.0%）**、掉了 293 → 274、值变仍是 17。
+  `test-effect-lst.mjs` 26 项。
+
+### 二、Writer 逐页翻页预览（D40 顺延）
+
+- 没有写分页算法：复用屏幕上分页参考线的 `--pgh`（就是 `effPx.h`）与
+  `estimatePages` 同一份页高，把「第 n 页」翻成滚动量。`print-preview.ts` 新增
+  `pageScrollTop` / `pageOfScrollTop` / `clampPage` 三枚纯函数（zoom 七档互逆），
+  `PreviewUi` 多一枚 `showPager`。
+- 预览条变成「◀ 第 n / N 页（约）▶」，点击走 `scrollRef.scrollTo`；滚动时反向
+  回写页码，`previewTargetRef` 在 smooth scroll 期间挡住中间帧，免得页码一路
+  跳回起点。非预览态 `onScroll` 直接返回，不白跑。
+- **诚实边界**：等距页距定位 ≠ 真分页。表格/图片跨页、孤行控制一概不模拟，
+  纸面断页仍由 Chromium 的 `@media print` 决定；页码保留「约」字。
+  `test-print-pager.mjs` 29 项。
+
+### 三、ODT 导入：两棵主树只物化一次
+
+- `odtToHtml` 此前 `cdoc`（content.xml）与 `sdoc`（styles.xml）被
+  `Array.from(getElementsByTagName('*'))` 各物化 3~5 次；`findLocal` 更是
+  「找第一枚也要先摊平整棵子树」。本轮把两棵树各预物化一次复用，其余子树
+  只查一次、**不缓存**（给它们挂 WeakMap 在基准里是纯亏损）；`findLocal`
+  改成遍历 HTMLCollection 早停。
+- `odtToHtml(bytes, {cacheDesc:false})` 保留改前路径——A/B 两腿同源、只差
+  一个参数，不依赖会过期的手工副本。夹具来自产品真出口
+  `prosemirrorToOdtBytes`，另往 `styles.xml` 注入 N 枚空具名样式放大 sdoc
+  （只放大节点数，不改两腿语义）。node 侧用 `@xmldom/xmldom` 并补一个
+  `children` getter（linkedom 的 `localName` 带命名空间前缀，不适配 ODT）。
+- 判据 `scripts/bench-odt-desc.mjs`：两腿 `{html, meta, warnings}` **逐字相同**，
+  `getElementsByTagName('*')` 调用 **14 → 8** 次；同进程交替各 14 样本取中位。
+
+| 夹具 | 改前 | 本轮 | 降幅 |
+|---:|---:|---:|---:|
+| 1 段 | 3.8ms | 4.5ms | 噪声覆盖 |
+| 400 段 | 11.6ms | 9.9ms | −15.0% |
+| 1200 段 | 26.3ms | 22.0ms | −16.3% |
+
+  复跑一次 400/1200 段为 −8.1% / −18.4%，写区间 **−8~18%**；小件 4~6ms
+  受 GC 噪声覆盖，不冒充有降幅。`test-odt-desc.mjs` 17 项（含空文档、
+  无 `styles.xml` 等边界）。
+
+### 门禁与账本
+
+- tsc 0、build ✓；十六组结构测试全绿。
+- 保真 docx 99.0% / 98.4%、记录对 715、四条变异腿 52.5 / 59.4 / 99.0 / 96.5
+  一字不动，**`docs/fidelity.*` 与 HEAD 逐字节相同**；pptx 70.1% / 74.3%、
+  42/19 全绿、`--mut no-ga` 42 条全红后复位。
+- 往返账 `70f83a6d…` / `a1961f82…` 两次复跑一致。`modules` 保持 **67**
+  （本轮没有新增 `src/lib` 文件）。
+- 既有断言因本轮改动过期，按纪律**改断言不改代码**：`test-writer-shell` 的
+  `PreviewUi` 对象多了 `showPager`、诚实边界注释换了口径。
+
+### 顺延（D41）
+
+- 图形壳剩 **235 对**：三维族 `sp3d`(3) / `props3d`(3) / `lightRig`(2) 要先
+  定「夹具结构非法、真件应写成 effectLst 之后的兄弟」的口径再动；VML 老式
+  形状族 `shape`(20) / `bodyPr`(19) / `rect`(15) / `fill`(14) / `line`(14)
+  仍是模型无槽、写手发不出 `w:pict`。`wp:posOffset` 动 0 对的口径问题照旧。
+- Impress 母版编辑（背景/配色可单轮闭环，占位矩形要第二套拖拽状态机）；
+  Calc 缩放（落点在预存改动 `SheetEditor.tsx`，按房规换落点）；
+  **pdf-lib 按需加载**仍等 `pdf-text-edit.ts` 入库。D32–D40 长尾原账不动。
+- **诚实边界**：本轮及历轮 A/B 都是合成夹具，不是真件打开耗时；效果整片只
+  回写三枚自闭合元素的属性，源件描边里的 `a:solidFill/a:schemeClr` 填充仍
+  没回写；翻页预览只有纯函数与源码级断言，没做真机浏览器对撞；ODT 的
+  node 判据依赖 DOM polyfill，浏览器端收益未实测。
+
 ## 性能（v0.3）
 
 
