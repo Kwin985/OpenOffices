@@ -19,6 +19,8 @@ import {
   revealSteps,
   serializeDeck,
   themeOf,
+  withMaster,
+  stageColors,
   writeAnimOrder,
   LAYOUT_NAMES,
   TRANSITION_NAMES,
@@ -30,6 +32,7 @@ import {
   type BulletAnim,
   type BulletExit,
   type Deck,
+  type MasterStyle,
   type RevealItem,
   type Slide,
   type SlideChartType,
@@ -218,6 +221,9 @@ function PptEditor({ tab }: Props) {
   const revealedRef = useRef(1)
   const [showNotes, setShowNotes] = useState(false)
   const [showSequence, setShowSequence] = useState(false) // v0.115：播放顺序面板
+  // v0.182：母版配色面板。背景图上传另起一枚 fileRef，别复用写单页 s.image 的那枚
+  const [showMaster, setShowMaster] = useState(false)
+  const masterBgRef = useRef<HTMLInputElement>(null)
   // v0.178 视图缩放：与 Writer 同一串档位。只改屏幕上那张舞台，导出/放映读的都是 deck
   const [zoom, setZoom] = useState(1)
   const stageWrapRef = useRef<HTMLDivElement>(null)
@@ -299,6 +305,15 @@ function PptEditor({ tab }: Props) {
     // Cannot update a component (Workspace) while rendering a different component (PptEditor)
     markDirty(tab.id, true)
   }
+
+  // v0.182：母版写入的唯一出口。withMaster 换引用（memo(StaticSlide) 才重渲染），
+  // 且不碰 deck.theme / luminance——那两样只在 pptx 导入时算一次，手改背景不重算
+  const patchMaster = (p: Partial<MasterStyle>) =>
+    edit((d) => {
+      d.master = withMaster(d, p).master
+    })
+  const hexOr = (v: string | undefined, fallback: string) =>
+    /^#[0-9a-fA-F]{6}$/.test(v ?? '') ? v! : fallback
 
   const editSlide = (i: number, fn: (s: Slide) => void) =>
     edit((d) => {
@@ -963,6 +978,13 @@ function PptEditor({ tab }: Props) {
             播放顺序 {seqItems.length}
           </button>
         )}
+        <button
+          className={`tool-btn${showMaster ? ' tool-btn-primary' : ''}`}
+          onClick={() => setShowMaster((v) => !v)}
+          title="母版背景与配色：整份 deck 生效，随 .opd 与 pptx 往返；占位矩形本轮不开放编辑"
+        >
+          母版配色
+        </button>
         <label className="tool-num" title="放映时到秒自动换页；随 pptx advTm 往返">
           换页
           <input
@@ -1050,6 +1072,74 @@ function PptEditor({ tab }: Props) {
             默认序
           </button>
           <span className="ppt-seq-hint">放映按这一列先后揭示，导出各占 PowerPoint 一枚 clickEffect</span>
+        </div>
+      )}
+
+      {/* v0.182：母版配色。复用播放顺序面板的样式与形状，写入统一走 patchMaster */}
+      {showMaster && (
+        <div className="ppt-seq-panel">
+          <span className="ppt-seq-label">母版背景 / 配色</span>
+          <input
+            ref={masterBgRef}
+            type="file"
+            accept="image/*"
+            style={{ display: 'none' }}
+            onChange={(e) => {
+              const f = e.target.files?.[0]
+              e.target.value = ''
+              // 别走 pickImage（那个写单页 s.image）；这里只写 deck.master.bgImage
+              if (f) void fileToDataUri(f).then((uri) => patchMaster({ bgImage: uri }))
+            }}
+          />
+          <label className="ppt-seq-item" title="母版底色；单页背景会盖住它">
+            底色
+            <input
+              type="color"
+              className="ppt-shape-color"
+              value={hexOr(m?.bg, stageColors(deck).bg)}
+              onChange={(e) => patchMaster({ bg: e.target.value })}
+            />
+          </label>
+          <label className="ppt-seq-item" title="标题与强调色">
+            标题色
+            <input
+              type="color"
+              className="ppt-shape-color"
+              value={hexOr(m?.titleColor, stageColors(deck).accent)}
+              onChange={(e) => patchMaster({ titleColor: e.target.value })}
+            />
+          </label>
+          <label className="ppt-seq-item" title="正文文字色">
+            正文色
+            <input
+              type="color"
+              className="ppt-shape-color"
+              value={hexOr(m?.bodyColor, stageColors(deck).fg)}
+              onChange={(e) => patchMaster({ bodyColor: e.target.value })}
+            />
+          </label>
+          <button className="tool-btn tool-btn-mini" onClick={() => masterBgRef.current?.click()}>
+            背景图…
+          </button>
+          <button
+            className="tool-btn tool-btn-mini"
+            disabled={!m?.bgImage}
+            onClick={() => patchMaster({ bgImage: undefined })}
+          >
+            清除背景图
+          </button>
+          <button
+            className="tool-btn tool-btn-mini"
+            title="去掉母版四色，回落到当前主题"
+            onClick={() =>
+              patchMaster({ bg: undefined, bgImage: undefined, titleColor: undefined, bodyColor: undefined })
+            }
+          >
+            恢复主题
+          </button>
+          <span className="ppt-seq-hint">
+            整份 deck 生效；背景图会盖住纯色底色，占位矩形本轮不开放编辑
+          </span>
         </div>
       )}
 

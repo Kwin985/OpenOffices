@@ -77,7 +77,15 @@ interface ShapeName {
   name: string
 }
 
-export async function deckToPptxBytes(deck: Deck): Promise<Uint8Array> {
+/**
+ * @param opts.legacyWriteBack 仅用于 A/B 基准的对照腿：把没改过的 slide 也
+ *   `zip.file(name, xml)` 写回（v0.181 及以前的写法）。产品路径永远不传，
+ *   两腿同源、只差这一个开关，判据可长期复现（v0.180 的纪律）。
+ */
+export async function deckToPptxBytes(
+  deck: Deck,
+  opts?: { legacyWriteBack?: boolean },
+): Promise<Uint8Array> {
   const { default: PptxGenJS } = await import('pptxgenjs')
   const pptx = new PptxGenJS()
   const shapeNames: ShapeName[][] = [] // 逐页：形状动画注入时按它反查 spid（v0.111）
@@ -281,7 +289,8 @@ export async function deckToPptxBytes(deck: Deck): Promise<Uint8Array> {
       const name = `ppt/slides/slide${i + 1}.xml`
       const file = zip.file(name)
       if (!file) continue
-      let xml = await file.async('string')
+      const original = await file.async('string')
+      let xml = original
       // v0.140：形状名/替代文本（cNvPr@descr，只有 image/chart 有原生 altText）与隔行底纹
       for (const n of shapeNames[i] ?? []) {
         const sh = s.shapes?.[n.idx]
@@ -303,8 +312,11 @@ export async function deckToPptxBytes(deck: Deck): Promise<Uint8Array> {
         const spidOf = (it: RevealItem) => (it.kind === 'line' ? spid : shapeSpid.get(it.idx))
         inject += timingXml(s, order, spidOf)
       }
-      if (inject) zip.file(name, xml.replace('</p:sld>', `${inject}</p:sld>`))
-      else zip.file(name, xml)
+      // v0.182：只在**真改过**时写回。JSZip 对未被 `file(name, data)` 替换的条目
+      // 复用原有压缩数据；把没改的 slide 也写回会丢掉那份缓存，让末尾的
+      // generateAsync 重新 DEFLATE 整包（含媒体、theme 与其它未改的 slide）。
+      const next = inject ? xml.replace('</p:sld>', `${inject}</p:sld>`) : xml
+      if (next !== original || opts?.legacyWriteBack) zip.file(name, next)
     }
     const buf = (await zip.generateAsync({ type: 'arraybuffer' })) as ArrayBuffer
     return new Uint8Array(buf)

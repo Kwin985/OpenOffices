@@ -202,6 +202,26 @@ export function themeOf(id: string): DeckTheme {
   return THEMES.find((t) => t.id === id) ?? THEMES[0]
 }
 
+/**
+ * v0.182：母版配色写入的单一事实源。**必须换 master 引用**——
+ * `StaticSlide` 是 memo，原地改 `deck.master.bg` 不会让缩略图/放映重渲染。
+ * 占位矩形（titleRect/bodyRect）本轮不开放编辑，原样保留在 master 里。
+ */
+export function withMaster(deck: Deck, patch: Partial<MasterStyle>): Deck {
+  return { ...deck, master: { ...(deck.master ?? {}), ...patch } }
+}
+
+/**
+ * 舞台配色优先级（与 PptEditor 的 stageStyle、StaticSlide 的同款链同源）：
+ * 文字/强调取母版优先、主题兜底；底色可由单页背景覆盖，但不改文字色。
+ * 纯函数，Node 侧可钉；改 master.bg 不触发 deck.theme 重算（luminance 只在 pptx 导入时算一次）。
+ */
+export function stageColors(deck: Deck, slideBg?: string): { fg: string; accent: string; bg: string } {
+  const t = themeOf(deck.theme)
+  const m = deck.master
+  return { fg: m?.bodyColor ?? t.fg, accent: m?.titleColor ?? t.accent, bg: slideBg ?? m?.bg ?? t.bg }
+}
+
 export const LAYOUT_NAMES: Record<SlideLayout, string> = {
   title: '标题页',
   bullets: '内容页',

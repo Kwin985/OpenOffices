@@ -2578,6 +2578,54 @@ function DocEditor({ tab }: Props) {
               mm
             </label>
           )}
+          {eff.cols > 1 && (
+            <label
+              className="doc-hf-field"
+              title="Word 的不等宽分栏：逐栏宽按缇原值写回 w:col。屏上 CSS columns 只能等宽，这里只管 docx 往返"
+            >
+              不等宽
+              <input
+                type="checkbox"
+                checked={!!eff.colsLayout?.widths?.length}
+                onChange={(e) => {
+                  if (!e.target.checked) {
+                    setPg({ colsLayout: undefined })
+                    return
+                  }
+                  const widths = eff.colsLayout?.widths?.length
+                    ? eff.colsLayout.widths
+                    : Array.from({ length: eff.cols }, () => ({
+                        w: Math.round(((effPx.w - effPx.left - effPx.right) * 15) / eff.cols),
+                      }))
+                  setPg({ colsLayout: { equalWidth: false, widths } })
+                }}
+              />
+            </label>
+          )}
+          {eff.cols > 1 && !!eff.colsLayout?.widths?.length && (
+            <span className="doc-hf-field" title="缇原值，直接写回 w:col/@w:w；屏上仍按等宽显示">
+              栏宽(缇)
+              {eff.colsLayout!.widths!.map((c, i) => (
+                <input
+                  key={i}
+                  className="tb-input doc-num"
+                  type="number"
+                  step="1"
+                  min="1"
+                  style={{ width: 72, marginRight: 4 }}
+                  value={c.w}
+                  onChange={(ev) => {
+                    const v = ev.target.valueAsNumber
+                    if (!Number.isFinite(v) || v <= 0) return
+                    const widths = eff.colsLayout!.widths!.map((x, j) =>
+                      j === i ? { ...x, w: Math.round(v) } : x,
+                    )
+                    setPg({ colsLayout: { ...eff.colsLayout, widths } })
+                  }}
+                />
+              ))}
+            </span>
+          )}
           {meta.page && btn('重置', () => patchMeta({ page: undefined }), false, '恢复 A4 + 默认边距 + 不分栏')}
         </div>
       )}

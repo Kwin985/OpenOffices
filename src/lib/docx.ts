@@ -2,6 +2,7 @@ import {
   AlignmentType,
   BorderStyle,
   Bookmark,
+  Column,
   CommentRangeEnd,
   CommentRangeStart,
   CommentReference,
@@ -154,6 +155,12 @@ export interface PageSetup {
   cols?: number
   colGap?: number
   /**
+   * 不等宽分栏（v0.182）：`w:cols/@w:equalWidth=0` 与逐枚 `w:col/@w:w|@w:space`。
+   * 缇原值，屏上 CSS columns 只能等宽、不兑现，只用于 docx 往返；包的
+   * `column.children: Column[]` 是原生槽，post-pack 不用动。
+   */
+  colsLayout?: { equalWidth?: boolean; widths?: { w: number; space?: number }[] }
+  /**
    * 页码型别与起始值（v0.170）：`w:pgNumType/@w:fmt|@w:start`。屏上没有分页视图，
    * 页码是域算的，但纸面上「这一节从 iii 开始、用罗马数字」是实打实的设置
    */
@@ -175,6 +182,8 @@ export interface DocxSection {
   margin?: { top?: number; right?: number; bottom?: number; left?: number; header?: number; footer?: number; gutter?: number }
   cols?: number
   colGap?: number
+  /** v0.182：不等宽分栏逐栏表（缇原值），与 PageSetup.colsLayout 同形，只往返不屏现 */
+  colsLayout?: { equalWidth?: boolean; widths?: { w: number; space?: number }[] }
   docGrid?: { type?: string; linePitch?: number; charSpace?: number }
   /** 页码型别与起始值（v0.170）：`w:pgNumType` 的两枚属性，原样带回 `PageSetup.pageNum` */
   pageNum?: { fmt?: string; start?: number }
@@ -227,6 +236,8 @@ export function pageSetupOf(s: DocxSection): PageSetup {
     const gap = mm(s.colGap)
     if (gap && Math.abs(gap - DEFAULT_COL_GAP) > 0.6) page.colGap = gap
   }
+  // v0.182：逐栏表是缇原值，不做 mm 换算（换算误差会写成源件没说过的话）
+  if (s.colsLayout) page.colsLayout = s.colsLayout
   if (s.docGrid && Object.keys(s.docGrid).length) page.docGrid = s.docGrid
   return page
 }
@@ -284,6 +295,7 @@ export function resolvePage(p?: PageSetup): {
   orient?: 'portrait' | 'landscape'
   docGrid?: { type?: string; linePitch?: number; charSpace?: number }
   pageNum?: { fmt?: string; start?: number }
+  colsLayout?: { equalWidth?: boolean; widths?: { w: number; space?: number }[] }
 } {
   const preset = p?.size === 'Letter' ? PAGE_SIZES_MM.Letter : PAGE_SIZES_MM.A4
   const w = p?.size === 'custom' && p.w ? p.w : preset[0]
@@ -301,6 +313,7 @@ export function resolvePage(p?: PageSetup): {
     ...(p?.orient ? { orient: p.orient } : {}),
     ...(p?.docGrid ? { docGrid: p.docGrid } : {}),
     ...(p?.pageNum ? { pageNum: p.pageNum } : {}),
+    ...(p?.colsLayout ? { colsLayout: p.colsLayout } : {}),
   }
 }
 
@@ -2905,7 +2918,15 @@ export async function prosemirrorToDocxBytes(json: PMNode, meta?: DocMeta): Prom
         /** 页码型别与起始值（v0.170）：包的 sections[].properties.page.pageNumbers 原生槽 */
         pageNumbers?: { start?: number; formatType?: (typeof NumberFormat)[keyof typeof NumberFormat] }
       }
-      column?: { count: number; space: number; equalWidth: true; separate: false }
+      column?: {
+        count: number
+        space: number
+        equalWidth: boolean
+        /** 不等宽分支刻意不传：包会把 false 序列化成 w:sep="false"（非法的 ST_OnOff） */
+        separate?: boolean
+        /** v0.182：不等宽分栏时逐枚 w:col（包的 Column 原生槽） */
+        children?: Column[]
+      }
     }
     headers?: { default: Header }
     footers?: { default: Footer }
@@ -2958,8 +2979,21 @@ export async function prosemirrorToDocxBytes(json: PMNode, meta?: DocMeta): Prom
           }
         : {}),
       // 单栏不写 w:cols（Word 默认即单栏，写出来反而让 diff 变噪）
+      // v0.182：带逐栏表时走 `equalWidth:false + children`（包的原生槽），
+      // 缇原值直接交给 Column，不做 mm 换算；没带表就照旧等宽 N 栏
       ...(pg.cols > 1
-        ? { column: { count: pg.cols, space: twips(pg.colGap), equalWidth: true as const, separate: false } }
+        ? {
+            column: pg.colsLayout?.widths?.length
+              ? {
+                  count: pg.colsLayout.widths.length,
+                  space: twips(pg.colGap),
+                  equalWidth: false,
+                  children: pg.colsLayout.widths.map(
+                    (c) => new Column({ width: c.w, ...(c.space !== undefined ? { space: c.space } : {}) }),
+                  ),
+                }
+              : { count: pg.cols, space: twips(pg.colGap), equalWidth: true as const, separate: false },
+          }
         : {}),
     }
   }
@@ -3119,8 +3153,10 @@ export async function prosemirrorToDocxBytes(json: PMNode, meta?: DocMeta): Prom
   // 各补丁仍取「上一步的 bytes」作参数，但有会话时那个值只是占位——真正的数据在
   // sess.zip 里，串行顺序与原来「打包→解包」的链逐字同义
   const sess: PackSession = { zip: await loadZipOf(out), touched: false }
+  // v0.182：不等宽分栏的 w:cols/@equalWidth 回填成 onOff 字面（包发 "false"）
+  const withCols = await patchColsOnOff(out, sess)
   // 段落属性余量（v0.147）：按出现序贴回各自的 <w:pPr>，与上面两笔同一路数
-  const withPara = await patchParaProps(out, dt.pprExtras, sess)
+  const withPara = await patchParaProps(withCols, dt.pprExtras, sess)
   // 下划线主题三枚（v0.159）：按 <w:u> 出现序补属性——包只有 {type,color} 两枚槽
   const withU = await patchElemAttrs(withPara, 'u', dt.uThemes, sess)
   // 文字色主题三枚（v0.160）：按 <w:color> 出现序补——包只写 w:val 一枚
@@ -3703,6 +3739,26 @@ async function patchParaProps(bytes: Uint8Array, extras: string[], sess?: PackSe
  * 而 run 级补丁位管的就是正文里那一枚。脚注/批注的正文在我们的写手里走简单文本
  * （不带 charExtra），不会登记进这一族，所以计数是对得上的
  */
+/**
+ * v0.182：包的 `IColumnsAttributes.equalWidth` 是 boolean，序列化成
+ * `w:equalWidth="false"`；而 OOXML 的 ST_OnOff 字面是 `"0"/"1"`，源件写 `"0"`。
+ * 与 v0.179 的 `FLAT/flat` 同款：只让包发壳，字面由 post-pack 按源件回填。
+ * 只动 `<w:cols>` 开标签上的这一枚值；幂等（第二趟已经没有 "false" 可换）。
+ */
+async function patchColsOnOff(bytes: Uint8Array, sess?: PackSession): Promise<Uint8Array> {
+  const zip = sess ? sess.zip : await loadZipOf(bytes)
+  const file = zip.file('word/document.xml')
+  if (!file) return bytes
+  const xml = await file.async('string')
+  const out = xml.replace(
+    /(<w:cols\b[^>]*\bw:equalWidth=")false(")/g,
+    (_m: string, a: string, b: string) => `${a}0${b}`,
+  )
+  if (out === xml) return bytes
+  zip.file('word/document.xml', out)
+  return finishPatch(bytes, zip, sess)
+}
+
 async function patchElemAttrs(bytes: Uint8Array, tag: string, extras: string[], sess?: PackSession): Promise<Uint8Array> {
   if (!extras.some((x) => x)) return bytes
   const zip = sess ? sess.zip : await loadZipOf(bytes)

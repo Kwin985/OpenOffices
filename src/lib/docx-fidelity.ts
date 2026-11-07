@@ -5500,6 +5500,24 @@ function sectionOf(doc: XEl | undefined): DocxSection | undefined {
     if (n !== undefined) out.cols = n
     const sp = attrNum(cols, 'w:space')
     if (sp !== undefined) out.colGap = sp
+    // v0.182：不等宽分栏的逐栏表。equalWidth 与 w:col/@w|@space 原本只在下面
+    // 「只读记账」段按名查问；这里复用同一条 attr 单漏斗把值带出来，查问集合不变。
+    // 缇原值直传，不做 mm 换算（换算误差会写成源件没说过的话）。
+    const eq = attr(cols, 'w:equalWidth')
+    const widths: { w: number; space?: number }[] = []
+    for (const c of all(cols, 'w:col')) {
+      const w = Number(attr(c, 'w:w'))
+      if (!Number.isFinite(w)) continue
+      const cs = attr(c, 'w:space')
+      const space = cs === undefined ? undefined : Number(cs)
+      widths.push({ w, ...(space !== undefined && Number.isFinite(space) ? { space } : {}) })
+    }
+    if (eq !== undefined || widths.length) {
+      out.colsLayout = {
+        ...(eq !== undefined ? { equalWidth: eq !== '0' && eq !== 'false' } : {}),
+        ...(widths.length ? { widths } : {}),
+      }
+    }
   }
   const grid = find(sect, 'w:docGrid')
   if (grid) {
