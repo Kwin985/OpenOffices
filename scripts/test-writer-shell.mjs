@@ -101,11 +101,12 @@ const read = (rel) => fs.readFileSync(new URL(rel, import.meta.url), 'utf8')
 // ───────────────────── 5. 独立打印预览（v0.175）─────────────────────
 
 {
+  // v0.181：PreviewUi 多了 showPager（翻页控件只在预览态出现）
   eq('预览：关着时是可编辑、无预览条', previewUi(false), {
-    editable: true, showEditorBars: true, showSidebars: true, showPreviewBar: false,
+    editable: true, showEditorBars: true, showSidebars: true, showPreviewBar: false, showPager: false,
   })
   eq('预览：开着时只读、只留预览条', previewUi(true), {
-    editable: false, showEditorBars: false, showSidebars: false, showPreviewBar: true,
+    editable: false, showEditorBars: false, showSidebars: false, showPreviewBar: true, showPager: true,
   })
   eq('预览：空文档也是一页', estimatePages(0, 1000, 100, 100), 1)
   eq('预览：正好一版心', estimatePages(800, 1000, 100, 100), 1)
@@ -130,7 +131,10 @@ const read = (rel) => fs.readFileSync(new URL(rel, import.meta.url), 'utf8')
   check('预览：只读态不弹编辑右键菜单', /onContextMenu=\{\(e\) => \{[\s\S]{0,160}if \(previewOpen\) return/.test(src))
   check('预览：一条 CSS 收起所有工具条/面板', css.includes('.editor-pane.is-preview > :not(.doc-body)'))
   check('预览：预览条与侧栏样式在位', css.includes('.doc-preview-bar') && css.includes('.editor-pane.is-preview .doc-outline'))
-  check('预览：诚实边界写进 lib', lib.includes('逐页翻页'))
+  // v0.181：补了等距页距翻页定位，lib 的边界注释改成「屏幕不重排、不切页」；
+  // 判据跟着改成钉新边界，而不是继续找旧的「逐页翻页未做」字面
+  check('预览：诚实边界写进 lib（等距定位 ≠ 真分页）',
+    lib.includes('屏幕上不重排、不切页') && lib.includes('@media print'))
 }
 
 // ───────────────────── 6. pptx 导入：一页一份 .rels 索引（v0.175）─────────────────────

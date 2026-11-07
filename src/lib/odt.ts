@@ -1081,7 +1081,9 @@ const LIST_WRAPPERS = new Set(['list-header', 'list-footer'])
 
 /** 后代里首个指定 local name 的元素（不含自身）：draw:frame 与内容之间还隔着一层的情形 */
 function findLocal(el: Element, localName: string): Element | null {
-  for (const d of Array.from(el.getElementsByTagName('*'))) if (d.localName === localName) return d
+  // v0.181：直接遍历 HTMLCollection 早停，不再先 Array.from 物化整棵子树
+  const all = el.getElementsByTagName('*')
+  for (let i = 0; i < all.length; i++) if (all[i].localName === localName) return all[i]
   return null
 }
 
@@ -1261,7 +1263,17 @@ const stripPageTokens = (t: string) =>
     .filter((x) => x && x !== '第' && x !== '页' && x !== '共' && x !== '·' && x !== '-' && x !== '/' && !/^\d+$/.test(x))
     .join(' ')
 
-export async function odtToHtml(bytes: Uint8Array): Promise<{ html: string; meta: DocMeta; warnings: string[] }> {
+export async function odtToHtml(
+  bytes: Uint8Array,
+  opts?: { cacheDesc?: boolean },
+): Promise<{ html: string; meta: DocMeta; warnings: string[] }> {
+  // v0.181：cdoc（content.xml）与 sdoc（styles.xml）此前被
+  // `Array.from(getElementsByTagName('*'))` 各物化 3~5 次，每次新建一整份数组。
+  // 导入期间这两棵树不再变，各物化一次复用即可；其余子树只查一次，不缓存
+  // （给它们挂 WeakMap 是纯亏损）。`cacheDesc: false` 保留改前路径，让 A/B 两腿
+  // 同源、只差这一个参数（v0.180 的纪律，不依赖会过期的手工 git archive 副本）。
+  /** cdoc / sdoc 是 Document，其余子树是 Element——两者都有 getElementsByTagName */
+  const descOf = (el: Element | Document): Element[] => Array.from(el.getElementsByTagName('*'))
   const { default: JSZip } = await import('jszip')
   const zip = await JSZip.loadAsync(bytes)
   const contentText = await zip.file('content.xml')?.async('string')
@@ -1275,6 +1287,11 @@ export async function odtToHtml(bytes: Uint8Array): Promise<{ html: string; meta
   if (perr) throw new Error(`content.xml 不是合法的 XML：${(perr.textContent ?? '').replace(/\s+/g, ' ').trim().slice(0, 160)}`)
   const sdoc = stylesText ? parser.parseFromString(stylesText, 'text/xml') : null
 
+  // 缓存腿预物化两棵树；对照腿（cacheDesc:false）不预物化，保持与改前逐字同形
+  const cdocAll = opts?.cacheDesc === false ? null : descOf(cdoc)
+  const sdocAll = opts?.cacheDesc === false || !sdoc ? null : descOf(sdoc)
+  const allDescOf = (el: Element | Document, cache?: Element[] | null): Element[] => cache ?? descOf(el)
+
   /** 与 docx 保真导入同一套边界账：同类只记一条，出口写成「文案×N」，显示在状态栏而不是静默丢 */
   const warnCount = new Map<string, number>()
   const warn = (m: string) => warnCount.set(m, (warnCount.get(m) ?? 0) + 1)
@@ -1286,7 +1303,7 @@ export async function odtToHtml(bytes: Uint8Array): Promise<{ html: string; meta
   const openCids: number[] = []
   const pointCids: number[] = []
   const endNames = new Set(
-    Array.from(cdoc.getElementsByTagName('*'))
+    allDescOf(cdoc, cdocAll)
       .filter((x) => x.localName === 'annotation-end')
       .map((x) => x.getAttribute('office:name') ?? ''),
   )
@@ -1318,7 +1335,7 @@ export async function odtToHtml(bytes: Uint8Array): Promise<{ html: string; meta
   let paraDefaultSize = ''
   for (const d of [cdoc, sdoc]) {
     if (!d) continue
-    for (const el of Array.from(d.getElementsByTagName('*'))) {
+    for (const el of allDescOf(d, d === cdoc ? cdocAll : sdocAll)) {
       if (el.localName === 'style') {
         const name = el.getAttribute('style:name')
         if (name && !styles.has(name)) styles.set(name, el)
@@ -1331,7 +1348,7 @@ export async function odtToHtml(bytes: Uint8Array): Promise<{ html: string; meta
         const name = el.getAttribute('style:name')
         if (!name) continue
         const lv = new Map<number, ListLevel>()
-        for (const x of Array.from(el.getElementsByTagName('*'))) {
+        for (const x of allDescOf(el)) {
           const num = x.localName === 'list-level-style-number'
           if (!num && x.localName !== 'list-level-style-bullet') continue
           // 专字只从这一层自己的直接孩子里取：编号层不吃（真件可达 number 层 0/37 带 text-properties，b45 c2|D），
@@ -1714,7 +1731,7 @@ export async function odtToHtml(bytes: Uint8Array): Promise<{ html: string; meta
   const noteBodies = new Map<string, Element>()
   // 同一趟预扫里收「被独立引用枚配走的那些 id」：老式内联锚要不要自己出正文，取决于本件有没有别处已经在配它
   const refClaimed = new Set<string>()
-  for (const el of Array.from(cdoc.getElementsByTagName('*'))) {
+  for (const el of allDescOf(cdoc, cdocAll)) {
     if (el.localName === 'footnote-reference' || el.localName === 'endnote-reference' || el.localName === 'note-reference') {
       const id = el.getAttribute('text:id')
       if (id) refClaimed.add(id)
@@ -1841,7 +1858,7 @@ export async function odtToHtml(bytes: Uint8Array): Promise<{ html: string; meta
       const root = doc.documentElement
       if (!root || doc.querySelector('parsererror')) continue
       // 只认有呈现标记的那类；剩下是 StarOffice 源码或二进制注释，塞进正文等于凭空造字
-      if (Array.from(root.getElementsByTagName('*')).some((x) => MATH_LEAF.has(x.localName))) return mathmlLinear(root)
+      if (allDescOf(root).some((x) => MATH_LEAF.has(x.localName))) return mathmlLinear(root)
       return ''
     }
     return ''
@@ -1922,14 +1939,14 @@ export async function odtToHtml(bytes: Uint8Array): Promise<{ html: string; meta
           case 'annotation': {
             // 批注本体：收进 DocComment（作者/日期/正文），正文不摊进段落；区间从此处包 span
             // 不收 e 的孩子——批注的 text:p 是内容不是正文，掉进 default 递归就会整段漏进文档（v0.86 前置实测量到的污染格）
-            const bodyPs = Array.from(e.getElementsByTagName('*')).filter((x) => x.localName === 'p' && x.namespaceURI?.includes('text'))
+            const bodyPs = allDescOf(e).filter((x) => x.localName === 'p' && x.namespaceURI?.includes('text'))
             const text = bodyPs.length
               ? bodyPs.map((p) => (p.textContent ?? '').replace(/\s+/g, ' ').trim()).filter(Boolean).join('\n')
               : (e.textContent ?? '').replace(/\s+/g, ' ').trim()
             const cid = comments.length + 1
             // dc:creator / dc:date 是 annotation 的子元素（ODF 1.2），不是属性——按元素收
             const dcEl = (name: string) =>
-              Array.from(e.getElementsByTagName('*')).find(
+              allDescOf(e).find(
                 (x) => x.localName === name && (x.namespaceURI ?? '').includes('purl.org/dc'),
               )?.textContent?.trim() || undefined
             comments.push({
@@ -1991,7 +2008,7 @@ export async function odtToHtml(bytes: Uint8Array): Promise<{ html: string; meta
    */
   async function frameHtml(e: Element): Promise<string> {
     let imgEl: Element | null = null
-    for (const d of Array.from(e.getElementsByTagName('*'))) {
+    for (const d of allDescOf(e)) {
       if (d.localName === 'image') {
         imgEl = d
         break
@@ -2045,7 +2062,7 @@ export async function odtToHtml(bytes: Uint8Array): Promise<{ html: string; meta
       warn('嵌入对象（draw:object）未导入')
       return ''
     }
-    if (findLocal(e, 'chart') || Array.from(e.getElementsByTagName('*')).some((d) => d.localName === 'chart'))
+    if (findLocal(e, 'chart') || allDescOf(e).some((d) => d.localName === 'chart'))
       warn('图表对象未导入')
     else warn('矢量图形（draw:frame 无位图）未导入')
     return ''
@@ -2212,14 +2229,14 @@ export async function odtToHtml(bytes: Uint8Array): Promise<{ html: string; meta
   const meta: DocMeta = {}
   if (comments.length) meta.comments = comments
   if (sdoc) {
-    const master = Array.from(sdoc.getElementsByTagName('*')).find((x) => x.localName === 'master-page')
+    const master = allDescOf(sdoc, sdocAll).find((x) => x.localName === 'master-page')
     const plain = (n: Element | null | undefined) => (n ? (n.textContent ?? '').replace(/\s+/g, ' ').trim() : '')
     const header = master ? pick(master, 'header') : null
     const footer = master ? pick(master, 'footer') : null
     const headText = hfText(header)
     if (headText) meta.headerText = headText
     if (footer) {
-      const kids = Array.from(footer.getElementsByTagName('*'))
+      const kids = allDescOf(footer)
       const hasPage = kids.some((x) => x.localName === 'page-number')
       const hasCount = kids.some((x) => x.localName === 'page-count')
       // 页码格式的判据问的是「数字住在哪些包裹符之间」（第 1 页 / -1- / 1 / 2），那是排版结构而不是正文，
@@ -2243,7 +2260,7 @@ export async function odtToHtml(bytes: Uint8Array): Promise<{ html: string; meta
     // 声明镜像版式的 0 件：`style:extra-page-layout` 与 `fo:break-before="left"` 各 0 枚）。
     const hfVar = (el: Element | null | undefined): string => {
       if (!el) return ''
-      const f = Array.from(el.getElementsByTagName('*'))
+      const f = allDescOf(el)
       if (f.some((x) => x.localName === 'page-number' || x.localName === 'page-count')) return ''
       return hfText(el)
     }
@@ -2255,10 +2272,10 @@ export async function odtToHtml(bytes: Uint8Array): Promise<{ html: string; meta
     // 「这张纸」取哪一枚：ODF 由 master-page 的 style:page-layout-name 指定，而 styles.xml 文档序的第一枚
     // page-layout-properties 常是 <style:default-page-layout> 的孩子（真件 77 枚里 11 枚如此，那一枚六枚长度字面全缺）。
     // 引名查不到才回退旧行为（文档序第一枚）：缺引名的外部件不会因此从有账变没账。
-    const firstPlp = Array.from(sdoc.getElementsByTagName('*')).find((x) => x.localName === 'page-layout-properties')
+    const firstPlp = allDescOf(sdoc, sdocAll).find((x) => x.localName === 'page-layout-properties')
     const plpName = master?.getAttribute('style:page-layout-name')
     const plpEl = plpName
-      ? Array.from(sdoc.getElementsByTagName('*')).find(
+      ? allDescOf(sdoc, sdocAll).find(
           (x) => x.localName === 'page-layout' && x.getAttribute('style:name') === plpName
         )
       : undefined
@@ -2286,7 +2303,7 @@ export async function odtToHtml(bytes: Uint8Array): Promise<{ html: string; meta
       }
       if (Object.keys(margin).length) page.margin = margin
     }
-    const colsEl = Array.from(sdoc.getElementsByTagName('*')).find((x) => x.localName === 'columns')
+    const colsEl = allDescOf(sdoc, sdocAll).find((x) => x.localName === 'columns')
     const cn = Number(colsEl?.getAttribute('fo:column-count') ?? 1)
     if (cn > 1) {
       page.cols = Math.min(4, cn)

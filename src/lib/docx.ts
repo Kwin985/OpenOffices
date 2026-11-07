@@ -49,7 +49,7 @@ import {
   UnderlineType,
 } from 'docx'
 import { xml2js } from 'xml-js'
-import { bdAttr, borderParts, parsePbdrPayload, parseTrPrPayload, pxToEighths, pxToPt, parseBdrPayload, parseCnfPayload, parseFramePayload, parseImgPayload, parsePprPayload, parseShadePayload, parseShdPayload, parseTabsPayload, parseTblbPayload, parseTblpPayload, parseTblPrPayload, parseTlookPayload, CELL_EDGES, CNF_KEYS, PPR_IND_KEYS, TBLB_EDGES, TBLB_KEYS, type CellEdge } from './cell-style'
+import { bdAttr, borderParts, parsePbdrPayload, parseTrPrPayload, pxToEighths, pxToPt, parseBdrPayload, parseCnfPayload, parseFramePayload, parseImgPayload, parsePprPayload, parseShadePayload, parseShdPayload, parseTabsPayload, parseTblbPayload, parseTblpPayload, parseTblPrPayload, parseTlookPayload, CELL_EDGES, CNF_KEYS, EFFECT_ATTRS, effectKey, PPR_IND_KEYS, TBLB_EDGES, TBLB_KEYS, type CellEdge } from './cell-style'
 import { lineToOoxml, type LineRule } from './paragraph-style'
 import { decodeEnt } from './ooxml'
 import { condLookBits } from './table-cond'
@@ -4544,6 +4544,44 @@ async function patchImgXml(bytes: Uint8Array, shells: string[], sess?: PackSessi
             ? box.slice(0, -2) + '>' + frag + '</a:ln>'
             : box.slice(0, at) + frag + box.slice(at)
           chunk = chunk.slice(0, lnBox.index) + fresh + chunk.slice(lnBox.index + box.length)
+        }
+      }
+    }
+    // v0.181：a:effectLst 整片。包连 effectLst 的发射器都没有，而 v0.180 那张
+    // 「插在 </a:ln> 内部」的锚点表位次不同（这是 a:ln 的兄弟，不是它的子元素），
+    // 必须另起一张：按 CT_ShapeProperties 排在 a:ln 之后、scene3d/sp3d/extLst
+    // 之前。三维族在夹具里被塞进 effectLst 内部（结构非法），本轮不复刻。
+    const effectKids: [string, Record<string, string>][] = []
+    for (const { prefix, tag, attrs } of EFFECT_ATTRS) {
+      const a: Record<string, string> = {}
+      for (const n of attrs) {
+        const v = kv[effectKey(prefix, n)]
+        if (v !== undefined) a[n] = v
+      }
+      if (Object.keys(a).length) effectKids.push([tag, a])
+    }
+    if (effectKids.length) {
+      const spPr = /<pic:spPr\b[^>]*>[\s\S]*?<\/pic:spPr>/.exec(chunk)
+      if (spPr) {
+        const box = spPr[0]
+        if (box.includes('<a:effectLst')) {
+          // 幂等：整片已在场时逐枚改属性，不再插第二枚（计数闸门抓不到重复片）
+          for (const [tag, a] of effectKids)
+            if (box.includes(`<a:${tag}`)) chunk = retag(chunk, `a:${tag}`, a)
+        } else {
+          const frag = `<a:effectLst>${effectKids
+            .map(([tag, a]) => tagWithAttrs(`<a:${tag}/>`, a)).join('')}</a:effectLst>`
+          // 锚点表：找第一枚「排在 effectLst 之后」的在场兄弟，插在它前面。
+          // 写出包实际只发到 a:ln、这些兄弟都不在，退化到 </pic:spPr> 前——
+          // 那也正好是 a:ln 之后，schema 位次成立。
+          let at = -1
+          for (const t of ['a:scene3d', 'a:sp3d', 'a:extLst', 'a:spLocks']) {
+            const i = box.indexOf(`<${t}`)
+            if (i >= 0 && (at < 0 || i < at)) at = i
+          }
+          if (at < 0) at = box.lastIndexOf('</pic:spPr>')
+          const fresh = box.slice(0, at) + frag + box.slice(at)
+          chunk = chunk.slice(0, spPr.index) + fresh + chunk.slice(spPr.index + box.length)
         }
       }
     }

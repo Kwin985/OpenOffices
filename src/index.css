@@ -2025,6 +2025,24 @@ button {
   margin-right: 6px;
 }
 
+/* v0.181：按等距页距翻页定位（非真分页，屏幕不重排） */
+.doc-preview-pager {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.doc-preview-pager .doc-preview-pages {
+  min-width: 96px;
+  text-align: center;
+  margin-right: 0;
+}
+
+.doc-preview-pager .tb-btn:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
 .doc-comments {
   width: 268px;
   flex-shrink: 0;

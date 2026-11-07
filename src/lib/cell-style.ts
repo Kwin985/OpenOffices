@@ -892,6 +892,23 @@ export const IMG_ATTR = 'data-img'
 
 export type ImgPayload = Record<string, string>
 
+/**
+ * v0.181：a:effectLst 三枚效果元素的属性清单，读手与写手**共用一份**。
+ * 包没有 effectLst 的构造器，整片由 post-pack 新建；属性名→载荷键的映射也必须同源，
+ * 否则「读手存了 osBlurRad、写手找 osBlur」这种错不报错、只是安静地什么都不做。
+ * 三维族（scene3d/sp3d/props3d）按 schema 不是 effectLst 的子元素，刻意不在表内。
+ */
+export const EFFECT_ATTRS = [
+  { prefix: 'os', tag: 'outerShdw', attrs: ['algn', 'blurRad', 'dir', 'dist', 'rotWithShape'] },
+  { prefix: 'gl', tag: 'glow', attrs: ['rad'] },
+  { prefix: 'rf', tag: 'reflection', attrs: ['algn', 'blurRad', 'dir', 'dist', 'endA', 'endPos', 'fadeDir', 'kx', 'ky', 'stA', 'stPos', 'sx', 'sy'] },
+] as const
+
+/** 载荷键 = 前缀 + 首字母大写的属性名（osBlurRad / rfEndPos …） */
+export function effectKey(prefix: string, attr: string): string {
+  return prefix + attr[0].toUpperCase() + attr.slice(1)
+}
+
 /** onOff 档：两枚 locks、a:picLocks 的箭头锁、wp:anchor 六枚闸门、VML 的五枚 t/f */
 export const IMG_ONOFF_KEYS = [
   'gfl',

@@ -50,7 +50,7 @@ import { all, allDesc, attr, attrL, attrNum, descend, els, find, findDesc, findL
 import { FieldEngine, fieldLabel, parseInstr, recomputable } from './docx-fields'
 import { embedHtml, inlineFlatten, unwrapEmbed, type EmbedHtml } from './ole'
 import { chartToHtml, smartArtToHtml } from './ooxml-graphics'
-import { BDR_ATTR, CELL_EDGES, PBAR_ATTR, PBDR_ATTR, TRPR_ATTR, CNF_ATTR, CNF_KEYS, CSS_BORDER_STYLE, FRAME_NUMERIC_KEYS, FRAME_STR_KEYS, IMG_ATTR, PPR_ATTR, PPR_IND_KEYS, PPR_ONOFF_KEYS, PPR_STR_KEYS, SHD_ATTR, TAB_LEADERS, TBLB_ATTR, TBLB_EDGES, TBLB_KEYS, TBLPR_ATTR, TLOOK_ATTR, bdSpaceAttrs, bdrPayload, borderParts, cnfPayload, eighthsToPx, framePayload, imgPayload, pprPayload, ptToPx, rgb2hex, shadeCss, shdPayloadOf, tblbPayload, tblpPayload, tblPrPayload, tabsPayload, tlookPayload, pbdrPayload, trPrPayload, type BdrOrigin, type CellEdge, type CnfPayload, type FramePayload, type ImgPayload, type PprPayload, type ShdPayload, type TabSpec, type TblbPayload, type TblpPayload } from './cell-style'
+import { BDR_ATTR, CELL_EDGES, PBAR_ATTR, PBDR_ATTR, TRPR_ATTR, CNF_ATTR, CNF_KEYS, CSS_BORDER_STYLE, EFFECT_ATTRS, FRAME_NUMERIC_KEYS, FRAME_STR_KEYS, IMG_ATTR, PPR_ATTR, PPR_IND_KEYS, PPR_ONOFF_KEYS, PPR_STR_KEYS, SHD_ATTR, TAB_LEADERS, TBLB_ATTR, TBLB_EDGES, TBLB_KEYS, TBLPR_ATTR, TLOOK_ATTR, bdSpaceAttrs, bdrPayload, borderParts, cnfPayload, effectKey, eighthsToPx, framePayload, imgPayload, pprPayload, ptToPx, rgb2hex, shadeCss, shdPayloadOf, tblbPayload, tblpPayload, tblPrPayload, tabsPayload, tlookPayload, pbdrPayload, trPrPayload, type BdrOrigin, type CellEdge, type CnfPayload, type FramePayload, type ImgPayload, type PprPayload, type ShdPayload, type TabSpec, type TblbPayload, type TblpPayload } from './cell-style'
 import { ooxmlLine } from './paragraph-style'
 import {
   asTableCondType,
@@ -1011,6 +1011,20 @@ function readImgPayload(idx: ImgIndex): string {
     for (const [suffix, n] of [['Type', 'type'], ['W', 'w'], ['Len', 'len']] as const) {
       const v = attrL(end, n)
       if (v) kv[prefix + suffix] = v
+    }
+  }
+  // v0.181：a:effectLst 的三枚效果子元素（outerShdw 5 / glow 1 / reflection 13）。
+  // 包连 effectLst 的构造器都没有，要由 post-pack 新建整片并插在 a:ln 之后——
+  // 与 v0.180 那张「插在 </a:ln> 内部」的锚点表位次不同，不能共用。
+  // 三维族（scene3d/sp3d/props3d）在夹具里被塞进了 effectLst，按 CT_ShapeProperties
+  // 其实应是 effectLst 之后的兄弟；本轮刻意不碰，免得复刻一份结构非法的坏件。
+  // 查问一律走 attrL 单漏斗，与 noteDrawingMarks 的 DRAWING_SHELL_ATTRS 同批键。
+  for (const { prefix, tag, attrs } of EFFECT_ATTRS) {
+    const el = firstOf(idx, tag)
+    if (!el) continue
+    for (const n of attrs) {
+      const v = attrL(el, n)
+      if (v) kv[effectKey(prefix, n)] = v
     }
   }
   // ── VML 壳（v0.149）：w:pict 那一支。位图字节在 v:imagedata 里，其余壳属性屏上

@@ -106,7 +106,7 @@ export function statusBarItems(s: StatusBarState): StatusBarItem[] {
   })
   out.push({
     id: 'pages', label: formatPagesText(statusBarPages(s)),
-    title: '按正文高度估算页数；点击打开独立打印预览（单页镜像，逐页翻页未做）',
+    title: '按正文高度估算页数；点击打开独立打印预览（可按等距页距翻页定位，屏幕不重排，真分页以打印样式为准）',
     kind: 'pages', action: 'togglePreview', active: s.previewOpen,
   })
   out.push({

@@ -73,7 +73,8 @@ import { captureFormat, marksForSchema, paintableMarkNames, type PaintFormat } f
 import { ZOOM_STEPS, clampZoom, zoomByWheel, zoomPct, zoomStep } from '../lib/view-zoom'
 import { contextItems } from '../lib/context-menu'
 // v0.175：打印预览的状态与页数口径住在 lib，两处 UI 共用一份。
-import { previewUi, estimatePages } from '../lib/print-preview'
+// v0.181：翻页定位的三枚纯函数也在那里（等距页距，非真分页）。
+import { previewUi, estimatePages, pageScrollTop, pageOfScrollTop, clampPage } from '../lib/print-preview'
 // v0.179：标尺的刻度/缩进换算住在 lib，组件只做接线与拖动交互
 import { rulerTicks, rulerVerticalTicks, rulerIndentMarks, rulerIndentFromDrag, type RulerHandle } from '../lib/ruler'
 import { caretColumn, tableTargetPx } from '../lib/table-width'
@@ -233,6 +234,10 @@ function DocEditor({ tab }: Props) {
   const scrollRef = useRef<HTMLDivElement | null>(null)
   // —— v0.175 独立打印预览：同一棵 DOM 切到只读，不另画一份文档 ——
   const [previewOpen, setPreviewOpen] = useState(false)
+  // v0.181：按等距页距翻页定位（非真分页）。targetRef 在程序化滚动期间挡住
+  // onScroll 回写，免得 smooth scroll 的中间帧把页码一路改回起点
+  const [previewPage, setPreviewPage] = useState(1)
+  const previewTargetRef = useRef<number | null>(null)
   // —— v0.179 标尺：默认关（WPS 可开关），关着时一次刻度计算都不跑 ——
   const [rulerOn, setRulerOn] = useState(false)
   const rulerDragRef = useRef<RulerHandle | null>(null)
@@ -568,6 +573,20 @@ function DocEditor({ tab }: Props) {
     }
     window.addEventListener('keydown', key)
     return () => window.removeEventListener('keydown', key)
+  }, [previewOpen])
+
+  // v0.181：打开预览时页码跟着当前滚动量走（文档可能已经被滚到中段）；
+  // 退出时清掉程序化滚动的目标，别让残留影响下一次
+  useEffect(() => {
+    if (!previewOpen) {
+      previewTargetRef.current = null
+      return
+    }
+    const top = scrollRef.current?.scrollTop ?? 0
+    setPreviewPage(clampPage(
+      pageOfScrollTop(top, effPx.h, zoom, effPx.top),
+      estimatePages(docH, effPx.h, effPx.top, effPx.bottom),
+    ))
   }, [previewOpen])
 
   // —— 分批喂那一路的"读全"账（v0.87）——
@@ -1436,6 +1455,16 @@ function DocEditor({ tab }: Props) {
     </button>
   )
 
+  // —— v0.181 打印预览翻页：页数口径与状态栏/预览条同源，页距换算住在 lib ——
+  const totalPreviewPages = estimatePages(docH, effPx.h, effPx.top, effPx.bottom)
+  const goPreviewPage = (delta: number) => {
+    const p = clampPage(previewPage + delta, totalPreviewPages)
+    const top = pageScrollTop(p, effPx.h, zoom, effPx.top)
+    setPreviewPage(p)
+    previewTargetRef.current = top
+    scrollRef.current?.scrollTo({ top, behavior: 'smooth' })
+  }
+
   // —— v0.180 可交互状态栏：条目表来自 lib 纯函数，这里只把 action 接到既有入口 ——
   const statusItems = statusBarItems({
     status,
@@ -1688,9 +1717,13 @@ function DocEditor({ tab }: Props) {
       {previewUi(previewOpen).showPreviewBar && (
         <div className="doc-preview-bar">
           <span className="doc-preview-title">打印预览 · 只读</span>
-          <span className="doc-preview-pages" title="按「正文高度 ÷ 版心高度」估算；真正的分页由系统打印样式决定">
-            约 {estimatePages(docH, effPx.h, effPx.top, effPx.bottom)} 页 · 单页纸面镜像，逐页翻页未做
-          </span>
+          {previewUi(previewOpen).showPager && (
+            <span className="doc-preview-pager" title="按等距纸高翻页定位；表格/图片跨页等真分页行为由系统打印样式决定，屏幕不重排">
+              <button className="tb-btn" disabled={previewPage <= 1} onClick={() => goPreviewPage(-1)} title="上一页">◀</button>
+              <span className="doc-preview-pages">第 {previewPage} / {totalPreviewPages} 页（约）</span>
+              <button className="tb-btn" disabled={previewPage >= totalPreviewPages} onClick={() => goPreviewPage(1)} title="下一页">▶</button>
+            </span>
+          )}
           <span className="tb-sep" />
           {zoomControls}
           <span className="tb-sep" />
@@ -1760,7 +1793,7 @@ function DocEditor({ tab }: Props) {
         )}
         {btn('查找替换', () => setFrOpen((v) => !v), frOpen, 'Ctrl+F 打开：查找、定位、替换')}
         {btn('历史版本', () => setHistOpen((v) => !v), histOpen, '会话内快照：每 60 秒自动留存，可一键恢复')}
-        {btn('打印预览', () => setPreviewOpen((v) => !v), previewOpen, '独立打印预览：纸面转只读、可缩放、可直接打印或导出 PDF；Esc 退出。逐页翻页未做')}
+        {btn('打印预览', () => setPreviewOpen((v) => !v), previewOpen, '独立打印预览：纸面转只读、可缩放、按等距页距翻页定位、可直接打印或导出 PDF；Esc 退出。屏幕不重排，真分页以打印样式为准')}
         {btn('打印 / PDF', () => window.print(), false, '调用系统打印，可选择另存为 PDF')}
         {btn('导出 PDF', exportPdf, false, 'WebView2 原生 PrintToPdf：按打印样式矢量输出，含高亮底色')}
       </div>
@@ -3050,6 +3083,19 @@ function DocEditor({ tab }: Props) {
         <div
           className="doc-scroll"
           ref={scrollRef}
+          onScroll={() => {
+            // v0.181：只在预览态同步页码；程序化滚动（smooth）期间先不回写，
+            // 等视口抵达目标再解除，否则中间帧会把页码一路改回起点
+            if (!previewOpen) return
+            const top = scrollRef.current?.scrollTop ?? 0
+            const target = previewTargetRef.current
+            if (target !== null) {
+              if (Math.abs(top - target) < 2) previewTargetRef.current = null
+              return
+            }
+            const p = clampPage(pageOfScrollTop(top, effPx.h, zoom, effPx.top), totalPreviewPages)
+            setPreviewPage((cur) => (cur === p ? cur : p))
+          }}
           onContextMenu={(e) => {
             e.preventDefault()
             // 预览态只读，不弹编辑用的右键菜单（也不放行浏览器原生菜单）
