@@ -1054,6 +1054,113 @@ button {
   min-height: 1000px;
 }
 
+/* v0.179 Writer 标尺：屏幕辅助层，挂在 .doc-page 内随内联 zoom 一起缩放。
+   水平条的 left/width 由 React 按版心几何给，0 点即版心左边缘；
+   刻度位置是未缩放的 CSS px，拖动换算在组件里除以 zoom 折回去。 */
+.doc-ruler-h {
+  position: absolute;
+  top: 0;
+  height: 20px;
+  z-index: 3;
+  background: var(--bg);
+  border-bottom: 1px solid var(--border);
+  cursor: default;
+  user-select: none;
+}
+
+.doc-ruler-tick {
+  position: absolute;
+  bottom: 0;
+  width: 1px;
+  height: 4px;
+  background: var(--text-2);
+  opacity: 0.55;
+}
+
+.doc-ruler-tick.doc-ruler-major {
+  height: 8px;
+  opacity: 0.9;
+}
+
+.doc-ruler-tick i {
+  position: absolute;
+  left: 2px;
+  top: -9px;
+  font: 9px/1 ui-monospace, monospace;
+  font-style: normal;
+  color: var(--text-2);
+}
+
+/* 版心可用区（首行起点 → 右缩进），只是底色提示，不接管指针 */
+.doc-ruler-avail {
+  position: absolute;
+  top: 15px;
+  height: 5px;
+  background: color-mix(in srgb, var(--accent) 18%, transparent);
+  pointer-events: none;
+}
+
+.doc-ruler-handle {
+  position: absolute;
+  bottom: 1px;
+  width: 11px;
+  height: 11px;
+  margin-left: -5px;
+  background: var(--panel);
+  border: 1px solid var(--accent);
+  cursor: ew-resize;
+  touch-action: none;
+}
+
+.doc-ruler-first {
+  top: 1px;
+  clip-path: polygon(50% 0, 100% 100%, 0 100%);
+  border: none;
+  background: var(--accent);
+}
+
+.doc-ruler-left {
+  bottom: 1px;
+  clip-path: polygon(50% 100%, 100% 0, 0 0);
+  border: none;
+  background: var(--accent);
+}
+
+.doc-ruler-right {
+  bottom: 1px;
+  border-radius: 2px;
+}
+
+.doc-ruler-v {
+  position: absolute;
+  left: 0;
+  width: 16px;
+  z-index: 3;
+  background: var(--bg);
+  border-right: 1px solid var(--border);
+  pointer-events: none;
+}
+
+.doc-ruler-vtick {
+  position: absolute;
+  right: 0;
+  height: 1px;
+  width: 4px;
+  background: var(--text-2);
+  opacity: 0.55;
+}
+
+.doc-ruler-vtick.doc-ruler-major {
+  width: 8px;
+  opacity: 0.9;
+}
+
+/* 预览态是「纸面只读镜像」，标尺与工具条一起收起 */
+.editor-pane.is-preview .doc-ruler-h,
+.editor-pane.is-preview .doc-ruler-v {
+  display: none;
+}
+
 .doc-content {
   outline: none;
   min-height: 900px;
@@ -3171,6 +3278,12 @@ button {
   .doc-hf,
   .doc-pg-lines {
     display: none;
+  }
+
+  /* v0.179：标尺是屏幕辅助，纸上不出现 */
+  .doc-ruler-h,
+  .doc-ruler-v {
+    display: none !important;
   }
 
   /* 屏幕上的 900px 打字区纯属编辑辅助，纸上要的是正文本身：

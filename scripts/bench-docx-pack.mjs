@@ -1,18 +1,23 @@
-// 写手 post-pack 链的性能判据（v0.178）。
+// 写手 post-pack 链的性能判据（v0.178，v0.179 改为自包含对照腿）。
 //
 // 热点：`prosemirrorToDocxBytes` 里十余个补丁各自 `JSZip.loadAsync(bytes)` →
 // 读一个部件 → 改 → `zip.generateAsync()` 重压整包。带图片的件每次保存要解包/压包
-// 十余遍。本轮把这一串收成「一次解包、共享 zip、一次打包」。
+// 十余遍。v0.178 把这一串收成「一次解包、共享 zip、一次打包」。
 //
 // 判据有两条，缺一不可：
-//   ① 同进程 A/B：改前副本（HEAD 的 src/lib）与产品源，同一份 PM/meta 交替顺序跑，
+//   ① 同进程 A/B：改前腿与产品源同一份代码，只把「共享会话」关掉，交替顺序跑，
 //      各 10 样本取中位。跨进程绝对值随机器负载浮动，不能相减。
 //   ② 语义等价：两腿产出的 zip **逐部件字符串**完全相同（部件名集合也相同）。
 //      只比时间不比输出，等于没证明「优化没改坏文件」。
 //
-// 跑法（副本由 git archive 生成，脚本不碰 git）：
-//   mkdir -p tmp/bench-pack-old && git archive HEAD src/lib | tar -x -C tmp/bench-pack-old
-//   npx vite-node scripts/bench-docx-pack.mjs
+// 为什么不再用手搓的 `git archive HEAD src/lib` 副本（v0.179 修）：
+// 那个副本在 v0.178 提交后就与产品源不同步了——HEAD 已经是优化后的版本，
+// 而后续轮次还会往写手加新功能（v0.179 的 a:ln），两腿差的东西越来越多，
+// 语义等价会假红。现在对照腿由脚本从**当前产品源**生成，只做三处机械改写
+// 把 PackSession 退回「每个补丁各自解包/打包」，其余差异一律为零。
+//
+// 跑法：npx vite-node scripts/bench-docx-pack.mjs
+import fs from 'node:fs'
 import path from 'node:path'
 import process from 'node:process'
 import { performance } from 'node:perf_hooks'
@@ -31,6 +36,48 @@ const median = (xs) => {
   return s[Math.floor(s.length / 2)]
 }
 
+/** 把产品源的写手退回「每个补丁各自解包/打包」，生成对照腿。三处机械改写，逐条验数。 */
+function legacyWriter() {
+  const dir = path.join(REPO, 'tmp/bench-pack-legacy')
+  const libDir = path.join(dir, 'src/lib')
+  fs.mkdirSync(libDir, { recursive: true })
+  fs.cpSync(path.join(REPO, 'src/lib'), libDir, { recursive: true })
+  const file = path.join(libDir, 'docx.ts')
+  let s = fs.readFileSync(file, 'utf8')
+  const swap = (from, to, expected) => {
+    const n = s.split(from).length - 1
+    if (n !== expected) throw new Error(`对照腿改写失败：期望 ${expected} 处，实际 ${n} 处 — ${from.slice(0, 60)}`)
+    s = s.split(from).join(to)
+  }
+  // ① 每个补丁独立解包（不再共享 sess.zip）
+  swap(
+    '  const zip = sess ? sess.zip : await loadZipOf(bytes)',
+    "  const { default: JSZip } = await import('jszip')\n  const zip = await JSZip.loadAsync(bytes)",
+    13,
+  )
+  // ② 每个补丁独立重压整包
+  swap(
+    '  return finishPatch(bytes, zip, sess)',
+    "  const buf = (await zip.generateAsync({ type: 'arraybuffer' })) as ArrayBuffer\n  return new Uint8Array(buf)",
+    13,
+  )
+  // ③ 主链末尾不再统一打包，直接交回最后一枚补丁的产物
+  const tail = `  await attachThemePart(withPgNum, meta?.themeXml, sess)
+  // v0.178：链上所有改动都落在 sess.zip 里；没改动就原样放回 Packer 的字节，
+  // 有改动才 generate 一次。两腿逐部件字符串必须完全一致（scripts/bench-docx-pack.mjs）
+  if (!sess.touched) return out
+  const buf = (await sess.zip.generateAsync({ type: 'arraybuffer' })) as ArrayBuffer
+  return new Uint8Array(buf)`
+  swap(
+    tail,
+    `  const withTheme = await attachThemePart(withPgNum, meta?.themeXml, sess)
+  return withTheme`,
+    1,
+  )
+  fs.writeFileSync(file, s)
+  return file
+}
+
 // 夹具 → 读手 → HTML → PM：与 fidelity-roundtrip.mjs 的装配逐句对应
 const srcZip = new JSZip()
 for (const [p, c] of fixtureParts()) srcZip.file(p, c)
@@ -41,7 +88,7 @@ const srcBytes = new Uint8Array(
 const reader = await import(url(path.join(REPO, 'src/lib/docx-fidelity.ts')))
 const { docExtensions } = await import(url(path.join(REPO, 'src/lib/doc-schema.ts')))
 const productWriter = await import(url(path.join(REPO, 'src/lib/docx.ts')))
-const oldWriter = await import(url(path.join(REPO, 'tmp/bench-pack-old/src/lib/docx.ts')))
+const oldWriter = await import(url(legacyWriter()))
 
 const fid = await reader.docxToHtmlFidelity(srcBytes)
 const meta = await productWriter.docxToDocMeta(srcBytes)
@@ -58,9 +105,7 @@ const schema = getSchema(docExtensions())
 const { document } = parseHTML(`<!doctype html><html><body>${fid.html}</body></html>`)
 const pmDoc = PMDOMParser.fromSchema(schema).parse(document.body).toJSON()
 
-// 解包成「部件名 → 字符串」的有序签名。压缩字节、时间戳与包的随机关系号不参与比较
-// （与保真账本同一口径：rId 要归一、docPr/@id 不归一）。这三样两腿天然不同，
-// 混进签名会让「语义等价」永远假红。
+// 解包成「部件名 → 字符串」的有序签名，压缩字节/时间戳不参与比较
 function normalizePart(name, text) {
   if (name === 'docProps/core.xml') {
     return text.replace(
@@ -68,8 +113,7 @@ function normalizePart(name, text) {
       '$1TS$2',
     )
   }
-  // docx 包给超链接发随机 rId（`rId8iboh-sm2mkm6uvkx0akl`）；只归一带字母/连字符的，
-  // 保留 `rId1` 这类序号——编号顺序若变了仍能被签名抓到
+  // docx 包给超链接发随机 rId；只归一带字母/连字符的，保留 rId1 这类序号
   return text.replace(/\brId(?=[0-9]*[A-Za-z_-])[A-Za-z0-9_-]+/g, 'rIdRAND')
 }
 

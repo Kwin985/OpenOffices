@@ -73,6 +73,8 @@ import { ZOOM_STEPS, clampZoom, zoomByWheel, zoomPct, zoomStep } from '../lib/vi
 import { contextItems } from '../lib/context-menu'
 // v0.175：打印预览的状态与页数口径住在 lib，两处 UI 共用一份。
 import { previewUi, estimatePages } from '../lib/print-preview'
+// v0.179：标尺的刻度/缩进换算住在 lib，组件只做接线与拖动交互
+import { rulerTicks, rulerVerticalTicks, rulerIndentMarks, rulerIndentFromDrag, type RulerHandle } from '../lib/ruler'
 import { caretColumn, tableTargetPx } from '../lib/table-width'
 import { frPluginKey, activeIndexOf } from '../lib/find-replace'
 import { docTemplate } from '../lib/templates'
@@ -228,6 +230,9 @@ function DocEditor({ tab }: Props) {
   const scrollRef = useRef<HTMLDivElement | null>(null)
   // —— v0.175 独立打印预览：同一棵 DOM 切到只读，不另画一份文档 ——
   const [previewOpen, setPreviewOpen] = useState(false)
+  // —— v0.179 标尺：默认关（WPS 可开关），关着时一次刻度计算都不跑 ——
+  const [rulerOn, setRulerOn] = useState(false)
+  const rulerDragRef = useRef<RulerHandle | null>(null)
   const [autoSavedAt, setAutoSavedAt] = useState<Date | null>(null)
   // 收尾那句的时钟与表格头（v0.69）、PDF 头（v0.70）共用模块那一份：两份 1500/5000 就是两把尺子。
   // 进度门这一头不挂——v0.71 实测 .docx/.odt 原地保存整趟 30~92ms、write_file 自身 6~62ms，
@@ -1532,6 +1537,48 @@ function DocEditor({ tab }: Props) {
     </span>
   )
 
+  // —— v0.179 标尺：0 点在版心左边缘（不随纸面边距走），刻度与缩进换算都在 lib。
+  // 关着时连一次刻度计算都不跑；打开时只读当前段落的三枚属性，不遍历全文。
+  const rulerGeom = {
+    contentWidthPx: Math.max(0, effPx.w - effPx.left - effPx.right),
+    mmPx: MM_PX,
+    maxIndentPx: 320, // 与 indent-extension 的 INDENT_MAX_PX 同源
+  }
+  const rulerTicksNow = rulerOn ? rulerTicks(rulerGeom) : []
+  // 与「首行」按钮同一口径：paragraph 优先，heading 兜底（光标在标题里时前者为空）。
+  // 不能用对象展开合并——heading 的空属性会把 paragraph 写过的值盖成 undefined
+  const rulerPara = rulerOn ? editor.getAttributes('paragraph') : {}
+  const rulerHead = rulerOn ? editor.getAttributes('heading') : {}
+  const rulerMarks = rulerOn ? rulerIndentMarks({
+    indentFirst: rulerPara.indentFirst ?? rulerHead.indentFirst ?? null,
+    indentLeft: rulerPara.indentLeft ?? rulerHead.indentLeft ?? null,
+    indentRight: rulerPara.indentRight ?? rulerHead.indentRight ?? null,
+  }, rulerGeom) : null
+  // 拖动换算：clientX 是缩放后的视口坐标，标尺刻度是未缩放的 CSS px，除以 zoom 折回去
+  const rulerDrag = (e: React.PointerEvent<HTMLDivElement>) => {
+    const handle = rulerDragRef.current
+    if (!handle || !rulerMarks) return
+    const box = e.currentTarget.getBoundingClientRect()
+    const atPx = (e.clientX - box.left) / zoom
+    const next = rulerIndentFromDrag(handle, atPx, rulerMarks, rulerGeom)
+    if (next) editor.chain().focus().setIndent(next).run()
+  }
+  const rulerHandle = (kind: RulerHandle, label: string, at: number) => (
+    <span
+      key={kind}
+      className={`doc-ruler-handle doc-ruler-${kind}`}
+      style={{ left: at }}
+      title={label}
+      onPointerDown={(e) => {
+        e.preventDefault()
+        rulerDragRef.current = kind
+        e.currentTarget.setPointerCapture(e.pointerId)
+      }}
+      onPointerUp={() => { rulerDragRef.current = null }}
+      onPointerCancel={() => { rulerDragRef.current = null }}
+    />
+  )
+
   const paraBorders = (edges: readonly CellEdge[], value: string | null) =>
     editor.chain().focus().setParaBorders(edges, value).run()
   const cellBorders = (edges: readonly CellEdge[], value: string | null) =>
@@ -1867,6 +1914,7 @@ function DocEditor({ tab }: Props) {
         {btn('拼写', toggleSpell, spellOn, '拼写检查：常见错拼、中文误用、重复字。开着会随输入重扫')}
         {btn('协同', toggleCollabPanel, collabOpen, '实时协同：同一房间名的多个实例一起改同一份文档，改动自动合并，不用互相锁')}
         {btn('宏', () => setMacroOpen((v) => !v), macroOpen, '脚本宏：一段 JS 操作这篇文档（只跑自己写的）')}
+        {btn('标尺', () => setRulerOn((v) => !v), rulerOn, '水平/垂直标尺：0 点在版心左边缘，拖动三枚滑块改首行/左/右缩进；关着时不计算刻度')}
         <span className="tb-sep" />
         {zoomControls}
       </div>
@@ -3001,6 +3049,40 @@ function DocEditor({ tab }: Props) {
             }}
           >
             <div className="doc-pg-lines" style={{ '--pgh': `${effPx.h}px` } as CSSProperties} />
+            {rulerOn && (
+              <>
+                {/* v0.179：标尺挂在 doc-page 内，随内联 zoom 一起缩放；0 点对齐版心左边缘 */}
+                <div
+                  className="doc-ruler-h"
+                  style={{ left: effPx.left, width: rulerGeom.contentWidthPx }}
+                  onPointerMove={rulerDrag}
+                  onPointerUp={() => { rulerDragRef.current = null }}
+                >
+                  {rulerTicksNow.map((t, i) => (
+                    <span
+                      key={i}
+                      className={`doc-ruler-tick${t.major ? ' doc-ruler-major' : ''}`}
+                      style={{ left: t.at }}
+                    >
+                      {t.label !== undefined && <i>{t.label}</i>}
+                    </span>
+                  ))}
+                  <span className="doc-ruler-avail" style={{ left: rulerMarks?.firstLine ?? 0, width: Math.max(0, (rulerMarks?.right ?? rulerGeom.contentWidthPx) - (rulerMarks?.firstLine ?? 0)) }} />
+                  {rulerHandle('first', '首行缩进：拖动改第一行的起点', rulerMarks?.firstLine ?? 0)}
+                  {rulerHandle('left', '左缩进：拖动改整段左边界，首行跟着走', rulerMarks?.left ?? 0)}
+                  {rulerHandle('right', '右缩进：拖动改整段右边界', rulerMarks?.right ?? rulerGeom.contentWidthPx)}
+                </div>
+                <div className="doc-ruler-v" style={{ top: effPx.top, height: Math.max(0, effPx.h - effPx.top - effPx.bottom) }}>
+                  {rulerVerticalTicks(Math.max(0, effPx.h - effPx.top - effPx.bottom), MM_PX).map((t, i) => (
+                    <span
+                      key={i}
+                      className={`doc-ruler-vtick${t.major ? ' doc-ruler-major' : ''}`}
+                      style={{ top: t.at }}
+                    />
+                  ))}
+                </div>
+              </>
+            )}
             {meta.headerText && <div className="doc-hf doc-hf-head">{meta.headerText}</div>}
             <div
               ref={wrapRef}

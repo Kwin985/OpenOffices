@@ -1186,6 +1186,14 @@ function imageRunOf(child: PMNode, dt?: DocTrack): TextRun | null {
         },
       }
     : undefined
+  // v0.179：a:ln 描边线。翻 .d.ts 的 CoreImageOptions 才发现 outline 是原生槽
+  // （读手注释一直写「包发不出 a:ln」）。只在源件说过线宽时传一枚最小壳——
+  // 包的 ShapeProperties 见到 outline 才 push <a:ln>；cap/cmpd 的枚举键是
+  // 'FLAT'/'SINGLE' 而源件字面是 'flat'/'sng'，直接传给包会写错值，所以这里
+  // 只负责发壳，三枚属性一律由 patchImgXml 按载荷原值回填（与 v0.178 同款）
+  const outline = kv.lnW !== undefined
+    ? { type: 'noFill' as const, width: Number(kv.lnW) || 0 }
+    : undefined
   return new TextRun({
     children: [
       new ImageRun({
@@ -1197,6 +1205,7 @@ function imageRunOf(child: PMNode, dt?: DocTrack): TextRun | null {
         },
         ...(alt ? { altText: { name: alt, description: alt } } : {}),
         ...(floating ? { floating } : {}),
+        ...(outline ? { outline } : {}),
       }),
     ],
   })
@@ -4454,6 +4463,14 @@ async function patchImgXml(bytes: Uint8Array, shells: string[], sess?: PackSessi
     // a:blip 的 cstate（v0.150）：「打印才出图」那档。包恒写 none，说了才改
     if (kv.blipState !== undefined) chunk = retag(chunk, 'a:blip', { cstate: kv.blipState })
     if (kv.prst !== undefined) chunk = retag(chunk, 'a:prstGeom', { prst: kv.prst })
+    // v0.179：a:ln 三枚（w 线宽 / cap 线端 / cmpd 复合线型）。包发的那枚壳
+    // 上有 w（预打包按 lnW 传了），cap/cmpd 由这里按源件字面补——不能交给包，
+    // 它的枚举键与 OOXML 字面不同名。已有则改、没有则补，零插元素
+    const ln: Record<string, string> = {}
+    if (kv.lnW !== undefined) ln.w = kv.lnW
+    if (kv.lnCap !== undefined) ln.cap = kv.lnCap
+    if (kv.lnCmpd !== undefined) ln.cmpd = kv.lnCmpd
+    if (Object.keys(ln).length) chunk = retag(chunk, 'a:ln', ln)
     // a:xfrm 的 a:off / a:ext（图形框自身的原点与尺寸）
     const off: Record<string, string> = {}
     if (kv.offX !== undefined) off.x = kv.offX

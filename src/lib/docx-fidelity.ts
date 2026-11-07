@@ -46,7 +46,7 @@
 // 自己的字号折 px，取不到才退正文 15px；负数字面、rightChars 单独臂（真件 0 枚）、编号层 w:numPr 的 w:ind 与
 // docDefaults 那一档字号仍在账外。
 
-import { all, allDesc, attr, attrL, attrNum, els, find, findDesc, findL, local, parseXml, textOf, type XEl } from './ooxml'
+import { all, allDesc, attr, attrL, attrNum, descend, els, find, findDesc, findL, local, parseXml, textOf, type XEl } from './ooxml'
 import { FieldEngine, fieldLabel, parseInstr, recomputable } from './docx-fields'
 import { embedHtml, inlineFlatten, unwrapEmbed, type EmbedHtml } from './ole'
 import { chartToHtml, smartArtToHtml } from './ooxml-graphics'
@@ -705,11 +705,11 @@ function readPprPayload(pPr: XEl | undefined): string {
  * 都在 `w:drawing`/`w:pict` 子树里按元素名深找：crop 只认 `v:imagedata`（a:blip 没有
  * 这组属性，问了就是假账），srcRect 只认 `a:srcRect`。
  */
-function imgClipCss(el: XEl): string {
-  const vml = findDesc(el, 'imagedata')
+function imgClipCss(idx: ImgIndex): string {
+  const vml = firstOf(idx, 'imagedata')
   const crop = (['croptop', 'cropright', 'cropbottom', 'cropleft'] as const).map((n) => cropPct(attrL(vml, n)))
   if (crop.some((v) => v)) return `clip-path:inset(${crop.map((v) => v ?? 0).join('% ')}%)`
-  const srs = allDesc(el, 'srcRect')
+  const srs = allOf(idx, 'srcRect')
   if (!srs.length) return ''
   const box = (['t', 'r', 'b', 'l'] as const).map((n) => {
     for (const s of srs) {
@@ -733,8 +733,8 @@ function imgClipCss(el: XEl): string {
  * **单边**：写侧只发 DrawingML 内嵌图，翻转与旋转都写不回——导出去的图是正的。
  * 与裁剪同款（读得进、写不出），如实记在审计里。
  */
-function imgTransformCss(el: XEl): string {
-  const xfrm = findDesc(el, 'xfrm')
+function imgTransformCss(idx: ImgIndex): string {
+  const xfrm = firstOf(idx, 'xfrm')
   if (!xfrm) return ''
   const raw = attrL(xfrm, 'rot')
   const flipH = attrL(xfrm, 'flipH')
@@ -759,6 +759,42 @@ function cropPct(raw: string | undefined): number | undefined {
 }
 
 /**
+ * 单枚图片的**子树索引**（v0.179）：一次前序遍历把后代按 local name 分组。
+ *
+ * 热点：`bitmap()` / `readImgPayload()` / `imgClipCss()` / `imgTransformCss()` 此前
+ * 对同一枚 `w:drawing`/`w:pict` 各做几十次 `findDesc` / `allDesc`，而 `allDesc` 每次
+ * 都要 `descend(el).filter(...)` 重新摊平整棵子树。v0.174 的 `buildDocIndex` 只服务
+ * 7 个只读记账的 note*，图片渲染主链没吃到那张索引。
+ *
+ * 为什么等价：`descend` 与 `findDescIn` 同为前序 DFS（先自身后子女、命中即停），
+ * 所以 `byTag(name)[0]` 就是原 `findDesc` 返回的那一枚，`byTag(name)` 就是原
+ * `allDesc` 的那一串。**只换「怎么找到元素」**：所有 `attr/attrL/attrNum/onOff`
+ * 的按名访问一字不动——探针记的是查问，不是元素查找，保真账与四条变异腿才不动。
+ */
+type ImgIndex = Map<string, XEl[]>
+
+function imageIndexOf(el: XEl): ImgIndex {
+  const idx: ImgIndex = new Map()
+  for (const d of descend(el)) {
+    const n = local(d.name)
+    const list = idx.get(n)
+    if (list) list.push(d)
+    else idx.set(n, [d])
+  }
+  return idx
+}
+
+/** 索引查表：替代 `findDesc(el, name)`（前序第一枚） */
+function firstOf(idx: ImgIndex, name: string): XEl | undefined {
+  return idx.get(name)?.[0]
+}
+
+/** 索引查表：替代 `allDesc(el, name)`（全部同名后代，文档序） */
+function allOf(idx: ImgIndex, name: string): XEl[] {
+  return idx.get(name) ?? []
+}
+
+/**
  * 图片容器壳（v0.148）：一个 w:drawing 里除位图字节与尺寸外那一层壳——wp:inline/
  * wp:anchor 的四边避让与锚点、wp:effectExtent 四边、两处对象序号与对象名、两枚
  * locks、a:prstGeom 的档位、a:xfrm 的 a:off/a:ext。屏上一条都不兑现（Web 流式排版
@@ -767,11 +803,11 @@ function cropPct(raw: string | undefined): number | undefined {
  * w:drawing 里只有一枚 wp:inline、一枚 pic:pic）。EMU 档存整数原值——width/height
  * 那一道 EMU→px 只在尺寸上做过，这里要的是能原样写回去的数。
  */
-function readImgPayload(el: XEl): string {
+function readImgPayload(idx: ImgIndex): string {
   const kv: ImgPayload = {}
   // wp:inline（内嵌）/ wp:anchor（浮动）各有四边避让；两者同名元素不同名，各查各的
-  const inline = findDesc(el, 'inline')
-  const anchor = findDesc(el, 'anchor')
+  const inline = firstOf(idx, 'inline')
+  const anchor = firstOf(idx, 'anchor')
   // v0.177：把「这一枚 drawing 是浮动图」记进载荷。写侧据此给 ImageRun 传
   // floating（包有原生槽），否则浮动图会被写成内嵌图，整层 anchor 属性全掉
   if (anchor) kv.anKind = 'anchor'
@@ -783,7 +819,7 @@ function readImgPayload(el: XEl): string {
     }
   }
   // wp:effectExtent：四边（Word 用它算阴影/发光占的溢出区，屏上不兑现）
-  const ee = findDesc(el, 'effectExtent')
+  const ee = firstOf(idx, 'effectExtent')
   if (ee) {
     for (const [k, n] of [['eeL', 'l'], ['eeT', 't'], ['eeR', 'r'], ['eeB', 'b']] as const) {
       const v = attrNum(ee, n)
@@ -793,7 +829,7 @@ function readImgPayload(el: XEl): string {
   // wp:docPr（画布级）与 pic:cNvPr（图形级）各有 id/name；name 那边读手已用 descr 优先
   // 取过 alt，这里收的是对象名本身。两处 id 都是整数、都只查一次（不用 ?? 短路——
   // 右支不求值会让后一枚永远不进探针账）
-  const docPr = findDesc(el, 'docPr')
+  const docPr = firstOf(idx, 'docPr')
   const docPrId = attrNum(docPr, 'id')
   if (docPrId !== undefined) kv.docPrId = String(docPrId)
   // 画布级对象名（v0.158）：descr 是替代文本、name 是对象名，两码事。写手那一侧把 alt
@@ -801,7 +837,7 @@ function readImgPayload(el: XEl): string {
   // Word 的选择窗格与定位里是要用的，得单存一份带回去
   const docPrName = attr(docPr, 'name')
   if (docPrName) kv.docPrName = docPrName
-  const cNvPr = findDesc(el, 'cNvPr')
+  const cNvPr = firstOf(idx, 'cNvPr')
   const cNvPrId = attrNum(cNvPr, 'id')
   if (cNvPrId !== undefined) kv.cNvPrId = String(cNvPrId)
   const cNvPrName = attr(cNvPr, 'name')
@@ -811,15 +847,15 @@ function readImgPayload(el: XEl): string {
   const cNvPrDescr = attr(cNvPr, 'descr')
   if (cNvPrDescr) kv.cNvPrDescr = cNvPrDescr
   // 两枚 locks：锁纵横比。onOff 三态（元素在场无 val 按「开」）
-  const gfl = onOff(attrL(findDesc(el, 'graphicFrameLocks'), 'noChangeAspect'))
+  const gfl = onOff(attrL(firstOf(idx, 'graphicFrameLocks'), 'noChangeAspect'))
   if (gfl !== undefined) kv.gfl = gfl ? '1' : '0'
-  const picLock = onOff(attrL(findDesc(el, 'picLocks'), 'noChangeAspect'))
+  const picLock = onOff(attrL(firstOf(idx, 'picLocks'), 'noChangeAspect'))
   if (picLock !== undefined) kv.pic = picLock ? '1' : '0'
   // a:prstGeom：图片的图形框恒 rect，换了档位的（裁剪成异形）照收原值
-  const prst = attr(findDesc(el, 'prstGeom'), 'prst')
+  const prst = attr(firstOf(idx, 'prstGeom'), 'prst')
   if (prst) kv.prst = prst
   // wp:anchor 的定位：simplePos（绝对坐标）与 positionH/V（相对哪个基准）
-  const sp = findDesc(el, 'simplePos')
+  const sp = firstOf(idx, 'simplePos')
   if (sp) {
     const x = attrNum(sp, 'x')
     const y = attrNum(sp, 'y')
@@ -827,12 +863,12 @@ function readImgPayload(el: XEl): string {
     if (y !== undefined) kv.spY = String(y)
   }
   for (const [k, n] of [['posH', 'positionH'], ['posV', 'positionV']] as const) {
-    const v = attr(findDesc(el, n), 'relativeFrom')
+    const v = attr(firstOf(idx, n), 'relativeFrom')
     if (v) kv[k] = v
   }
   // a:xfrm 的 a:off / a:ext：图形框自身的原点与尺寸（与 wp:extent 不同一枚元素，
   // 图片的两者同值，但换编辑器打开时只认 xfrm 那一枚）
-  const xfrm = findDesc(el, 'xfrm')
+  const xfrm = firstOf(idx, 'xfrm')
   if (xfrm) {
     const off = find(xfrm, 'off') ?? findDesc(xfrm, 'off')
     const ext = find(xfrm, 'ext') ?? findDesc(xfrm, 'ext')
@@ -852,24 +888,24 @@ function readImgPayload(el: XEl): string {
   // v0.178：浮动图的文字环绕档位（wp:wrapSquare/@wrapText）。包只会发
   // <wp:wrapNone/>，写手按这枚载荷把那一枚整片换成 wrapSquare，元素名与值同时回来。
   // 与 noteDrawingMarks 的查问同走 attrL，不新开漏斗
-  const wrapSq = findDesc(el, 'wrapSquare')
+  const wrapSq = firstOf(idx, 'wrapSquare')
   if (wrapSq) {
     const v = attrL(wrapSq, 'wrapText')
     if (v !== undefined && v.trim()) kv.wrapText = v
   }
   // a:picLocks 的箭头锁（v0.149）：与纵横比锁同一枚元素，包两个属性都发，都能写回
-  const arrow = onOff(attr(findDesc(el, 'picLocks'), 'noChangeArrowheads'))
+  const arrow = onOff(attr(firstOf(idx, 'picLocks'), 'noChangeArrowheads'))
   if (arrow !== undefined) kv.picArrow = arrow ? '1' : '0'
   // pic:spPr 的 bwMode（黑白模式档位）。spPr 可能套两层（pic:spPr 里再嵌一枚
   // a:spPr，VML↔DrawingML 互转的老文件里常见），全查一遍取第一枚说得上话的
-  for (const sp of allDesc(el, 'spPr')) {
+  for (const sp of allOf(idx, 'spPr')) {
     const v = attr(sp, 'bwMode')
     if (v && kv.bwMode === undefined) kv.bwMode = v
   }
   // wp:anchor 六枚闸门（v0.149）：allowOverlap / behindDoc / layoutInCell / locked /
   // relativeHeight / simplePos。v0.177 起写侧按 anKind 发浮动图，这一组由
   // patchImgXml 按载荷原值回填，不再是只读账。
-  const anchorEl = findDesc(el, 'anchor')
+  const anchorEl = firstOf(idx, 'anchor')
   if (anchorEl) {
     for (const [k, n] of [
       ['anOver', 'allowOverlap'],
@@ -898,36 +934,36 @@ function readImgPayload(el: XEl): string {
     if (anEdit !== undefined) kv.anEdit = anEdit
   }
   // a:blip 的 cstate（v0.150）：「只在打印时出图」那档。与 r:embed 同一枚元素
-  const cstate = attrL(findDesc(el, 'blip'), 'cstate')
+  const cstate = attrL(firstOf(idx, 'blip'), 'cstate')
   if (cstate) kv.blipState = cstate
   // a:ext 的 uri（v0.150）：扩展点身份（a:ext 是 extLst 的条目，xfrm 里那枚同名元素没有 uri，
   // 所以全查一遍取第一枚说得上话的——与 bwMode 查 spPr 同款纪律）
-  for (const e of allDesc(el, 'ext')) {
+  for (const e of allOf(idx, 'ext')) {
     const u = attrL(e, 'uri')
     if (u && kv.extUri === undefined) kv.extUri = u
   }
   // a:lumMod 的亮度调制（v0.150）：主题色的明度档位（schemeClr 的子元素），
   // 只记第一枚——同一枚填充里多档 lumMod/lumOff 串联时第一枚就是基准
-  const lumMod = attrL(findDesc(el, 'lumMod'), 'val')
+  const lumMod = attrL(firstOf(idx, 'lumMod'), 'val')
   if (lumMod) kv.lumModV = lumMod
   // a:lumOff 的明度偏移（v0.151）：与 lumMod 同住 schemeClr 里的明度档位，同款只记第一枚
-  const lumOff = attrL(findDesc(el, 'lumOff'), 'val')
+  const lumOff = attrL(firstOf(idx, 'lumOff'), 'val')
   if (lumOff) kv.lumOffV = lumOff
   // a:schemeClr 的主题色槽位（v0.151）：val 是槽位名（accent1/lt1/…），fill/line/effect
   // 三处的引用都长这样。全查一遍取第一枚说得上话的——与 bwMode 查 spPr 同款纪律。
   // 这是宇宙里最大的一枚单对（7668 字面）：屏上不兑现（Web 没有主题色概念），
   // 写侧也写不出（包不发 schemeClr）——只记账
-  for (const sc of allDesc(el, 'schemeClr')) {
+  for (const sc of allOf(idx, 'schemeClr')) {
     const v = attrL(sc, 'val')
     if (v && kv.shClr === undefined) kv.shClr = v
   }
   // a:miter 的斜接限制（v0.151）：描边折角的斜接长度上限，EMU。a:ln 的子元素
-  const miterLim = attrL(findDesc(el, 'miter'), 'lim')
+  const miterLim = attrL(firstOf(idx, 'miter'), 'lim')
   if (miterLim) kv.miterLim = miterLim
   // a:lum 的亮度/对比度（v0.152）：schemeClr 里的明暗两档（与 lumMod/lumOff 同住），
   // 两枚属性各查各的——bright 是亮度偏移、contrast 是对比度偏移，百分比
   {
-    const lum = findDesc(el, 'lum')
+    const lum = firstOf(idx, 'lum')
     if (lum) {
       const br = attrL(lum, 'bright')
       if (br) kv.lumBright = br
@@ -937,19 +973,19 @@ function readImgPayload(el: XEl): string {
   }
   // a:shade 的阴影档位（v0.152）：schemeClr 的压暗系数（与 lumMod 同族的另一枚）。
   // 注意与 w:shd（段落/单元格底纹）不是一枚——那一族的 val 早就由 shadeSpec 读着
-  const shadeV = attrL(findDesc(el, 'shade'), 'val')
+  const shadeV = attrL(firstOf(idx, 'shade'), 'val')
   if (shadeV) kv.shadeV = shadeV
   // a:gs 的色标位置（v0.152）：渐变色标在色带上的位置（千分比）。只记第一枚——
   // 一条 gradFill 里常有好几枚 gs，位置序列说明渐变形状，全挂撑爆 HTML
   {
-    const gs = findDesc(el, 'gs')
+    const gs = firstOf(idx, 'gs')
     if (gs) {
       const pos = attrL(gs, 'pos')
       if (pos) kv.gsPos = pos
     }
   }
   // a:ln 的线宽（v0.150）：spPr 下的描边宽度，EMU。全查一遍（与 bwMode 同款）
-  for (const l of allDesc(el, 'ln')) {
+  for (const l of allOf(idx, 'ln')) {
     const w = attrL(l, 'w')
     if (w && kv.lnW === undefined) kv.lnW = w
     // a:ln 的线端与复合线型（v0.152）：cap（flat/square/round）与 cmpd（sng/dbl/…）。
@@ -961,7 +997,7 @@ function readImgPayload(el: XEl): string {
   }
   // ── VML 壳（v0.149）：w:pict 那一支。位图字节在 v:imagedata 里，其余壳属性屏上
   //    一条都不兑现；写侧只发 DrawingML 内嵌图，这一族读得回、写不出（记账边界）──
-  const shape = findDesc(el, 'shape')
+  const shape = firstOf(idx, 'shape')
   if (shape) {
     for (const [k, n, isOn] of [
       ['shId', 'id', false],
@@ -1013,7 +1049,7 @@ function readImgPayload(el: XEl): string {
   }
   // v:group 的五枚（v0.150）：分组画布的身份（id/spid）与坐标约定（coordorigin/coordsize）
   // 加 style。同 VML 壳其余各枚：只读不写
-  const grp = findDesc(el, 'group')
+  const grp = firstOf(idx, 'group')
   if (grp) {
     for (const [k, n] of [
       ['grpId', 'id'],
@@ -1028,32 +1064,32 @@ function readImgPayload(el: XEl): string {
   }
   // o:useLocalDpi（v0.150）与 o:attr（v0.150）：遗留件的两个扩展点。useLocalDpi 是
   // 「按本机 DPI 量尺寸」的 onOff，attr 是一枚自定义名值对
-  const dpi = onOff(attrL(findDesc(el, 'useLocalDpi'), 'val'))
+  const dpi = onOff(attrL(firstOf(idx, 'useLocalDpi'), 'val'))
   if (dpi !== undefined) kv.localDpi = dpi ? '1' : '0'
-  const attrEl = findDesc(el, 'attr')
+  const attrEl = firstOf(idx, 'attr')
   if (attrEl) {
     const an = attrL(attrEl, 'name')
     if (an) kv.attrN = an
     const av = attrL(attrEl, 'val')
     if (av) kv.attrV = av
   }
-  const lock = findDesc(el, 'lock')
+  const lock = firstOf(idx, 'lock')
   if (lock) {
     const asp = onOff(attrL(lock, 'aspectratio'))
     if (asp !== undefined) kv.lkAspect = asp ? '1' : '0'
     const ext = attrL(lock, 'ext')
     if (ext) kv.lkExt = ext
   }
-  const idTitle = attrL(findDesc(el, 'imagedata'), 'title')
+  const idTitle = attrL(firstOf(idx, 'imagedata'), 'title')
   if (idTitle) kv.idTitle = idTitle
-  const vFill = findDesc(el, 'fill')
+  const vFill = firstOf(idx, 'fill')
   if (vFill) {
     const on = onOff(attrL(vFill, 'on'))
     if (on !== undefined) kv.fOn = on ? '1' : '0'
     const fs = attrL(vFill, 'focussize')
     if (fs) kv.fFocus = fs
   }
-  const vStroke = findDesc(el, 'stroke')
+  const vStroke = firstOf(idx, 'stroke')
   if (vStroke) {
     const on = onOff(attrL(vStroke, 'on'))
     if (on !== undefined) kv.sOn = on ? '1' : '0'
@@ -1071,7 +1107,7 @@ function readImgPayload(el: XEl): string {
   // 坐标串。与 w/h 同住 v:path 上（w/h 已由图元几何族记账）。两枚在真实件里常是空串
   // （=用默认角/默认点），而载荷拒收空值，所以按图元几何族同款记「枚数 + 首枚值」——
   // 枚数说明这一族在这里出现了（探针要的正是那次按名查问），首枚值说明它长什么样
-  const vPaths = allDesc(el, 'path')
+  const vPaths = allOf(idx, 'path')
   if (vPaths.length) {
     const ca = attrL(vPaths[0], 'connectangles')
     kv.pathCa = `${vPaths.length} ${ca ?? ''}`
@@ -1080,7 +1116,7 @@ function readImgPayload(el: XEl): string {
   }
   // v:rect 四边（v0.151）：VML 矩形的上下左右（EMU）。textbox 的老式件把文字盒画成
   // v:rect（与 v:shape 平级），四边常是 0（=贴 shape 的盒子），非 0 时文字盒内缩
-  for (const r of allDesc(el, 'rect')) {
+  for (const r of allOf(idx, 'rect')) {
     for (const [k, n] of [['rcT', 't'], ['rcL', 'l'], ['rcB', 'b'], ['rcR', 'r']] as const) {
       const v = attrL(r, n)
       if (v !== undefined && kv[k] === undefined) kv[k] = v
@@ -1089,7 +1125,7 @@ function readImgPayload(el: XEl): string {
   // a:srcRect（v0.154）：blipFill 的**源裁剪框**——从原图哪一块取像素。四边是千分比
   // （25000 = 25%），与 VML 的 crop 是同一件事的新式写法。屏上那一半由 imgClipCss 兑现，
   // 这里存原值只为往返（写侧发不出 a:srcRect，是单边通道——见审计文档）
-  for (const sr of allDesc(el, 'srcRect')) {
+  for (const sr of allOf(idx, 'srcRect')) {
     for (const [k, n] of [['srT', 't'], ['srR', 'r'], ['srB', 'b'], ['srL', 'l']] as const) {
       const v = attrL(sr, n)
       if (v !== undefined && v.trim() && kv[k] === undefined) kv[k] = v
@@ -3640,7 +3676,9 @@ class Fidelity {
 
   /** 位图部分：找不到可解码的图像就返回 null（交给调用方决定是否另有文本框可出） */
   private async bitmap(el: XEl): Promise<string | null> {
-    const blip = findDesc(el, 'blip') ?? findDesc(el, 'imagedata')
+    // v0.179：这一枚 drawing 的后代只摊一次，下面四个消费者共用
+    const idx = imageIndexOf(el)
+    const blip = firstOf(idx, 'blip') ?? firstOf(idx, 'imagedata')
     const rid = blip ? (attrL(blip, 'embed') ?? attrL(blip, 'id')) : undefined
     if (!rid) return null
     const rel = this.rels.get(rid)
@@ -3658,12 +3696,12 @@ class Fidelity {
       this.warn(`浏览器不支持的图片格式：${rel.target}`)
       return null
     }
-    const ext = findDesc(el, 'extent')
+    const ext = firstOf(idx, 'extent')
     let w = Math.round((attrNum(ext, 'cx') ?? 0) * EMU_PX)
     let h = Math.round((attrNum(ext, 'cy') ?? 0) * EMU_PX)
     if (!w || !h) {
       // 老式 vml 把尺寸写在 style 里（WIDTH:100pt;HEIGHT:50pt）
-      const style = attr(findDesc(el, 'shape'), 'style') ?? ''
+      const style = attr(firstOf(idx, 'shape'), 'style') ?? ''
       const sw = /width:\s*([\d.]+)pt/i.exec(style)
       const sh = /height:\s*([\d.]+)pt/i.exec(style)
       if (!w && sw) w = Math.round(Number(sw[1]) * PT_PX)
@@ -3673,15 +3711,15 @@ class Fidelity {
     // 替代文本（读屏软件念的那段），name 只是对象名——v0.145 起 alt 以 descr 优先、
     // 无 descr 时回落 name 保旧观感（老文件的 alt 一直装的 name，不能一夜间全空）。
     // 两处都查问（不用 ?? 短路——右支不求值会让 cNvPr 那半永远不进探针账）
-    const docPr = findDesc(el, 'docPr')
-    const cNvPr = findDesc(el, 'cNvPr')
+    const docPr = firstOf(idx, 'docPr')
+    const cNvPr = firstOf(idx, 'cNvPr')
     const name = attr(docPr, 'name') ?? attr(cNvPr, 'name') ?? ''
     const descrDocPr = attr(docPr, 'descr')
     const descrCNvPr = attr(cNvPr, 'descr')
     const alt = descrDocPr || descrCNvPr || name
     const size = `${w ? ` width="${w}"` : ''}${h ? ` height="${h}"` : ''}`
     // 容器壳（v0.148）：位图出得来才有壳可挂——解不开字节时那张图本来就没进文档
-    const shell = readImgPayload(el)
+    const shell = readImgPayload(idx)
     // 裁剪四边（v0.153）：VML 的 v:imagedata 用 croptop/cropright/cropbottom/cropleft
     // 从各边裁掉一段，CSS 的 clip-path:inset() 有直接对应物——这是老式壳里唯一屏上
     // 真能兑现的一族（其余壳属性零兑现）。**单边通道**：写侧只发 DrawingML 内嵌图，
@@ -3690,9 +3728,9 @@ class Fidelity {
     // 只在 VML 那一支上读裁剪：crop 四边是 v:imagedata 的属性，a:blip（DrawingML）身上
     // 没有这组属性，混着读一次就是在账本上记四枚「读手问过 blip 要 crop」的假对——
     // 与 noteVmlShellMarks 只在 w:pict 里扫是同一个道理
-    const clip = imgClipCss(el)
+    const clip = imgClipCss(idx)
     // 图形变换（v0.155）：旋转与翻转，与裁剪同挂一张图的 style
-    const tf = imgTransformCss(el)
+    const tf = imgTransformCss(idx)
     const style = [clip, tf].filter(Boolean).join(';')
     return `<img src="data:${mime};base64,${b64}"${size}${style ? ` style="${style}"` : ''}${alt ? ` alt="${esc(alt)}"` : ''}${shell ? ` ${IMG_ATTR}="${esc(shell)}"` : ''}>`
   }

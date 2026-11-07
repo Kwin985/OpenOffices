@@ -96,6 +96,18 @@ const outXml = await (await JSZip.loadAsync(outBytes)).file('word/document.xml')
   // 包对每枚浮动图无条件 push wrapNone：不带环绕载荷的那一块留着它（源件也没说过
   // 别的环绕档），带载荷的那一块换成 wrapSquare。两块都按载荷各说各的话
   eq('写手：另一枚浮动图仍是 wrapNone', (outXml.match(/<wp:wrapNone\s*\/>/g) ?? []).length, 1)
+
+  // v0.179：a:ln 三枚。翻 .d.ts 发现 CoreImageOptions 有 outline 原生槽
+  // （读手注释曾写「包发不出 a:ln」），按载荷条件发壳、再按载荷原值回填属性。
+  const lnTags = [...outXml.matchAll(/<a:ln\b([^>]*)>/g)].map((m) => m[1])
+  const lnHit = lnTags.find((t) => a('cap').test(t)) ?? ''
+  check('写手：真的发出 a:ln 壳', lnTags.length > 0, `枚数=${lnTags.length}`)
+  eq('写手：a:ln/@w 原值', a('w').exec(lnHit)?.[1], '9525')
+  eq('写手：a:ln/@cap 原值（不是包的 FLAT 枚举键）', a('cap').exec(lnHit)?.[1], 'flat')
+  eq('写手：a:ln/@cmpd 原值（不是包的 SINGLE 枚举键）', a('cmpd').exec(lnHit)?.[1], 'sng')
+  eq('写手：只有带 lnCap 载荷那一块补了三枚', lnTags.filter((t) => a('cap').test(t)).length, 1)
+  // 不带描边载荷的图不能凭空多一枚 a:ln：包只在传了 outline 时发
+  check('写手：a:ln 只出现在源件说过的 drawing 上', lnTags.length <= 2, `枚数=${lnTags.length}`)
 }
 
 // ---- 3. 纪律：只改属性/整片换，不插新元素、不碰 unrelated drawing -------------
@@ -112,6 +124,14 @@ const outXml = await (await JSZip.loadAsync(outBytes)).file('word/document.xml')
     /function retagWrap[\s\S]{0,220}\.replace\(\/<wp:wrapNone/.test(writer)
       && writer.includes('chunk = retagWrap(chunk, kv.wrapText)'))
   check('接线：环绕只在浮动图这一支做', /if \(kv\.anKind === 'anchor'\) \{[\s\S]{0,1400}kv\.wrapText/.test(writer))
+  check('接线：a:ln 由 outline 原生槽发壳（不插元素）',
+    /const outline = kv\.lnW !== undefined/.test(writer)
+      && /type: 'noFill' as const, width: Number\(kv\.lnW\)/.test(writer)
+      && /\.\.\.\(outline \? \{ outline \} : \{\}\)/.test(writer)
+      // 写手侧不许自己拼 <a:ln> 字符串：壳只能由包的 outline 槽发
+      && !/['\"`<]a:ln\b[^>]*>['\"`]/.test(writer))
+  check('接线：a:ln 三枚按载荷回填', /retag\(chunk, 'a:ln', ln\)/.test(writer)
+    && /ln\.cap = kv\.lnCap/.test(writer) && /ln\.cmpd = kv\.lnCmpd/.test(writer))
   check('纪律：没有为这一族新开插元素通道', !/wp:sizeRelH|mc:AlternateContent/.test(writer))
 }
 
