@@ -10917,6 +10917,71 @@ Writer 工具条加「标尺」开关，水平标尺挂在 `.doc-page` 内随内
   不等宽只走 docx；母版配色只有纯函数与源码级断言，没做真机浏览器对撞；
   pptx 导出的降幅在 10ms 级有明显噪声，结构性收益是未改 slide 不再回写。
 
+## v0.183（节余量 / numbering legacy 两族 + 清除格式 + 写手部件文本单例解压）
+
+承接 D42：连续两轮在正文族上动手，这一轮把「只读记账」里最容易闭环的五对一次性收掉。
+
+**保真：5 对 `lost → kept`，正文 83.0% → 84.7%**
+
+| 族 | 对数 | 机制 |
+|---|---:|---|
+| `type\|val` / `pgSz\|code` | 2 | `docx` 9.7.1 本来就有 `sections[].properties.type` 与 `page.size.code` 两个原生槽；读手把已有的 `attr` 查问升成带值载荷，`DocxSection` / `PageSetup` / `resolvePage` 原值透传，写手直接传槽——**post-pack 一行不用动** |
+| `legacy\|legacy` / `legacySpace` / `legacyIndent` | 3 | 读手 `readNumbering` 把三枚 `attr` 升成载荷，`patchOneAbstractNum` 的 `insertKid` 锚点表里本来就写着 `'legacy'/'lvlJc'`；写手按 CT_Lvl 序插在 `lvlPicBulletId` 之后、`lvlJc` 之前 |
+
+- 两族都沿用 v0.182 的「只读记账 → 带值载荷」路数，且**查问集合一字未变**：仍是原来的
+  `attr(...)` 单漏斗（没换 `attrNum`，那是 `attr ?? attrL` 两条路，会撬动 `--mut no-attr`
+  的记录对），保真账 `docs/fidelity.*` 与 HEAD 逐字节相同。
+- 节起法走 `Object.values(SectionType)` 白名单，自造档不写（宁可少一枚，不赌坏件）；
+  `paperCode` 非数值不写。三枚 legacy 原值 `1/0/0` 直传、不做 onOff 归一——源件没说过
+  的话不替它说。`test-section-legacy.mjs` 30 项（含「无源值的件不凭空多出来」与按块对位）。
+
+**功能：Writer 清除格式**（D42 里挂了几轮的「右键菜单刻意不放」清单项）
+- 右键菜单与工具条各一个入口，都走 `runCtx('clearFormat')`：`format-painter.ts` 新增
+  `clearableMarkNames`，与格式刷同源，**只摘字符外观 mark**（粗斜/字色/高亮/字号…）+
+  三个样式标签；批注锚 / 书签 / 修订 / 超链接这类带身份的标记整列保留，标题节点也不
+  转回段落——清掉别人的标注属于「删除批注」，不是「清除格式」。无选区时不灰掉，清的是
+  光标处后续输入会带上什么格式。`test-clear-format.mjs` 23 项。
+
+**性能：写手 post-pack 同一份 `document.xml` 从 17 次解压收成 5 次**
+- v0.178 的 `PackSession` 省了「整包解包 + 重压」，但十余个补丁仍各自
+  `zip.file('word/document.xml').async('string')`。探针量出 JSZip **对同一条目二次
+  `async` 仍会重新 inflate**（首次 1.24ms / 二次 1.53ms），链上 17 次部件解压占端到端
+  6.8%。现在会话按部件名缓存当前文本：`partText` 查表、`setPart` 写回时**同步更新**，
+  下一枚补丁读到的仍是刚写下的内容（等价性关键）。
+- 缓存只在 `zip === sess.zip` 的共享路径生效；A/B 对照腿 `{legacyPartText:true}` 不建
+  缓存表，两腿同源只差一个参数。`bench-docx-parts.mjs` 的判据是逐部件字符串逐字相同
+  （归一 `core.xml` 时间戳与超链接随机 `rId`）+ 同一条链上的解压次数。
+- **数字不粉饰**：解压次数 **17 → 5** 是确定的结构性事实；端到端只在「文字 ×40」
+  放大档两次复跑稳定 **+12.7% / +13.1%**，小件与超大件档在 ±3% 噪声里（大件被 Packer
+  序列化与高压缩比稀释），不冒充全档降幅。`test-docx-part-cache.mjs` 15 项。
+- 顺手修了一把旧尺：`bench-docx-pack.mjs` 的对照腿硬编码「13 个补丁」，v0.182 加了
+  `patchColsOnOff` 后就过期了（这把尺几轮没重跑）。改成从当前产品源动态取补丁数、
+  第二处仍校验「读写配对」相等；复跑语义等价 ✓、−44.9%。
+
+**门禁**：tsc 0、build ✓；22 组结构测试全绿（新增 30 + 23 + 15 项）。保真 99.0%/98.4%、
+记录对 715、四条变异腿 52.5 / 59.4 / 99.0 / 96.5 一字不动；pptx 70.1/74.3、42/19 全绿、
+`--mut no-ga` 42 条全红后复位；往返账 `1aedef8f…`/`782fc0efa…` 两次复跑一致，
+5 对逐对说得清且 out 等于 src 原值。`modules` 保持 **67**（没新增 `src/lib` 文件）。
+
+### 顺延（D43）
+
+- 图形壳剩 **235 对**：三维族 `sp3d`/`props3d`/`lightRig` 要先定「夹具结构非法、
+  真件应写成 effectLst 之后兄弟」的口径；VML 老式形状族仍是模型无槽、写手发不出
+  `w:pict`。`wp:posOffset` 动 0 对（值在元素文本里、账本无此对）；`sizeRelH/V` 真件要
+  `mc:AlternateContent`。
+- 正文长尾：`fldChar|fldCharType`(3 个源值) / `fldChar|fldLock`、`outline|val`、
+  `smartTag|*`(2)、±5 缇、`ind|left` 列表缩进覆盖、`docPr|id`、`lvlJc`、
+  `w:color` 字面 val；`theme1.xml` 口径未定。`legacy|*` 与 `type|val`/`pgSz|code`
+  v0.183 已补。
+- Impress 占位矩形编辑（第二套拖拽状态机）；Calc 视图缩放（落点在预存改动
+  `SheetEditor.tsx`，按房规换落点或只记结论）；**pdf-lib 按需加载**仍等
+  `pdf-text-edit.ts` 入库。D32–D42 长尾原账不动。
+- **诚实边界**：本轮及历轮 A/B 都是合成夹具，不是真件打开耗时；节起法与纸型档位号
+  屏上零兑现、只走 docx 往返（ODT 链没扩）；清除格式只有纯函数与源码级断言，
+  没做真机浏览器对撞；部件文本缓存的端到端收益只在放大档稳定，结构性收益是省
+  12 次 inflate；本轮曾试过 pptx 导入 `descendantsByName` 索引化，实测在同一子树
+  只查一次的链上**反而慢 9%**，已按「不粉饰数字」完整回退、未提交。
+
 ## 性能（v0.3）
 
 

@@ -22,9 +22,9 @@
  },
  "totals": {
   "read": 619,
-  "kept": 331,
+  "kept": 336,
   "value": 16,
-  "lost": 272,
+  "lost": 267,
   "part": 0,
   "consulted": 672,
   "srcParts": 7,
@@ -2690,28 +2690,34 @@
    ]
   },
   "legacy|legacy": {
-   "bucket": "lost",
+   "bucket": "kept",
    "n": 1,
    "src": [
     "1"
    ],
-   "out": []
+   "out": [
+    "1"
+   ]
   },
   "legacy|legacyIndent": {
-   "bucket": "lost",
+   "bucket": "kept",
    "n": 1,
    "src": [
     "0"
    ],
-   "out": []
+   "out": [
+    "0"
+   ]
   },
   "legacy|legacySpace": {
-   "bucket": "lost",
+   "bucket": "kept",
    "n": 1,
    "src": [
     "0"
    ],
-   "out": []
+   "out": [
+    "0"
+   ]
   },
   "ligatures|val": {
    "bucket": "lost",
@@ -3636,12 +3642,14 @@
    ]
   },
   "pgSz|code": {
-   "bucket": "lost",
+   "bucket": "kept",
    "n": 1,
    "src": [
     "9"
    ],
-   "out": []
+   "out": [
+    "9"
+   ]
   },
   "pgSz|h": {
    "bucket": "kept",
@@ -5758,12 +5766,14 @@
    ]
   },
   "type|val": {
-   "bucket": "lost",
+   "bucket": "kept",
    "n": 1,
    "src": [
     "continuous"
    ],
-   "out": []
+   "out": [
+    "continuous"
+   ]
   },
   "u|color": {
    "bucket": "kept",

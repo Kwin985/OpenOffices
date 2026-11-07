@@ -2742,7 +2742,56 @@ pptx 两本账与 HEAD **逐字节相同**（本轮没有新增 `src/lib` 文件
 `next !== original` 时写回 slide（`legacyWriteBack:true` 保留旧写法供 A/B，
 逐部件字符串逐字相同，−3~20%，12 项断言）。
 
-### 顺延清单（D42）
+### v0.183 追加节：正文族五对 + 清除格式 + 写手部件文本单例解压
+
+**往返账动 5 对**，全部 `lost → kept`、out 等于 src 原值：
+`type|val`(`continuous`)、`pgSz|code`(`9`)、`legacy|legacy`(`1`)、
+`legacy|legacySpace`(`0`)、`legacy|legacyIndent`(`0`)。
+正文 **249/300 = 83.0% → 254/300 = 84.7%**，合计 **331/619 = 53.5% →
+336/619 = 54.3%**，掉了 272 → 267、值变仍 16。
+
+- 前两枚走 `docx` 的 **原生槽**：`ISectionPropertiesOptionsBase.type` 与
+  `IPageSizeAttributes.code`（`.d.ts:1703/1530`，实现 `index.mjs:23094/22840`）。
+  读手 `sectionOf` 把 `:5543` / `:5545` 已有的 `attr` 查问升成带值载荷，
+  `DocxSection`/`PageSetup`/`pageSetupOf`/`resolvePage` 原值透传，写手直接传槽，
+  **post-pack 一行不用动**。原注释「写侧也没有对应槽（包只发纸型/页边距/分栏数）」
+  是过时判断——这是「包没有槽是判断不是判决书」的第九次应验。
+- 节起法用 `Object.values(SectionType)` 白名单（只发五档），`paperCode` 非数值不写；
+  `w:type` 由包排在 `w:pgSz` 之前，schema 序自然成立。
+- `legacy` 三枚在 `word/numbering.xml` 的 `w:lvl` 里。读手 `readNumbering:1343`
+  原已 `attr` 查问三枚、只是没存；升成 `DocxLvlMeta.legacy` 后，
+  `patchOneAbstractNum.insertKid` 的锚点表本来就写着 `'legacy'/'lvlJc'`，
+  写手按 `['lvlJc','pPr','rPr']` 插在 `lvlPicBulletId` 之后、`lvlJc` 之前。
+  三枚是字面值 `1/0/0`，刻意不做 onOff 归一。
+- **查问集合一字未变**：两族都沿用原有 `attr` 单漏斗（没换 `attrNum`，那是
+  `attr ?? attrL` 两条路），`docs/fidelity.*` 与 HEAD 逐字节相同、
+  四条变异腿 52.5 / 59.4 / 99.0 / 96.5 与记录对 392/416/715/685 全不动。
+  `test-section-legacy.mjs` 30 项：完整链路、schema 序、按块对位（包会发多枚
+  `ilvl=0` 内置层，「全文第一枚」不是带载荷那一块）、无源值不凭空造、白名单。
+
+**功能**：Writer「清除格式」——`context-menu.ts` 加 `clearFormat` 条目、
+`format-painter.ts` 加 `clearableMarkNames`（与格式刷同源、身份型 mark 整列排除）、
+`runCtx` 复用 `unsetMark` 循环 + 三个 `setXStyle(null)`，不改节点类型。
+无选区时清的是后续输入格式，故不灰掉。23 项断言。
+
+**性能**：写手 post-pack 的 `PackSession` 加 `text: Map<string,string>`。
+v0.178 省了整包解包/重压，但十余个补丁仍各自 `async('string')` 解压同一份
+`word/document.xml`；探针证实 JSZip 对同一条目二次 `async` **仍重新 inflate**，
+链上 17 次部件解压占端到端 6.8%。现在 `partText` 查表、`setPart` 写回同步更新，
+且只在 `zip === sess.zip` 的共享路径生效（对照腿各自解包时自动退回改前路径）。
+`{legacyPartText:true}` 让两腿同源只差一个参数；判据是逐部件字符串逐字相同
+（归一 `core.xml` 时间戳与超链接随机 `rId`）+ 解压次数 **17 → 5**。
+端到端只在文字 ×40 放大档两次复跑稳定 +12.7% / +13.1%，小件与超大件档在
+±3% 噪声内，不冒充全档降幅。`test-docx-part-cache.mjs` 15 项。
+顺手把 `bench-docx-pack.mjs` 对照腿硬编码的「13 个补丁」改成从产品源动态数
+（v0.182 加了 `patchColsOnOff` 后已过期），复跑语义等价 ✓、−44.9%。
+
+**本轮试过但完整回退的一处**：pptx 导入 `descendantsByName` 惰性索引化。
+这条链上同一子树几乎只查问一次，惰性建 Map 是纯亏损（动画密集件实测 −8.5%，
+即慢 8.5%）；按「不粉饰数字」用反向补丁精确还原、基准脚本删除、未提交。
+判据 `newId()` 随机 id 导致的签名假红也一并记下：两腿签名要归一随机量。
+
+### 顺延清单（D43）
 
 - 图形壳剩余 **235 对**：三维族 `sp3d`(3) / `props3d`(3) / `lightRig`(2)
   要先定「夹具结构非法、真件应写成 effectLst 之后的兄弟」的口径；VML
@@ -2751,12 +2800,13 @@ pptx 两本账与 HEAD **逐字节相同**（本轮没有新增 `src/lib` 文件
   文本里、账本压根没这一对，**动 0 对**；`sizeRelH/V` 是 wp14 扩展，
   夹具写 `wp:` 前缀、真件要 `mc:AlternateContent`。
 - 正文长尾：`fldChar|fldCharType`(3 个源值) / `fldChar|fldLock`、
-  `outline|val`、`smartTag|*`、`legacy|*`、±5 缇、`ind|left` 列表缩进覆盖、
+  `outline|val`、`smartTag|*`、±5 缇、`ind|left` 列表缩进覆盖、
   `docPr|id`、`lvlJc`、`w:color` 字面 val；`theme1.xml` 口径未定。
+  `legacy|*` 与 `type|val`/`pgSz|code` v0.183 已补。
 - Impress 占位矩形编辑（第二套拖拽状态机）；Calc 视图缩放（落点在预存
   改动文件 `SheetEditor.tsx`，按房规换落点或只记结论）；**pdf-lib 按需加载**
   仍等 `pdf-text-edit.ts` 入库。Writer 标尺 v0.179、状态栏 v0.180、
-  逐页翻页预览 v0.181、Impress 母版配色 v0.182 已补。
-- D32–D41 原账不动（同上）。
+  逐页翻页预览 v0.181、Impress 母版配色 v0.182、清除格式 v0.183 已补。
+- D32–D42 原账不动（同上）。
 
 
