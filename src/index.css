@@ -662,6 +662,54 @@ button {
   font-size: 12px;
 }
 
+/* v0.180 Writer 可交互状态栏：底部独立一条，条目表来自 lib/status-bar.ts。
+   预览态由 .is-preview 的通配规则藏掉，纸上由 @media print 显式 display:none。 */
+.doc-status-bar {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  height: 28px;
+  padding: 0 10px;
+  border-top: 1px solid var(--border);
+  background: var(--panel);
+  font-size: 12px;
+  color: var(--text-2);
+  user-select: none;
+}
+
+.doc-status-grow {
+  flex: 1;
+}
+
+.doc-status-item {
+  display: inline-flex;
+  align-items: center;
+  padding: 3px 7px;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  line-height: 1.2;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.doc-status-item.is-static {
+  cursor: default;
+}
+
+.doc-status-item:not(.is-static):hover {
+  background: rgba(127, 127, 127, 0.14);
+  color: var(--accent);
+}
+
+.doc-status-item.is-active {
+  color: var(--accent);
+  font-weight: 600;
+}
+
 .chart-pop {
   position: absolute;
   top: 40px;
@@ -3283,6 +3331,11 @@ button {
   /* v0.179：标尺是屏幕辅助，纸上不出现 */
   .doc-ruler-h,
   .doc-ruler-v {
+    display: none !important;
+  }
+
+  /* v0.180：状态栏同样是屏幕 UI；visibility:hidden 会留 28px 空位，必须 display:none */
+  .doc-status-bar {
     display: none !important;
   }
 

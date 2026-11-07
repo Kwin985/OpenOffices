@@ -124,12 +124,16 @@ const outXml = await (await JSZip.loadAsync(outBytes)).file('word/document.xml')
     /function retagWrap[\s\S]{0,220}\.replace\(\/<wp:wrapNone/.test(writer)
       && writer.includes('chunk = retagWrap(chunk, kv.wrapText)'))
   check('接线：环绕只在浮动图这一支做', /if \(kv\.anKind === 'anchor'\) \{[\s\S]{0,1400}kv\.wrapText/.test(writer))
-  check('接线：a:ln 由 outline 原生槽发壳（不插元素）',
+  // v0.180：post-pack 里新增了「在 <a:ln> 内插子元素」的查找正则与注释，
+  // 全文扫 `<a:ln` 会假红。判据收窄到**发壳路径**（imageRunOf）本身：
+  // 这一段的非注释代码里连 `<a:ln` 字样都不该有，壳只能由包的 outline 槽发。
+  const imageRunSeg = writer.slice(writer.indexOf('function imageRunOf'), writer.indexOf('function imageRunOf') + 2600)
+  const imageRunCode = imageRunSeg.split('\n').filter((l) => !/^\s*(\/\/|\/\*|\*)/.test(l)).join('\n')
+  check('接线：a:ln 由 outline 原生槽发壳（发壳路径不手搓壳）',
     /const outline = kv\.lnW !== undefined/.test(writer)
       && /type: 'noFill' as const, width: Number\(kv\.lnW\)/.test(writer)
       && /\.\.\.\(outline \? \{ outline \} : \{\}\)/.test(writer)
-      // 写手侧不许自己拼 <a:ln> 字符串：壳只能由包的 outline 槽发
-      && !/['\"`<]a:ln\b[^>]*>['\"`]/.test(writer))
+      && !/<a:ln/.test(imageRunCode))
   check('接线：a:ln 三枚按载荷回填', /retag\(chunk, 'a:ln', ln\)/.test(writer)
     && /ln\.cap = kv\.lnCap/.test(writer) && /ln\.cmpd = kv\.lnCmpd/.test(writer))
   check('纪律：没有为这一族新开插元素通道', !/wp:sizeRelH|mc:AlternateContent/.test(writer))

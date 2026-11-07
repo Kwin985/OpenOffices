@@ -995,6 +995,24 @@ function readImgPayload(idx: ImgIndex): string {
     const cmpd = attrL(l, 'cmpd')
     if (cmpd && kv.lnCmpd === undefined) kv.lnCmpd = cmpd
   }
+  // v0.180：CT_LineProperties 的四枚子元素（prstDash / miter / headEnd / tailEnd）。
+  // 它们不是 a:ln 的属性，而是它的子元素；写侧此前连壳都没有，本轮由 outline 槽发出
+  // a:ln 后，post-pack 在 </a:ln> 前按 schema 序（prstDash → miter → headEnd → tailEnd）
+  // 插回。查问一律走 attrL 单漏斗，与 noteDrawingMarks 的 DRAWING_SHELL_ATTRS 同批键，
+  // 探针记的是「按名访问的对」，不因多一次查问而扩集合。
+  const dash = firstOf(idx, 'prstDash')
+  if (dash) {
+    const v = attrL(dash, 'val')
+    if (v) kv.dashVal = v
+  }
+  for (const [prefix, tag] of [['he', 'headEnd'], ['te', 'tailEnd']] as const) {
+    const end = firstOf(idx, tag)
+    if (!end) continue
+    for (const [suffix, n] of [['Type', 'type'], ['W', 'w'], ['Len', 'len']] as const) {
+      const v = attrL(end, n)
+      if (v) kv[prefix + suffix] = v
+    }
+  }
   // ── VML 壳（v0.149）：w:pict 那一支。位图字节在 v:imagedata 里，其余壳属性屏上
   //    一条都不兑现；写侧只发 DrawingML 内嵌图，这一族读得回、写不出（记账边界）──
   const shape = firstOf(idx, 'shape')
@@ -5305,11 +5323,26 @@ const BODYPR_ATTRS = [
   'spcFirstLastPara', 'tIns', 'upright', 'vert', 'vertOverflow', 'wrap',
 ] as const
 
-/** 保真导入一份 docx。抛错或 blocks=0 时调用方应回退 mammoth。`depth` 是嵌套层数（嵌入文档递归用）。 */
-export async function docxToHtmlFidelity(bytes: Uint8Array, depth = 0): Promise<DocxImport> {
-  const { default: JSZip } = await import('jszip')
-  const zip = (await JSZip.loadAsync(bytes)) as unknown as ZipLike
-  const read = async (p: string): Promise<string> => (await zip.file(p)?.async('string')) ?? ''
+/**
+ * 保真导入一份 docx。抛错或 blocks=0 时调用方应回退 mammoth。`depth` 是嵌套层数（嵌入文档递归用）。
+ *
+ * v0.180：`shared` 是可选的共享 zip 会话（由 `openDocxZip` 建、与 `docxToDocMeta`
+ * 共用一份）。不传就照旧各自解包——A/B 两腿同源，只差这一个参数。
+ * 这里不 import `./docx`（本模块已经反向依赖它），会话按结构化形状收。
+ */
+export async function docxToHtmlFidelity(
+  bytes: Uint8Array,
+  depth = 0,
+  shared?: { zip: unknown; read(name: string): Promise<string> },
+): Promise<DocxImport> {
+  let zip: ZipLike
+  if (shared) {
+    zip = shared.zip as ZipLike
+  } else {
+    const { default: JSZip } = await import('jszip')
+    zip = (await JSZip.loadAsync(bytes)) as unknown as ZipLike
+  }
+  const read = shared?.read ?? (async (p: string): Promise<string> => (await zip.file(p)?.async('string')) ?? '')
   const documentXml = await read('word/document.xml')
   if (!documentXml) throw new Error('缺 word/document.xml')
   // v0.173：整份导入只建一次 document 树。下面 7 个「跑正文前按名查问」的只读扫描、

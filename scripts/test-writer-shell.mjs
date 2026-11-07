@@ -121,7 +121,12 @@ const read = (rel) => fs.readFileSync(new URL(rel, import.meta.url), 'utf8')
   check('预览：工具条与预览条都接状态函数', src.includes('previewUi(previewOpen).showPreviewBar'))
   check('预览：切只读（setEditable）', src.includes('editor.setEditable(!previewOpen)'))
   check('预览：Esc 退出', /if \(!previewOpen\) return[\s\S]{0,200}setPreviewOpen\(false\)/.test(src))
-  check('预览：状态栏与预览条共用 estimatePages', (src.match(/estimatePages\(/g) ?? []).length >= 2 && !src.includes('Math.ceil(docH'))
+  // v0.180：状态栏搬成独立底部条、页数经 status-bar.ts 转调 estimatePages，
+  // 组件里只剩预览条那一处直接调用；两处同源的判据改为「组件一处 + lib 转调一处」
+  check('预览：状态栏与预览条共用 estimatePages（状态栏经 lib 转调）',
+    src.includes('estimatePages(docH, effPx.h, effPx.top, effPx.bottom)')
+      && !src.includes('Math.ceil(docH')
+      && read('../src/lib/status-bar.ts').includes('estimatePages(s.docH'))
   check('预览：只读态不弹编辑右键菜单', /onContextMenu=\{\(e\) => \{[\s\S]{0,160}if \(previewOpen\) return/.test(src))
   check('预览：一条 CSS 收起所有工具条/面板', css.includes('.editor-pane.is-preview > :not(.doc-body)'))
   check('预览：预览条与侧栏样式在位', css.includes('.doc-preview-bar') && css.includes('.editor-pane.is-preview .doc-outline'))

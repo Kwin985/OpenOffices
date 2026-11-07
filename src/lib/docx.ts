@@ -650,12 +650,54 @@ export async function docxToHtml(bytes: Uint8Array): Promise<string> {
   return result.value
 }
 
-// mammoth 不读页眉页脚：直接解 zip 里 sectPr 引用的 header/footer XML，抽文本与 PAGE 页码域
-export async function docxToDocMeta(bytes: Uint8Array): Promise<DocMeta> {
+/**
+ * 打开一份 .docx 的**共享 zip 会话**（v0.180）。
+ *
+ * 此前 `docxToDocMeta` 与 `docxToHtmlFidelity` 各自 `JSZip.loadAsync(bytes)` 一遍，
+ * `word/document.xml`、`word/theme/theme1.xml`、`word/_rels/document.xml.rels`
+ * 三份部件各解压 + 转 UTF-8 两次。现在调用方先建一枚会话：zip 实例共享、
+ * 部件文本按名缓存，两个入口都从同一处读。
+ *
+ * 会话是**可选参数**：不传就走原来的「各自解包」路径。这样 A/B 两腿同源、
+ * 只差这一个参数，判据可长期复现（v0.179 的教训：手工 git archive 副本会过期）。
+ */
+export interface DocxZipSession {
+  /** 同一个 zip 实例，供读手 f.load 直读图片字节；调用方只透传、不解类型 */
+  zip: unknown
+  /** 带缓存的部件文本读取；缺件一律返回空串，与原 read 闭包同义 */
+  read(name: string): Promise<string>
+}
+
+interface ZipView {
+  file(name: string): { async(kind: 'string'): Promise<string>; async(kind: 'arraybuffer'): Promise<ArrayBuffer> } | null
+}
+
+export async function openDocxZip(bytes: Uint8Array): Promise<DocxZipSession> {
   const { default: JSZip } = await import('jszip')
   const zip = await JSZip.loadAsync(bytes)
-  const docXml = (await zip.file('word/document.xml')?.async('string')) ?? ''
-  const relsText = (await zip.file('word/_rels/document.xml.rels')?.async('string')) ?? ''
+  const cache = new Map<string, string>()
+  const read = async (name: string): Promise<string> => {
+    const hit = cache.get(name)
+    if (hit !== undefined) return hit
+    const text = (await zip.file(name)?.async('string')) ?? ''
+    cache.set(name, text)
+    return text
+  }
+  return { zip, read }
+}
+
+// mammoth 不读页眉页脚：直接解 zip 里 sectPr 引用的 header/footer XML，抽文本与 PAGE 页码域
+export async function docxToDocMeta(bytes: Uint8Array, shared?: DocxZipSession): Promise<DocMeta> {
+  let zip: ZipView
+  if (shared) {
+    zip = shared.zip as ZipView
+  } else {
+    const { default: JSZip } = await import('jszip')
+    zip = (await JSZip.loadAsync(bytes)) as unknown as ZipView
+  }
+  const readText = shared?.read ?? (async (p: string) => (await zip.file(p)?.async('string')) ?? '')
+  const docXml = await readText('word/document.xml')
+  const relsText = await readText('word/_rels/document.xml.rels')
   const relFor = (rid: string) =>
     relsText.match(new RegExp(`Id="${rid}"[^>]*Target="([^"]+)"`))?.[1] ??
     relsText.match(new RegExp(`Target="([^"]+)"[^>]*Id="${rid}"`))?.[1]
@@ -754,12 +796,11 @@ export async function docxToDocMeta(bytes: Uint8Array): Promise<DocMeta> {
     if (gap && Math.abs(gap - DEFAULT_COL_GAP) > 0.6) page.colGap = rmm(gap)
   }
   if (Object.keys(page).length) out.page = page
-  // 主题件（v0.164）：整份原样带走，导出时原样放回（见 attachThemePart）
-  const themeFile = zip.file('word/theme/theme1.xml')
-  if (themeFile) {
-    const themeXml = await themeFile.async('string')
-    if (themeXml.trim()) out.themeXml = themeXml
-  }
+  // 主题件（v0.164）：整份原样带走，导出时原样放回（见 attachThemePart）。
+  // v0.180：走共享会话的 read（读手那份 theme1.xml 也走同一处），省掉第二次解压；
+  // 缺件时返回空串，与原来 `if (themeFile)` 的门逐字同义
+  const themeXml = await readText('word/theme/theme1.xml')
+  if (themeXml.trim()) out.themeXml = themeXml
   return out
 }
 
@@ -4471,6 +4512,41 @@ async function patchImgXml(bytes: Uint8Array, shells: string[], sess?: PackSessi
     if (kv.lnCap !== undefined) ln.cap = kv.lnCap
     if (kv.lnCmpd !== undefined) ln.cmpd = kv.lnCmpd
     if (Object.keys(ln).length) chunk = retag(chunk, 'a:ln', ln)
+    // v0.180：CT_LineProperties 的四枚子元素（v0.179 只补了 a:ln 的三枚属性）。
+    // 包没有这些元素的构造器——v0.179 的 outline 槽让 `<a:ln>` 这枚壳发得出来之后，
+    // 子元素要在这里按 schema 序补：fill（包发的 a:noFill）→ prstDash → miter
+    // → headEnd → tailEnd。插在 `</a:ln>` 之前天然满足位次，且不需要新建 a:effectLst
+    // 那张锚点表（那是下一族的事）。
+    // 纪律：chunk 已是单个 w:drawing 块、只插第一枚 a:ln、已有同名元素改为改属性
+    // 而不是再插一枚（第二枚同名子元素 = 非法 XML，计数闸门抓不到）。
+    const lineKids: [string, Record<string, string>][] = []
+    if (kv.dashVal !== undefined) lineKids.push(['prstDash', { val: kv.dashVal }])
+    if (kv.miterLim !== undefined) lineKids.push(['miter', { lim: kv.miterLim }])
+    for (const [prefix, tag] of [['he', 'headEnd'], ['te', 'tailEnd']] as const) {
+      const a: Record<string, string> = {}
+      if (kv[prefix + 'Type']) a.type = kv[prefix + 'Type']
+      if (kv[prefix + 'W']) a.w = kv[prefix + 'W']
+      if (kv[prefix + 'Len']) a.len = kv[prefix + 'Len']
+      if (Object.keys(a).length) lineKids.push([tag, a])
+    }
+    if (lineKids.length) {
+      const lnBox = /<a:ln\b[^>]*\/>|<a:ln\b[^>]*>[\s\S]*?<\/a:ln>/.exec(chunk)
+      if (lnBox) {
+        const box = lnBox[0]
+        if (lineKids.some(([tag]) => box.includes(`<a:${tag}`))) {
+          // 包已自带其中一枚（或同一块跑第二趟）：逐枚改属性，不再插
+          for (const [tag, a] of lineKids)
+            if (box.includes(`<a:${tag}`)) chunk = retag(chunk, `a:${tag}`, a)
+        } else {
+          const frag = lineKids.map(([tag, a]) => tagWithAttrs(`<a:${tag}/>`, a)).join('')
+          const at = box.lastIndexOf('</a:ln>')
+          const fresh = box.endsWith('/>')
+            ? box.slice(0, -2) + '>' + frag + '</a:ln>'
+            : box.slice(0, at) + frag + box.slice(at)
+          chunk = chunk.slice(0, lnBox.index) + fresh + chunk.slice(lnBox.index + box.length)
+        }
+      }
+    }
     // a:xfrm 的 a:off / a:ext（图形框自身的原点与尺寸）
     const off: Record<string, string> = {}
     if (kv.offX !== undefined) off.x = kv.offX

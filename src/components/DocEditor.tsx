@@ -26,6 +26,7 @@ import {
   type PMNode,
   type TableCond,
   type TableCondType,
+  openDocxZip,
 } from '../lib/docx'
 import { addCommentMark, findCommentAnchor, removeCommentMark } from '../lib/comment-extension'
 import { acceptRevisions, deleteAsRevision, rejectRevisions, revModeOnState, toggleRevMode } from '../lib/revision-extension'
@@ -81,9 +82,11 @@ import { docTemplate } from '../lib/templates'
 import { odtToHtml, prosemirrorToOdtBytes } from '../lib/odt'
 import { planFeed, runFeed, type FeedSource } from '../lib/doc-feed'
 import { registerSaver, runExclusive } from '../lib/registry'
-import { failDialog, failStatus, statusText, statusTip } from '../lib/fail-msg'
+import { failDialog, failStatus } from '../lib/fail-msg'
+// v0.180：可交互状态栏的条目表住在 lib；fail-msg / print-preview / view-zoom 的口径在那里转调
+import { statusBarItems, type StatusBarAction } from '../lib/status-bar'
 import { saveDoneTimer } from '../lib/save-status'
-import { autoDelayMs, autoFailStatus, autoOkTip, createAutoSaveLedger, onFocusBack, staleFailureClaim } from '../lib/auto-save'
+import { autoDelayMs, autoFailStatus, createAutoSaveLedger, onFocusBack, staleFailureClaim } from '../lib/auto-save'
 import type { FailureClaim } from '../lib/auto-save'
 
 interface Props {
@@ -629,14 +632,16 @@ function DocEditor({ tab }: Props) {
         let note = ''
         if (tab.path.toLowerCase().endsWith('.docx')) {
           const bytes = await readBytes(tab.path)
-          const m = await docxToDocMeta(bytes)
+          // v0.180：meta 与保真读手共用一次解包、一份部件文本缓存
+          const zipSession = await openDocxZip(bytes)
+          const m = await docxToDocMeta(bytes, zipSession)
           // 保真导入器直接读 OOXML 的 pPr/rPr，样式还原度远高于 mammoth；
           // 但它覆盖面有限（认不出的构造会漏），所以抛错或一块都没拆出来时退回 mammoth。
           let fid: DocxImport | null = null
           try {
             // 只在真的打开 .docx 时才拉这个模块，别把它塞进编辑器 chunk 的常驻体积里
             const { docxToHtmlFidelity } = await import('../lib/docx-fidelity')
-            const r = await docxToHtmlFidelity(bytes)
+            const r = await docxToHtmlFidelity(bytes, 0, zipSession)
             if (r.blocks > 0) fid = r
           } catch (e) {
             console.warn('docx 保真导入失败，回退 mammoth', e)
@@ -1431,6 +1436,34 @@ function DocEditor({ tab }: Props) {
     </button>
   )
 
+  // —— v0.180 可交互状态栏：条目表来自 lib 纯函数，这里只把 action 接到既有入口 ——
+  const statusItems = statusBarItems({
+    status,
+    savedAtText: autoSavedAt ? autoSavedAt.toLocaleTimeString() : '',
+    words: counts.words,
+    chars: counts.chars,
+    docH,
+    pageH: effPx.h,
+    marginTop: effPx.top,
+    marginBottom: effPx.bottom,
+    zoom,
+    revOn,
+    spellOn,
+    previewOpen,
+    histOpen,
+  })
+  const runStatus = (a: StatusBarAction) => {
+    switch (a) {
+      case 'openHistory': setHistOpen(true); break
+      case 'togglePreview': setPreviewOpen((v) => !v); break
+      case 'toggleRevision': setRevOn(toggleRevMode(editor)); break
+      case 'toggleSpell': toggleSpell(); break
+      case 'zoomOut': setZoom((z) => zoomStep(z, -1)); break
+      case 'zoomIn': setZoom((z) => zoomStep(z, 1)); break
+      case 'zoomReset': setZoom(1); break
+    }
+  }
+
   // —— v0.173 文档结构图：关着时连一次 doc.descendants 都不跑 ——
   const outline = navOpen ? outlineOf(editor.state.doc) : []
   const activeOutline = navOpen ? activeOutlinePos(outline, editor.state.selection.from) : -1
@@ -1730,20 +1763,6 @@ function DocEditor({ tab }: Props) {
         {btn('打印预览', () => setPreviewOpen((v) => !v), previewOpen, '独立打印预览：纸面转只读、可缩放、可直接打印或导出 PDF；Esc 退出。逐页翻页未做')}
         {btn('打印 / PDF', () => window.print(), false, '调用系统打印，可选择另存为 PDF')}
         {btn('导出 PDF', exportPdf, false, 'WebView2 原生 PrintToPdf：按打印样式矢量输出，含高亮底色')}
-        {status && (
-          <span className="editor-status" title={statusTip(status)}>
-            {statusText(status)}
-          </span>
-        )}
-        {!status && autoSavedAt && (
-          <span className="editor-status" title={autoOkTip(auto)}>
-            已自动保存 {autoSavedAt.toLocaleTimeString()}
-          </span>
-        )}
-        <span className="editor-hint">
-          字数 {counts.words} · 字符 {counts.chars} · 约{' '}
-          {estimatePages(docH, effPx.h, effPx.top, effPx.bottom)} 页
-        </span>
       </div>
       <div className="doc-toolbar">
         <select
@@ -3203,6 +3222,24 @@ function DocEditor({ tab }: Props) {
               })}
           </aside>
         )}
+      </div>
+      {/* v0.180：独立状态栏。预览态由 .is-preview 的通配规则藏掉，纸上由 @media print 藏掉 */}
+      <div className="doc-status-bar">
+        {statusItems.flatMap((it) => [
+          ...(it.pushLeft ? [<span key="grow" className="doc-status-grow" />] : []),
+          it.action ? (
+            <button
+              key={it.id}
+              className={`doc-status-item${it.active ? ' is-active' : ''}`}
+              title={it.title}
+              onClick={() => { const a = it.action; if (a) runStatus(a) }}
+            >
+              {it.label}
+            </button>
+          ) : (
+            <span key={it.id} className="doc-status-item is-static" title={it.title}>{it.label}</span>
+          ),
+        ])}
       </div>
       {ctxMenu && (
         <div
