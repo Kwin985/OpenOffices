@@ -6,6 +6,8 @@
 //
 // 刻意不放的：浏览器的「粘贴为纯文本 / 字体 / 段落对话框」这类需要模态面板的项，
 // 以及任何会改文档语义却看不出后果的操作。菜单只列按下去立刻看得见结果的动作。
+// v0.183 补了「清除格式」：它摘的是字符外观 mark 与样式标签，身份型 mark
+// （批注/书签/修订/超链接）整列保留——按下去立刻看得见，且不越权删别人的标注。
 
 export interface CtxState {
   hasSelection: boolean
@@ -32,6 +34,9 @@ export function contextItems(s: CtxState): CtxItem[] {
     { id: 'copy', label: '复制', ...(!s.hasSelection ? { disabled: true } : {}) },
     { id: 'paste', label: '粘贴' },
     { id: 'selectAll', label: '全选' },
+    // 不随 hasSelection 灰掉：无选区时清的是「光标处后续输入会带上什么格式」，
+    // 与 WPS 同口径；执行侧 unsetMark 对空选区正好落 storedMarks
+    { id: 'clearFormat', label: '清除格式' },
     { id: 'sep-2', label: '', separator: true },
     { id: 'find', label: '查找替换' },
     { id: 'painter', label: s.painterArmed ? '取消格式刷' : '格式刷' },

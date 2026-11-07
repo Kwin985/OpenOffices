@@ -44,8 +44,15 @@ function legacyWriter() {
   fs.cpSync(path.join(REPO, 'src/lib'), libDir, { recursive: true })
   const file = path.join(libDir, 'docx.ts')
   let s = fs.readFileSync(file, 'utf8')
+  // v0.183：补丁数随轮次增长（v0.182 加了 patchColsOnOff 后硬编码的 13 就过期了）。
+  // 第一处改写按产品源动态取数，第二处要求「读写配对」与它相等，第三处恒为 1。
+  let patchCount = 0
   const swap = (from, to, expected) => {
     const n = s.split(from).length - 1
+    if (expected === 'auto') {
+      if (!patchCount) patchCount = n
+      expected = patchCount
+    }
     if (n !== expected) throw new Error(`对照腿改写失败：期望 ${expected} 处，实际 ${n} 处 — ${from.slice(0, 60)}`)
     s = s.split(from).join(to)
   }
@@ -53,13 +60,13 @@ function legacyWriter() {
   swap(
     '  const zip = sess ? sess.zip : await loadZipOf(bytes)',
     "  const { default: JSZip } = await import('jszip')\n  const zip = await JSZip.loadAsync(bytes)",
-    13,
+    'auto',
   )
   // ② 每个补丁独立重压整包
   swap(
     '  return finishPatch(bytes, zip, sess)',
     "  const buf = (await zip.generateAsync({ type: 'arraybuffer' })) as ArrayBuffer\n  return new Uint8Array(buf)",
-    13,
+    'auto',
   )
   // ③ 主链末尾不再统一打包，直接交回最后一枚补丁的产物
   const tail = `  await attachThemePart(withPgNum, meta?.themeXml, sess)

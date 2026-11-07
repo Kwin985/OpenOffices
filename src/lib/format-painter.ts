@@ -51,6 +51,18 @@ export function paintableMarkNames(schema: Schema): string[] {
   return Object.keys(schema.marks).filter((name) => !PAINT_EXCLUDE.has(name))
 }
 
+/**
+ * 清除格式（v0.183）要摘掉的 mark 名单：与格式刷同源，只摘「字符长相」。
+ *
+ * 为什么连「删除」也把身份型整列留着：批注锚、书签、修订、超链接不是格式，
+ * 是别人的标注与目标。WPS 的「清除格式」按钮按下去不该把整篇的批注一起抹掉，
+ * 那属于「删除批注」而不是「清除格式」。要摘这些得走各自的入口。
+ * 与 paintableMarkNames 分成两个名字，是为了让两处的语义将来能各自演化而不互相牵连。
+ */
+export function clearableMarkNames(schema: Schema): string[] {
+  return paintableMarkNames(schema)
+}
+
 /** 载荷还原成 PM Mark 实例；schema 里没有的类型、属性不合法的一枚跳过，不整笔作废。 */
 export function marksForSchema(schema: Schema, payload: PaintFormat): Mark[] {
   const out: Mark[] = []

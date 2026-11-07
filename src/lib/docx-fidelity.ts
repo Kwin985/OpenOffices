@@ -1328,8 +1328,8 @@ function readNumbering(xml: string, theme?: ThemeFonts): Numbering {
       //   lvlRestart     —— 这一层是否随上一级重新起号（0 = 永不重起）
       //   lvlPicBulletId —— 这一层用的是第几号图片项目符号（对着根上 numPicBullet 的 id）
       //   legacy         —— 三枚属性（legacy/legacySpace/legacyIndent），Word 2003 的
-      //                     老式编号缩进补偿；**只读**（三枚同族不同名，写回要做属性组补丁，
-      //                     而它对屏上零后果）
+      //                     老式编号缩进补偿。**v0.183 起上了通道**：写手的 insertKid
+      //                     锚点表本来就含 'legacy'，只差把三枚原值带过来
       //   numForm        —— 编号口径（default/…）。**只读**：它的位次在我们手上没有
       //                     可靠参考（CT_Lvl 的序里没有它，硬插会被 Word 判损坏件），
       //                     所以读了记账、不回写——宁可少写一枚，不赌一次乱序。
@@ -1340,11 +1340,19 @@ function readNumbering(xml: string, theme?: ThemeFonts): Numbering {
       const pic = valNum(l, 'w:lvlPicBulletId')
       if (pic !== undefined) meta.picBulletId = pic
       val(l, 'w:numForm')
+      // v0.183：legacy 三枚从「只读记账」升成带值载荷。写手 patchOneAbstractNum
+      // 的 insertKid 锚点表里本来就写着 'legacy'/'lvlJc'，位次是现成的——
+      // 缺的只是把这三枚原值带过 numbering.xml 这一趟（同样是 attr 单漏斗，查问集合不变）
       const lg = find(l, 'w:legacy')
       if (lg) {
-        attr(lg, 'w:legacy')
-        attr(lg, 'w:legacySpace')
-        attr(lg, 'w:legacyIndent')
+        const a = attr(lg, 'w:legacy')
+        const b = attr(lg, 'w:legacySpace')
+        const c = attr(lg, 'w:legacyIndent')
+        const rec: NonNullable<DocxLvlMeta['legacy']> = {}
+        if (a !== undefined) rec.legacy = a
+        if (b !== undefined) rec.space = b
+        if (c !== undefined) rec.indent = c
+        if (Object.keys(rec).length) meta.legacy = rec
       }
       if (Object.keys(meta).length) lvls[String(ilvl)] = meta
     }
@@ -5532,17 +5540,24 @@ function sectionOf(doc: XEl | undefined): DocxSection | undefined {
     if (cs !== undefined) g.charSpace = cs
     if (Object.keys(g).length) out.docGrid = g
   }
-  // v0.155：节属性余量七枚——全是「说了也不改屏上排版」的元信息，屏上零兑现，
-  // 写侧也没有对应槽（包只发纸型/页边距/分栏数这几枚），纯只读记账：
-  //   type        —— 这一节从哪儿起（nextPage 另起一页 / continuous 接着排 / evenPage …）
-  //   pgSz|code   —— 纸型的打印机档位号（Word 记住「用户选的是 A4 那一格」用的）
-  //   pgNumType   —— 页码型别与起始值。**v0.170 起上了通道**（包的 page.pageNumbers 有槽）
-  //   cols|equalWidth / col|w|space —— 逐栏不等宽的分栏表（我们只支持等宽 N 栏）
-  //   rtlGutter   —— 装订线落在右侧（从右往左书写的件）
-  //   formProt    —— 这一节受窗体保护（只填表单域，其余不可改）
+  // v0.155 起：节属性余量——全是「说了也不改屏上排版」的元信息，屏上零兑现。
+  // v0.183 把其中两枚升成**带值载荷**（与 v0.182 分栏同款）：包本来就有
+  // `sections[].properties.type`（w:type）与 `page.size.code`（w:pgSz/@w:code）
+  // 两个原生槽，原注释写「写侧也没有对应槽」是过时的判断；post-pack 一行不用动。
+  //   type        —— 这一节从哪儿起（nextPage / continuous / evenPage …）**已上通道**
+  //   pgSz|code   —— 纸型的打印机档位号（Word 记住「用户选的是 A4 那一格」）**已上通道**
+  //   pgNumType   —— 页码型别与起始值，v0.170 起上了通道（page.pageNumbers 原生槽）
+  //   cols|equalWidth / col|w|space —— v0.182 起上了通道（Column[] 原生槽）
+  //   rtlGutter / formProt —— 仍只读记账（包无对应槽，屏上零后果）
   const ty = find(sect, 'w:type')
-  if (ty) attr(ty, 'w:val')
-  if (pg) attr(pg, 'w:code')
+  if (ty) {
+    const v = attr(ty, 'w:val')
+    if (v) out.sectionType = v
+  }
+  if (pg) {
+    const c = attr(pg, 'w:code')
+    if (c) out.paperCode = c
+  }
   // 页码型别与起始值（v0.170）：两枚都原样带回 PageSetup.pageNum，写侧走包的
   // `sections[].properties.page.pageNumbers`（w:pgNumType 的原生槽）
   const pgn = find(sect, 'w:pgNumType')

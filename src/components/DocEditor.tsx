@@ -68,7 +68,7 @@ import { ruleOf, type LineRule } from '../lib/paragraph-style'
 import { docExtensions } from '../lib/doc-schema'
 // v0.173：文档结构图与格式刷。形状住在 lib，组件只做接线与交互。
 import { outlineOf, activeOutlinePos } from '../lib/outline'
-import { captureFormat, marksForSchema, paintableMarkNames, type PaintFormat } from '../lib/format-painter'
+import { captureFormat, clearableMarkNames, marksForSchema, paintableMarkNames, type PaintFormat } from '../lib/format-painter'
 // v0.174：视图缩放与内容区右键菜单。刻度/条目表住在 lib，组件只做接线。
 import { ZOOM_STEPS, clampZoom, zoomByWheel, zoomPct, zoomStep } from '../lib/view-zoom'
 import { contextItems } from '../lib/context-menu'
@@ -1542,6 +1542,14 @@ function DocEditor({ tab }: Props) {
         setTimeout(() => frInputRef.current?.focus(), 0)
         return
       case 'painter': painterClick(); return
+      // v0.183 清除格式：只摘字符外观 mark + 三个样式标签。身份型 mark 整列保留
+      // （清掉批注/修订/书签/超链接是「删除标注」，不是「清除格式」），节点类型
+      // 也不动（标题转段落交给用户）。名单与格式刷同源，抽在 lib 里可纯函数钉。
+      case 'clearFormat': {
+        for (const name of clearableMarkNames(editor.state.schema)) chain.unsetMark(name)
+        chain.setPstyle(null).setRStyle(null).setTableStyle(null).run()
+        return
+      }
       case 'nav': setNavOpen((v) => !v); return
       case 'pageBreak': chain.insertPageBreak().run(); return
       case 'addRow': chain.addRowAfter().run(); return
@@ -1963,6 +1971,9 @@ function DocEditor({ tab }: Props) {
         >
           {painter ? (painterLocked ? '格式刷·连刷' : '格式刷·待刷') : '格式刷'}
         </button>
+        {btn('清格式', () => void runCtx('clearFormat'), false,
+          '清除格式：摘掉选区里的字符外观（粗斜、字色、高亮、字号等）与样式标签；' +
+          '批注/书签/修订/超链接这类带身份的标记保留，标题节点也不转回段落。无选区时清的是后续输入格式')}
         {btn('拼写', toggleSpell, spellOn, '拼写检查：常见错拼、中文误用、重复字。开着会随输入重扫')}
         {btn('协同', toggleCollabPanel, collabOpen, '实时协同：同一房间名的多个实例一起改同一份文档，改动自动合并，不用互相锁')}
         {btn('宏', () => setMacroOpen((v) => !v), macroOpen, '脚本宏：一段 JS 操作这篇文档（只跑自己写的）')}

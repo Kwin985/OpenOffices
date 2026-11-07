@@ -33,6 +33,7 @@ import {
   Packer,
   Paragraph,
   ShadingType,
+  SectionType,
   SymbolRun,
   Table,
   TableCell,
@@ -161,6 +162,13 @@ export interface PageSetup {
    */
   colsLayout?: { equalWidth?: boolean; widths?: { w: number; space?: number }[] }
   /**
+   * 节起法与纸型档位号（v0.183）：`w:type/@w:val` 与 `w:pgSz/@w:code`。
+   * 两枚都是屏上零兑现的元信息，但写好写回能让 Word 记住「这一节是接着排、
+   * 用户选的是 A4 那一格」。包的两个原生槽直接吃这两个值，原样透传不换算。
+   */
+  sectionType?: string
+  paperCode?: string
+  /**
    * 页码型别与起始值（v0.170）：`w:pgNumType/@w:fmt|@w:start`。屏上没有分页视图，
    * 页码是域算的，但纸面上「这一节从 iii 开始、用罗马数字」是实打实的设置
    */
@@ -185,6 +193,9 @@ export interface DocxSection {
   /** v0.182：不等宽分栏逐栏表（缇原值），与 PageSetup.colsLayout 同形，只往返不屏现 */
   colsLayout?: { equalWidth?: boolean; widths?: { w: number; space?: number }[] }
   docGrid?: { type?: string; linePitch?: number; charSpace?: number }
+  /** v0.183：节起法 `w:type/@w:val` 与纸型档位号 `w:pgSz/@w:code`，原值直传只往返 */
+  sectionType?: string
+  paperCode?: string
   /** 页码型别与起始值（v0.170）：`w:pgNumType` 的两枚属性，原样带回 `PageSetup.pageNum` */
   pageNum?: { fmt?: string; start?: number }
 }
@@ -202,6 +213,9 @@ export function pageSetupOf(s: DocxSection): PageSetup {
   const mm = (t?: number) => (t === undefined || !(t > 0) ? undefined : rmm(t / MM_TWIPS))
   const page: PageSetup = {}
   if (s.pageNum) page.pageNum = { ...s.pageNum }
+  // v0.183：两枚都是字面值（不是尺寸），不做 mm / 缇换算
+  if (s.sectionType) page.sectionType = s.sectionType
+  if (s.paperCode) page.paperCode = s.paperCode
   const pw = mm(s.w)
   const ph = mm(s.h)
   if (pw && ph) {
@@ -294,6 +308,9 @@ export function resolvePage(p?: PageSetup): {
   footer?: number
   orient?: 'portrait' | 'landscape'
   docGrid?: { type?: string; linePitch?: number; charSpace?: number }
+  /** v0.183：节起法与纸型档位号，原值透传给包的原生槽 */
+  sectionType?: string
+  paperCode?: string
   pageNum?: { fmt?: string; start?: number }
   colsLayout?: { equalWidth?: boolean; widths?: { w: number; space?: number }[] }
 } {
@@ -314,6 +331,8 @@ export function resolvePage(p?: PageSetup): {
     ...(p?.docGrid ? { docGrid: p.docGrid } : {}),
     ...(p?.pageNum ? { pageNum: p.pageNum } : {}),
     ...(p?.colsLayout ? { colsLayout: p.colsLayout } : {}),
+    ...(p?.sectionType ? { sectionType: p.sectionType } : {}),
+    ...(p?.paperCode ? { paperCode: p.paperCode } : {}),
   }
 }
 
@@ -571,6 +590,12 @@ export interface DocxLvlMeta {
    * numPicBullet 里（我们不发图片项目符号），引用留着不指空是给 Word 看的
    */
   picBulletId?: number
+  /**
+   * Word 2003 老式编号缩进补偿（v0.183）：`w:legacy/@w:legacy|@w:legacySpace|
+   * @w:legacyIndent` 三枚原值。屏上零兑现，随 numbering.xml 的 insertKid 往返；
+   * 三枚都是字面值（onOff 也按原值存），不做归一，免得把源件没说过的话写回去。
+   */
+  legacy?: { legacy?: string; space?: string; indent?: string }
 }
 
 /**
@@ -2884,6 +2909,36 @@ async function loadZipOf(bytes: Uint8Array) {
 interface PackSession {
   zip: Awaited<ReturnType<typeof loadZipOf>>
   touched: boolean
+  /**
+   * v0.183：部件名 → 当前文本。`legacyPartText` 对照腿不建这份表，每次真解压。
+   * 与 v0.178 的共享 zip 是同一条链的第二层：那次省了「整包解包 + 重压」，
+   * 这次省的是「同一份 document.xml 被十余个补丁各解压一次」。
+   */
+  text?: Map<string, string>
+}
+
+/**
+ * 读一枚部件：共享会话里查表，否则真解压。
+ * `zip !== sess.zip` 的独立路径（A/B 对照腿各自解包 / 调用方直用补丁）
+ * 一律不走缓存，避免跨 zip 实例串味——这条守卫让对照腿仍是逐字改前路径。
+ */
+async function partText(
+  zip: PackSession['zip'],
+  name: string,
+  sess?: PackSession,
+): Promise<string> {
+  const cache = sess?.text
+  const shared = !!cache && zip === sess!.zip
+  if (shared && cache!.has(name)) return cache!.get(name)!
+  const t = (await zip.file(name)?.async('string')) ?? ''
+  if (shared) cache!.set(name, t)
+  return t
+}
+
+/** 写回一枚部件：zip 与缓存同步更新，下一枚补丁读到的就是刚写下的文本 */
+function setPart(zip: PackSession['zip'], name: string, text: string, sess?: PackSession): void {
+  zip.file(name, text)
+  if (sess?.text && zip === sess.zip) sess.text.set(name, text)
 }
 
 /** 补丁落地：有会话就只标脏（末尾统一打包），没有会话就照旧各自重压 */
@@ -2900,7 +2955,11 @@ async function finishPatch(
   return new Uint8Array(buf)
 }
 
-export async function prosemirrorToDocxBytes(json: PMNode, meta?: DocMeta): Promise<Uint8Array> {
+export async function prosemirrorToDocxBytes(
+  json: PMNode,
+  meta?: DocMeta,
+  opts?: { legacyPartText?: boolean },
+): Promise<Uint8Array> {
   const dt = newDocTrack()
   // 编号注册表（v0.142）：blocksOf 一路往里传，收齐全篇的自定义档位后进 Document.numbering。
   // 带上源文档的编号定义（v0.158）：重建一串列表时能照原样逐层发，而不是三层拍成一个符面
@@ -2913,11 +2972,14 @@ export async function prosemirrorToDocxBytes(json: PMNode, meta?: DocMeta): Prom
     children: (Paragraph | Table | TableOfContents)[]
     properties?: {
       page: {
-        size: { width: number; height: number; orientation?: 'landscape' | 'portrait' }
+        /** v0.183：w:pgSz/@w:code 纸型档位号（包的原生槽，屏上不兑现） */
+        size: { width: number; height: number; orientation?: 'landscape' | 'portrait'; code?: number }
         margin: Record<string, number>
         /** 页码型别与起始值（v0.170）：包的 sections[].properties.page.pageNumbers 原生槽 */
         pageNumbers?: { start?: number; formatType?: (typeof NumberFormat)[keyof typeof NumberFormat] }
       }
+      /** v0.183：节起法 w:type（nextPage/continuous/evenPage…），包的原生槽 */
+      type?: (typeof SectionType)[keyof typeof SectionType]
       column?: {
         count: number
         space: number
@@ -2941,6 +3003,10 @@ export async function prosemirrorToDocxBytes(json: PMNode, meta?: DocMeta): Prom
           width: twips(Math.min(pg.w, pg.h)),
           height: twips(Math.max(pg.w, pg.h)),
           ...(landscape ? { orientation: 'landscape' as const } : {}),
+          // v0.183：纸型档位号原值透传；非数值的脏值不写（宁可少一枚，不赌坏件）
+          ...(pg.paperCode !== undefined && Number.isFinite(Number(pg.paperCode))
+            ? { code: Number(pg.paperCode) }
+            : {}),
         },
         margin: {
           top: twips(pg.margin.top),
@@ -2994,6 +3060,11 @@ export async function prosemirrorToDocxBytes(json: PMNode, meta?: DocMeta): Prom
                 }
               : { count: pg.cols, space: twips(pg.colGap), equalWidth: true as const, separate: false },
           }
+        : {}),
+      // v0.183：节起法（w:type）。只发包认的五档枚举，源文件偶见的自造档不写
+      // （BuilderElement 不校验，但 Word 会判坏件）；schema 序由包负责，post-pack 不动
+      ...(pg.sectionType && (Object.values(SectionType) as string[]).includes(pg.sectionType)
+        ? { type: pg.sectionType as (typeof SectionType)[keyof typeof SectionType] }
         : {}),
     }
   }
@@ -3152,7 +3223,11 @@ export async function prosemirrorToDocxBytes(json: PMNode, meta?: DocMeta): Prom
   // v0.178：整条 post-pack 链共用一枚解包会话，末尾只 generate 一次。
   // 各补丁仍取「上一步的 bytes」作参数，但有会话时那个值只是占位——真正的数据在
   // sess.zip 里，串行顺序与原来「打包→解包」的链逐字同义
-  const sess: PackSession = { zip: await loadZipOf(out), touched: false }
+  const sess: PackSession = {
+    zip: await loadZipOf(out),
+    touched: false,
+    ...(opts?.legacyPartText ? {} : { text: new Map<string, string>() }),
+  }
   // v0.182：不等宽分栏的 w:cols/@equalWidth 回填成 onOff 字面（包发 "false"）
   const withCols = await patchColsOnOff(out, sess)
   // 段落属性余量（v0.147）：按出现序贴回各自的 <w:pPr>，与上面两笔同一路数
@@ -3243,7 +3318,7 @@ async function patchStylesXml(
   const zip = sess ? sess.zip : await loadZipOf(bytes)
   const file = zip.file('word/styles.xml')
   if (!file) return bytes
-  let xml = await file.async('string')
+  let xml = await partText(zip, 'word/styles.xml', sess)
   let touched = false
   if (props.size) {
     xml = xml.replace(/<w:style\b[^>]*>[\s\S]*?<\/w:style>/g, (all) => {
@@ -3298,7 +3373,7 @@ async function patchStylesXml(
     }
   }
   if (!touched) return bytes
-  zip.file('word/styles.xml', xml)
+  setPart(zip, 'word/styles.xml', xml, sess)
   return finishPatch(bytes, zip, sess)
 }
 
@@ -3412,7 +3487,7 @@ async function patchNumberingXml(bytes: Uint8Array, defs: DocxAbstractNumMeta[],
   const zip = sess ? sess.zip : await loadZipOf(bytes)
   const file = zip.file('word/numbering.xml')
   if (!file) return bytes
-  const xml = await file.async('string')
+  const xml = await partText(zip, 'word/numbering.xml', sess)
   const blocks = xml.match(/<w:abstractNum\b[^>]*>[\s\S]*?<\/w:abstractNum>/g)
   if (!blocks || !blocks.length) return bytes
   // 包内每枚的层序列（按 ilvl 序的 `numFmt|lvlText`）→ 块下标
@@ -3449,7 +3524,7 @@ async function patchNumberingXml(bytes: Uint8Array, defs: DocxAbstractNumMeta[],
   }
   out += xml.slice(cursor)
   if (!touched) return bytes
-  zip.file('word/numbering.xml', out)
+  setPart(zip, 'word/numbering.xml', out, sess)
   return finishPatch(bytes, zip, sess)
 }
 
@@ -3545,6 +3620,19 @@ function patchOneAbstractNum(block: string, d: DocxAbstractNumMeta): string {
         // CT_Lvl 序：suff 在 lvlText 之前
         insertKid(`<w:suff w:val="${xmlAttr(m.suff)}"/>`, ['lvlText', 'lvlPicBulletId', 'legacy', 'lvlJc', 'pPr', 'rPr'])
       }
+    }
+    // v0.183：Word 2003 老式编号缩进补偿三枚。包不发 w:legacy，按 CT_Lvl 序
+    // 插在 lvlJc / pPr / rPr 中第一枚在场者之前（锚点表与 restart/picBulletId/suff 同源）。
+    // 三枚都是字面值原样回填，不做 onOff 归一——源件写 1/0 就还它 1/0
+    if (m.legacy) {
+      const lg = [
+        m.legacy.legacy !== undefined ? ` w:legacy="${xmlAttr(m.legacy.legacy)}"` : '',
+        m.legacy.space !== undefined ? ` w:legacySpace="${xmlAttr(m.legacy.space)}"` : '',
+        m.legacy.indent !== undefined ? ` w:legacyIndent="${xmlAttr(m.legacy.indent)}"` : '',
+      ].join('')
+      const frag = `<w:legacy${lg}/>`
+      if (/<[\w:]*legacy\b[^>]*\/>/.test(inner)) inner = inner.replace(/<[\w:]*legacy\b[^>]*\/>/, frag)
+      else insertKid(frag, ['lvlJc', 'pPr', 'rPr'])
     }
     out = out.slice(0, at) + tag + inner + out.slice(end + closeLen)
   }
@@ -3690,7 +3778,7 @@ async function patchParaProps(bytes: Uint8Array, extras: string[], sess?: PackSe
   const zip = sess ? sess.zip : await loadZipOf(bytes)
   const file = zip.file('word/document.xml')
   if (!file) return bytes
-  const xml = await file.async('string')
+  const xml = await partText(zip, 'word/document.xml', sess)
   // 自闭合的 `<w:p/>` 也算一段（空的段、只有分页符的段都可能写成这样）
   const opens = [...xml.matchAll(/<w:p(?:\s[^>]*)?\/?>/g)]
   if (opens.length !== extras.length) return bytes
@@ -3715,7 +3803,7 @@ async function patchParaProps(bytes: Uint8Array, extras: string[], sess?: PackSe
   }
   if (!touched) return bytes
   out += xml.slice(cursor)
-  zip.file('word/document.xml', out)
+  setPart(zip, 'word/document.xml', out, sess)
   return finishPatch(bytes, zip, sess)
 }
 
@@ -3749,13 +3837,13 @@ async function patchColsOnOff(bytes: Uint8Array, sess?: PackSession): Promise<Ui
   const zip = sess ? sess.zip : await loadZipOf(bytes)
   const file = zip.file('word/document.xml')
   if (!file) return bytes
-  const xml = await file.async('string')
+  const xml = await partText(zip, 'word/document.xml', sess)
   const out = xml.replace(
     /(<w:cols\b[^>]*\bw:equalWidth=")false(")/g,
     (_m: string, a: string, b: string) => `${a}0${b}`,
   )
   if (out === xml) return bytes
-  zip.file('word/document.xml', out)
+  setPart(zip, 'word/document.xml', out, sess)
   return finishPatch(bytes, zip, sess)
 }
 
@@ -3764,7 +3852,7 @@ async function patchElemAttrs(bytes: Uint8Array, tag: string, extras: string[], 
   const zip = sess ? sess.zip : await loadZipOf(bytes)
   const file = zip.file('word/document.xml')
   if (!file) return bytes
-  const xml = await file.async('string')
+  const xml = await partText(zip, 'word/document.xml', sess)
   const opens = [...xml.matchAll(new RegExp(`<w:${tag}(?=[\\s/>])[^>]*>`, 'g'))]
   if (opens.length !== extras.length) return bytes
   let out = ''
@@ -3789,7 +3877,7 @@ async function patchElemAttrs(bytes: Uint8Array, tag: string, extras: string[], 
   }
   if (!touched) return bytes
   out += xml.slice(cursor)
-  zip.file('word/document.xml', out)
+  setPart(zip, 'word/document.xml', out, sess)
   return finishPatch(bytes, zip, sess)
 }
 
@@ -3809,7 +3897,7 @@ async function patchBeforeElem(bytes: Uint8Array, anchor: string, extras: string
   const zip = sess ? sess.zip : await loadZipOf(bytes)
   const file = zip.file('word/document.xml')
   if (!file) return bytes
-  const xml = await file.async('string')
+  const xml = await partText(zip, 'word/document.xml', sess)
   const opens = [...xml.matchAll(new RegExp(`<w:${anchor}(?=[\\s/>])[^>]*>`, 'g'))]
   if (opens.length !== extras.length) return bytes
   let out = ''
@@ -3825,7 +3913,7 @@ async function patchBeforeElem(bytes: Uint8Array, anchor: string, extras: string
   }
   if (!touched) return bytes
   out += xml.slice(cursor)
-  zip.file('word/document.xml', out)
+  setPart(zip, 'word/document.xml', out, sess)
   return finishPatch(bytes, zip, sess)
 }
 
@@ -3865,7 +3953,7 @@ async function patchShdAttrs(bytes: Uint8Array, extras: string[], sess?: PackSes
   const zip = sess ? sess.zip : await loadZipOf(bytes)
   const file = zip.file('word/document.xml')
   if (!file) return bytes
-  const xml = await file.async('string')
+  const xml = await partText(zip, 'word/document.xml', sess)
   const opens = [...xml.matchAll(/<w:shd(?=[\s/>])[^>]*>/g)]
   if (opens.length !== extras.length) return bytes
   let out = ''
@@ -3889,7 +3977,7 @@ async function patchShdAttrs(bytes: Uint8Array, extras: string[], sess?: PackSes
   }
   if (!touched) return bytes
   out += xml.slice(cursor)
-  zip.file('word/document.xml', out)
+  setPart(zip, 'word/document.xml', out, sess)
   return finishPatch(bytes, zip, sess)
 }
 
@@ -3911,7 +3999,7 @@ async function patchBorderBlocks(bytes: Uint8Array, tag: 'w:pBdr' | 'w:tcBorders
   const zip = sess ? sess.zip : await loadZipOf(bytes)
   const file = zip.file('word/document.xml')
   if (!file) return bytes
-  const xml = await file.async('string')
+  const xml = await partText(zip, 'word/document.xml', sess)
   const blocks = [...xml.matchAll(new RegExp(`<${tag}(?=[\\s/>])[^>]*?(?:/>|>[\\s\\S]*?</${tag}>)`, 'g'))]
   if (blocks.length !== extras.length) return bytes
   let out = ''
@@ -3962,7 +4050,7 @@ async function patchBorderBlocks(bytes: Uint8Array, tag: 'w:pBdr' | 'w:tcBorders
   }
   if (!touched) return bytes
   out += xml.slice(cursor)
-  zip.file('word/document.xml', out)
+  setPart(zip, 'word/document.xml', out, sess)
   return finishPatch(bytes, zip, sess)
 }
 
@@ -3977,10 +4065,10 @@ async function dropEmptyPgNum(bytes: Uint8Array, sess?: PackSession): Promise<Ui
   const zip = sess ? sess.zip : await loadZipOf(bytes)
   const file = zip.file('word/document.xml')
   if (!file) return bytes
-  const xml = await file.async('string')
+  const xml = await partText(zip, 'word/document.xml', sess)
   const out = xml.replace(/<w:pgNumType(?:\s*\/>|>\s*<\/w:pgNumType>)/g, '')
   if (out === xml) return bytes
-  zip.file('word/document.xml', out)
+  setPart(zip, 'word/document.xml', out, sess)
   return finishPatch(bytes, zip, sess)
 }
 
@@ -4225,7 +4313,7 @@ async function patchTblLook(
   const zip = sess ? sess.zip : await loadZipOf(bytes)
   const file = zip.file('word/document.xml')
   if (!file) return bytes
-  const xml = await file.async('string')
+  const xml = await partText(zip, 'word/document.xml', sess)
   // 计数闸门：两族（tblLook 与 bandSize）都按 tblPr 出现序对位，
   // 长度必须与 tblPr 枚数相等（两族在同一处 push，恒等长；取 max 只是防御）
   const n = (xml.match(/<w:tblPr>/g) ?? []).length
@@ -4273,7 +4361,7 @@ async function patchTblLook(
     return out
   })
   if (!touched) return bytes
-  zip.file('word/document.xml', patched)
+  setPart(zip, 'word/document.xml', patched, sess)
   return finishPatch(bytes, zip, sess)
 }
 
@@ -4314,7 +4402,7 @@ async function patchTrPr(bytes: Uint8Array, extras: string[], sess?: PackSession
   const zip = sess ? sess.zip : await loadZipOf(bytes)
   const file = zip.file('word/document.xml')
   if (!file) return bytes
-  const xml = await file.async('string')
+  const xml = await partText(zip, 'word/document.xml', sess)
   const rows = [...xml.matchAll(/<w:tr(?=[\s>])[^>]*>/g)]
   if (rows.length !== extras.length) return bytes
   let out = ''
@@ -4355,7 +4443,7 @@ async function patchTrPr(bytes: Uint8Array, extras: string[], sess?: PackSession
   }
   if (!touched) return bytes
   out += xml.slice(cursor)
-  zip.file('word/document.xml', out)
+  setPart(zip, 'word/document.xml', out, sess)
   return finishPatch(bytes, zip, sess)
 }
 
@@ -4364,7 +4452,7 @@ async function patchTcPr(bytes: Uint8Array, extras: string[], sess?: PackSession
   const zip = sess ? sess.zip : await loadZipOf(bytes)
   const file = zip.file('word/document.xml')
   if (!file) return bytes
-  const xml = await file.async('string')
+  const xml = await partText(zip, 'word/document.xml', sess)
   const opens = [...xml.matchAll(/<w:tc(?:\s[^>]*)?\/?>/g)]
   if (opens.length !== extras.length) return bytes
   let out = ''
@@ -4388,7 +4476,7 @@ async function patchTcPr(bytes: Uint8Array, extras: string[], sess?: PackSession
   }
   if (!touched) return bytes
   out += xml.slice(cursor)
-  zip.file('word/document.xml', out)
+  setPart(zip, 'word/document.xml', out, sess)
   return finishPatch(bytes, zip, sess)
 }
 
@@ -4460,7 +4548,7 @@ async function patchImgXml(bytes: Uint8Array, shells: string[], sess?: PackSessi
   const zip = sess ? sess.zip : await loadZipOf(bytes)
   const file = zip.file('word/document.xml')
   if (!file) return bytes
-  const xml = await file.async('string')
+  const xml = await partText(zip, 'word/document.xml', sess)
   const blocks = [...xml.matchAll(/<w:drawing>[\s\S]*?<\/w:drawing>/g)]
   if (blocks.length !== shells.length) return bytes
   let out = ''
@@ -4656,6 +4744,6 @@ async function patchImgXml(bytes: Uint8Array, shells: string[], sess?: PackSessi
   }
   if (!touched) return bytes
   out += xml.slice(cursor)
-  zip.file('word/document.xml', out)
+  setPart(zip, 'word/document.xml', out, sess)
   return finishPatch(bytes, zip, sess)
 }
