@@ -22,9 +22,9 @@
  },
  "totals": {
   "read": 619,
-  "kept": 298,
+  "kept": 301,
   "value": 17,
-  "lost": 304,
+  "lost": 301,
   "part": 0,
   "consulted": 672,
   "srcParts": 7,
@@ -2865,28 +2865,34 @@
    ]
   },
   "ln|cap": {
-   "bucket": "lost",
+   "bucket": "kept",
    "n": 1,
    "src": [
     "flat"
    ],
-   "out": []
+   "out": [
+    "flat"
+   ]
   },
   "ln|cmpd": {
-   "bucket": "lost",
+   "bucket": "kept",
    "n": 1,
    "src": [
     "sng"
    ],
-   "out": []
+   "out": [
+    "sng"
+   ]
   },
   "ln|w": {
-   "bucket": "lost",
+   "bucket": "kept",
    "n": 3,
    "src": [
     "9525"
    ],
-   "out": []
+   "out": [
+    "9525"
+   ]
   },
   "lnRef|idx": {
    "bucket": "lost",

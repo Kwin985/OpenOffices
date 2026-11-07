@@ -2590,3 +2590,67 @@ D37 的模型无槽、写手根本发不出 `w:pict`；这一族是**包发得�
 - D32–D37 原账不动：`fldChar` 三对、`outline|val`、`col|w`/`col|space`、
   `smartTag|*` / `legacy|*`、±5 缇、`w:cols` `equalWidth`、`ind|left`、
   `docPr|id`、`lvlJc`；`theme1.xml` 进不进普查清单仍要定口径。
+
+### D39 追加节（v0.179）
+
+**`a:ln` 整族 3 对 `lost → kept`。** 挑族的办法仍是扫「读手已存载荷 vs 写手
+未接」差集，但这次要过第二道筛：**包发不发得出那枚壳**。v0.179 逐条查
+`node_modules/docx/dist/index.mjs` 的结论是，D38 剩下的 50 个未接键里：
+
+| 类别 | 结论 |
+|---|---|
+| `a:ln`（`lnW/lnCap/lnCmpd`） | 包有 `CoreImageOptions.outline` 原生槽、`createOutline`(13288-13315) 发的正是 `<a:ln w cap cmpd algn>`；**当前 ImageRun 路径不传 outline 所以不发**——本轮打开这个槽即闭环 |
+| `a:solidFill` / `a:schemeClr` | 有发射器但同属 outline/solidFill 条件槽，当前不发 |
+| `a:headEnd` / `a:tailEnd` / `a:outerShdw` / `a:glow` / `a:reflection` | 包**连构造器都没有**，要发必须新建插入通道 + `wp:anchor` schema 锚点表 |
+| 全部 VML 键（`sh*`/`grp*`/`f*`/`s*`/`rc*`…） | 包只在 VML textbox 路径发 `w:pict`，ImageRun 路径完全不发 |
+| `wp14:sizeRelH/sizeRelV` | 只有命名空间声明，无元素构造器 |
+
+**教训 33 的第七次应验**：读手注释写「写侧发不出 a:ln」，翻 `.d.ts` 才看见
+`outline` 槽。但这一次与 v0.177 的 `floating` 不同——包的 `cap` 枚举键是
+`FLAT`/`SQUARE`/`ROUND`、`compoundLine` 是 `SINGLE`/`DOUBLE`，OOXML 字面却是
+`flat`/`sng`。**不能把源值直接交给包**：会写错值。做法是只传一枚最小
+`{ type:'noFill', width }` 让包发壳，三枚属性由 `retag(chunk,'a:ln',…)` 按
+载荷字面回填（`tagWithAttrs` 已有则改、没有则补）。零插元素、零类型 hack、
+零新读点。
+
+**图片载荷单次索引（性能，改的是读手主链）**：`bitmap()` / `readImgPayload()` /
+`imgClipCss()` / `imgTransformCss()` 此前对同一枚 drawing 各做几十次
+`findDesc`/`allDesc`（29 + 7 + 6 次），`allDesc` 每次 `descend(el).filter()`
+重新摊平整棵子树。新增 `ImgIndex = Map<localName, XEl[]>`，一次前序遍历建表，
+`firstOf`/`allOf` 查表；`descend` 与 `findDescIn` 同为前序 DFS，等价性由此成立。
+
+**纪律**：只换「怎么找到元素」，所有 `attr`/`attrL`/`attrNum` 按名访问一字不动。
+探针记的是查问不是元素查找，所以保真账 99.0% / 98.4% / 记录对 715 与四条
+变异腿 52.5 / 59.4 / 99.0 / 96.5 全不动——这正是 v0.174 `buildDocIndex` 那条
+「查问顺序不进账本」的延续（那张索引只服务 7 个 note*，图片主链是漏网之鱼）。
+
+判据 `scripts/bench-img-payload.mjs`：同进程 A/B + **两腿 HTML 逐字相同**；
+200 张图 67.8 → 56.3ms（−17.1%），三次独立复跑 −24.8 / −24.5 / −20.3%，
+结论写区间 **−17~−25%** 而不取最好看的一次。夹具造法有个坑：非贪婪
+`/<w:p>[\s\S]*?<\/w:p>/` 会把 `wps` 文本框 `w:txbxContent` 里的内嵌 `<w:p>`
+从中间截断，拼出的 document.xml 不闭合、读手递归失控；脚本只收 `<w:p>`
+开闭配对的段（N=1 的原生夹具仍覆盖那些段）。
+
+**顺手修旧尺**：`bench-docx-pack.mjs` 此前靠手工 `git archive HEAD src/lib` 造
+对照副本，v0.178 提交后 HEAD 已是优化后版本，两腿越差越多（本轮加 `a:ln`
+后语义等价假红）。改为从当前产品源生成对照腿，只做三处机械改写（13 / 13 / 1
+处，逐条验数）把 `PackSession` 退回各自解包/打包，两腿同源只差一件事。
+复跑语义等价 ✓、72.2 → 35.2ms（−51.3%）。
+
+**账**：往返 298/619 (48.1%) → **301/619 (48.6%)**，图形壳 52/319 (16.3%) →
+**55/319 (17.2%)**，掉了 304 → 301、值变 17 不增。保真与 pptx 四本账只动了
+`modules` 65 → **66** 这行元信息（新增 `src/lib/ruler.ts`），逐对分值一字不差；
+往返账两次复跑 `ccc19b39…` / `e86e017f…` 一致。
+
+### 顺延清单（D39）
+
+- 图形壳剩余 **262 对**：VML 老式形状族仍是模型无槽、写手发不出 `w:pict` 的
+  整族缺口；`a:headEnd`/`tailEnd`/`outerShdw`/`glow`/`reflection` 包连构造器都没有，
+  要新建插入通道与 `wp:anchor` 锚点表（本轮刻意没碰，零插元素是安全边界）。
+- `wp:posOffset`：值在元素文本里（不是属性）、读手没载荷键、往返账压根没这一对，
+  **动 0 对**。要修先定「文本值算不算一对」的口径，且新读点会走 `attr`/`attrL`
+  漏斗之外的路径（变异腿敏感）。
+- Writer 可交互状态栏 / 逐页翻页预览；Impress 母版编辑、Calc 视图缩放
+  （落点在预存改动文件 `SheetEditor.tsx`，按房规换落点或只记结论）；
+  Writer 标尺 v0.179 已补；**pdf-lib 按需加载**仍等 `pdf-text-edit.ts` 入库。
+- D32–D38 原账不动（同上）。

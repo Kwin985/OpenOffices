@@ -1,6 +1,6 @@
 # docx 往返账（读 → 模型 → 写）
 
-取样 rev `HEAD`（65 个模块，取自 git）。
+取样 rev `HEAD`（66 个模块，取自 git）。
 
 账本里**不写日期**：同一 rev、同一份夹具复跑必须逐字节相同，否则 `diff` 出来的
 就不再是保真的变化。
@@ -44,9 +44,9 @@ docx ──读手──▶ HTML ──TipTap schema──▶ PM 模型 ──写
 | | 值 |
 |---|---:|
 | 读到的对 | 619 |
-| 保留 | **298（48.1%）** |
+| 保留 | **301（48.6%）** |
 | 值变 | 17 |
-| 掉了 | 304 |
+| 掉了 | 301 |
 | 缺件 | 0 |
 | 源包部件 | 7 |
 | 写出包部件 | 7 |
@@ -62,12 +62,12 @@ docx ──读手──▶ HTML ──TipTap schema──▶ PM 模型 ──写
 | 族 | 读到的 | 保留 | 值变 | 掉了 | 保留率 |
 |---|---:|---:|---:|---:|---:|
 | 正文属性（`w:*`） | 300 | 246 | 15 | 39 | **82.0%** |
-| 图形壳（`a:`/`v:`/`wp:`/`pic:`/`wps:`/`o:`） | 319 | 52 | 2 | 265 | **16.3%** |
+| 图形壳（`a:`/`v:`/`wp:`/`pic:`/`wps:`/`o:`） | 319 | 55 | 2 | 262 | **17.2%** |
 
 口径说明：一个对算正文，当且仅当它在源包里**只**出现在 `w:*` 元素上（沾过图形壳就算图形壳）。
 对名按 local name 归并（与保真账本同口径），所以 `fill|type` 这种两族同名的会并成一笔。
 
-### 掉了（304）
+### 掉了（301）
 
 名字一次都没写出来。这里每一行都是一条**单边通道**：读手读了，模型或写手没有它的槽。
 
@@ -76,7 +76,6 @@ docx ──读手──▶ HTML ──TipTap schema──▶ PM 模型 ──写
 | `schemeClr|val` | 8 | accent1, accent2, accent3, lt1 | — |
 | `gs|pos` | 4 | 0, 100000 | — |
 | `fldChar|fldCharType` | 3 | begin, separate, end | — |
-| `ln|w` | 3 | 9525 | — |
 | `lumMod|val` | 3 | 50000, 80000 | — |
 | `col|space` | 2 | 400 | — |
 | `col|w` | 2 | 2000, 3000 | — |
@@ -113,7 +112,8 @@ docx ──读手──▶ HTML ──TipTap schema──▶ PM 模型 ──写
 | `bodyPr|spcCol` | 1 | 0 | — |
 | `bodyPr|spcFirstLastPara` | 1 | 0 | — |
 | `bodyPr|tIns` | 1 | 45720 | — |
-| …共 304 条，完整清单见 `docs/fidelity-roundtrip.json` | | | |
+| `bodyPr|upright` | 1 | 0 | — |
+| …共 301 条，完整清单见 `docs/fidelity-roundtrip.json` | | | |
 
 ### 值变（17）
 
@@ -145,7 +145,7 @@ docx ──读手──▶ HTML ──TipTap schema──▶ PM 模型 ──写
 
 （空）
 
-### 保留（298）
+### 保留（301）
 
 这些是真的双向。列出来是为了让「保留」也可核对，而不是一个孤零零的百分比。
 
@@ -169,13 +169,13 @@ docx ──读手──▶ HTML ──TipTap schema──▶ PM 模型 ──写
 | `left|space` | 3 | 2, 0 | 2, 0, 3 |
 | `left|sz` | 3 | 4 | 4 |
 | `left|val` | 3 | dotted, dashed, single | dotted, single, dashed |
+| `ln|w` | 3 | 9525 | 9525 |
 | `picLocks|noChangeAspect` | 3 | 0, 1 | 0, 1 |
 | `spacing|after` | 3 | 240, 0, 120 | 240, 0, 120 |
 | `b|val` | 2 | 0, 1 | 0, 1 |
 | `between|color` | 2 | ff9900 | ff9900 |
 | `between|space` | 2 | 2 | 2 |
-| `between|sz` | 2 | 6 | 6 |
-| …共 298 条，完整清单见 `docs/fidelity-roundtrip.json` | | | |
+| …共 301 条，完整清单见 `docs/fidelity-roundtrip.json` | | | |
 
 ## 边界
 

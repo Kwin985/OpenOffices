@@ -13,7 +13,7 @@ against the lookups our import path actually performs on them, at run time. A pa
 | **never consulted** | the pair appears in real files and no code path asks for it | the actionable list: fidelity we do not claim |
 | **noise** | `rsid*`, `paraId`, `textId` | Word's save-session bookkeeping: no rendering and no UI meaning |
 
-Measured on the committed product at `HEAD` (`git:HEAD`, 65 modules,
+Measured on the committed product at `HEAD` (`git:HEAD`, 66 modules,
 probe injected at 3 points: attr, attrL, reader.__PROBE(再导出)).
 
 ## Headline
