@@ -225,3 +225,38 @@ export function parsePageSpec(spec: string, total: number): number[] | null {
   }
   return out.size ? [...out].sort((x, y) => x - y) : null
 }
+
+/**
+ * 页码钳制的单一事实源：直接转调 Writer 打印预览那份 `clampPage`
+ * （`scripts/test-print-pager.mjs` 已钉住它的下界/上界/NaN/非正 total 边界）。
+ * 不在 PDF 侧重写一遍 Math.max/Math.min——工具条里散落的三处手写钳制吃过这个亏。
+ */
+import { clampPage } from './print-preview'
+export const clampPdfPage = clampPage
+
+/** 页码导航四枚目标页 + 两端可用状态（v0.184，纯函数） */
+export interface PageNav {
+  first: number
+  prev: number
+  next: number
+  last: number
+  canPrev: boolean
+  canNext: boolean
+}
+
+/**
+ * 首页/上一页/下一页/末页一次算全。total 的归一也走 clampPage（取它夹出的上界），
+ * 于是「没打开文档 / total=0 / NaN」这些边界与 Writer 预览逐字同口径。
+ */
+export function pageNav(cur: number, total: number): PageNav {
+  const t = clampPage(Number.MAX_SAFE_INTEGER, total)
+  const c = clampPage(cur, t)
+  return {
+    first: 1,
+    prev: clampPage(c - 1, t),
+    next: clampPage(c + 1, t),
+    last: t,
+    canPrev: c > 1,
+    canNext: c < t,
+  }
+}

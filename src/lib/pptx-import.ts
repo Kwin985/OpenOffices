@@ -122,6 +122,65 @@ function firstDesc(node: PEl | null | undefined, name: string): PEl | undefined 
   return undefined
 }
 
+/**
+ * v0.184：动画链两处「只关心是否存在」的查问改成**命中即停的前序遍历**。
+ *
+ * 原写法 `descendantsByName(...).some(...)` 每次都把整棵子树按名摊平成数组，
+ * `animEffectOf` 里还是嵌套二次摊平；clickEffect 一多就是 O(查问数 × 子树)。
+ * 与 v0.183 试过又回退的「惰性索引化」不同：这里不建 Map、不改数据结构、
+ * 不给只查一次的子树挂缓存，只把「先收齐再判断」换成「边走边判断」——
+ * 没有缓存的固定成本，也就不会在每子树只查一次的链上反而变慢。
+ *
+ * `legacyAnimScan` 只给同进程 A/B 对照腿用（入口设一次），产品路径恒为 false。
+ */
+let legacyAnimScan = false
+
+/** 存在一枚满足 pred 的后代（不含自身）：逆序入栈 + pop = 文档序，命中即返回 */
+function hasDesc(node: PEl | null | undefined, pred: (el: PEl) => boolean): boolean {
+  if (!node) return false
+  const stack: PEl[] = []
+  for (let i = node.kids.length - 1; i >= 0; i--) stack.push(node.kids[i])
+  while (stack.length) {
+    const n = stack.pop()!
+    if (pred(n)) return true
+    for (let i = n.kids.length - 1; i >= 0; i--) stack.push(n.kids[i])
+  }
+  return false
+}
+
+/**
+ * 原嵌套 some 的等价早停：attrName 必须是某枚 anim 的**后代**（不是任意 attrName），
+ * 且文本为 ppt_x / ppt_y。inAnim 门是等价性的关键——少这一层会把 anim 外的
+ * attrName 也算进来，让 fade 误判成 fly。
+ */
+function hasFlyXY(c: PEl): boolean {
+  if (legacyAnimScan) {
+    return descendantsByName(c, 'anim').some((a) =>
+      descendantsByName(a, 'attrName').some((x) => textOf(x) === 'ppt_x' || textOf(x) === 'ppt_y'),
+    )
+  }
+  const stack: { el: PEl; inAnim: boolean }[] = []
+  for (let i = c.kids.length - 1; i >= 0; i--) stack.push({ el: c.kids[i], inAnim: false })
+  while (stack.length) {
+    const { el, inAnim } = stack.pop()!
+    const inside = inAnim || el.localName === 'anim'
+    if (inside && el.localName === 'attrName') {
+      const t = textOf(el)
+      if (t === 'ppt_x' || t === 'ppt_y') return true
+    }
+    for (let i = el.kids.length - 1; i >= 0; i--) stack.push({ el: el.kids[i], inAnim: inside })
+  }
+  return false
+}
+
+/** 出场效果：存在一枚 animEffect 后代且 transition="out" */
+function hasExitEffect(c: PEl): boolean {
+  if (legacyAnimScan) {
+    return descendantsByName(c, 'animEffect').some((a) => ga(a, 'transition') === 'out')
+  }
+  return hasDesc(c, (el) => el.localName === 'animEffect' && ga(el, 'transition') === 'out')
+}
+
 // 一个 <a:p> 内的所有 <a:t> 拼接为一行
 function paragraphText(p: PEl): string {
   return descendantsByName(p, 't')
@@ -532,14 +591,7 @@ function animEffectOf(c: PEl): { anim: BulletAnim; dir?: AnimDir; dur?: number }
   let anim: BulletAnim
   if (filter.startsWith('wipe')) anim = 'wipe'
   else if (filter.startsWith('fade')) anim = 'fade'
-  else if (
-    descendantsByName(c, 'anim').some((a) =>
-      descendantsByName(a, 'attrName').some(
-        (x) => textOf(x) === 'ppt_x' || textOf(x) === 'ppt_y',
-      ),
-    )
-  )
-    anim = 'fly'
+  else if (hasFlyXY(c)) anim = 'fly'
   else anim = 'fade'
   const dur = Number(ga(effect ? firstDesc(effect, 'cTn') : undefined, 'dur') ?? NaN)
   const durOk = Number.isFinite(dur) && dur >= 50 && dur <= 600_000 ? Math.round(dur) : undefined
@@ -599,8 +651,7 @@ function parseAnim(
     const spid = ga(firstDesc(c, 'spTgt'), 'spid')
     if (!spid) continue
     if (ga(c, 'presetClass') === 'exit') {
-      if (!descendantsByName(c, 'animEffect').some((a) => ga(a, 'transition') === 'out'))
-        continue
+      if (!hasExitEffect(c)) continue
       if (spid === bodySpid) out.exitAnim = 'fade'
       else {
         const i = shapeAt(spid)
@@ -864,7 +915,12 @@ async function slideToDeckSlide(
   }
 }
 
-export async function pptxBytesToDeck(bytes: Uint8Array): Promise<Deck> {
+export async function pptxBytesToDeck(
+  bytes: Uint8Array,
+  opts?: { legacyAnimScan?: boolean },
+): Promise<Deck> {
+  // v0.184：A/B 对照腿只切这一个开关；不传（产品路径）走命中即停的早停遍历
+  legacyAnimScan = !!opts?.legacyAnimScan
   const { default: JSZip } = await import('jszip')
   const zip = await JSZip.loadAsync(bytes)
   const slideFiles = Object.values(zip.files)

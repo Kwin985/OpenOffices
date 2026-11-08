@@ -596,6 +596,13 @@ export interface DocxLvlMeta {
    * 三枚都是字面值（onOff 也按原值存），不做归一，免得把源件没说过的话写回去。
    */
   legacy?: { legacy?: string; space?: string; indent?: string }
+  /**
+   * 编号符面对齐（v0.184）：`w:lvlJc/@w:val` 的源件字面值。屏上那一半早已由
+   * `LvlDef.lvlJc` → `markerAlignOf` 走 `listLevels` 兑现，但那是「按段重建」的链；
+   * numbering.xml 补丁链此前没带这一枚，包又恒发 `w:lvlJc=start`，于是源件里
+   * `center` 那一层被冲掉。升成带值载荷后按 ilvl 改值（不是插元素）。
+   */
+  lvlJc?: string
 }
 
 /**
@@ -1117,8 +1124,12 @@ function childToRuns(child: PMNode, inherited: Inherited, cs?: CommentTrack, dt?
       // 「字面色与主题三枚一起丢」上，不去动闸门
       const ctheme = cx('ctheme')
       if (color) {
-        const [thc = '', tht = '', ths = ''] = (ctheme ?? '').split(';')
+        // v0.184：载荷扩成 5 格 ref;tint;shade;lit;base。lit 是源件 w:val 原值，
+        // base 是导入那一刻的屏上解析色；只有屏上色没被用户改过才回填旧字面值。
+        const [thc = '', tht = '', ths = '', lit = '', base = ''] = (ctheme ?? '').split(';')
         dt?.colorThemes.push(themeAttrs(thc, tht, ths))
+        const stillOriginal = !!lit && (!base || color.toLowerCase() === base.toLowerCase())
+        dt?.colorLits.push(stillOriginal ? ` w:val="${xmlAttr(lit)}"` : '')
       }
       const runOpts = {
         text,
@@ -2265,6 +2276,12 @@ interface DocTrack {
    */
   colorThemes: string[]
   /**
+   * 文字色字面值原件（v0.184）：与 `<w:color>` 一一对应、同序。包发 w:val 时写的是
+   * 主题解析后的屏上色，源件那枚字面值（如 FF0000）得按出现序**改值**补回。
+   * 与 colorThemes 同一次登记，条数闸门共用；空串 = 用户改过色或源件没写字面值，不动。
+   */
+  colorLits: string[]
+  /**
    * 表条件格式的落点开关（v0.162）：与 `section.children` 里每个 Table 一一对应、同序。
    * `w:cnfStyle` 十三枚在包里没有槽（包只发它认得的表属性），走打包后补丁按
    * `<w:tblPr>` 出现序插。与 tblLooks/tblPrs/cellSps 同住一处，但**插入锚点不同**——
@@ -2356,6 +2373,7 @@ function newDocTrack(): DocTrack {
     rowPrs: [],
     uThemes: [],
     colorThemes: [],
+    colorLits: [],
   }
 }
 
@@ -3236,8 +3254,11 @@ export async function prosemirrorToDocxBytes(
   const withU = await patchElemAttrs(withPara, 'u', dt.uThemes, sess)
   // 文字色主题三枚（v0.160）：按 <w:color> 出现序补——包只写 w:val 一枚
   const withColor = await patchElemAttrs(withU, 'color', dt.colorThemes, sess)
+  // v0.184：字面 w:val 原值按同一出现序**改值**回填（包写的是主题解析后的屏上色）；
+  // 与上面那笔共用 colorThemes/colorLits 的一一对应闸门，顺序不能反
+  const withColorLit = await patchColorLits(withColor, dt.colorLits, sess)
   // 被包吞掉的全大写（v0.161）：按 <w:smallCaps> 出现序在它前面插 <w:caps/>
-  const withCaps = await patchBeforeElem(withColor, 'smallCaps', dt.capsExtras, sess)
+  const withCaps = await patchBeforeElem(withColorLit, 'smallCaps', dt.capsExtras, sess)
   // 图片容器壳（v0.148）：按 <w:drawing> 出现序逐块改值（包发得出壳，只是值硬编码）
   const withImg = await patchImgXml(withCaps, dt.imgExtras, sess)
   // 表闸门三样都要补：样式推出来的（looks）与表自己带的（dt.tblLooks），
@@ -3621,6 +3642,16 @@ function patchOneAbstractNum(block: string, d: DocxAbstractNumMeta): string {
         insertKid(`<w:suff w:val="${xmlAttr(m.suff)}"/>`, ['lvlText', 'lvlPicBulletId', 'legacy', 'lvlJc', 'pPr', 'rPr'])
       }
     }
+    // v0.184：w:lvlJc 包恒发（默认 start），所以是「按 ilvl 改值」不是插元素——
+    // 与 suff / lvlPicBulletId 同一条现成分支。源件里 center 那一层此前被冲成 start
+    if (m.lvlJc) {
+      const frag = `<w:lvlJc w:val="${xmlAttr(m.lvlJc)}"/>`
+      if (/<[\w:]*lvlJc\b/.test(inner)) {
+        inner = inner.replace(/(<[\w:]*lvlJc\b[^>]*?\sw:val=")[^"]*(")/, `$1${xmlAttr(m.lvlJc)}$2`)
+      } else {
+        insertKid(frag, ['pPr', 'rPr'])
+      }
+    }
     // v0.183：Word 2003 老式编号缩进补偿三枚。包不发 w:legacy，按 CT_Lvl 序
     // 插在 lvlJc / pPr / rPr 中第一枚在场者之前（锚点表与 restart/picBulletId/suff 同源）。
     // 三枚都是字面值原样回填，不做 onOff 归一——源件写 1/0 就还它 1/0
@@ -3935,6 +3966,46 @@ function mergeTagAttrs(tag: string, add: string): string {
       : out.replace(/(\s*\/?>)$/, (_all, tail: string) => `${am[0]}${tail}`)
   }
   return out
+}
+
+/**
+ * 给 document.xml 里每个 `<w:color>` 回填源件的字面 `w:val`（v0.184）。
+ *
+ * 与 `patchElemAttrs('color', ...)`（只追加主题三枚）不同：`w:val` 包自己会发，
+ * 而且发的是主题解析后的屏上色（源 FF0000 → 写出 ADBBD4）。追加会造出第二枚
+ * 同名属性 = 非法 XML，必须走 `mergeTagAttrs` **同名改值**。
+ * 计数闸门与 `colorThemes` 共用（两者同一次登记、一一对应）；空串 = 用户后来改过色
+ * 或源件没写字面值，这一枚不动。
+ */
+async function patchColorLits(bytes: Uint8Array, extras: string[], sess?: PackSession): Promise<Uint8Array> {
+  if (!extras.some((x) => x)) return bytes
+  const zip = sess ? sess.zip : await loadZipOf(bytes)
+  const file = zip.file('word/document.xml')
+  if (!file) return bytes
+  const xml = await partText(zip, 'word/document.xml', sess)
+  const opens = [...xml.matchAll(/<w:color(?=[\s/>])[^>]*>/g)]
+  if (opens.length !== extras.length) return bytes
+  let out = ''
+  let cursor = 0
+  let touched = false
+  for (let i = 0; i < opens.length; i++) {
+    const m = opens[i]
+    const start = m.index ?? 0
+    const stop = start + m[0].length
+    const add = extras[i]
+    if (!add) {
+      out += xml.slice(cursor, stop)
+      cursor = stop
+      continue
+    }
+    out += xml.slice(cursor, start) + mergeTagAttrs(m[0], add)
+    cursor = stop
+    touched = true
+  }
+  if (!touched) return bytes
+  out += xml.slice(cursor)
+  setPart(zip, 'word/document.xml', out, sess)
+  return finishPatch(bytes, zip, sess)
 }
 
 /**

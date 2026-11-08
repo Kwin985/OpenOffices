@@ -1302,11 +1302,14 @@ function readNumbering(xml: string, theme?: ThemeFonts): Numbering {
       const ilvl = Number(attr(l, 'w:ilvl') ?? '0')
       const numFmt = val(l, 'w:numFmt') ?? 'bullet'
       const lvlText = val(l, 'w:lvlText')
+      // v0.184：lvlJc 原本只读进 LvlDef（屏上链），numbering.xml 补丁链没带，
+      // 包恒发 start → 源件 center 那一层被冲掉。同一次 val 查问复用，升成带值载荷
+      const lvlJcRaw = val(l, 'w:lvlJc')
       levels.set(ilvl, {
         numFmt,
         start: valNum(l, 'w:start') ?? 1,
         lvlText,
-        lvlJc: (val(l, 'w:lvlJc') ?? '').toLowerCase() || undefined,
+        lvlJc: (lvlJcRaw ?? '').toLowerCase() || undefined,
       })
       // 层属性三枚（v0.150）：tentative 是 onOff（「这一层还在草拟」，显式关也是值），
       // tplc 是模板层号（十六进制串），suff 是编号与正文之间夹的那一段
@@ -1317,6 +1320,8 @@ function readNumbering(xml: string, theme?: ThemeFonts): Numbering {
       // 那边是给人看的串，这边是给写手用的值）
       meta.fmt = numFmt
       if (lvlText !== undefined) meta.text = lvlText
+      // v0.184：原值直传（不做 start/left 归一，账本自己有等价口径）
+      if (lvlJcRaw) meta.lvlJc = lvlJcRaw
       const tnt = onOff(attr(l, 'w:tentative'))
       if (tnt !== undefined) meta.tentative = tnt
       const tplc = attr(l, 'w:tplc')
@@ -1801,6 +1806,14 @@ interface RunProps {
    * 否则「Word 主题色」的文档一进一出，主题引用全被拍成字面值（改主题就换不了色了）
    */
   colorTheme?: ThemeRef
+  /**
+   * 字面字色原值（v0.184）：`w:color/@w:val`。Word 常把字面值与主题引用一起写，
+   * 读手此前只在主题解析不出来时用它兜底，主题在场时整枚忘了存——写出包里
+   * `w:val` 就成了主题解析后的屏上色（ff0000 → adbbd4）。与 w:u / w:shd 同款的两槽分工。
+   */
+  colorLit?: string
+  /** 导入时的屏上解析色（不含 #，v0.184）：写手用它做陈旧守卫——用户后来改了色就不回填旧字面值 */
+  colorBase?: string
   /** w:em/@w:val（v0.155）：着重号型别（dot 圈点 / circle 空心圈 / comma 逗号 / underDot）。屏上走 text-emphasis */
   em?: string
   /** w:ligatures/@w:val（v0.155）：连字档。屏上走 font-variant-ligatures */
@@ -1870,8 +1883,13 @@ function readRPr(el: XEl | undefined, p: RunProps, tc?: ThemeColors): RunProps {
     const th = themeRefParts(colorEl)
     const themed = themeCssOf(tc, th)
     const v = (attr(colorEl, 'w:val') ?? '').toLowerCase()
-    if (themed) o.color = themed
-    else if (v && v !== 'auto') o.color = '#' + v.replace(/^#/, '')
+    // v0.184：字面值单独存一份「只往返」的原件；屏上仍用主题解析色。
+    // colorBase 记下导入那一刻的屏上色，写手比对它来判断用户有没有改过色
+    if (v && v !== 'auto') o.colorLit = v.replace(/^#/, '')
+    if (themed) {
+      o.color = themed
+      o.colorBase = themed.replace(/^#/, '').toLowerCase()
+    } else if (v && v !== 'auto') o.color = '#' + v.replace(/^#/, '')
     if (th.ref) o.colorTheme = th
   }
   const hlv = val(el, 'w:highlight')
@@ -2178,9 +2196,16 @@ function marked(inner: string, p: RunProps): string {
     const t = p.uTheme
     return [p.uVal || 'single', p.uColor ?? '', p.uColorLit ?? '', t?.ref ?? '', t?.tint ?? '', t?.shade ?? ''].join(';')
   })()
-  // 文字色的主题三枚（v0.160）：`ref;tint;shade`，缺的槽留空串。与 uPayload 分开走是因为
-  // 它们落在**两个不同的元素**上（w:u / w:color），补丁位按元素分别计数，混一格就对不上位
-  const cthemePayload = p.colorTheme ? [p.colorTheme.ref, p.colorTheme.tint ?? '', p.colorTheme.shade ?? ''].join(';') : ''
+  // 文字色的存盘原件（v0.160 三格 → v0.184 五格）：`ref;tint;shade;lit;base`。
+  // 后两格是字面色原值与导入时屏上解析色（陈旧守卫用）。与 uPayload 分开走是因为
+  // 它们落在**两个不同的元素**上（w:u / w:color），补丁位按元素分别计数，混一格就对不上位。
+  // 不新建 data 属性——data-ctheme 本来就是整串字符串槽，扩格零 schema 改动
+  const cthemePayload = (p.colorTheme || p.colorLit)
+    ? [
+        p.colorTheme?.ref ?? '', p.colorTheme?.tint ?? '', p.colorTheme?.shade ?? '',
+        p.colorLit ?? '', p.colorBase ?? '',
+      ].join(';')
+    : ''
   const extra = [
     p.cs ? ` data-cs="${attrEsc(p.cs)}"` : '',
     p.szCs !== undefined ? ` data-szcs="${p.szCs}"` : '',

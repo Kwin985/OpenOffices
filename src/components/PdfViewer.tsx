@@ -18,9 +18,11 @@ import { findCountText, shouldPublish, type FindStatus } from '../lib/pdf-search
 import { replacementPlan, locateReplace } from '../lib/pdf-replace'
 import { PDF_OBJECTS_PER_TICK } from '../lib/pdf-ticks'
 import {
+  clampPdfPage,
   fromDisplayPoints,
   fromDisplayRect,
   normRot,
+  pageNav,
   parsePageSpec,
   textItemBox,
   toDisplayPoints,
@@ -2360,13 +2362,16 @@ function PdfViewer({ tab }: Props) {
     </button>
   )
 
+  // v0.184：跳页统一在这里钳制（与 Writer 打印预览共用 clampPage 单一事实源）。
+  // 此前工具条里散着 Math.max / Math.min / 「越界就不跳」三种口径，首页/末页更没有入口
   const gotoPage = (n: number) => {
-    const el = pageEl(n)
+    const el = pageEl(clampPdfPage(n, doc?.numPages ?? 1))
     el?.scrollIntoView({ block: 'start' })
   }
 
   const est = sizes[1] ?? { w: 595, h: 842 }
   const numPages = doc?.numPages ?? 0
+  const nav = pageNav(curPage, numPages)
   // 闸门此刻关着（这一份 doc 还没整片读完）⇒ 写回会被拒，而侧栏要给用户一枚能办事的把手而不是让他猜。
   // 吃的是**状态** annosRead 而不是那枚渲染期镜像：这里要的是「界面此刻承不承认已读全」
   const annosPending = doc !== null && annosRead !== doc
@@ -2380,7 +2385,8 @@ function PdfViewer({ tab }: Props) {
         <span className="editor-hint">PDF · 选文字加高亮/便签（Ctrl+S 存回文件，表单值与图章一并写回） · ✎ 标注：拖移/改色/删除，▭◯↗✏ 拖拽绘制，🖼 图章点击落章 · 🖨 打印 · Ctrl+滚轮缩放 · Ctrl+F 搜索 · ☰ 侧栏</span>
       </div>
       <div className="pdf-toolbar">
-        {btn('◀', () => gotoPage(Math.max(1, curPage - 1)), curPage <= 1, '上一页')}
+        {btn('⏮', () => gotoPage(nav.first), !doc || !nav.canPrev, '首页（第 1 页）')}
+        {btn('◀', () => gotoPage(nav.prev), !nav.canPrev, '上一页')}
         <span className="pdf-pageinfo">
           <input
             className="tb-input pdf-page-input"
@@ -2390,12 +2396,14 @@ function PdfViewer({ tab }: Props) {
             value={curPage}
             onChange={(e) => {
               const n = Number(e.target.value)
-              if (doc && n >= 1 && n <= doc.numPages) gotoPage(n)
+              // 越界交给 gotoPage 里的 clampPdfPage 夹回 [1, N]，不再静默不跳
+              if (doc && Number.isFinite(n)) gotoPage(n)
             }}
           />
           / {numPages || '-'}
         </span>
-        {btn('▶', () => gotoPage(Math.min(numPages, curPage + 1)), !doc || curPage >= numPages, '下一页')}
+        {btn('▶', () => gotoPage(nav.next), !nav.canNext, '下一页')}
+        {btn('⏭', () => gotoPage(nav.last), !doc || !nav.canNext, `末页（第 ${nav.last} 页）`)}
         {/* 没打开成功（含刚取消密码）时唯一的出路入口：按同一轮路径重来一遍 */}
         {!doc && tab.path && btn('↻', () => reloadDoc(), false, '重新打开这份 PDF（设了密码的会再问一次）')}
         <span className="tb-sep" />

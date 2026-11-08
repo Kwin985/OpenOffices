@@ -228,7 +228,8 @@ export const CharExtra = Mark.create({
           return { 'data-u': raw, style: `${c}text-decoration-line: underline; text-decoration-style: ${line}` }
         },
       },
-      // ctheme（v0.160）：**文字色** `w:color` 上的主题引用三枚。载荷 `ref;tint;shade`
+      // ctheme（v0.160 三格 → v0.184 五格）：**文字色** `w:color` 上的存盘原件。
+      // 载荷 `ref;tint;shade;lit;base`（后两格是字面色原值与导入屏上色基准）
       // ——与 u 那三格同形状，但槽在另一个元素上（w:color 而不是 w:u）。
       // 屏上那一半已经由 textStyle 的 color 兑现（读手把主题解析成 hex 再发 CSS），
       // 这一格只为存盘：包发 w:color 时只写 w:val，主题三枚包外无槽，走 run 级补丁位。

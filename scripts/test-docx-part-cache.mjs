@@ -36,10 +36,10 @@ const read = (p) => fs.readFileSync(new URL(p, import.meta.url), 'utf8')
   check('入口：legacyPartText 可选参数', /opts\?: \{ legacyPartText\?: boolean \}/.test(w))
   check('入口：对照腿不建缓存表',
     /\.\.\.\(opts\?\.legacyPartText \? \{\} : \{ text: new Map<string, string>\(\) \}\)/.test(w))
-  eq('补丁：13 处读走 partText', (w.match(/await partText\(zip, /g) ?? []).length, 13)
+  // 补丁数随轮次增长（v0.184 加了 patchColorLits），别硬编码 13：只要求「读 ≥ 14 且读写配对」
   const nRead = (w.match(/await partText\(zip, /g) ?? []).length
   const nWrite = (w.match(/setPart\(zip, /g) ?? []).length
-  eq('补丁：写回数与读数精确配对', nWrite, nRead)
+  check('补丁：读写数目精确配对且不比上一轮少', nRead >= 14 && nWrite === nRead, `读 ${nRead} / 写 ${nWrite}`)
   check('补丁：写回全部走 setPart（没有漏接的 zip.file(..., out)）',
     !/^\s*zip\.file\('word\/(?:document|styles|numbering)\.xml', \w+\)/m.test(w))
   check('attachThemePart 的三枚写回没被误改（THEME / Content_Types / rels）',

@@ -444,7 +444,11 @@ const RF = '<w:rFonts w:ascii="Calibri" w:eastAsia="宋体" w:hint="eastAsia"/>'
   // 导入侧：主题部件里没有 clrScheme（这份 THEME 只有 fontScheme），主题解析不出来，
   // 但**引用名照样要带出去**——解析与带值是两件事（v0.150 起的老纪律）
   const html = await importDocx(styleWith(''), '<w:color w:val="ff0000" w:themeColor="accent1" w:themeTint="99"/>')
-  has('ctheme 导入：主题引用随载荷带出', html, 'data-ctheme="accent1;99;"')
+  // v0.184：data-ctheme 从 3 格扩成 5 格 `ref;tint;shade;lit;base`。
+  // 这份 THEME 没有 clrScheme，主题解析不出来 → 屏上走字面值兜底、base 留空；
+  // 但引用名与字面色原值照样各自带出，解析与带值是两件事
+  has('ctheme 导入：主题引用随 5 格载荷带出', html, 'data-ctheme="accent1;99;;ff0000;"')
+  has('ctheme 导入：字面色原值在第 4 格', html, ';99;;ff0000;')
   has('ctheme 导入：解析不出主题时字面值兜底', html, 'color: #ff0000')
 }
 
