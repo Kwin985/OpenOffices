@@ -11135,6 +11135,94 @@ Writer 工具条加「标尺」开关，水平标尺挂在 `.doc-page` 内随内
   CSS zoom 等比缩放这一假设；文本拼接的端到端收益在噪声内，确定收益只在
   纯遍历段。
 
+## v0.186（书签 `w:id` 两族 `value→kept` + 母版占位矩形编辑 + 写手零正则）
+
+承接 D45。这轮修的也是「名字在、值不对」，而且比前两轮更实在：
+**写出包里三对书签的 `w:id` 全是 1**，Word 里几枚书签同号就分不开，
+是真坏件而不只是账本上一笔值变。
+
+**保真：2 对 `value → kept`，正文 86.0% → 86.7%**
+
+| 族 | 源值 → 旧写出 | 机制 |
+|---|---|---|
+| `bookmarkStart\|id` | `7, 9` → `1` | 读手 `bookmarkStart/End` 分支**已查问过** `w:id`，只是没进模型。写手 `new Bookmark({ id: 书签名 })` 把数字令牌传成了名字，docx 库于是每枚恒发 `w:id="1"`。现在载荷扩成「书签名;源 id」两格，post-pack 按名对位改回 |
+| `bookmarkEnd\|id` | `7, 9` → `1` | 同上，与 Start 栈式配对，共享同一个目标 id |
+
+- **按书签名对位，不按出现序**：读手把跨段书签拆成每段一枚同名 span，
+  写出发出的两枚 `_Cross` 都该回到源 id `9`，Word 才认得出是一枚跨段书签。
+  `patchBookmarkIds` 里 Start 改自身并压栈、End 弹栈改同一个值，嵌套与多枚
+  都不串位；没有映射（用户新建）、孤立 End、标签没写 `w:id` 一律不动。
+- `data-oo-bookmark` 是整串字符串槽，扩成两格**零 schema 改动**；写手按
+  **最后一个**分号拆（书签名含分号也不丢），`Bookmark` 组件仍只收纯名字。
+  `w:id` 复用已有查问，读手查问仍 **672**，`docs/fidelity.*` 的覆盖率与四条
+  变异腿一字不动。`test-bookmark-ids.mjs` 31 项（含源 id 换成 21/33 也按名
+  对位、嵌套栈式配对、`xmlAttr` 转义、无源值不凭空造）。
+- 正文 **260/300 = 86.7%**、合计 **342/619 = 55.3%**、值变 **12 → 10**、
+  掉了仍 267、图形壳 82/319 不动。
+
+**功能：Impress 母版占位矩形编辑（评估文档里挂了多轮的缺口）**
+
+- 新增 `src/lib/master-rect.ts`（**`modules` 67 → 68**，本轮唯一新增的 lib 文件）：
+  归一化 0..1 的 `rectFor` / `dragRect` / `rectStyle`，缺省矩形与
+  `pptx-export.ts` 那两组英寸默认值同源（导出侧 `rect.x * W`）。
+- PptEditor 加**第二套拖拽状态机**：占位矩形不是 `SlideShape`，没有 id 给
+  `patchShape` 用，落点是 `deck.master.titleRect/bodyRect`。位移按舞台宽高折成
+  比例（与形状拖拽同款，CSS zoom 自动抵消），写回复用 v0.182 的
+  `patchMaster` **唯一出口**（换 master 引用，memo 化的缩略图/放映才重渲染），
+  不另开一条 `edit(d => d.master = …)`。工具条「占位框」开关 + 两枚虚线框
+  与右下角缩放手柄；关着时一次拖拽状态都不建。`test-master-rect.mjs` 52 项。
+- **Writer 的自动缩放两档仍未接**，D45 的这条顺延原样保留。
+
+**性能：写手 `tagWithAttrs` / `retag` 去掉动态正则编译**
+
+- 两处原先每次调用都 `new RegExp(...)` 现编译——图片壳补丁一个
+  `<w:drawing>` 要 retag 十几枚，每枚属性还要再编译一次。改成纯字符串定位，
+  **零动态正则、零临时数组**；改前算法原样留成 `legacyRetag:true` 对照腿
+  （两腿同源只差一个参数），产物逐部件字符串归一后逐字相同。
+- **纯函数段（真实形状：每枚 drawing 单独 13 次 retag）20 / 200 / 1000 drawing
+  三档稳定 −79.0% / −79.2% / −79.1%**，产物 hash 一致；
+  **端到端 25.4 → 27.8ms（−9.3%，噪声内，不冒充降幅）**——小夹具只有 5 张图，
+  这处开销被 XML 解析与序列化盖住。`test-docx-retag.mjs` 24 项 +
+  `bench-docx-retag.mjs`。
+- 两处**判据修正**照实记：基准原先只累加产物长度会假绿（长度相同值不同也过），
+  改成逐字符滚 hash；「把 1000 个 drawing 拼成一个大串」不是产品形状
+  （`patchImgXml` 是逐块切出来改的），按单块重测才有上面那组稳定数字。
+- **一处语义修正单独列出，不算性能收益**：改前 `String.replace(re, '$1"'+v+'"')`
+  会把载荷值里的 `$&` 当替换模式展开、写出坏件（`descr` 是用户文本，可能带
+  `$`）；本轮字符串拼接按字面写入。没有拿真件实测过这一形状。
+
+**门禁**：tsc 0、`tsc && vite build` ✓（`pnpm run build` 的 pdfjs 资源清理仍被
+环境安全策略的批量删除守卫拦下，与上轮同）；**32 组结构测试全绿**
+（新增 31 + 52 + 24 项；另把 `test-docx-part-cache` 的 opts 字面量、
+`test-impress-master` 的面板文案两条过期断言按新口径改，不改产品代码凑测试）。
+保真 99.0%/98.4%、四条变异腿 52.5 / 59.4 / 99.0 / 96.5 与记录对
+392/416/715/685 一字不动；pptx 70.1/74.3、42/19 全绿、
+`--selftest --mut no-ga` 42 条全红后复位；往返账
+`a1cb9635…`/`9df6c593…` 两次复跑一致。两把旧尺：`bench-docx-pack`
+语义等价 ✓ / −53.5%、`bench-docx-parts` 部件解压 **18 → 19 → 5**
+（新增书签补丁多一次读，语义等价 ✓）。
+- **账本元信息**：`docs/fidelity.*` 与 `docs/pptx-fidelity.*` 这轮**不再与 HEAD
+  逐字节相同**——唯一差异是 provenance 的 `modules` 67 → 68（新增
+  `master-rect.ts`），覆盖率与变异腿数字一字不动。按「账本要能给定 rev 就给定
+  答案」把四份随 rev 更新入库，不攒元信息差。
+
+### 顺延（D46）
+
+- 图形壳剩 **235 对**：三维族 `sp3d`/`props3d`/`lightRig` 要先定「夹具结构
+  非法」口径；VML 老式形状族仍是模型无槽。`wp:posOffset` 动 0 对、
+  `sizeRelH/V` 真件要 `mc:AlternateContent`。
+- 正文长尾：`fldChar` 三对、`outline|val`、`smartTag|*`、±5 缇、`docPr|id`、
+  `docPr|name`、`name|val`(`text1`)、`startOverride|val`；`theme1.xml` 口径未定。
+  `bookmark*|id` v0.186、`ind|left`/`ind|right` v0.185、
+  `color|val`/`lvlJc|val` v0.184 已补。
+- Impress 占位矩形编辑 v0.186 已补；Calc 缩放（落点在预存改动
+  `SheetEditor.tsx`，按房规换落点）；**pdf-lib 按需加载**仍等
+  `pdf-text-edit.ts` 入库；**Writer 自动缩放两档未接**。D32–D45 长尾原账不动。
+- **诚实边界**：本轮及历轮 A/B 都是合成夹具；书签 `w:id` 只走 docx 链、ODT 未扩；
+  占位矩形只有纯函数与源码级断言，没做真机拖拽对撞，`rect/zoom` 还原依赖
+  CSS zoom 等比缩放这一假设；写手零正则的端到端收益在噪声内，确定收益只在
+  纯函数段；`$&` 那处修正没拿真件实测。
+
 ## 性能（v0.3）
 
 

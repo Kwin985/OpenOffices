@@ -2906,7 +2906,66 @@ pptx 70.1/74.3 且 `--selftest --mut no-ga` 全红后复位；往返账
 `test-impress-zoom` / `test-pptx-anim` 两条钉死整串 import / 整串 opts 类型
 字面量的旧断言改成按关键名判——**断言过期按新口径改，不改产品代码凑测试**。
 
-### 顺延清单（D45）
+### v0.186 追加节：书签 `w:id` 两族 + 母版占位矩形 + 写手零正则
+
+**往返账动 2 对，全部 `value → kept`**：`bookmarkStart|id` / `bookmarkEnd|id`。
+正文 **258/300 = 86.0% → 260/300 = 86.7%**，合计 **340/619 = 54.9% →
+342/619 = 55.3%**，值变 12 → 10、掉了仍 267、图形壳 82/319 不动。
+
+- 坏件形状：源件 `<w:bookmarkStart w:id="7" w:name="_Toc7"/>…`
+  `<w:id="9" w:name="_Cross"/>`，写出包三对 Start/End 的 `w:id` **全是 1**。
+  `Bookmark` 组件传进去的 `id` 是书签名而不是数字令牌，库按自己的规则重排成 1；
+  `bookmark-extension.ts` 原注释写「Word 自己复制书签时也重排，不进模型」——
+  **「包没有槽」是判断不是判决书**，这条又中一次。Word 里几枚书签同号就分不开，
+  是真坏件，不只是账本上一笔值变。
+- 归属按**书签名**不按出现序：读手把跨段书签拆成每段一枚同名 span，写出发出的
+  两枚 `_Cross` 都得回源 id `9`，Word 才认作一枚跨段书签。
+- 载荷三跳：`wrapBookmark` 把 `data-oo-bookmark` 从「名字」扩成「名字;源 w:id」
+  两格（整串字符串槽、零 schema 改动）；`inlineToChildren` 按**最后一个**分号拆
+  （书签名含分号也不丢），`Bookmark({ id: sp.name })` 仍只收纯名字，数字令牌进
+  `DocTrack.bookmarkIds`；`patchBookmarkIds` 扫 document.xml，Start 取 `w:name`
+  查映射、改自身并压栈，End 弹栈改同一个值，**同名改值不追加第二枚 `w:id`**。
+  没有映射（用户新建）、孤立 End、标签没写 `w:id` 一律不动，绝不凭空造令牌。
+- **零新增查问对**：`w:id` 在读手 `bookmarkStart/End` 分支里已经查问过
+  （`const id = attr(node,'w:id')`），本轮只把查问结果带上；读手查问仍 672，
+  保真覆盖率与四条变异腿 52.5/59.4/99.0/96.5、记录对 392/416/715/685 全不动。
+  `test-bookmark-ids.mjs` 31 项：跨段同名、源 id 换 21/33 仍按名对位、嵌套
+  栈式配对、`xmlAttr` 转义、无源值不凭空造、源码级接线。
+
+**功能**：新增 `src/lib/master-rect.ts`（本轮唯一新增 lib 文件，
+`modules` 67 → 68）：归一化 0..1 的 `rectFor` / `dragRect` / `rectStyle` /
+`DEFAULT_*` / `RECT_KEY`，缺省矩形与 `pptx-export.ts` 两组英寸默认值同源。
+PptEditor 加第二套拖拽状态机 `masterDragRef`（占位矩形不是 SlideShape，
+没有 id 给 `patchShape` 用），位移按舞台宽高折比例、写回复用 v0.182 的
+`patchMaster` **唯一出口**（换 master 引用，memo 化的缩略图/放映才重渲染），
+不另开 `edit(d => d.master = …)`。工具条「占位框」开关 + 两枚虚线框与缩放
+手柄，关着时一次状态都不建。`test-master-rect.mjs` 52 项（纯函数 + 源码级
+接线；真机拖拽没做浏览器对撞）。Writer 自动缩放两档仍未接。
+
+**性能**：`tagWithAttrs` / `retag` 去掉每次调用的 `new RegExp(...)`，改纯字符串
+定位；改前算法原样留成 `legacyRetag:true` 对照腿，两腿产物逐部件字符串归一后
+逐字相同。**纯函数段按真实形状（每枚 drawing 单独 13 次 retag）20/200/1000
+drawing 稳定 −79.0% / −79.2% / −79.1%**；端到端 25.4 → 27.8ms
+（−9.3%，噪声内，不冒充降幅）。`test-docx-retag.mjs` 24 项 +
+`bench-docx-retag.mjs`。两处判据修正照实记：基准只累加产物长度会假绿，改成
+逐字符滚 hash；「把 1000 个 drawing 拼成一个大串」不是产品形状
+（`patchImgXml` 逐块切出来改），按单块重测才有稳定数字。
+**一处语义修正单独列出，不算性能收益**：改前 `String.replace(re, '$1"'+v+'"')`
+会把载荷值里的 `$&` 当替换模式展开写坏件（`descr` 是用户文本），本轮字符串
+拼接按字面写入；没拿真件实测过这一形状。
+
+**门禁**：tsc 0、`tsc && vite build` ✓（`pnpm run build` 的 pdfjs 资源清理仍被
+环境安全策略的批量删除守卫拦下）；32 组结构测试全绿（新增 31+52+24 项；
+`test-docx-part-cache` 的 opts 字面量与 `test-impress-master` 的面板文案两条
+过期断言按新口径改，不改产品代码凑测试）；pptx 70.1/74.3、42/19 全绿、
+`--selftest --mut no-ga` 42 条全红后复位；往返账 `a1cb9635…`/`9df6c593…`
+两次复跑一致；`bench-docx-pack` 语义等价 ✓ / −53.5%、`bench-docx-parts`
+部件解压 **18 → 19 → 5**（新增书签补丁多一次读，语义等价 ✓）。
+- **账本元信息**：`docs/fidelity.*` 与 `docs/pptx-fidelity.*` 本轮不再与 HEAD
+  逐字节相同，唯一差异是 provenance 的 `modules` 67 → 68；覆盖率与变异腿数字
+  一字不动。按「给定 rev 就给定答案」把四份随 rev 更新入库，不攒元信息差。
+
+### 顺延清单（D46）
 
 - 图形壳剩余 **235 对**：三维族 `sp3d`(3) / `props3d`(3) / `lightRig`(2)
   要先定「夹具结构非法、真件应写成 effectLst 之后的兄弟」的口径；**删
@@ -2916,17 +2975,17 @@ pptx 70.1/74.3 且 `--selftest --mut no-ga` 全红后复位；往返账
   文本里、账本压根没这一对，**动 0 对**；`sizeRelH/V` 是 wp14 扩展，
   夹具写 `wp:` 前缀、真件要 `mc:AlternateContent`。
 - 正文长尾：`fldChar|fldCharType`(3 个源值) / `fldChar|fldLock`、
-  `outline|val`、`smartTag|*`、±5 缇、`docPr|id`、
+  `outline|val`、`smartTag|*`、±5 缇、`docPr|id`、`docPr|name`、
   `name|val`(表单域 `text1`)、`startOverride|val`；`theme1.xml` 口径未定。
-  `ind|left`/`ind|right` 显式 0 v0.185、`color|val`/`lvlJc|val` v0.184、
-  `legacy|*` 与 `type|val`/`pgSz|code` v0.183、`col|w`/`col|space`/
-  `w:cols equalWidth` v0.182 已补。
-- Impress 占位矩形编辑（第二套拖拽状态机）；Calc 视图缩放（落点在预存
-  改动文件 `SheetEditor.tsx`，按房规换落点或只记结论）；**pdf-lib 按需加载**
+  `bookmark*|id` v0.186、`ind|left`/`ind|right` 显式 0 v0.185、
+  `color|val`/`lvlJc|val` v0.184、`legacy|*` 与 `type|val`/`pgSz|code` v0.183、
+  `col|w`/`col|space`/`w:cols equalWidth` v0.182 已补。
+- Impress 占位矩形编辑（第二套拖拽状态机）v0.186 已补；Calc 视图缩放（落点在
+  预存改动文件 `SheetEditor.tsx`，按房规换落点或只记结论）；**pdf-lib 按需加载**
   仍等 `pdf-text-edit.ts` 入库（本轮 build 仍见 `INEFFECTIVE_DYNAMIC_IMPORT`）；
   **Writer 的自动缩放两档未接**。Writer 标尺 v0.179、状态栏 v0.180、
   逐页翻页预览 v0.181、Impress 母版配色 v0.182、清除格式 v0.183、
   PDF 首页末页 v0.184 已补。
-- D32–D44 原账不动（同上）。
+- D32–D45 原账不动（同上）。
 
 
