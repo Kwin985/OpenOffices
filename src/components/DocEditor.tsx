@@ -70,7 +70,7 @@ import { docExtensions } from '../lib/doc-schema'
 import { outlineOf, activeOutlinePos } from '../lib/outline'
 import { captureFormat, clearableMarkNames, marksForSchema, paintableMarkNames, type PaintFormat } from '../lib/format-painter'
 // v0.174：视图缩放与内容区右键菜单。刻度/条目表住在 lib，组件只做接线。
-import { ZOOM_STEPS, clampZoom, zoomByWheel, zoomPct, zoomStep } from '../lib/view-zoom'
+import { ZOOM_STEPS, clampZoom, fitZoom, nearestZoomStep, zoomByWheel, zoomPct, zoomStep, type FitMode } from '../lib/view-zoom'
 import { contextItems } from '../lib/context-menu'
 // v0.175：打印预览的状态与页数口径住在 lib，两处 UI 共用一份。
 // v0.181：翻页定位的三枚纯函数也在那里（等距页距，非真分页）。
@@ -1584,6 +1584,17 @@ function DocEditor({ tab }: Props) {
   }
 
   // 缩放控件在工具条与打印预览条两处出现，定义一份，别让两串刻度走散
+  // v0.187：自动缩放两档，与 PDF / Impress 共用 fitZoom。
+  // 判断修正：v0.185 说「纸面固定版心，自动档没有新信息」偏保守——纸面宽确实固定，
+  // 但**视口宽随侧栏开合与窗口大小变化**，适合页宽是有实际意义的一档。
+  // Writer 是档位制下拉，落到最近一档，免得 select 里显示没有的百分比。
+  const fitTo = (mode: FitMode) => {
+    const host = scrollRef.current
+    if (!host) return
+    const z = fitZoom(effPx.w, effPx.h, host.clientWidth, host.clientHeight, mode)
+    setZoom(nearestZoomStep(z))
+  }
+
   const zoomControls = (
     <span className="doc-zoom" title="视图缩放：只改屏幕上的纸面，打印与导出 PDF 始终按 100% 出纸；也可在正文区按 Ctrl+滚轮">
       <button className="tb-btn" onClick={() => setZoom((z) => zoomStep(z, -1))} title="缩小一档">
@@ -1603,6 +1614,12 @@ function DocEditor({ tab }: Props) {
       </button>
       <button className="tb-btn" onClick={() => setZoom(1)} title="回到 100%">
         100%
+      </button>
+      <button className="tb-btn" onClick={() => fitTo('width')} title="适合页宽：按纸面宽铺满正文区">
+        ↔
+      </button>
+      <button className="tb-btn" onClick={() => fitTo('page')} title="适合整页：纸面连高一起装下">
+        ⤢
       </button>
     </span>
   )

@@ -166,7 +166,9 @@ const outXml = await writeStyles()
   check('写手：props 从 para 的两枚标记组装', /s\.para\?\.indLeftZero \|\| s\.para\?\.indRightZero/.test(w))
   check('写手：补丁挂在 patchStylesXml 的 styleId 回调里', /if \(p\.indZeros\) out = patchStyleIndZeros\(out, p\.indZeros\)/.test(w))
   check('写手：位次名单含 rPr/sectPr（CT_PPrBase 序）', /'rPr', 'sectPr', 'pPrChange'/.test(w))
-  check('写手：已有同名属性走不覆盖过滤', /\.filter\(\(a\) => !new RegExp\(/.test(w))
+  // v0.187：这一处改成共享 hasAttrNamed，旧正则只留在 A/B 对照腿分支
+  check('写手：已有同名属性走不覆盖过滤',
+    /\.filter\(\(a\) => legacyAttrScan/.test(w) && /hasAttrNamed\(ind\[0\]/.test(w))
 }
 
 console.log(`通过 ${ok.length} 项` + (bad.length ? `，**失败 ${bad.length} 项**` : '，失败 0 项'))

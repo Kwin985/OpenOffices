@@ -1258,10 +1258,12 @@ interface Numbering {
    * 刻意只记序、不记号——与段落余量（pprExtras）同一条纪律
    */
   defs: DocxAbstractNumMeta[]
+  /** v0.187：`w:num` 出现序 → `w:startOverride/@w:val`（没说过就 undefined） */
+  starts: (number | undefined)[]
 }
 
 function readNumbering(xml: string, theme?: ThemeFonts): Numbering {
-  const out: Numbering = { byId: new Map(), multiLevels: new Map(), defs: [] }
+  const out: Numbering = { byId: new Map(), multiLevels: new Map(), defs: [], starts: [] }
   if (!xml) return out
   const num = find(parseXml(xml), 'w:numbering')
   if (!num) return out
@@ -1381,6 +1383,10 @@ function readNumbering(xml: string, theme?: ThemeFonts): Numbering {
   const nmac = find(num, 'w:numIdMacAtCleanup')
   if (nmac) attrL(nmac, 'val')
   for (const n of all(num, 'w:num')) {
+    // v0.187：按 `w:num` 出现序先占一格（哪怕这枚 num 没有 numId 也要占，
+    // 否则补丁前缀对位会整体错位）。下面 lvlOverride 那一趟查问到起始号再回填。
+    const startAt = out.starts.length
+    out.starts.push(undefined)
     // durableId（v0.152）：`w:num` 身上的持久编号 id（Word 合并文档时按它对账）。
     // 同 rna 的纪律：先于 numId/abstractNumId 那道闸读——语料里那枚只带 durableId。
     // **只读记账**：我们的 ListRegistry 按段引用重建定义，这枚身份带不回来
@@ -1394,6 +1400,8 @@ function readNumbering(xml: string, theme?: ThemeFonts): Numbering {
     for (const lo of all(n, 'w:lvlOverride')) {
       const ilvl = attrNum(lo, 'w:ilvl') ?? 0
       const so = attrNum(find(lo, 'w:startOverride'), 'w:val')
+      // 复用同一次查问结果，零新增漏斗；多枚 lvlOverride 时取第一枚说过的
+      if (so !== undefined && out.starts[startAt] === undefined) out.starts[startAt] = so
       const cur = levels.get(ilvl)
       if (so !== undefined) levels.set(ilvl, { numFmt: cur?.numFmt ?? 'bullet', start: so, lvlText: cur?.lvlText, lvlJc: cur?.lvlJc })
     }
@@ -5467,7 +5475,9 @@ export async function docxToHtmlFidelity(
     ...(section ? { section } : {}),
     ...(bg ? { background: bg } : {}),
     // 编号定义账（v0.150）：只有真说了话的定义才出去（空件与旧 meta 保持字节一致）
-    ...(numbering.defs.length ? { numbering: { defs: numbering.defs } } : {}),
+    ...(numbering.defs.length || numbering.starts.some((x) => x !== undefined)
+      ? { numbering: { defs: numbering.defs, starts: numbering.starts } }
+      : {}),
   }
 }
 

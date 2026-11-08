@@ -125,7 +125,10 @@ async function patched(xml, ids) {
   check('写手：Bookmark 组件只收纯书签名', /new Bookmark\(\{ id: sp\.name, children: inner \}\)/.test(w))
   check('写手：id 登记进 DocTrack', /dt\?\.bookmarkIds\.set\(name, bmId\)/.test(w))
   check('写手：主链挂 patchBookmarkIds', /const withBm = await patchBookmarkIds\(withImg, dt\.bookmarkIds, sess\)/.test(w))
-  check('写手：后续补丁接 withBm 而不是绕过它', /patchTcPr\(withBm,| : withBm/.test(w))
+  // v0.187 主链在 withBm 后又插了 withRev（修订 id），链尾变量名会跟着轮次变；
+  // 按「withBm 是下一笔的输入、后续没有绕过它」判，不钉死链尾名字
+  check('写手：后续补丁没有绕过 withBm',
+    /const withRev = await patchRevIds\(withBm,/.test(w) && /patchTcPr\(withRev,| : withRev/.test(w))
   check('写手：Start 压栈 / End 弹栈', /if \(isStart\) stack\.push\(want\)/.test(w) && /stack\.pop\(\)/.test(w))
   check('schema：注释改成「w:id 随载荷往返」，不再说库会重排', /按名回填源值/.test(s))
 }

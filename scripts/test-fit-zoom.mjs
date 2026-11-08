@@ -76,7 +76,16 @@ const read = (p) => fs.readFileSync(new URL(p, import.meta.url), 'utf8')
   check('Impress 扣掉 CSS 的 26px padding', /wrap\.clientWidth, wrap\.clientHeight, mode, 26/.test(ppt))
   check('Impress 自动值落到最近一档（select 不显示空白）', /setZoom\(nearestZoomStep\(z\)\)/.test(ppt))
   check('Impress 两枚按钮都在', /fitTo\('width'\)/.test(ppt) && /fitTo\('page'\)/.test(ppt))
-  check('缩放口径没有第二份实现（两处都不自己算除法）', !/clientWidth\s*\/\s*vp\.width/.test(pdf) && !/clientWidth\s*\/\s*r\.width/.test(ppt))
+  check('缩放口径没有第二份实现（三处都不自己算除法）',
+    !/clientWidth\s*\/\s*vp\.width/.test(pdf) && !/clientWidth\s*\/\s*r\.width/.test(ppt)
+      && !/clientWidth\s*\/\s*effPx\.w/.test(read('../src/components/DocEditor.tsx')))
+  // v0.187：Writer 补齐自动档（v0.185 判断「纸面固定版心没有新信息」偏保守——
+  // 视口宽会随侧栏开合变化）。三处 UI 现在共用同一份 fitZoom。
+  const doc = read('../src/components/DocEditor.tsx')
+  check('Writer 引入 fitZoom/nearestZoomStep/FitMode', /fitZoom, nearestZoomStep/.test(doc) && /type FitMode/.test(doc))
+  check('Writer 用未缩放纸面尺寸 + 滚动容器尺寸', /fitZoom\(effPx\.w, effPx\.h, host\.clientWidth, host\.clientHeight, mode\)/.test(doc))
+  check('Writer 自动值落到最近一档（select 不显示空白）', /setZoom\(nearestZoomStep\(z\)\)/.test(doc))
+  check('Writer 两枚按钮都在', /fitTo\('width'\)/.test(doc) && /fitTo\('page'\)/.test(doc))
 }
 
 console.log(`通过 ${ok.length} 项` + (bad.length ? `，**失败 ${bad.length} 项**` : '，失败 0 项'))

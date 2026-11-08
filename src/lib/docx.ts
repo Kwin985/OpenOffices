@@ -652,6 +652,13 @@ export interface DocxAbstractNumMeta {
  */
 export interface DocxNumbering {
   defs: DocxAbstractNumMeta[]
+  /**
+   * `w:num` 出现序 → 这一串的起始号（`w:lvlOverride/w:startOverride/@w:val`）。
+   * v0.187：包对每个重建出来的 num 恒发 `startOverride=1`，源件说的「从第 3 号起」
+   * 就丢了。与 defs 同一条纪律——只存序不存号（包的 numId 会重排），
+   * `patchNumOverrides` 按 `<w:num>` 出现序前缀贴回；undefined = 这一串没说过起始号。
+   */
+  starts?: (number | undefined)[]
 }
 
 // 页眉页脚设置 + 批注列表 + 页面设置：随 .odoc meta 存储，导出写入 OOXML
@@ -668,6 +675,13 @@ export interface DocMeta {
   footerPageNumber?: boolean
   pageNumberFormat?: PageNumberFormat
   comments?: DocComment[]
+  /**
+   * 修订壳 `w:id` 原值（v0.187）：按 `<w:ins>/<w:del>` 在源包里的出现序。
+   * 由 `docxToDocMeta` 从 document.xml 正则提取——那一条是**正则读的部件**，
+   * 不进保真账；读手在 w:ins/w:del 分支里也已查问过 w:id，零新增查问对。
+   * 写手 `revId` 恒从 1 起，`patchRevIds` 按出现序把源值改回去。
+   */
+  revIds?: string[]
   page?: PageSetup
   /** 文档带进来的段落样式清单（v0.102）：随 meta 持久化，导出时重建样式表 */
   styles?: DocxStyleInfo[]
@@ -750,6 +764,10 @@ export async function docxToDocMeta(bytes: Uint8Array, shared?: DocxZipSession):
   }
   const readText = shared?.read ?? (async (p: string) => (await zip.file(p)?.async('string')) ?? '')
   const docXml = await readText('word/document.xml')
+  // v0.187：修订壳的 w:id 原值，按出现序。这是**写手侧 meta**里的一条，不改读手、
+  // 不进 PM 模型（revision mark 只有 author/date，且那份文件是预存改动不能碰）。
+  // 正则读的部件不进保真账，读手也早查问过 w:id，所以零新增查问对。
+  const revIds = [...docXml.matchAll(/<w:(?:ins|del)\b[^>]*\bw:id="([^"]*)"/g)].map((m) => m[1])
   const relsText = await readText('word/_rels/document.xml.rels')
   const relFor = (rid: string) =>
     relsText.match(new RegExp(`Id="${rid}"[^>]*Target="([^"]+)"`))?.[1] ??
@@ -854,6 +872,7 @@ export async function docxToDocMeta(bytes: Uint8Array, shared?: DocxZipSession):
   // 缺件时返回空串，与原来 `if (themeFile)` 的门逐字同义
   const themeXml = await readText('word/theme/theme1.xml')
   if (themeXml.trim()) out.themeXml = themeXml
+  if (revIds.length) out.revIds = revIds
   return out
 }
 
@@ -3004,10 +3023,11 @@ async function finishPatch(
 export async function prosemirrorToDocxBytes(
   json: PMNode,
   meta?: DocMeta,
-  opts?: { legacyPartText?: boolean; legacyRetag?: boolean },
+  opts?: { legacyPartText?: boolean; legacyRetag?: boolean; legacyAttrScan?: boolean },
 ): Promise<Uint8Array> {
-  // v0.186：只给同进程 A/B 对照腿用（入口设一次），产品路径恒为 false
+  // v0.186 / v0.187：只给同进程 A/B 对照腿用（入口设一次），产品路径恒为 false
   legacyRetag = !!opts?.legacyRetag
+  legacyAttrScan = !!opts?.legacyAttrScan
   const dt = newDocTrack()
   // 编号注册表（v0.142）：blocksOf 一路往里传，收齐全篇的自定义档位后进 Document.numbering。
   // 带上源文档的编号定义（v0.158）：重建一串列表时能照原样逐层发，而不是三层拍成一个符面
@@ -3302,6 +3322,8 @@ export async function prosemirrorToDocxBytes(
   // v0.186：书签 w:id 原值（包恒发 1）。按 Start/End 出现序栈式对位；与前后几笔
   // 都改 document.xml 的不同元素，共用 PackSession 的文本缓存，不另解一次 zip
   const withBm = await patchBookmarkIds(withImg, dt.bookmarkIds, sess)
+  // v0.187：修订壳 w:id 原值（源包出现序前缀对位），与书签补丁同一条改值纪律
+  const withRev = await patchRevIds(withBm, meta?.revIds ?? [], sess)
   // 表闸门三样都要补：样式推出来的（looks）与表自己带的（dt.tblLooks），
   // v0.152 起再加表级条件格式尺寸两枚（dt.tblPrs，与 tblLook 同住 tblPr）
   const needTbl =
@@ -3312,7 +3334,7 @@ export async function prosemirrorToDocxBytes(
     dt.cnfStyles.some((x) => x) ||
     dt.tblBorders.some((x) => x)
   // 单元格不换行（v0.152）：包里没有 noWrap 的槽，按 <w:tc> 出现序插 <w:noWrap/>
-  const withCell = dt.cellExtras.some((x) => x) ? await patchTcPr(withBm, dt.cellExtras, sess) : withBm
+  const withCell = dt.cellExtras.some((x) => x) ? await patchTcPr(withRev, dt.cellExtras, sess) : withRev
   // 底纹的存盘原件（v0.164）：按 <w:shd> 出现序**合并**属性（包只发 val/color/fill 三枚，
   // 且 fill 写的是解析后的屏上色——源件的字面色与主题三枚都要改回来/补上去）
   const withShd = await patchShdAttrs(withCell, dt.shdExtras, sess)
@@ -3332,9 +3354,11 @@ export async function prosemirrorToDocxBytes(
     ? await patchStylesXml(withRow, latent, props, sess)
     : withRow
   const withNum = numDefs.length ? await patchNumberingXml(withStyles, numDefs, sess) : withStyles
+  // v0.187：w:startOverride 原值，按 w:num 出现序前缀对位（与上面那条补丁共用会话）
+  const withNumStart = await patchNumOverrides(withNum, meta?.numbering?.starts, sess)
   const packed = needTbl
-    ? await patchTblLook(withNum, looks, dt.tblLooks, dt.tblPrs, dt.cellSps, dt.cnfStyles, dt.tblBorders, sess)
-    : withNum
+    ? await patchTblLook(withNumStart, looks, dt.tblLooks, dt.tblPrs, dt.cellSps, dt.cnfStyles, dt.tblBorders, sess)
+    : withNumStart
   // 包对 w:pgNumType 是「无条件 push」（SectionProperties 里那行没有 if）——没话说时也发
   // 一枚空元素。源件没写过就不该凭空多这一枚（账本看不见，Word 的文件结构看得见）
   const withPgNum = pg.pageNum ? packed : await dropEmptyPgNum(packed, sess)
@@ -3478,7 +3502,9 @@ export function patchStyleIndZeros(block: string, z: { left?: boolean; right?: b
   if (ind) {
     // 同名属性已在场 = 包或用户已经写过；不追加、不覆盖（追加会造出第二枚 w:left）
     const add = want
-      .filter((a) => !new RegExp(`\\s${a.trim().split('=')[0]}=`).test(ind[0]))
+      .filter((a) => legacyAttrScan
+        ? !new RegExp(`\\s${a.trim().split('=')[0]}=`).test(ind[0])
+        : !hasAttrNamed(ind[0], a.trim().split('=')[0]))
       .join('')
     if (!add) return block
     const cut = ind[0].endsWith('/>') ? ind[0].length - 2 : ind[0].length - 1
@@ -3546,6 +3572,89 @@ export async function patchBookmarkIds(
   if (!touched) return bytes
   out += xml.slice(cursor)
   setPart(zip, 'word/document.xml', out, sess)
+  return finishPatch(bytes, zip, sess)
+}
+
+/**
+ * 修订壳 `w:id` 原值回填（v0.187）。
+ *
+ * 写手给 `InsertedTextRun`/`DeletedTextRun` 的 id 是 `dt.revId++`（从 1 起），
+ * 源件那枚「这条改动」的唯一号就此丢了（`ins|id` 挂值变）。读手在 w:ins/w:del
+ * 分支里**已经查问过** `w:id`，只是按「重编不该由我们决定」留成只读记账；
+ * 本轮由 `docxToDocMeta` 从源包按出现序把原值带进 meta（正则读、不进保真账），
+ * 这里按 `<w:ins>/<w:del>` 出现序前缀对位**同名改值**，不追加第二枚 `w:id`。
+ * 写出包比源包多出来的修订（跨段拆开）保持包自己的号，绝不凭空造令牌。
+ */
+export async function patchRevIds(
+  bytes: Uint8Array,
+  ids: string[],
+  sess?: PackSession,
+): Promise<Uint8Array> {
+  if (!ids.length) return bytes
+  const zip = sess ? sess.zip : await loadZipOf(bytes)
+  const file = zip.file('word/document.xml')
+  if (!file) return bytes
+  const xml = await partText(zip, 'word/document.xml', sess)
+  let i = 0
+  let out = ''
+  let cursor = 0
+  let touched = false
+  for (const m of xml.matchAll(/<w:(?:ins|del)\b[^>]*>/g)) {
+    const at = m.index ?? 0
+    const tag = m[0]
+    const want = ids[i++]
+    if (!want) continue
+    const next = tag.replace(/\sw:id="[^"]*"/, () => ` w:id="${xmlAttr(want)}"`)
+    if (next === tag) continue
+    out += xml.slice(cursor, at) + next
+    cursor = at + tag.length
+    touched = true
+  }
+  if (!touched) return bytes
+  out += xml.slice(cursor)
+  setPart(zip, 'word/document.xml', out, sess)
+  return finishPatch(bytes, zip, sess)
+}
+
+/**
+ * `w:startOverride` 原值回填（v0.187）。
+ *
+ * 包对每个重建出来的 `<w:num>` 恒发 `<w:startOverride w:val="1"/>`，源件说的
+ * 「这一串从第 3 号起」就丢了。`DocxNumbering.starts` 按 `w:num` 出现序存原值，
+ * 与 `patchNumberingXml` 同一条「只存序不存号、前缀对位」的纪律——包的 numId
+ * 会重排，按号认会贴错。只对源里说过的那几串改值，认不出的整块不动。
+ */
+export async function patchNumOverrides(
+  bytes: Uint8Array,
+  starts: (number | undefined)[] | undefined,
+  sess?: PackSession,
+): Promise<Uint8Array> {
+  if (!starts?.some((x) => x !== undefined)) return bytes
+  const zip = sess ? sess.zip : await loadZipOf(bytes)
+  const file = zip.file('word/numbering.xml')
+  if (!file) return bytes
+  const xml = await partText(zip, 'word/numbering.xml', sess)
+  const blocks = [...xml.matchAll(/<w:num\b[^>]*>[\s\S]*?<\/w:num>/g)]
+  let out = ''
+  let cursor = 0
+  let touched = false
+  for (let i = 0; i < blocks.length && i < starts.length; i++) {
+    const want = starts[i]
+    if (want === undefined) continue
+    const m = blocks[i]
+    const at = m.index ?? 0
+    const next = m[0].replace(
+      /(<w:startOverride\b[^>]*?\sw:val=")[^"]*(")/,
+      (_all, head: string, tail: string) => `${head}${xmlAttr(String(want))}${tail}`,
+    )
+    if (next === m[0]) continue
+    out += xml.slice(cursor, at) + next
+    cursor = at + m[0].length
+    touched = true
+  }
+  if (!touched) return bytes
+  out += xml.slice(cursor)
+  setPart(zip, 'word/numbering.xml', out, sess)
   return finishPatch(bytes, zip, sess)
 }
 
@@ -4105,16 +4214,50 @@ async function patchBeforeElem(bytes: Uint8Array, anchor: string, extras: string
  * 这是「包自己会发这一枚属性」时的唯一动作：追加会造出第二枚同名属性 = 非法 XML，
  * 而计数闸门不会替你发现。凡是要覆盖包里那个解析后的值，都得走这里。
  */
+/**
+ * v0.187：把写手补丁链里最后三处「循环内动态编译正则」收干净
+ * （v0.186 已收掉 `tagWithAttrs` / `retag`，这三处是同一族的遗漏点）。
+ * `hasAttrNamed` 用字符串定位 + 空白收边，与 `tagWithAttrs` 同一套口径；
+ * 三处共用它，不再各写一遍 `new RegExp(...)`。
+ * `legacyAttrScan` 只给同进程 A/B 对照腿用（入口设一次），产品路径恒为 false。
+ */
+let legacyAttrScan = false
+
+/** 开标签上有没有这枚「空白收边」的属性（零动态正则、零临时数组） */
+function hasAttrNamed(tag: string, name: string): boolean {
+  const needle = `${name}=`
+  let at = tag.indexOf(needle)
+  while (at >= 0) {
+    if (at > 0 && tag[at - 1] <= ' ') return true
+    at = tag.indexOf(needle, at + needle.length)
+  }
+  return false
+}
+
 function mergeTagAttrs(tag: string, add: string): string {
   let out = tag
   // 属性串允许不带前导空格：匹配与追加都靠 `\sw:` 那一枚空白收边，而拼串的人很容易
   // 只在第二枚起才记得加空格（v0.165 踩过：第一枚 w:color 被整条跳过，themeColor 一族
   // 照贴不误——补丁「跑成功了一半」，账上只剩一笔没说法的值变）
   for (const am of ` ${add}`.matchAll(/\sw:([A-Za-z]+)="([^"]*)"/g)) {
-    const re = new RegExp(`(\\sw:${am[1]}=)"[^"]*"`)
-    out = re.test(out)
-      ? out.replace(re, (_all, head: string) => `${head}"${am[2]}"`)
-      : out.replace(/(\s*\/?>)$/, (_all, tail: string) => `${am[0]}${tail}`)
+    if (legacyAttrScan) {
+      const re = new RegExp(`(\\sw:${am[1]}=)"[^"]*"`)
+      out = re.test(out)
+        ? out.replace(re, (_all, head: string) => `${head}"${am[2]}"`)
+        : out.replace(/(\s*\/?>)$/, (_all, tail: string) => `${am[0]}${tail}`)
+      continue
+    }
+    const needle = `w:${am[1]}="`
+    let at = out.indexOf(needle)
+    while (at >= 0 && !(at > 0 && out[at - 1] <= ' ')) at = out.indexOf(needle, at + needle.length)
+    if (at >= 0) {
+      const q = out.indexOf('"', at + needle.length)
+      if (q >= 0) {
+        out = out.slice(0, at + needle.length) + am[2] + out.slice(q)
+        continue
+      }
+    }
+    out = out.replace(/(\s*\/?>)$/, (_all, tail: string) => `${am[0]}${tail}`)
   }
   return out
 }
@@ -4379,7 +4522,9 @@ function pprOrder(inner: string, extra: string): string {
       if (!tag) continue
       const attrs = /^<w:[A-Za-z]+([^>]*?)\/?>/.exec(it.xml)?.[1] ?? ''
       const add = [...attrs.matchAll(/\s+w:([A-Za-z]+)="[^"]*"/g)]
-        .filter((m) => !new RegExp(`\\sw:${m[1]}=`).test(tag))
+        .filter((m) => legacyAttrScan
+          ? !new RegExp(`\\sw:${m[1]}=`).test(tag)
+          : !hasAttrNamed(tag, `w:${m[1]}`))
         .map((m) => m[0])
         .join('')
       if (!add) continue
