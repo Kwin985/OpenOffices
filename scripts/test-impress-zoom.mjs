@@ -41,8 +41,10 @@ const eq = (name, got, want) => check(name, JSON.stringify(got) === JSON.stringi
   const src = read('../src/components/PptEditor.tsx')
   const zoomSrc = read('../src/lib/view-zoom.ts')
   const css = read('../src/index.css')
+  // v0.185 起同一行还带 fitZoom / nearestZoomStep / FitMode（自动缩放档），
+  // 所以按「这一行里同时有 ZOOM_STEPS 与 stageZoomStyle」判，不钉死整串导入名
   check('接线：从共用模块导入档位与 stageZoomStyle',
-    /import \{ ZOOM_STEPS, clampZoom, stageZoomStyle, zoomByWheel, zoomPct, zoomStep \} from '\.\.\/lib\/view-zoom'/.test(src))
+    /import \{[^}]*ZOOM_STEPS[^}]*stageZoomStyle[^}]*\} from '\.\.\/lib\/view-zoom'/.test(src))
   check('接线：stageZoomStyle 是单一事实源（组件里不另算 zoom 值）',
     /\.\.\.stageZoomStyle\(zoom\)/.test(src) && !/zoom:\s*clampZoom|zoom:\s*zoom\b/.test(src))
   check('接线：缩放状态初值 100%', /const \[zoom, setZoom\] = useState\(1\)/.test(src))

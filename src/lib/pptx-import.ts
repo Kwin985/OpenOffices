@@ -181,11 +181,36 @@ function hasExitEffect(c: PEl): boolean {
   return hasDesc(c, (el) => el.localName === 'animEffect' && ga(el, 'transition') === 'out')
 }
 
-// 一个 <a:p> 内的所有 <a:t> 拼接为一行
+/**
+ * v0.185：一个 `<a:p>` 内的所有 `<a:t>` 拼接为一行，**不摊平数组**。
+ *
+ * 原写法 `descendantsByName(p,'t').map(textOf).join('')` 每个段落都要把整棵子树
+ * 按名摊平成两个数组（后代数组 + map 结果）。这是导入里最热的一条路径——每个形状
+ * 每个段落都走一次。改成一次前序遍历、命中即取文本并累加，零中间数组。
+ *
+ * 与 v0.184 的早停同族但不同处：这里没有「命中即返回」，是「命中即拼接」，
+ * 同样不建缓存、不改数据结构。`a:t` 是叶子，命中后不再递归进它——否则
+ * `textOf(c)` 已含后代文本，再拼一次就重复了。
+ *
+ * `legacyParaText` 只给同进程 A/B 对照腿用（入口设一次），产品路径恒为 false。
+ */
+let legacyParaText = false
+
 function paragraphText(p: PEl): string {
-  return descendantsByName(p, 't')
-    .map((t) => textOf(t))
-    .join('')
+  if (legacyParaText) {
+    return descendantsByName(p, 't')
+      .map((t) => textOf(t))
+      .join('')
+  }
+  let s = ''
+  const walk = (n: PEl) => {
+    for (const k of n.kids) {
+      if (k.localName === 't') s += textOf(k)
+      else walk(k)
+    }
+  }
+  walk(p)
+  return s
 }
 
 function shapeParagraphs(sp: PEl): string[] {
@@ -917,10 +942,12 @@ async function slideToDeckSlide(
 
 export async function pptxBytesToDeck(
   bytes: Uint8Array,
-  opts?: { legacyAnimScan?: boolean },
+  opts?: { legacyAnimScan?: boolean; legacyParaText?: boolean },
 ): Promise<Deck> {
   // v0.184：A/B 对照腿只切这一个开关；不传（产品路径）走命中即停的早停遍历
   legacyAnimScan = !!opts?.legacyAnimScan
+  // v0.185：文本拼接的 A/B 对照腿，与上面那只开关互不干扰（可以单独切）
+  legacyParaText = !!opts?.legacyParaText
   const { default: JSZip } = await import('jszip')
   const zip = await JSZip.loadAsync(bytes)
   const slideFiles = Object.values(zip.files)

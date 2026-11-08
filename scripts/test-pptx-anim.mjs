@@ -20,7 +20,9 @@ const read = (p) => fs.readFileSync(new URL(p, import.meta.url), 'utf8')
 // ---- 1. 源码级纪律 ----------------------------------------------------------
 {
   const src = read('../src/lib/pptx-import.ts')
-  check('入口：legacyAnimScan 可选参数', /opts\?: \{ legacyAnimScan\?: boolean \}/.test(src)
+  // v0.185 同一份 opts 里多了一枚 legacyParaText（文本拼接的 A/B 腿），
+  // 按「这枚可选参数在场」判，不钉死整个类型字面量
+  check('入口：legacyAnimScan 可选参数', /opts\?: \{[^}]*legacyAnimScan\?: boolean/.test(src)
     && /legacyAnimScan = !!opts\?\.legacyAnimScan/.test(src))
   check('hasDesc：逆序入栈 + pop（文档序）',
     /function hasDesc\(node: PEl \| null \| undefined, pred/.test(src)

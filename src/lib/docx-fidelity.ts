@@ -3076,6 +3076,17 @@ class Fidelity {
       }
       const para: DocxStyleInfo['para'] = {}
       const pPr = view.pPr
+      // v0.185：显式零缩进只认**这一枚样式自己 pPr 上写过的**，不认 styleView 合并
+      // 后的链视图（v0.161 主题字体引用同款纪律）——父层的 0 若摊到子层再写一遍，
+      // 就把「跟着父层走」改成了「钉死在子层」，换父层时不再跟着变。
+      // 这里直接读已解析元素的属性表，不走 attr/attrL 漏斗：w:left/w:right 在下面
+      // view.pPr 那一处已经查问过，本轮**没有新增查问对**，保真账与四条变异腿不动。
+      const ownInd = find(info.pPr, 'w:ind')
+      if (ownInd) {
+        const a = ownInd.attrs
+        if ((a['w:left'] ?? a['left']) === '0') para.indLeftZero = true
+        if ((a['w:right'] ?? a['right']) === '0') para.indRightZero = true
+      }
       if (pPr) {
         const jc = val(pPr, 'w:jc')
         const align =

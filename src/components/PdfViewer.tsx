@@ -30,6 +30,7 @@ import {
   type PdfRect,
   type TextItemGeom,
 } from '../lib/pdf-geo'
+import { fitZoom, type FitMode } from '../lib/view-zoom'
 import { sampleBackdrop, applyTextEdits, type TextEdit } from '../lib/pdf-text-edit'
 import {
   extractPages,
@@ -2369,6 +2370,19 @@ function PdfViewer({ tab }: Props) {
     el?.scrollIntoView({ block: 'start' })
   }
 
+  // v0.185：自动缩放两档，与 Impress 共用 view-zoom 的 fitZoom。页面尺寸取
+  // scale=1 的 viewport（**未缩放**的原始尺寸），容器扣掉内边距后交给纯函数；
+  // fitZoom 给连续比例，这里只按 PDF 自己的 [0.5,3] 夹一次，不代档位制 UI 做决定
+  const fitTo = async (mode: FitMode) => {
+    const d = docRef.current
+    const host = scrollRef.current
+    if (!d || !host) return
+    const p = await d.getPage(curPageRef.current)
+    const vp = p.getViewport({ scale: 1 })
+    const z = fitZoom(vp.width, vp.height, host.clientWidth, host.clientHeight, mode)
+    setScale(Math.min(SCALE_MAX, Math.max(SCALE_MIN, z)))
+  }
+
   const est = sizes[1] ?? { w: 595, h: 842 }
   const numPages = doc?.numPages ?? 0
   const nav = pageNav(curPage, numPages)
@@ -2411,6 +2425,8 @@ function PdfViewer({ tab }: Props) {
         <span className="pdf-zoom">{Math.round(scale * 100)}%</span>
         {btn('＋', () => setScale((s) => Math.min(SCALE_MAX, +(s * SCALE_STEP).toFixed(3))), scale >= SCALE_MAX, '放大')}
         {btn('100%', () => setScale(1))}
+        {btn('↔', () => void fitTo('width'), !doc, '适合页宽：按当前页宽铺满窗口')}
+        {btn('⤢', () => void fitTo('page'), !doc, '适合整页：当前页连高一起装下')}
         <span className="tb-sep" />
         <span className="pdf-tools">
           <button

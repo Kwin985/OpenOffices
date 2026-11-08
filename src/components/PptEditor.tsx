@@ -57,7 +57,7 @@ import { saveDoneTimer } from '../lib/save-status'
 import { autoDelayMs, autoFailStatus, autoOkTip, createAutoSaveLedger, onFocusBack, staleFailureClaim } from '../lib/auto-save'
 import type { FailureClaim } from '../lib/auto-save'
 import { pptTemplate } from '../lib/templates'
-import { ZOOM_STEPS, clampZoom, stageZoomStyle, zoomByWheel, zoomPct, zoomStep } from '../lib/view-zoom'
+import { ZOOM_STEPS, clampZoom, fitZoom, nearestZoomStep, stageZoomStyle, zoomByWheel, zoomPct, zoomStep, type FitMode } from '../lib/view-zoom'
 import StaticSlide from './StaticSlide'
 
 interface Props {
@@ -800,6 +800,19 @@ function PptEditor({ tab }: Props) {
     ...stageZoomStyle(zoom),
   }
 
+  // v0.185：自动缩放两档，与 PDF 共用 fitZoom。舞台被 CSS zoom 等比缩放，
+  // 所以 getBoundingClientRect() 要除回当前 zoom 才是**未缩放**的页面尺寸；
+  // 容器扣掉 .ppt-stage-wrap 的 26px padding（CSS 常量，改 CSS 要同步这一处）。
+  // Impress 是档位制下拉，自动值落到最近一档，免得 select 里出现没有的百分比
+  const fitTo = (mode: FitMode) => {
+    const stage = stageRef.current
+    const wrap = stageWrapRef.current
+    if (!stage || !wrap || zoom <= 0) return
+    const r = stage.getBoundingClientRect()
+    const z = fitZoom(r.width / zoom, r.height / zoom, wrap.clientWidth, wrap.clientHeight, mode, 26)
+    setZoom(nearestZoomStep(z))
+  }
+
   // 播放顺序那一列（v0.115）：正文逐条与带动画的形状各一票，次序在这一份数组里
   const seqItems = slide ? revealOrder(slide) : []
 
@@ -1029,6 +1042,8 @@ function PptEditor({ tab }: Props) {
           </select>
           <button className="tool-btn" onClick={() => setZoom((z) => zoomStep(z, 1))} title="放大一档">＋</button>
           <button className="tool-btn" onClick={() => setZoom(1)} title="回到 100%">100%</button>
+          <button className="tool-btn" onClick={() => fitTo('width')} title="适合页宽：按幻灯片宽铺满舞台区">↔</button>
+          <button className="tool-btn" onClick={() => fitTo('page')} title="适合整页：幻灯片连高一起装下">⤢</button>
         </span>
         {status && (
           <span className="editor-status" title={statusTip(status)}>

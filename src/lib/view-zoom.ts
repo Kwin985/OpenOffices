@@ -50,3 +50,46 @@ export function zoomPct(z: number): string {
 export function stageZoomStyle(z: number): { zoom: number } {
   return { zoom: clampZoom(z) }
 }
+
+/**
+ * 自动缩放档（v0.185）：`width` 让一页正好铺满可用宽度，`page` 让整页连高一起装下。
+ *
+ * 三个口径都定在这一处，UI 只负责把「页面原始尺寸」与「容器可用尺寸」量进来：
+ *   ① 页面尺寸必须是**未缩放**的（PDF 用 getViewport({scale:1})，Impress 用
+ *      getBoundingClientRect()/当前 zoom），拿已缩放的尺寸去算会自我锁死；
+ *   ② 容器要扣掉内边距，否则算出 100% 时页面仍贴着边；
+ *   ③ 结果保留三位小数，不在这里夹档位——PDF 的 scale 是连续值，Impress 是档位制
+ *      下拉，各自再走自己的 clamp / nearestZoomStep，避免一处替另一处做决定。
+ *
+ * 退化口径：页面或容器尺寸非法（0 / NaN / 负）一律回 1，不产生 Infinity 或 0 缩放。
+ */
+export type FitMode = 'width' | 'page'
+export const FIT_PADDING = 24
+
+export function fitZoom(
+  pageW: number,
+  pageH: number,
+  viewW: number,
+  viewH: number,
+  mode: FitMode,
+  padding = FIT_PADDING,
+): number {
+  const nums = [pageW, pageH, viewW, viewH, padding]
+  if (!nums.every((v) => Number.isFinite(v) && v >= 0)) return 1
+  if (pageW <= 0 || pageH <= 0) return 1
+  const availW = viewW - padding * 2
+  const availH = viewH - padding * 2
+  if (availW <= 0 || availH <= 0) return 1
+  const byW = availW / pageW
+  const byH = availH / pageH
+  const raw = mode === 'page' ? Math.min(byW, byH) : byW
+  return Math.round(raw * 1000) / 1000
+}
+
+/** 档位制 UI（Impress 的下拉没有任意百分比这一项）把自动值落到最近一档 */
+export function nearestZoomStep(z: number): number {
+  if (!Number.isFinite(z)) return 1
+  let best: number = ZOOM_STEPS[0]
+  for (const s of ZOOM_STEPS) if (Math.abs(s - z) < Math.abs(best - z)) best = s
+  return best
+}

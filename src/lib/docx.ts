@@ -473,6 +473,14 @@ export interface DocxStyleInfo {
     align?: string
     marginLeftPx?: number
     marginRightPx?: number
+    /**
+     * 本层样式 pPr 上**显式写过** `w:ind/@w:left="0"` / `w:right="0"`（v0.185）。
+     * Word 里显式 0 是「压掉上一层样式链继承来的缩进」，与「没写」语义不同；
+     * 屏上两者都是零缩进，所以 marginLeftPx/marginRightPx 一律不设。这一对布尔
+     * 只往返、不上屏，写手按 styleId 在 styles.xml 里把那枚显式 0 补回来。
+     */
+    indLeftZero?: boolean
+    indRightZero?: boolean
     textIndentPx?: number
     lineHeight?: number
     lineRule?: 'auto' | 'exact' | 'atLeast'
@@ -3233,6 +3241,14 @@ export async function prosemirrorToDocxBytes(
     // 沿 basedOn 链摊到子样式上（写出包里 Report/ReportHead/ReportChar 各有 rFonts 而
     // 源里没有），摊出来的那些不该凭空戴上引用名
     if (s.run?.fontTheme) p.fontTheme = s.run.fontTheme
+    // v0.185：显式 0 只在这一层自己写过时补；用户后来改过缩进的段落是直接格式，
+    // 写手在 document.xml 段落 pPr 上发的 w:ind 会压过样式那枚，守卫天然成立
+    if (s.para?.indLeftZero || s.para?.indRightZero) {
+      p.indZeros = {
+        ...(s.para.indLeftZero ? { left: true } : {}),
+        ...(s.para.indRightZero ? { right: true } : {}),
+      }
+    }
     if (Object.keys(p).length) props.set(s.id, p)
   }
   const latent = meta?.latentStyles
@@ -3328,6 +3344,11 @@ interface StyleExtraProps {
    * 源件说的是「跟着 minorHAnsi 走」。两者一起写才与源等价——Word 认引用优先
    */
   fontTheme?: { ascii?: string; eastAsia?: string; hAnsi?: string; cs?: string }
+  /**
+   * 显式零缩进（v0.185）：包对内建样式（Normal）根本不发 `<w:ind>`，更不会发
+   * 「显式 0」。按 styleId 在这一枚样式自己的 `<w:pPr>` 里按 schema 序补回。
+   */
+  indZeros?: { left?: boolean; right?: boolean }
 }
 
 async function patchStylesXml(
@@ -3380,6 +3401,9 @@ async function patchStylesXml(
           out = out.replace(/<w:rFonts[^>]*>/, (tag) => (tag.endsWith('/>') ? tag.slice(0, -2) + add + '/>' : tag.slice(0, -1) + add + '>'))
         }
       }
+      // v0.185：显式零缩进。放在最后是因为前面几笔都可能动到这枚 <w:style> 块，
+      // 但谁都不会动 pPr 里的 w:ind，位次互不干扰
+      if (p.indZeros) out = patchStyleIndZeros(out, p.indZeros)
       return out
     })
   }
@@ -3396,6 +3420,61 @@ async function patchStylesXml(
   if (!touched) return bytes
   setPart(zip, 'word/styles.xml', xml, sess)
   return finishPatch(bytes, zip, sess)
+}
+
+/**
+ * 一枚 `<w:style>` 块 → 补回本层显式写过的零缩进（v0.185）。
+ *
+ * `w:ind` 在 CT_PPrBase 里是单枚、位次 32（spacing 之后、jc/outlineLvl/rPr 之前）。
+ * 包对内建样式不发 `w:ind`，也不发「显式 0」——而 Word 里 `w:left="0"` 是压掉上一层
+ * 样式链继承的声明，缺了它段落会莫名继承父样式的缩进。
+ *
+ * 两条纪律：① 没有 `<w:pPr>` 就不凭空造（v0.161 主题字体同款）；② 已有的
+ * `<w:ind>` 只补**缺的**同名属性，包或用户写过的那个值一律不覆盖。
+ */
+export function patchStyleIndZeros(block: string, z: { left?: boolean; right?: boolean }): string {
+  const want = [
+    ...(z.left ? [' w:left="0"'] : []),
+    ...(z.right ? [' w:right="0"'] : []),
+  ]
+  if (!want.length) return block
+  const open = /<w:pPr\b[^>]*>/.exec(block)
+  if (!open) return block
+  // 自闭合 `<w:pPr/>`：没有内容可插，整枚换成有内容形态
+  if (open[0].endsWith('/>')) {
+    const tag = open[0].slice(0, -2).trimEnd() + '>'
+    return block.replace(open[0], () => `${tag}<w:ind${want.join('')}/></w:pPr>`)
+  }
+  const pPr = /<w:pPr\b[^>]*>([\s\S]*?)<\/w:pPr>/.exec(block)
+  if (!pPr) return block
+  const inner = pPr[1]
+  const ind = /<w:ind\b[^>]*\/?>/.exec(inner)
+  let next: string
+  if (ind) {
+    // 同名属性已在场 = 包或用户已经写过；不追加、不覆盖（追加会造出第二枚 w:left）
+    const add = want
+      .filter((a) => !new RegExp(`\\s${a.trim().split('=')[0]}=`).test(ind[0]))
+      .join('')
+    if (!add) return block
+    const cut = ind[0].endsWith('/>') ? ind[0].length - 2 : ind[0].length - 1
+    const tag = ind[0].slice(0, cut) + add + ind[0].slice(cut)
+    next = inner.replace(ind[0], () => tag)
+  } else {
+    // 按 CT_PPrBase 序：找第一枚位次比 ind 更靠后的在场子元素，插在它前面
+    const AFTER_IND = [
+      'contextualSpacing', 'mirrorIndents', 'suppressOverlap', 'jc', 'textDirection',
+      'textAlignment', 'textboxTightWrap', 'outlineLvl', 'divId', 'cnfStyle',
+      'rPr', 'sectPr', 'pPrChange',
+    ]
+    let at = -1
+    for (const k of AFTER_IND) {
+      const i = inner.indexOf(`<w:${k}`)
+      if (i >= 0 && (at < 0 || i < at)) at = i
+    }
+    const frag = `<w:ind${want.join('')}/>`
+    next = at >= 0 ? inner.slice(0, at) + frag + inner.slice(at) : inner + frag
+  }
+  return block.replace(pPr[0], () => open[0] + next + '</w:pPr>')
 }
 
 /** `DocxLatentStyles` → `<w:latentStyles>` 整块 XML（含全部 lsdException）；没话说的件给空容器 */
