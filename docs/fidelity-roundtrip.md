@@ -44,8 +44,8 @@ docx ──读手──▶ HTML ──TipTap schema──▶ PM 模型 ──写
 | | 值 |
 |---|---:|
 | 读到的对 | 619 |
-| 保留 | **336（54.3%）** |
-| 值变 | 16 |
+| 保留 | **338（54.6%）** |
+| 值变 | 14 |
 | 掉了 | 267 |
 | 缺件 | 0 |
 | 源包部件 | 7 |
@@ -61,7 +61,7 @@ docx ──读手──▶ HTML ──TipTap schema──▶ PM 模型 ──写
 
 | 族 | 读到的 | 保留 | 值变 | 掉了 | 保留率 |
 |---|---:|---:|---:|---:|---:|
-| 正文属性（`w:*`） | 300 | 254 | 14 | 32 | **84.7%** |
+| 正文属性（`w:*`） | 300 | 256 | 12 | 32 | **85.3%** |
 | 图形壳（`a:`/`v:`/`wp:`/`pic:`/`wps:`/`o:`） | 319 | 82 | 2 | 235 | **25.7%** |
 
 口径说明：一个对算正文，当且仅当它在源包里**只**出现在 `w:*` 元素上（沾过图形壳就算图形壳）。
@@ -115,7 +115,7 @@ docx ──读手──▶ HTML ──TipTap schema──▶ PM 模型 ──写
 | `bodyPr|vertOverflow` | 1 | overflow | — |
 | …共 267 条，完整清单见 `docs/fidelity-roundtrip.json` | | | |
 
-### 值变（16）
+### 值变（14）
 
 名字在，但某个源值没写回去。比「掉了」更隐蔽——普查看着它在场，屏上也像那么回事。
 
@@ -129,10 +129,8 @@ docx ──读手──▶ HTML ──TipTap schema──▶ PM 模型 ──写
 | `bookmarkEnd|id` | 2 | 7, 9 | 1 |
 | `bookmarkStart|id` | 2 | 7, 9 | 1 |
 | `ind|right` | 2 | 210, 0 | 210 |
-| `lvlJc|val` | 2 | left, center | left, start |
 | `abstractNum|abstractNumId` | 1 | 0 | 1, 2, 3 |
 | `abstractNumId|val` | 1 | 0 | 1, 3 |
-| `color|val` | 1 | ff0000 | adbbd4 |
 | `ins|id` | 1 | 7 | 1 |
 | `numId|val` | 1 | 1 | 2 |
 | `startOverride|val` | 1 | 3 | 1 |
@@ -144,7 +142,7 @@ docx ──读手──▶ HTML ──TipTap schema──▶ PM 模型 ──写
 
 （空）
 
-### 保留（336）
+### 保留（338）
 
 这些是真的双向。列出来是为了让「保留」也可核对，而不是一个孤零零的百分比。
 
@@ -174,7 +172,7 @@ docx ──读手──▶ HTML ──TipTap schema──▶ PM 模型 ──写
 | `b|val` | 2 | 0, 1 | 0, 1 |
 | `between|color` | 2 | ff9900 | ff9900 |
 | `between|space` | 2 | 2 | 2 |
-| …共 336 条，完整清单见 `docs/fidelity-roundtrip.json` | | | |
+| …共 338 条，完整清单见 `docs/fidelity-roundtrip.json` | | | |
 
 ## 边界
 

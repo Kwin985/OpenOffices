@@ -10982,6 +10982,72 @@ Writer 工具条加「标尺」开关，水平标尺挂在 `.doc-page` 内随内
   12 次 inflate；本轮曾试过 pptx 导入 `descendantsByName` 索引化，实测在同一子树
   只查一次的链上**反而慢 9%**，已按「不粉饰数字」完整回退、未提交。
 
+## v0.184（两族「值变」修复 + PDF 首页末页 + pptx 动画链早停）
+
+承接 D43。前几轮都在补「掉了」的属性，这一轮改修**名字在、值不对**的两笔——
+`value → kept` 是修好值变，不是把掉了粉饰成值变。
+
+**保真：2 对 `value → kept`，正文 84.7% → 85.3%**
+
+| 族 | 原值 → 旧写出 | 机制 |
+|---|---|---|
+| `color\|val` | `ff0000` → `adbbd4` | 源件把字面色与主题三枚一起写；读手此前只留主题解析后的屏上色，字面值整枚忘了存。把 `data-ctheme` 从 3 格扩成 5 格（`ref;tint;shade;lit;base`），写手用现成的 `mergeTagAttrs` **同名改值**回填（追加会造出第二枚 `w:val` = 非法 XML）。`base` 是导入时屏上色，用户后来改过色就不回填旧字面值 |
+| `lvlJc\|val` | `center,left` → `left,start` | 读手把 `w:lvlJc` 存进 `LvlDef` 走屏上链，但 numbering.xml 补丁链的 `DocxLvlMeta` 没带这一枚，包恒发 `start`。复用同一次 `val()` 查问升成带值载荷，`patchOneAbstractNum` 照 `suff` 那段按 ilvl **改值**（包恒发该元素，不是插元素） |
+
+- 两族都**复用既有 `attr`/`val` 查问**，没新开漏斗；`docs/fidelity.*` 与 HEAD
+  **逐字节相同**，四条变异腿与记录对 392/416/715/685 一字不动。
+- 逐对说得清：`color|val` 的 out 就是 `ff0000`，`lvlJc|val` 的 out 覆盖
+  `center/left/start`；掉了仍 267、值变 16 → **14**。`test-value-fidelity.mjs` 24 项
+  （含陈旧守卫、按块对位、无源值不凭空造）。顺手把 `test-docx-runprops` 里
+  硬编码 3 格载荷的旧断言改成 5 格口径。
+
+**功能：PDF 首页 / 末页 + 页码钳制单一出口**
+- 工具条原有「上一页 / 页码输入 / 下一页」，钳制散在 `Math.max(1,…)`、
+  `Math.min(numPages,…)` 与「越界就不跳」三处，且没有首页/末页。现在
+  `pdf-geo.ts` 加 `pageNav(cur,total)` 一次算全四枚目标页与两端可用状态，
+  钳制**转调** Writer 打印预览那份 `clampPage`（不重写一遍）；`gotoPage` 内部
+  统一夹回 `[1,N]`。新增 ⏮ / ⏭ 两枚按钮。`test-pdf-nav.mjs` 34 项。
+
+**性能：pptx 导入动画链改成「命中即停」**
+- `animEffectOf` 原先 `descendantsByName(c,'anim').some(a =>
+  descendantsByName(a,'attrName').some(…))` 嵌套两次把整棵子树按名摊平成数组；
+  出场判定也先收齐所有 `animEffect`。现在 `hasFlyXY` / `hasExitEffect`
+  一次前序遍历、命中即返回、零数组物化。**不建缓存、不改数据结构**——
+  与 v0.183 试过又回退的惰性索引化划清界线（那条在每子树只查一次的链上慢 9%）。
+  `inAnim` 门是等价性关键：`attrName` 必须是某枚 `anim` 的后代，否则会把 fade 误判成 fly。
+- 判据：`{legacyAnimScan:true}` 让两腿同源只差一个参数，Deck 稳定序列化
+  （Map 展开 + 键排序 + 随机 id 归一）**逐字相同**；夹具来自产品真出口
+  `deckToPptxBytes`，覆盖 fade/wipe/fly 三支与出场。`bench-pptx-anim.mjs` +
+  `test-pptx-anim.mjs` 25 项。
+- **数字不粉饰**：端到端 4/24/60 页为 −6.3% / +2.2% / +0.1%（噪声内，
+  这处开销被 XML 解析与文本提取盖住）；把两腿遍历算法复刻成第二条腿对撞的
+  **纯遍历段**才是确定收益：60 anim 命中首枚 **−66.8%**、全不命中 **−66.9%**、
+  200 anim 命中末枚 **−42.0%**，三种形状布尔结果逐字相同。
+
+**门禁**：tsc 0、build ✓；25 组结构测试全绿（新增 24 + 34 + 25 项）。
+保真 99.0%/98.4% 且与 HEAD 逐字节相同；pptx 70.1/74.3、42/19 全绿、
+`--mut no-ga` 42 条全红后复位；往返账 `c450f28c…`/`b1978355…` 两次复跑一致。
+两把旧尺复跑：`bench-docx-pack` 语义等价 ✓ / −50.0%、`bench-docx-parts`
+部件解压 **18 → 5**（比上轮多 1 次，因新增 `patchColorLits` 补丁）。
+`modules` 保持 **67**（没新增 `src/lib` 文件）。
+
+### 顺延（D44）
+
+- 图形壳剩 **235 对**：三维族 `sp3d`/`props3d`/`lightRig` 要先定「夹具结构非法」
+  口径（删 `props3d` 会动往返账分母、留它就得发非法元素）；VML 老式形状族
+  仍是模型无槽。`wp:posOffset` 动 0 对的口径问题照旧；`sizeRelH/V` 真件要
+  `mc:AlternateContent`。
+- 正文长尾：`fldChar` 三对、`outline|val`、`smartTag|*`、±5 缇、`ind|left`
+  显式 0、`docPr|id`、`name|val`(`text1`)、`startOverride|val`；`theme1.xml`
+  口径未定。`color|val`/`lvlJc|val` v0.184、`legacy|*`/`type|val`/`pgSz|code`
+  v0.183、`col|w`/`col|space`/`w:cols equalWidth` v0.182 已补。
+- Impress 占位矩形编辑（第二套拖拽状态机）；Calc 缩放（落点在预存改动
+  `SheetEditor.tsx`，按房规换落点）；**pdf-lib 按需加载**仍等
+  `pdf-text-edit.ts` 入库。D32–D43 长尾原账不动。
+- **诚实边界**：本轮及历轮 A/B 都是合成夹具；`color|val` 的字面色只走 docx
+  往返、屏上仍显示主题解析色；PDF 页码只有纯函数与源码级断言，没做真机
+  浏览器对撞；动画早停的端到端收益在噪声内，确定收益只在纯遍历段。
+
 ## 性能（v0.3）
 
 

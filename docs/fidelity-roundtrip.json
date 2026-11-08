@@ -22,8 +22,8 @@
  },
  "totals": {
   "read": 619,
-  "kept": 336,
-  "value": 16,
+  "kept": 338,
+  "value": 14,
   "lost": 267,
   "part": 0,
   "consulted": 672,
@@ -1071,13 +1071,13 @@
    ]
   },
   "color|val": {
-   "bucket": "value",
+   "bucket": "kept",
    "n": 1,
    "src": [
     "ff0000"
    ],
    "out": [
-    "adbbd4"
+    "ff0000"
    ]
   },
   "cols|equalWidth": {
@@ -3090,13 +3090,14 @@
    ]
   },
   "lvlJc|val": {
-   "bucket": "value",
+   "bucket": "kept",
    "n": 2,
    "src": [
     "center",
     "left"
    ],
    "out": [
+    "center",
     "left",
     "start"
    ]
