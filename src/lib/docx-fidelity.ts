@@ -2405,9 +2405,13 @@ function wrapComment(pieces: Piece[], from: number, cid: number): Piece[] {
  * 块原样保留。空区间（起终点相邻、不包内容）产出空串，PM 的 mark 模型无处安放
  * 一枚没有内容的标记，往返丢失（记账，见审计）
  */
-function wrapBookmark(pieces: Piece[], from: number, name: string | undefined): Piece[] {
+function wrapBookmark(pieces: Piece[], from: number, name: string | undefined, id: string): Piece[] {
   if (!name) return []
-  return wrapRange(pieces, from, (buf) => `<span data-oo-bookmark="${attrEsc(name)}">${buf}</span>`)
+  // v0.186：载荷从「名字一格」扩成「名字;源件 w:id」两格（整串字符串槽，零 schema
+  // 改动）。`w:id` 在 bookmarkStart/End 分支里**已经查问过**，这里只是把查问结果
+  // 带上，没有新增查问对。写手的 Bookmark 组件恒发 w:id="1"（我们传给它的 id 是
+  // 书签名而非数字令牌），得靠 post-pack 按名字把原值改回去。
+  return wrapRange(pieces, from, (buf) => `<span data-oo-bookmark="${attrEsc(name)};${attrEsc(id)}">${buf}</span>`)
 }
 
 /** 区间包裹的公共骨架：from 起的行内片并成一枚 span，块级片原样留在 span 之外 */
@@ -3190,7 +3194,7 @@ class Fidelity {
     // 按下标倒序处理——正序会让后一个区间的起始下标在前一次 splice 后失位
     const stillOpen = [...st.openBm.entries()].sort((a, b) => b[1].at - a[1].at)
     for (const [id, open] of stillOpen) {
-      st.pieces.splice(open.at, st.pieces.length - open.at, ...wrapBookmark(st.pieces, open.at, open.name))
+      st.pieces.splice(open.at, st.pieces.length - open.at, ...wrapBookmark(st.pieces, open.at, open.name, id))
       st.openBm.delete(id)
     }
     return st.pieces
@@ -3229,7 +3233,7 @@ class Fidelity {
         st.openBm.delete(id)
         this.openBookmarks.delete(id)
         if (open === undefined) return
-        st.pieces.splice(open.at, st.pieces.length - open.at, ...wrapBookmark(st.pieces, open.at, open.name))
+        st.pieces.splice(open.at, st.pieces.length - open.at, ...wrapBookmark(st.pieces, open.at, open.name, id))
         return
       }
       case 'instrText': {

@@ -205,7 +205,8 @@ export function themeOf(id: string): DeckTheme {
 /**
  * v0.182：母版配色写入的单一事实源。**必须换 master 引用**——
  * `StaticSlide` 是 memo，原地改 `deck.master.bg` 不会让缩略图/放映重渲染。
- * 占位矩形（titleRect/bodyRect）本轮不开放编辑，原样保留在 master 里。
+ * 占位矩形（titleRect/bodyRect）v0.186 起可在 PptEditor 里拖拽编辑，换算在
+ * lib/master-rect.ts；写入仍走这一个出口（换引用，memo 化的缩略图才重渲染）。
  */
 export function withMaster(deck: Deck, patch: Partial<MasterStyle>): Deck {
   return { ...deck, master: { ...(deck.master ?? {}), ...patch } }

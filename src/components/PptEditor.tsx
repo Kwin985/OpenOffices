@@ -32,6 +32,7 @@ import {
   type BulletAnim,
   type BulletExit,
   type Deck,
+  type MasterRect,
   type MasterStyle,
   type RevealItem,
   type Slide,
@@ -58,6 +59,7 @@ import { autoDelayMs, autoFailStatus, autoOkTip, createAutoSaveLedger, onFocusBa
 import type { FailureClaim } from '../lib/auto-save'
 import { pptTemplate } from '../lib/templates'
 import { ZOOM_STEPS, clampZoom, fitZoom, nearestZoomStep, stageZoomStyle, zoomByWheel, zoomPct, zoomStep, type FitMode } from '../lib/view-zoom'
+import { RECT_KEY, dragRect, rectFor, rectStyle, type DragMode, type PlaceholderKind } from '../lib/master-rect'
 import StaticSlide from './StaticSlide'
 
 interface Props {
@@ -223,6 +225,8 @@ function PptEditor({ tab }: Props) {
   const [showSequence, setShowSequence] = useState(false) // v0.115：播放顺序面板
   // v0.182：母版配色面板。背景图上传另起一枚 fileRef，别复用写单页 s.image 的那枚
   const [showMaster, setShowMaster] = useState(false)
+  // v0.186：母版占位框的显隐（标题 / 正文两枚），关着时一次拖拽状态都不建
+  const [showPlaceholders, setShowPlaceholders] = useState(false)
   const masterBgRef = useRef<HTMLInputElement>(null)
   // v0.178 视图缩放：与 Writer 同一串档位。只改屏幕上那张舞台，导出/放映读的都是 deck
   const [zoom, setZoom] = useState(1)
@@ -742,6 +746,49 @@ function PptEditor({ tab }: Props) {
     dragRef.current = null
   }
 
+  // v0.186：母版占位框是**第二套**拖拽状态机——它不是 SlideShape，没有 id 可供
+  // patchShape 按 id 更新，落点是 deck.master 的 titleRect / bodyRect 两枚键。
+  // 换算与钳制都在 lib/master-rect.ts，这里只负责把指针位移折成比例再写回。
+  const masterDragRef = useRef<{
+    kind: PlaceholderKind
+    mode: DragMode
+    sx: number
+    sy: number
+    from: MasterRect
+    stage: DOMRect
+  } | null>(null)
+
+  const masterPointerDown = (e: React.PointerEvent, kind: PlaceholderKind, mode: DragMode) => {
+    e.stopPropagation() // 别让舞台的 onPointerDown 把这次拖拽当成「点空白」
+    const stage = stageRef.current
+    if (!stage) return
+    masterDragRef.current = {
+      kind,
+      mode,
+      sx: e.clientX,
+      sy: e.clientY,
+      from: rectFor(deck.master, kind),
+      stage: stage.getBoundingClientRect(),
+    }
+    ;(e.currentTarget as HTMLElement).setPointerCapture(e.pointerId)
+  }
+
+  const masterPointerMove = (e: React.PointerEvent) => {
+    const d = masterDragRef.current
+    if (!d) return
+    const dx = (e.clientX - d.sx) / d.stage.width
+    const dy = (e.clientY - d.sy) / d.stage.height
+    const next = dragRect(d.from, d.mode, dx, dy)
+    const key = RECT_KEY[d.kind]
+    // 复用 v0.182 的母版写入唯一出口：withMaster 换 master 引用，
+    // memo 化的缩略图与放映才会重渲染；不另开一条 edit(d => d.master = …) 路径
+    patchMaster({ [key]: next })
+  }
+
+  const masterPointerUp = () => {
+    masterDragRef.current = null
+  }
+
   // 选中形状时 Del/Backspace 删除（焦点在输入框里时不劫持按键）
   useEffect(() => {
     if (!selShape) return
@@ -994,9 +1041,16 @@ function PptEditor({ tab }: Props) {
         <button
           className={`tool-btn${showMaster ? ' tool-btn-primary' : ''}`}
           onClick={() => setShowMaster((v) => !v)}
-          title="母版背景与配色：整份 deck 生效，随 .opd 与 pptx 往返；占位矩形本轮不开放编辑"
+          title="母版背景与配色：整份 deck 生效，随 .opd 与 pptx 往返"
         >
           母版配色
+        </button>
+        <button
+          className={`tool-btn${showPlaceholders ? ' tool-btn-primary' : ''}`}
+          onClick={() => setShowPlaceholders((v) => !v)}
+          title="母版占位框：显示标题与正文两枚占位矩形，拖动平移、右下角缩放；改动写回母版，导出 pptx / PDF 与放映跟随"
+        >
+          占位框
         </button>
         <label className="tool-num" title="放映时到秒自动换页；随 pptx advTm 往返">
           换页
@@ -1153,7 +1207,7 @@ function PptEditor({ tab }: Props) {
             恢复主题
           </button>
           <span className="ppt-seq-hint">
-            整份 deck 生效；背景图会盖住纯色底色，占位矩形本轮不开放编辑
+            整份 deck 生效；背景图会盖住纯色底色，占位矩形用「占位框」按钮拖动编辑
           </span>
         </div>
       )}
@@ -1184,6 +1238,30 @@ function PptEditor({ tab }: Props) {
               setEditingShape(null)
             }}
           >
+            {/* v0.186：母版占位框。百分比定位相对 .ppt-stage 自身，随舞台内联 zoom
+                一起缩放；拖动/缩放都写回 deck.master，导出与放映走的是同一份矩形 */}
+            {showPlaceholders &&
+              (['title', 'body'] as const).map((kind) => (
+                <div
+                  key={kind}
+                  className={`ppt-master-rect ppt-master-rect-${kind}`}
+                  style={{ ...rectStyle(rectFor(deck.master, kind)), zIndex: 50 }}
+                  onPointerDown={(e) => masterPointerDown(e, kind, 'move')}
+                  onPointerMove={masterPointerMove}
+                  onPointerUp={masterPointerUp}
+                  title={`母版${kind === 'title' ? '标题' : '正文'}占位框：拖动平移，右下角手柄缩放`}
+                >
+                  <span className="ppt-master-rect-tag">
+                    {kind === 'title' ? '标题占位' : '正文占位'}
+                  </span>
+                  <span
+                    className="ppt-master-rect-handle"
+                    onPointerDown={(e) => masterPointerDown(e, kind, 'resize')}
+                    onPointerMove={masterPointerMove}
+                    onPointerUp={masterPointerUp}
+                  />
+                </div>
+              ))}
             {slide.layout === 'title' ? (
               <div className="ppt-edit-title-wrap">
                 <textarea

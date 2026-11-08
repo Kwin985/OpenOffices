@@ -89,7 +89,10 @@ const theme = themeOf(base.theme)
   check('UI 舞台配色仍用同一条优先级链', /const fgColor = m\?\.bodyColor \?\? t\.fg/.test(ui))
   check('背景图上传另起 fileRef、不复用 pickImage',
     /masterBgRef/.test(ui) && /if \(f\) void fileToDataUri\(f\)\.then\(\(uri\) => patchMaster\(\{ bgImage: uri \}\)\)/.test(ui))
-  check('面板明写占位矩形不开放编辑', /占位矩形本轮不开放编辑/.test(ui))
+  // v0.186：占位矩形已开放编辑，面板说明改成指向「占位框」按钮；按新口径钉，
+  // 并守住旧文案不再回来（避免哪天又写「不开放」而功能其实在）
+  check('面板说明指向占位框编辑入口',
+    /占位矩形用「占位框」按钮拖动编辑/.test(ui) && !/占位矩形本轮不开放编辑/.test(ui))
   check('纪律：没碰预存改动 / 未跟踪文件的导入',
     !/from '\.\/slide-chart'[\s\S]{0,200}withMaster/.test(ui))
 }

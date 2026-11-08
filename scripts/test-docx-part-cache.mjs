@@ -33,7 +33,9 @@ const read = (p) => fs.readFileSync(new URL(p, import.meta.url), 'utf8')
       && /if \(shared && cache!\.has\(name\)\) return cache!\.get\(name\)!/.test(w))
   check('setPart：写回时同步更新缓存',
     /function setPart\([\s\S]{0,200}zip\.file\(name, text\)[\s\S]{0,120}sess\.text\.set\(name, text\)/.test(w))
-  check('入口：legacyPartText 可选参数', /opts\?: \{ legacyPartText\?: boolean \}/.test(w))
+  // v0.186 同一份 opts 多了一枚 legacyRetag（零正则的 A/B 腿），按「这枚在场」判，
+  // 不钉死整个类型字面量
+  check('入口：legacyPartText 可选参数', /opts\?: \{[^}]*legacyPartText\?: boolean/.test(w))
   check('入口：对照腿不建缓存表',
     /\.\.\.\(opts\?\.legacyPartText \? \{\} : \{ text: new Map<string, string>\(\) \}\)/.test(w))
   // 补丁数随轮次增长（v0.184 加了 patchColorLits），别硬编码 13：只要求「读 ≥ 14 且读写配对」

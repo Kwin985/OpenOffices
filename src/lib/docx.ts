@@ -1313,15 +1313,27 @@ function inlineToChildren(node: PMNode, inherited: Inherited = {}, cs?: CommentT
   const kids = node.content ?? []
   const spanStart = new Map<number, { name: string; last: number }>()
   const open = new Map<string, [number, number]>()
+  const bmIds = new Map<string, string>()
   kids.forEach((c, i) => {
     if (c.type !== 'text') return
-    const nm = markAttr(c, 'bookmark', 'name')
+    const raw = markAttr(c, 'bookmark', 'name')
+    if (!raw) return
+    // v0.186：载荷是「书签名;源件 w:id」两格，按**最后一个**分号拆——书签名里
+    // 万一有分号也不会被截断。旧模型只有名字、没有分号，就不凭空造 id。
+    const cut = raw.lastIndexOf(';')
+    const nm = cut >= 0 ? raw.slice(0, cut) : raw
     if (!nm) return
+    if (cut >= 0 && !bmIds.has(nm)) bmIds.set(nm, raw.slice(cut + 1))
     const cur = open.get(nm)
     if (cur) cur[1] = i
     else open.set(nm, [i, i])
   })
-  for (const [name, [first, last]] of open) spanStart.set(first, { name, last })
+  for (const [name, [first, last]] of open) {
+    spanStart.set(first, { name, last })
+    // Bookmark 组件只收书签名（它把 id 恒写成 1），数字令牌另走 post-pack 按名对位
+    const bmId = bmIds.get(name)
+    if (bmId) dt?.bookmarkIds.set(name, bmId)
+  }
   const out: ParagraphChildLike[] = []
   for (let i = 0; i < kids.length; i++) {
     const sp = spanStart.get(i)
@@ -2290,6 +2302,13 @@ interface DocTrack {
    */
   colorLits: string[]
   /**
+   * 书签源件 `w:id`（v0.186）：书签名 → 数字令牌。docx 库的 `Bookmark` 组件把每枚
+   * 书签的 `w:id` 恒写成 1（传进去的 id 是书签名，不是数字令牌），Word 里几枚书签
+   * 同号就分不开。读手已查问过 `w:id` 却没进模型，这里按名字收一份，
+   * `patchBookmarkIds` 按 Start/End 出现序栈式对位改回去。
+   */
+  bookmarkIds: Map<string, string>
+  /**
    * 表条件格式的落点开关（v0.162）：与 `section.children` 里每个 Table 一一对应、同序。
    * `w:cnfStyle` 十三枚在包里没有槽（包只发它认得的表属性），走打包后补丁按
    * `<w:tblPr>` 出现序插。与 tblLooks/tblPrs/cellSps 同住一处，但**插入锚点不同**——
@@ -2382,6 +2401,7 @@ function newDocTrack(): DocTrack {
     uThemes: [],
     colorThemes: [],
     colorLits: [],
+    bookmarkIds: new Map(),
   }
 }
 
@@ -2984,8 +3004,10 @@ async function finishPatch(
 export async function prosemirrorToDocxBytes(
   json: PMNode,
   meta?: DocMeta,
-  opts?: { legacyPartText?: boolean },
+  opts?: { legacyPartText?: boolean; legacyRetag?: boolean },
 ): Promise<Uint8Array> {
+  // v0.186：只给同进程 A/B 对照腿用（入口设一次），产品路径恒为 false
+  legacyRetag = !!opts?.legacyRetag
   const dt = newDocTrack()
   // 编号注册表（v0.142）：blocksOf 一路往里传，收齐全篇的自定义档位后进 Document.numbering。
   // 带上源文档的编号定义（v0.158）：重建一串列表时能照原样逐层发，而不是三层拍成一个符面
@@ -3277,6 +3299,9 @@ export async function prosemirrorToDocxBytes(
   const withCaps = await patchBeforeElem(withColorLit, 'smallCaps', dt.capsExtras, sess)
   // 图片容器壳（v0.148）：按 <w:drawing> 出现序逐块改值（包发得出壳，只是值硬编码）
   const withImg = await patchImgXml(withCaps, dt.imgExtras, sess)
+  // v0.186：书签 w:id 原值（包恒发 1）。按 Start/End 出现序栈式对位；与前后几笔
+  // 都改 document.xml 的不同元素，共用 PackSession 的文本缓存，不另解一次 zip
+  const withBm = await patchBookmarkIds(withImg, dt.bookmarkIds, sess)
   // 表闸门三样都要补：样式推出来的（looks）与表自己带的（dt.tblLooks），
   // v0.152 起再加表级条件格式尺寸两枚（dt.tblPrs，与 tblLook 同住 tblPr）
   const needTbl =
@@ -3287,7 +3312,7 @@ export async function prosemirrorToDocxBytes(
     dt.cnfStyles.some((x) => x) ||
     dt.tblBorders.some((x) => x)
   // 单元格不换行（v0.152）：包里没有 noWrap 的槽，按 <w:tc> 出现序插 <w:noWrap/>
-  const withCell = dt.cellExtras.some((x) => x) ? await patchTcPr(withImg, dt.cellExtras, sess) : withImg
+  const withCell = dt.cellExtras.some((x) => x) ? await patchTcPr(withBm, dt.cellExtras, sess) : withBm
   // 底纹的存盘原件（v0.164）：按 <w:shd> 出现序**合并**属性（包只发 val/color/fill 三枚，
   // 且 fill 写的是解析后的屏上色——源件的字面色与主题三枚都要改回来/补上去）
   const withShd = await patchShdAttrs(withCell, dt.shdExtras, sess)
@@ -3475,6 +3500,53 @@ export function patchStyleIndZeros(block: string, z: { left?: boolean; right?: b
     next = at >= 0 ? inner.slice(0, at) + frag + inner.slice(at) : inner + frag
   }
   return block.replace(pPr[0], () => open[0] + next + '</w:pPr>')
+}
+
+/**
+ * 书签 `w:id` 原值回填（v0.186）。
+ *
+ * docx 库的 `Bookmark` 组件把每枚书签的 `w:id` 恒写成 1（我们传给它的 `id` 是
+ * 书签名而不是数字令牌），源件里 7/9/9 三个令牌到写出包就全成了 1——Word 里
+ * 几枚书签同号就分不开，这是真坏件，不只是账本上一笔值变。
+ *
+ * 按**书签名**对位而不是按出现序：读手把跨段书签拆成每段一枚同名 span，
+ * 写出发出的两枚 Start/End 都该回到同一个源 id，Word 才认得出是一枚跨段书签。
+ * Start 改自身并压栈目标 id，End 弹栈改同一个值，嵌套/多枚都不会串位。
+ * 没有映射（用户新建的书签）与病态件（孤立 End）一律不动，绝不凭空造令牌。
+ */
+export async function patchBookmarkIds(
+  bytes: Uint8Array,
+  ids: Map<string, string>,
+  sess?: PackSession,
+): Promise<Uint8Array> {
+  if (!ids.size) return bytes
+  const zip = sess ? sess.zip : await loadZipOf(bytes)
+  const file = zip.file('word/document.xml')
+  if (!file) return bytes
+  const xml = await partText(zip, 'word/document.xml', sess)
+  const stack: (string | undefined)[] = []
+  let out = ''
+  let cursor = 0
+  let touched = false
+  for (const m of xml.matchAll(/<w:bookmark(Start|End)\b[^>]*>/g)) {
+    const at = m.index ?? 0
+    const tag = m[0]
+    const isStart = m[1] === 'Start'
+    const name = isStart ? /\sw:name="([^"]*)"/.exec(tag)?.[1] : undefined
+    const want = isStart ? (name ? ids.get(name) : undefined) : stack.pop()
+    if (isStart) stack.push(want)
+    if (!want) continue
+    // 同名改值，不追加第二枚 w:id（与 patchColorLits 同一条纪律）
+    const next = tag.replace(/\sw:id="[^"]*"/, () => ` w:id="${xmlAttr(want)}"`)
+    if (next === tag) continue
+    out += xml.slice(cursor, at) + next
+    cursor = at + tag.length
+    touched = true
+  }
+  if (!touched) return bytes
+  out += xml.slice(cursor)
+  setPart(zip, 'word/document.xml', out, sess)
+  return finishPatch(bytes, zip, sess)
 }
 
 /** `DocxLatentStyles` → `<w:latentStyles>` 整块 XML（含全部 lsdException）；没话说的件给空容器 */
@@ -4649,8 +4721,17 @@ function tcPrInsert(chunk: string, extra: string): string {
   return open + body.slice(0, a) + `<w:tcPr>${withKid}</w:tcPr>` + body.slice(b + '</w:tcPr>'.length)
 }
 
-/** 在一枚开标签（含自闭合）上改/加属性：已有同名属性就地换值，没有就追加在 `>` 之前 */
-function tagWithAttrs(tag: string, kv: Record<string, string>): string {
+/**
+ * v0.186：`tagWithAttrs` / `retag` 原先每次调用都 `new RegExp(...)` 现编译一次
+ * ——图片壳补丁里一个 `<w:drawing>` 要 retag 十几枚，200 图就是几千次编译，
+ * 且 `tagWithAttrs` 每枚属性还要再编译一次。改成纯字符串定位：零动态正则、
+ * 零临时数组，语义逐字等价。`legacyRetag` 只给同进程 A/B 对照腿用（入口设一次），
+ * 产品路径恒为 false；改前算法原样留成第二条腿，便于对撞边界。
+ */
+let legacyRetag = false
+
+/** 对照腿：改前的动态正则实现，一字不改留着给基准对撞 */
+function legacyTagWithAttrs(tag: string, kv: Record<string, string>): string {
   let out = tag
   for (const k of Object.keys(kv)) {
     const v = kv[k]
@@ -4667,12 +4748,54 @@ function tagWithAttrs(tag: string, kv: Record<string, string>): string {
   return out
 }
 
-/** 块内按标签名改属性：只改第一枚（一个 w:drawing 里各层壳都只有一枚） */
-function retag(chunk: string, tag: string, kv: Record<string, string>): string {
+function legacyRetagChunk(chunk: string, tag: string, kv: Record<string, string>): string {
   const re = new RegExp(`<${tag}(?:\\s[^>]*)?/?>`)
   const m = re.exec(chunk)
   if (!m) return chunk
-  return chunk.slice(0, m.index) + tagWithAttrs(m[0], kv) + chunk.slice(m.index + m[0].length)
+  return chunk.slice(0, m.index) + legacyTagWithAttrs(m[0], kv) + chunk.slice(m.index + m[0].length)
+}
+
+/** 在一枚开标签（含自闭合）上改/加属性：已有同名属性就地换值，没有就追加在 `>` 之前 */
+function tagWithAttrs(tag: string, kv: Record<string, string>): string {
+  if (legacyRetag) return legacyTagWithAttrs(tag, kv)
+  let out = tag
+  for (const k of Object.keys(kv)) {
+    const v = kv[k]
+    if (!v) continue
+    const needle = `${k}="`
+    // 前一个字符必须是空白（ASCII 空白都 <= ' '），否则 `data-k="` 之类也会命中
+    let at = out.indexOf(needle)
+    while (at >= 0 && !(at > 0 && out[at - 1] <= ' ')) at = out.indexOf(needle, at + needle.length)
+    if (at >= 0) {
+      const q = out.indexOf('"', at + needle.length)
+      if (q < 0) continue
+      out = out.slice(0, at + needle.length) + v + out.slice(q)
+      continue
+    }
+    const gt = out.lastIndexOf('>')
+    if (gt < 0) continue
+    const slash = gt > 0 && out[gt - 1] === '/' ? '/' : ''
+    const cut = slash ? gt - 1 : gt
+    out = out.slice(0, cut) + ` ${k}="${v}"` + slash + out.slice(gt)
+  }
+  return out
+}
+
+/** 块内按标签名改属性：只改第一枚（一个 w:drawing 里各层壳都只有一枚） */
+function retag(chunk: string, tag: string, kv: Record<string, string>): string {
+  if (legacyRetag) return legacyRetagChunk(chunk, tag, kv)
+  const needle = `<${tag}`
+  let at = chunk.indexOf(needle)
+  while (at >= 0) {
+    const c = chunk[at + needle.length]
+    // 标签名到此为止才算命中（`<wp:inlineX` 不算，正则的 `(?:\s[^>]*)?` 同理）
+    if (c !== undefined && (c === '>' || c === '/' || c <= ' ')) break
+    at = chunk.indexOf(needle, at + needle.length)
+  }
+  if (at < 0) return chunk
+  const end = chunk.indexOf('>', at)
+  if (end < 0) return chunk
+  return chunk.slice(0, at) + tagWithAttrs(chunk.slice(at, end + 1), kv) + chunk.slice(end + 1)
 }
 
 /**
