@@ -22,8 +22,8 @@
  },
  "totals": {
   "read": 619,
-  "kept": 338,
-  "value": 14,
+  "kept": 340,
+  "value": 12,
   "lost": 267,
   "part": 0,
   "consulted": 672,
@@ -2233,13 +2233,14 @@
    ]
   },
   "ind|left": {
-   "bucket": "value",
+   "bucket": "kept",
    "n": 3,
    "src": [
     "0",
     "420"
    ],
    "out": [
+    "0",
     "1440",
     "2160",
     "2880",
@@ -2253,13 +2254,14 @@
    ]
   },
   "ind|right": {
-   "bucket": "value",
+   "bucket": "kept",
    "n": 2,
    "src": [
     "0",
     "210"
    ],
    "out": [
+    "0",
     "210"
    ]
   },

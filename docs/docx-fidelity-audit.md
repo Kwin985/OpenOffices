@@ -2845,7 +2845,68 @@ v0.178 省了整包解包/重压，但十余个补丁仍各自 `async('string')`
 两把旧尺复跑：`bench-docx-pack` 语义等价 ✓ / −50.0%、`bench-docx-parts`
 部件解压 18 → 5（比上轮多 1 次，因新增 `patchColorLits`）。
 
-### 顺延清单（D44）
+### v0.185 追加节：样式链显式零两族 + 自动缩放两档 + pptx 文本拼接零数组
+
+**往返账动 2 对，全部 `value → kept`**：`ind|left` / `ind|right` 的源值 `0`。
+正文 **256/300 = 85.3% → 258/300 = 86.0%**，合计 **338/619 = 54.6% →
+340/619 = 54.9%**，值变 14 → 12、掉了仍 267、图形壳 82/319 不动。
+
+- 显式 0 住在 `fixture.mjs` 的 `FIXTURE_STYLES`：`Normal` 样式 pPr 上的
+  `<w:ind w:left="0" w:right="0"/>`，**不是段落上的 `w:ind`**。Word 里这枚是
+  「压掉上一层样式链继承」的声明，与「没写」语义不同；屏上两者都是零缩进，
+  所以模型里不该有 `marginLeftPx/marginRightPx`——读手 `if (left)` 把 0 当
+  falsy 吞掉在屏上那一槽其实是对的，坏的是**只往返的那一份字面原件没人存**。
+  这是 v0.159 `w:u`、v0.164 `w:shd`、v0.184 `w:color` 同一条「两槽分工」的
+  第四处，差别是它落在样式表而不是 run。
+- 归属只认本层：`styleList()` 新增的 `ownInd = find(info.pPr,'w:ind')` 读的是
+  `info.pPr`，不是 `styleView` 合并后的 `view.pPr`（v0.161 主题字体引用同款
+  纪律）。`ReportHead` 是 basedOn `Normal` 的子样式，父层那枚 0 若摊到子层
+  再写一遍，等于把「跟着父层走」改成「钉死在子层」，换父层就不再跟着变。
+  直接读 `XEl.attrs` 而不走 `attr`/`attrL` 漏斗：`w:left/w:right` 在屏上那条
+  链里已查问过，本轮**零新增查问对**（672 不变），保真账与 HEAD 逐字节相同、
+  四条变异腿 52.5/59.4/99.0/96.5 与记录对 392/416/715/685 一字不动。
+- 写手三跳：`DocxStyleInfo.para` 加 `indLeftZero/indRightZero` 两枚只往返布尔
+  → `StyleExtraProps.indZeros` → `patchStylesXml` 按 styleId 调
+  `patchStyleIndZeros`。后者按 CT_PPrBase 序插（`ind` 位次 32，`spacing` 之后、
+  `jc`/`outlineLvl`/`rPr`/`sectPr` 之前）；已有 `<w:ind>` 只补**缺的**同名属性，
+  **不覆盖不追加**（追加会造第二枚 `w:left` = 非法 XML）；没有 `<w:pPr>`
+  不凭空造；自闭合 `<w:pPr/>` 换成有内容形态。
+- 陈旧守卫不用另存基准：用户后来改缩进走段落直接格式，写手在 document.xml
+  段落 pPr 上发的 `w:ind` 压过样式那枚 0；样式里已有 `w:ind` 时也只补缺属性。
+  变体断言用 `marginLeftPx:20` 钉住「不把旧 0 写回改过的文档」。
+- **只补字面 `w:left/w:right`**：`w:start/w:end` 是另一套写法、账本对名不同，
+  本轮不误认（测试里有 `w:start="0"` 反例）。ODT 写手链没跟着扩。
+  `test-style-ind-zero.mjs` 42 项：读手归属、无源值不凭空造、按 styleId 对位、
+  两枚独立、纯函数的自闭合/已有 ind/位次三态、源码级接线。
+
+**功能**：`view-zoom.ts` 新增 `fitZoom(pageW,pageH,viewW,viewH,mode,padding)`
+与 `nearestZoomStep`，PDF 与 Impress 各接 ↔ / ⤢ 两枚按钮。三种口径定在一处：
+页面尺寸必须未缩放（PDF `getViewport({scale:1})`、Impress
+`getBoundingClientRect()/当前 zoom`）、容器扣内边距、结果不夹档位（PDF 是
+连续 scale、Impress 是七档下拉落到最近一档）。非法尺寸一律回 1。Writer 未接。
+`test-fit-zoom.mjs` 45 项。
+
+**性能**：`paragraphText(p)` 从
+`descendantsByName(p,'t').map(textOf).join('')` 改成一次前序、`a:t` 命中即拼接，
+零中间数组、不建缓存（与 v0.184 早停同族，区别是「命中即拼接」而非
+「命中即返回」）。`a:t` 是叶子，命中后不递归，否则 `textOf` 已含后代文本会
+重复计。表格单元格那处仍按格摊平，**本轮刻意不动**（不是逐段热路径）。
+`{legacyParaText:true}` 让两腿同源只差一个参数，Deck 稳定序列化逐字相同，
+夹具来自 `deckToPptxBytes`。**端到端 4/24/60 页 −3.0%/+1.7%/+1.4%（噪声内）**；
+纯遍历段（改前算法复刻对撞）4 run×3 噪声×200 段 −22.6%、20 run×6 噪声×120 段
+−5.0%、80 run×10 噪声×40 段 −11.6%，文本逐字相同。`test-pptx-paratext.mjs`
+21 项 + `bench-pptx-paratext.mjs`。
+
+**门禁**：tsc 0、`tsc && vite build` ✓（`pnpm run build` 里的
+`copy-pdfjs-assets.mjs` 清理 `public/pdfjs` 被环境安全策略按批量删除拦下，
+改跑等价两步）；29 组结构测试全绿；保真 99.0/98.4 与 HEAD 逐字节相同、
+pptx 70.1/74.3 且 `--selftest --mut no-ga` 全红后复位；往返账
+`8cdac69a…`/`a3932552…` 两次复跑一致；`bench-docx-pack` 语义等价 ✓ / −45.6%、
+`bench-docx-parts` 部件解压 18 → 5；`modules` 67。顺手把
+`test-impress-zoom` / `test-pptx-anim` 两条钉死整串 import / 整串 opts 类型
+字面量的旧断言改成按关键名判——**断言过期按新口径改，不改产品代码凑测试**。
+
+### 顺延清单（D45）
 
 - 图形壳剩余 **235 对**：三维族 `sp3d`(3) / `props3d`(3) / `lightRig`(2)
   要先定「夹具结构非法、真件应写成 effectLst 之后的兄弟」的口径；**删
@@ -2855,15 +2916,17 @@ v0.178 省了整包解包/重压，但十余个补丁仍各自 `async('string')`
   文本里、账本压根没这一对，**动 0 对**；`sizeRelH/V` 是 wp14 扩展，
   夹具写 `wp:` 前缀、真件要 `mc:AlternateContent`。
 - 正文长尾：`fldChar|fldCharType`(3 个源值) / `fldChar|fldLock`、
-  `outline|val`、`smartTag|*`、±5 缇、`ind|left` 显式 0、`docPr|id`、
+  `outline|val`、`smartTag|*`、±5 缇、`docPr|id`、
   `name|val`(表单域 `text1`)、`startOverride|val`；`theme1.xml` 口径未定。
-  `color|val`/`lvlJc|val` v0.184、`legacy|*` 与 `type|val`/`pgSz|code` v0.183、
-  `col|w`/`col|space`/`w:cols equalWidth` v0.182 已补。
+  `ind|left`/`ind|right` 显式 0 v0.185、`color|val`/`lvlJc|val` v0.184、
+  `legacy|*` 与 `type|val`/`pgSz|code` v0.183、`col|w`/`col|space`/
+  `w:cols equalWidth` v0.182 已补。
 - Impress 占位矩形编辑（第二套拖拽状态机）；Calc 视图缩放（落点在预存
   改动文件 `SheetEditor.tsx`，按房规换落点或只记结论）；**pdf-lib 按需加载**
-  仍等 `pdf-text-edit.ts` 入库。Writer 标尺 v0.179、状态栏 v0.180、
+  仍等 `pdf-text-edit.ts` 入库（本轮 build 仍见 `INEFFECTIVE_DYNAMIC_IMPORT`）；
+  **Writer 的自动缩放两档未接**。Writer 标尺 v0.179、状态栏 v0.180、
   逐页翻页预览 v0.181、Impress 母版配色 v0.182、清除格式 v0.183、
   PDF 首页末页 v0.184 已补。
-- D32–D43 原账不动（同上）。
+- D32–D44 原账不动（同上）。
 
 

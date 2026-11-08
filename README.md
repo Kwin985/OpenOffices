@@ -11048,6 +11048,93 @@ Writer 工具条加「标尺」开关，水平标尺挂在 `.doc-page` 内随内
   往返、屏上仍显示主题解析色；PDF 页码只有纯函数与源码级断言，没做真机
   浏览器对撞；动画早停的端到端收益在噪声内，确定收益只在纯遍历段。
 
+## v0.185（样式显式零两族 `value→kept` + 自动缩放两档 + pptx 文本拼接零数组）
+
+承接 D44。这轮修的是**样式链上「显式 0」被吞**——它不是「没写」，
+而是 Word 用来压掉上一层样式继承缩进的声明。两对 `value → kept`，
+仍是修好值变，不是把掉了粉饰成值变。
+
+**保真：2 对 `value → kept`，正文 85.3% → 86.0%**
+
+| 族 | 源值 → 旧写出 | 机制 |
+|---|---|---|
+| `ind\|left` | `0, 420` → 只有 `420` | 显式 0 在 `styles.xml` 的 Normal 样式 `w:ind` 上（**不是段落**）。读手 `styleList()` 的 `if (left)` 把 0 当 falsy 吞掉，写手对内建样式又根本不发 `<w:ind>`。现在读手只认**本层自己 pPr 的属性表**，存两枚只往返布尔；写手按 styleId 在 styles.xml 补回那枚显式 0 |
+| `ind\|right` | `0, 210` → 只有 `210` | 同上，同一枚 `<w:ind>` 上的第二格 |
+
+- **归属纪律**：只认 `info.pPr`，不认 `styleView` 合并后的链视图（v0.161
+  主题字体引用同款）——`ReportHead` 是 basedOn `Normal` 的子样式，父层那枚 0
+  若摊到子层再写一遍，就把「跟着父层走」改成了「钉死在子层」。直接读已解析
+  元素的属性表，**不走 `attr`/`attrL` 漏斗**：`w:left/w:right` 在屏上那条链
+  里已经查问过，读手查问仍是 672，`docs/fidelity.*` 与 HEAD **逐字节相同**，
+  四条变异腿 52.5 / 59.4 / 99.0 / 96.5 与记录对 392/416/715/685 一字不动。
+- **写回按 CT_PPrBase 序**：`ind` 位次 32（`spacing` 之后、`jc`/`outlineLvl`/
+  `rPr`/`sectPr` 之前），没有 `<w:pPr>` 不凭空造、自闭合的换成有内容形态；
+  已有 `<w:ind>` 只补**缺的**同名属性，不覆盖也不追加第二枚。陈旧守卫天然
+  成立：用户后来改缩进走的是段落直接格式（document.xml 的 pPr），会压过样式
+  那枚 0，不是把旧值写回改过的文档。
+- 正文 **258/300 = 86.0%**、合计 **340/619 = 54.9%**、值变 **14 → 12**
+  （正文 12 → 10）、掉了仍 267、图形壳 82/319 不动。`test-style-ind-zero.mjs`
+  42 项（含父层不误记、`w:start="0"` 新式写法不误认、按 styleId 对位、
+  用户改过缩进不覆盖）。
+
+**功能：适应页宽 / 适应整页，PDF 与 Impress 共用一份纯函数**
+
+- `view-zoom.ts` 新增 `fitZoom(pageW,pageH,viewW,viewH,mode,padding)`、
+  `nearestZoomStep`、`FitMode`；三种口径定在一处：页面尺寸必须**未缩放**
+  （PDF 用 `getViewport({scale:1})`、Impress 用 `rect/当前 zoom` 还原）、容器
+  扣内边距、结果不在这里夹档位（PDF 是连续 scale、Impress 是七档下拉）。
+  非法尺寸一律回 1，不产生 0 / Infinity 缩放。
+- PDF 工具条加 ↔ / ⤢，按自己的 `[0.5,3]` 夹一次；Impress 加同两枚按钮，
+  扣掉 `.ppt-stage-wrap` 的 26px padding 后落到**最近一档**（否则 select 里
+  没有这个百分比会显示空白）。**Writer 未接**——它的纸面宽是固定版心，
+  自动档没有新的可用信息，别为了对称硬塞。`test-fit-zoom.mjs` 45 项。
+
+**性能：pptx 导入文本拼接不再摊平数组**
+
+- `paragraphText(p)` 原为 `descendantsByName(p,'t').map(textOf).join('')`：
+  每个形状每个段落都要把整棵子树摊平成两个数组，是导入里最热的一条路径。
+  改成一次前序、`a:t` 命中即拼接并累加，零中间数组。与 v0.184 早停同族
+  但不同处——这里是「命中即拼接」而不是「命中即返回」，同样不建缓存。
+  `a:t` 是叶子，命中后不再递归，否则 `textOf` 已含后代文本会重复计一遍。
+- 表格单元格那处仍是按格摊平，**本轮刻意不动**（不是逐段热路径，改了会让
+  范围失控）。`{legacyParaText:true}` 让两腿同源只差一个参数，Deck 稳定
+  序列化逐字相同，夹具来自产品真出口 `deckToPptxBytes`。
+- **数字不粉饰**：端到端 4/24/60 页 **−3.0% / +1.7% / +1.4%（噪声内）**，
+  这处开销被 XML 解析与 zip 解压盖住；把两腿遍历算法复刻成第二条腿对撞的
+  **纯遍历段**才是确定收益：4 run×3 噪声×200 段 **−22.6%**、
+  20 run×6 噪声×120 段 **−5.0%**、80 run×10 噪声×40 段 **−11.6%**，
+  三种形状文本逐字相同。`test-pptx-paratext.mjs` 21 项 +
+  `bench-pptx-paratext.mjs`。
+
+**门禁**：tsc 0、`tsc && vite build` ✓（`pnpm run build` 里的
+`copy-pdfjs-assets.mjs` 清理 `public/pdfjs` 被环境的安全策略按批量删除拦下，
+改跑等价两步，如实记）；**29 组结构测试全绿**（新增 42 + 45 + 21 项，
+另把 `test-impress-zoom` / `test-pptx-anim` 两条钉死整串导入/整串类型字面量的
+旧断言改成按关键名判）。保真 99.0%/98.4% 且与 HEAD 逐字节相同、四条变异腿
+不动；pptx 70.1/74.3、42/19 全绿、`--selftest --mut no-ga` 42 条全红后复位；
+往返账 `8cdac69a…`/`a3932552…` 两次复跑一致。两把旧尺：`bench-docx-pack`
+语义等价 ✓ / −45.6%、`bench-docx-parts` 部件解压 **18 → 5** 且语义等价 ✓。
+`modules` 保持 **67**。
+
+### 顺延（D45）
+
+- 图形壳剩 **235 对**：三维族 `sp3d`/`props3d`/`lightRig` 要先定「夹具结构
+  非法」口径；VML 老式形状族仍是模型无槽。`wp:posOffset` 动 0 对、
+  `sizeRelH/V` 真件要 `mc:AlternateContent`。
+- 正文长尾：`fldChar` 三对、`outline|val`、`smartTag|*`、±5 缇、`docPr|id`、
+  `name|val`(`text1`)、`startOverride|val`；`theme1.xml` 口径未定。
+  `ind|left`/`ind|right` 显式 0 v0.185、`color|val`/`lvlJc|val` v0.184、
+  `legacy|*`/`type|val`/`pgSz|code` v0.183 已补。
+- Impress 占位矩形编辑（第二套拖拽状态机）；Calc 缩放（落点在预存改动
+  `SheetEditor.tsx`，按房规换落点）；**pdf-lib 按需加载**仍等
+  `pdf-text-edit.ts` 入库（本轮 build 仍见 `INEFFECTIVE_DYNAMIC_IMPORT` 警告）；
+  **Writer 的自动缩放两档未接**。D32–D44 长尾原账不动。
+- **诚实边界**：本轮及历轮 A/B 都是合成夹具；显式 0 只走 docx 链、ODT 未扩，
+  且只认 `w:left/w:right` 字面（`w:start/w:end` 新式写法不认）；自动缩放只有
+  纯函数与源码级断言，没做真机浏览器对撞，Impress 的 `rect/zoom` 还原依赖
+  CSS zoom 等比缩放这一假设；文本拼接的端到端收益在噪声内，确定收益只在
+  纯遍历段。
+
 ## 性能（v0.3）
 
 
