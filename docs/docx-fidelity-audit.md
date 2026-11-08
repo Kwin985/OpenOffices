@@ -2965,7 +2965,57 @@ drawing 稳定 −79.0% / −79.2% / −79.1%**；端到端 25.4 → 27.8ms
   逐字节相同，唯一差异是 provenance 的 `modules` 67 → 68；覆盖率与变异腿数字
   一字不动。按「给定 rev 就给定答案」把四份随 rev 更新入库，不攒元信息差。
 
-### 顺延清单（D46）
+### v0.187 追加节：修订 / 编号两族值变 + Writer 自动档 + 补丁链正则收尾
+
+**往返账动 2 对，全部 `value → kept`**：`ins|id`、`startOverride|val`。
+正文 **260/300 = 86.7% → 262/300 = 87.3%**，合计 **342/619 = 55.3% →
+344/619 = 55.6%**，值变 10 → 8、掉了仍 267、图形壳 82/319 不动。
+
+- `ins|id`：写手 `revOpts = { id: dt.revId++, ... }`，源件 `w:ins w:id="7"`
+  到写出包成了 1。读手 `case 'ins'/'del'` 里 `attr(node,'w:id')` **已经查问过**
+  （注释写「重编又不该由我们决定，只读记账」）。本轮不推翻那个判断里的
+  「不该由我们编」，只把**源件说过的值**带回：由 `docxToDocMeta` 从源包
+  document.xml 正则提取，按出现序存 `DocMeta.revIds`，`patchRevIds` 按
+  `<w:ins>/<w:del>` 出现序前缀对位同名改值。这条路有三个好处：正则读的部件
+  不进保真账（v0.147 那笔教训）、读手零改动零新增查问、`revision-extension.ts`
+  是工作树里的预存改动**不碰**。写出比源多的修订保持包自己的号。
+- `startOverride|val`：包对重建出来的每个 `<w:num>` 恒发
+  `<w:startOverride w:val="1"/>`（源件是 3）。读手 `readNumbering` 的
+  lvlOverride 循环本来就用 `attrNum(find(lo,'w:startOverride'),'w:val')`
+  查问过，本轮把同一次结果按 `w:num` 出现序回填进 `Numbering.starts`
+  （`w:num` 循环开头先 `push(undefined)` 占格，连缺 numId 的 num 也占，
+  否则补丁前缀对位整体错位），随 `fid.numbering` 进 `DocxNumbering.starts`。
+  `patchNumOverrides` 按 `<w:num>` 块出现序前缀贴回，**只存序不存号**——
+  与 v0.150 `patchNumberingXml` 同一条纪律，包的 numId 会重排，按号认会贴错。
+- 零新增查问对：读手查问仍 672，`docs/fidelity.*` 与 `docs/pptx-fidelity.*`
+  与 HEAD **逐字节相同**（`modules` 仍 68），四条变异腿
+  52.5/59.4/99.0/96.5 与记录对 392/416/715/685 一字不动。
+  `test-rev-start.mjs` 28 项：源值换 21/5 仍按序对位、ins/del 混排、
+  空串占位不造令牌、编号串比写出包长不越界、源码级接线。
+
+**功能**：Writer 补自动缩放两档。**判断修正**——v0.185 写「纸面固定版心，
+自动档没有新信息」偏保守：纸面宽固定，但视口宽随侧栏开合与窗口大小变化。
+现在 PDF / Impress / Writer 共用 `fitZoom`；Writer 用未缩放 `effPx.w/h`
+与 `scrollRef` 视口，结果落最近档位。`test-fit-zoom.mjs` 补 4 项（共 49）。
+
+**性能**：v0.186 收掉 `tagWithAttrs`/`retag` 后，`mergeTagAttrs`、
+`patchStyleIndZeros`、`pprOrder` 三处仍在循环里 `new RegExp(...)`。本轮共用
+`hasAttrNamed`（字符串定位 + 空白收边，与 `tagWithAttrs` 同口径），旧算法
+原样留成 `legacyAttrScan:true` 对照腿，两腿逐部件字符串归一后逐字相同。
+纯函数段 2 万 / 10 万 / 40 万次属性判定 **−80.2% / −79.5% / −79.0%**；
+端到端 26.2 → 28.0ms（−7.1%，噪声内，不冒充降幅）。
+`test-docx-attrscan.mjs` 24 项 + `bench-docx-attrscan.mjs`。
+三条旧断言按新口径改（书签补丁链尾变量、`patchStyleIndZeros` 过滤形态、
+opts 新增开关），不改产品代码凑测试。
+
+**门禁**：tsc 0、`tsc && vite build` ✓（`pnpm run build` 的 pdfjs 资源清理仍
+被环境安全策略的批量删除守卫拦下）；34 组结构测试全绿；保真 99.0/98.4 与
+HEAD 逐字节相同、四条变异腿不动，pptx 70.1/74.3、42/19 全绿、
+`--selftest --mut no-ga` 42 条全红后复位；往返账 `4e310316…`/`adca5fb6…`
+两次复跑一致；`bench-docx-pack` 语义等价 ✓ / −53.2%、`bench-docx-parts`
+部件解压 **19 → 21 → 5**（两个新补丁各多一次读，预期）。
+
+### 顺延清单（D47）
 
 - 图形壳剩余 **235 对**：三维族 `sp3d`(3) / `props3d`(3) / `lightRig`(2)
   要先定「夹具结构非法、真件应写成 effectLst 之后的兄弟」的口径；**删
@@ -2976,16 +3026,21 @@ drawing 稳定 −79.0% / −79.2% / −79.1%**；端到端 25.4 → 27.8ms
   夹具写 `wp:` 前缀、真件要 `mc:AlternateContent`。
 - 正文长尾：`fldChar|fldCharType`(3 个源值) / `fldChar|fldLock`、
   `outline|val`、`smartTag|*`、±5 缇、`docPr|id`、`docPr|name`、
-  `name|val`(表单域 `text1`)、`startOverride|val`；`theme1.xml` 口径未定。
-  `bookmark*|id` v0.186、`ind|left`/`ind|right` 显式 0 v0.185、
+  `name|val`(表单域 `text1`)；`theme1.xml` 口径未定。`outline|val` 要先定
+  rPr 内的 schema 位次并新建 charExtra 槽（包没原生槽）；`docPr|id`/
+  `docPr|name` 是 VML 与图形壳没生成 `data-img` 载荷的老问题，不是新 bug。
+  `ins|id`/`startOverride|val` v0.187、`bookmark*|id` v0.186、
+  `ind|left`/`ind|right` 显式 0 v0.185、
   `color|val`/`lvlJc|val` v0.184、`legacy|*` 与 `type|val`/`pgSz|code` v0.183、
   `col|w`/`col|space`/`w:cols equalWidth` v0.182 已补。
 - Impress 占位矩形编辑（第二套拖拽状态机）v0.186 已补；Calc 视图缩放（落点在
   预存改动文件 `SheetEditor.tsx`，按房规换落点或只记结论）；**pdf-lib 按需加载**
   仍等 `pdf-text-edit.ts` 入库（本轮 build 仍见 `INEFFECTIVE_DYNAMIC_IMPORT`）；
-  **Writer 的自动缩放两档未接**。Writer 标尺 v0.179、状态栏 v0.180、
+  Writer 自动缩放两档 v0.187 已补（三处 UI 共用 `fitZoom`）。版式库 /
+  SmartArt / 3D / Fontwork、页面边框 / 水印 / 邮件合并 / 公式编辑器 /
+  数据透视表仍未做。Writer 标尺 v0.179、状态栏 v0.180、
   逐页翻页预览 v0.181、Impress 母版配色 v0.182、清除格式 v0.183、
   PDF 首页末页 v0.184 已补。
-- D32–D45 原账不动（同上）。
+- D32–D46 原账不动（同上）。
 
 
