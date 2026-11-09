@@ -11302,6 +11302,79 @@ Writer 工具条加「标尺」开关，水平标尺挂在 `.doc-page` 内随内
   与源码级断言，没做真机浏览器对撞；零正则的端到端收益在噪声内，确定收益
   只在纯函数段。
 
+## v0.188（`docPr` 两族 `value→kept` + 文档属性读写链 + `patchImgXml` 惰性遍历）
+
+承接 D47。这轮把「写手侧从源包正则取原值」这条路再走一次（第三个用户），
+并顺手修掉一处**另存即丢元数据**的坏件。
+
+**保真：2 对 `value → kept`，合计 55.6% → 55.9%**
+
+| 族 | 源值 → 旧写出 | 机制 |
+|---|---|---|
+| `docPr\|id` | `7,8,9,11,12` → `1,7,8,11`（两枚空壳） | WPS 形状与艺术字被读手展平成文字后没有 `data-img` 载荷，包为那两枚发出 `id="1"`。`docxToDocMeta` 从源包按 `<wp:docPr>` 出现序正则取原值，`patchDocPr` 前缀对位改回 |
+| `docPr\|name` | `图片 1…艺术字` → 少了「形状 1」「艺术字」，多一个空串 | 同上，同一枚元素上的第二格 |
+
+- **零新增查问 / 不动读手**：这两对读手在 `readImgPayload` 里早查问过，只是
+  展平后的形状没走那条路。源包是**正则读**的（不进保真账），读手查问仍 672，
+  `docs/fidelity.*` 与 HEAD **逐字节相同**，四条变异腿 52.5 / 59.4 / 99.0 /
+  96.5 与记录对 392/416/715/685 一字不动。`patchDocPr` 复用 `tagWithAttrs`
+  做同名改值 / 缺则追加，绝不追加第二枚同名属性；源里空串占位不回写。
+- 图形壳 **82/319 = 25.7% → 84/319 = 26.3%**、合计 **344/619 = 55.6% →
+  346/619 = 55.9%**、值变 **8 → 6**、正文 262/300 = 87.3% 不动、掉了仍 267。
+  `modules` 仍 **68**（没新增 lib 文件）。
+
+**功能：文档属性（标题 / 主题 / 作者 / 关键词 / 备注）**
+
+- 修的是坏件：`new Document` 原先把 `creator` / `title` 硬编码成
+  `OpenOffices` / `OpenOffices 文档`，导入别人的文档另存一次，原作者与标题
+  就被冲掉。现在 `docxToDocMeta` 从 `docProps/core.xml` 正则读五格进
+  `DocMeta.docProps`，写手走 docx 包的 `IPropertiesOptions` 原生槽
+  （包自己转义，不手拼 XML），没写过的格用 `DEFAULT_DOC_PROPS` 回落。
+- DocEditor 工具条加「文档属性」按钮 + 五格可编辑面板，`patchMeta` 回写，随
+  `.odoc` 与 docx 往返。`parseCoreProps` / `docPropsOf` 放在 `src/lib/docx.ts`
+  里，不新增 lib 文件（`modules` 不变）。`test-docpr-props.mjs` 37 项覆盖
+  实体还原、缺省回落、端到端写出 core.xml、用户改值、源码级接线。
+
+**性能：`patchImgXml` 不再物化整块 XML 数组**
+
+- 改前 `[...xml.matchAll(/<w:drawing>…/g)]` 把每一项都是**整块 XML** 的元素
+  收进一个数组，只为先数够不够再逐块改。改后产品路径直接用惰性迭代器
+  边走边拼，计数闸门移到末尾（块数对不上就丢弃已算结果，语义等价）。
+  `legacyBlockScan:true` 是物化数组的对照腿，两腿同源只差一个参数、
+  逐部件字符串归一后逐字相同。
+- **纯函数段 50 / 500 / 2000 drawing −7.9% / −7.3% / −6.7%**（收益比前几轮
+  小，如实写）；**端到端 25.7 → 28.1ms（−9.4%，噪声内，不冒充降幅）**。
+  `test-img-lazy.mjs` 11 项 + `bench-img-lazy.mjs`。只动 `patchImgXml` 这一处，
+  `patchBorderBlocks` / `patchNumOverrides` 两处同类物化**顺延**，不算全链优化。
+
+**门禁**：tsc 0、`tsc && vite build` ✓（`pnpm run build` 的 pdfjs 资源清理仍
+被环境安全策略的批量删除守卫拦下）；**36 组结构测试全绿**（新增 37 + 11 项；
+三条旧断言按新口径改：主链链尾变量、`patchImgXml` 的迭代器形态，不改产品代码
+凑测试）。保真 99.0%/98.4% 且与 HEAD 逐字节相同、四条变异腿不动；
+pptx 70.1/74.3、42/19 全绿、`--selftest --mut no-ga` 42 条全红后复位；
+往返账 `17c3e44b…`/`3f07bccd…` 两次复跑一致。两把旧尺：`bench-docx-pack`
+语义等价 ✓ / −55.3%、`bench-docx-parts` 部件解压 **21 → 22 → 5**
+（`docxToDocMeta` 多读一次 core.xml，预期且语义等价 ✓）。
+
+### 顺延（D48）
+
+- 图形壳剩 **233 对**：三维族 `sp3d`/`props3d`/`lightRig` 要先定「夹具结构
+  非法」口径；VML 老式形状族仍是模型无槽。`wp:posOffset` 动 0 对、
+  `sizeRelH/V` 真件要 `mc:AlternateContent`。
+- 正文长尾：`fldChar` 三对、`outline|val`（要先定 rPr 内 schema 位次 +
+  charExtra 槽）、`smartTag|*`、±5 缇、`name|val`(表单域 `text1`)、
+  `docPr|descr`、`theme1.xml` 口径未定。`docPr|id`/`name` v0.188、
+  `ins|id`/`startOverride|val` v0.187、书签两族 v0.186 已补。
+- 写手 `patchBorderBlocks` / `patchNumOverrides` 两处 `[...matchAll]` 仍物化
+  数组（本轮只动了最热的 `patchImgXml`）；Calc 缩放（落点在预存改动
+  `SheetEditor.tsx`，按房规换落点）；**pdf-lib 按需加载**仍等
+  `pdf-text-edit.ts` 入库；版式库 / SmartArt / 3D / Fontwork、页面边框 /
+  水印 / 邮件合并 / 公式编辑器 / 数据透视表未做。D32–D47 长尾原账不动。
+- **诚实边界**：本轮及历轮 A/B 都是合成夹具；`docPr` 与文档属性两处的源值
+  都是写手侧正则读来的（不进保真账），ODT 链没跟着扩；文档属性只有纯函数、
+  端到端与源码级断言，没做真机 WPS 对撞；惰性遍历的端到端收益在噪声内，
+  确定收益只在纯函数段且只有一处落地。
+
 ## 性能（v0.3）
 
 

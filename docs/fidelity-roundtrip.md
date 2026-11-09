@@ -44,8 +44,8 @@ docx ──读手──▶ HTML ──TipTap schema──▶ PM 模型 ──写
 | | 值 |
 |---|---:|
 | 读到的对 | 619 |
-| 保留 | **344（55.6%）** |
-| 值变 | 8 |
+| 保留 | **346（55.9%）** |
+| 值变 | 6 |
 | 掉了 | 267 |
 | 缺件 | 0 |
 | 源包部件 | 7 |
@@ -62,7 +62,7 @@ docx ──读手──▶ HTML ──TipTap schema──▶ PM 模型 ──写
 | 族 | 读到的 | 保留 | 值变 | 掉了 | 保留率 |
 |---|---:|---:|---:|---:|---:|
 | 正文属性（`w:*`） | 300 | 262 | 6 | 32 | **87.3%** |
-| 图形壳（`a:`/`v:`/`wp:`/`pic:`/`wps:`/`o:`） | 319 | 82 | 2 | 235 | **25.7%** |
+| 图形壳（`a:`/`v:`/`wp:`/`pic:`/`wps:`/`o:`） | 319 | 84 | 0 | 235 | **26.3%** |
 
 口径说明：一个对算正文，当且仅当它在源包里**只**出现在 `w:*` 元素上（沾过图形壳就算图形壳）。
 对名按 local name 归并（与保真账本同口径），所以 `fill|type` 这种两族同名的会并成一笔。
@@ -115,15 +115,13 @@ docx ──读手──▶ HTML ──TipTap schema──▶ PM 模型 ──写
 | `bodyPr|vertOverflow` | 1 | overflow | — |
 | …共 267 条，完整清单见 `docs/fidelity-roundtrip.json` | | | |
 
-### 值变（8）
+### 值变（6）
 
 名字在，但某个源值没写回去。比「掉了」更隐蔽——普查看着它在场，屏上也像那么回事。
 
 | 对 | 源里出现 | 源值 | 写出值 |
 |---|---:|---|---|
 | `name|val` | 7 | text1, normal, report head, report | table grid, normal, plain, report |
-| `docPr|id` | 5 | 7, 8, 9, 11 | 7, 8, 1, 11 |
-| `docPr|name` | 5 | 图片 1, 浮动图, 形状 1, 图形余量 | 图片 1, 浮动图, , 图形余量 |
 | `gridCol|w` | 4 | 5000, 2500 | 4995, 2505 |
 | `abstractNum|abstractNumId` | 1 | 0 | 1, 2, 3 |
 | `abstractNumId|val` | 1 | 0 | 1, 3 |
@@ -136,7 +134,7 @@ docx ──读手──▶ HTML ──TipTap schema──▶ PM 模型 ──写
 
 （空）
 
-### 保留（344）
+### 保留（346）
 
 这些是真的双向。列出来是为了让「保留」也可核对，而不是一个孤零零的百分比。
 
@@ -144,6 +142,8 @@ docx ──读手──▶ HTML ──TipTap schema──▶ PM 模型 ──写
 |---|---:|---|---|
 | `style|styleId` | 6 | normal, reporthead, report, reportchar | tablegrid, normal, plain, report |
 | `style|type` | 6 | paragraph, character, table | table, paragraph, character |
+| `docPr|id` | 5 | 7, 8, 9, 11 | 7, 8, 9, 11 |
+| `docPr|name` | 5 | 图片 1, 浮动图, 形状 1, 图形余量 | 图片 1, 浮动图, 形状 1, 图形余量 |
 | `extent|cx` | 5 | 914400 | 914400, 1266825, 3048000 |
 | `extent|cy` | 5 | 914400 | 914400, 638175, 2286000 |
 | `top|color` | 5 | ff0000, 4472c4, 336699, 000000 | ff0000, 4472c4, auto, 336699 |
@@ -164,9 +164,7 @@ docx ──读手──▶ HTML ──TipTap schema──▶ PM 模型 ──写
 | `ln|w` | 3 | 9525 | 9525 |
 | `picLocks|noChangeAspect` | 3 | 0, 1 | 0, 1 |
 | `spacing|after` | 3 | 240, 0, 120 | 240, 0, 120 |
-| `b|val` | 2 | 0, 1 | 0, 1 |
-| `between|color` | 2 | ff9900 | ff9900 |
-| …共 344 条，完整清单见 `docs/fidelity-roundtrip.json` | | | |
+| …共 346 条，完整清单见 `docs/fidelity-roundtrip.json` | | | |
 
 ## 边界
 

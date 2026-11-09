@@ -3015,9 +3015,56 @@ HEAD 逐字节相同、四条变异腿不动，pptx 70.1/74.3、42/19 全绿、
 两次复跑一致；`bench-docx-pack` 语义等价 ✓ / −53.2%、`bench-docx-parts`
 部件解压 **19 → 21 → 5**（两个新补丁各多一次读，预期）。
 
-### 顺延清单（D47）
+### v0.188 追加节：`docPr` 两族 + 文档属性 + `patchImgXml` 惰性遍历
 
-- 图形壳剩余 **235 对**：三维族 `sp3d`(3) / `props3d`(3) / `lightRig`(2)
+**往返账动 2 对，全部 `value → kept`**：`docPr|id` / `docPr|name`。
+图形壳 **82/319 = 25.7% → 84/319 = 26.3%**、合计 **344/619 = 55.6% →
+346/619 = 55.9%**，值变 8 → 6、正文 262/300 = 87.3% 不动、掉了仍 267。
+
+- 差集根源：源包 5 枚 `<wp:docPr>` 各有 id/name，但 `形状 1`（WPS 形状）
+  与 `艺术字` 被读手展平成文字，没走 `readImgPayload` 那条路、也就没有
+  `data-img` 载荷；包为那两枚发出 `id="1" name=""` 的空壳。这不是读手漏查问
+  （833/838 行两枚属性都查过），是**载荷没生成**。本轮沿用 v0.187 的第三条路：
+  `docxToDocMeta` 从源包正则提取五枚的 id/name（按出现序），存
+  `DocMeta.docPrShells`，`patchDocPr` 按 `<wp:docPr>` 出现序前缀对位改回。
+  正则读的部件不进保真账，读手零改动、查问仍 672。
+- `patchDocPr` 复用 `tagWithAttrs`：已有同名属性改值、没有就追加，绝不追加
+  第二枚同名；源里空串占位不回写（不把包写的 `descr` 之类抹掉）。
+  写出比源多的 docPr 保持包自己的值，不凭空造名字。
+  `test-docpr-props.mjs` 37 项中的 docPr 部分：源值换 42 仍按序对位、
+  越界不造值、缺 name 时只追加一枚、每枚标签只有一枚 id。
+
+**功能**：文档属性五格（标题/主题/作者/关键词/备注）。此前 `new Document`
+把 `creator` / `title` **硬编码**成 OpenOffices，导入别人的文档另存一次原作者
+与标题就被冲掉——坏件而不只是缺功能。`parseCoreProps` 从
+`docProps/core.xml` 正则读（实体还原、空元素不落字段），`docPropsOf` 用
+`DEFAULT_DOC_PROPS` 补位，五格走 docx 包 `IPropertiesOptions` 原生槽
+（包自己转义，不手拼 XML）。DocEditor 工具条加按钮 + 五格面板，
+`patchMeta` 回写，随 `.odoc` 与 docx 往返。纯函数放在 `src/lib/docx.ts`，
+**没新增 lib 文件**（`modules` 仍 68，两份保真账与 HEAD 逐字节相同）。
+测试覆盖实体、缺省回落、端到端写出 core.xml 与用户改值。
+
+**性能**：`patchImgXml` 原先 `[...xml.matchAll(/<w:drawing>…/g)]` 把每一项
+都是整块 XML 的元素收进数组，只为先数够不够。改后产品路径用惰性迭代器
+边走边拼，计数闸门移到末尾（块数对不上就丢弃已算结果，语义等价）；
+`legacyBlockScan:true` 是物化数组的对照腿，两腿逐部件归一后逐字相同。
+纯函数段 50 / 500 / 2000 drawing **−7.9% / −7.3% / −6.7%**（收益比前几轮小，
+如实写）；端到端 25.7 → 28.1ms（−9.4%，噪声内）。`test-img-lazy.mjs` 11 项 +
+`bench-img-lazy.mjs`。只动最热的这一处，`patchBorderBlocks` /
+`patchNumOverrides` 两处同类物化顺延。
+
+**门禁**：tsc 0、`tsc && vite build` ✓（`pnpm run build` 的 pdfjs 资源清理仍
+被环境安全策略拦下）；36 组结构测试全绿（新增 37 + 11 项；三条旧断言按新
+口径改：主链链尾变量、`patchImgXml` 的迭代器形态，不改产品代码凑测试）；
+保真 99.0/98.4 与 HEAD 逐字节相同、四条变异腿不动，pptx 70.1/74.3、
+42/19 全绿、`--selftest --mut no-ga` 42 条全红后复位；往返账
+`17c3e44b…`/`3f07bccd…` 两次复跑一致；`bench-docx-pack` 语义等价 ✓ /
+−55.3%、`bench-docx-parts` 部件解压 **21 → 22 → 5**（`docxToDocMeta` 多读
+一次 core.xml，预期）。
+
+### 顺延清单（D48）
+
+- 图形壳剩余 **233 对**：三维族 `sp3d`(3) / `props3d`(3) / `lightRig`(2)
   要先定「夹具结构非法、真件应写成 effectLst 之后的兄弟」的口径；**删
   `props3d` 会动往返账分母、留它就得发一个非法元素**，两难需先裁决。VML
   老式形状族 `shape`(20) / `bodyPr`(19) / `rect`(15) / `fill`(14) /
@@ -3025,11 +3072,12 @@ HEAD 逐字节相同、四条变异腿不动，pptx 70.1/74.3、42/19 全绿、
   文本里、账本压根没这一对，**动 0 对**；`sizeRelH/V` 是 wp14 扩展，
   夹具写 `wp:` 前缀、真件要 `mc:AlternateContent`。
 - 正文长尾：`fldChar|fldCharType`(3 个源值) / `fldChar|fldLock`、
-  `outline|val`、`smartTag|*`、±5 缇、`docPr|id`、`docPr|name`、
+  `outline|val`、`smartTag|*`、±5 缇、`docPr|descr`、
   `name|val`(表单域 `text1`)；`theme1.xml` 口径未定。`outline|val` 要先定
-  rPr 内的 schema 位次并新建 charExtra 槽（包没原生槽）；`docPr|id`/
-  `docPr|name` 是 VML 与图形壳没生成 `data-img` 载荷的老问题，不是新 bug。
-  `ins|id`/`startOverride|val` v0.187、`bookmark*|id` v0.186、
+  rPr 内的 schema 位次并新建 charExtra 槽（包没原生槽）；`docPr|descr` 与
+  本轮两枚同元素，但包会把 alt 顶进来，归属口径未定。
+  `docPr|id`/`docPr|name` v0.188、`ins|id`/`startOverride|val` v0.187、
+  `bookmark*|id` v0.186、
   `ind|left`/`ind|right` 显式 0 v0.185、
   `color|val`/`lvlJc|val` v0.184、`legacy|*` 与 `type|val`/`pgSz|code` v0.183、
   `col|w`/`col|space`/`w:cols equalWidth` v0.182 已补。
@@ -3041,6 +3089,9 @@ HEAD 逐字节相同、四条变异腿不动，pptx 70.1/74.3、42/19 全绿、
   数据透视表仍未做。Writer 标尺 v0.179、状态栏 v0.180、
   逐页翻页预览 v0.181、Impress 母版配色 v0.182、清除格式 v0.183、
   PDF 首页末页 v0.184 已补。
-- D32–D46 原账不动（同上）。
+- 写手 `patchBorderBlocks` / `patchNumOverrides` 两处 `[...matchAll]` 仍物化数组
+  （v0.188 只改了最热的 `patchImgXml`）；文档属性与 `docPr` 两族都只在 docx 链，
+  ODT 写手没跟着扩。
+- D32–D47 原账不动（同上）。
 
 

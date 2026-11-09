@@ -22,8 +22,8 @@
  },
  "totals": {
   "read": 619,
-  "kept": 344,
-  "value": 8,
+  "kept": 346,
+  "value": 6,
   "lost": 267,
   "part": 0,
   "consulted": 672,
@@ -1295,7 +1295,7 @@
    ]
   },
   "docPr|id": {
-   "bucket": "value",
+   "bucket": "kept",
    "n": 5,
    "src": [
     "11",
@@ -1305,14 +1305,15 @@
     "9"
    ],
    "out": [
-    "1",
     "11",
+    "12",
     "7",
-    "8"
+    "8",
+    "9"
    ]
   },
   "docPr|name": {
-   "bucket": "value",
+   "bucket": "kept",
    "n": 5,
    "src": [
     "图形余量",
@@ -1322,10 +1323,11 @@
     "艺术字"
    ],
    "out": [
-    "",
     "图形余量",
     "图片 1",
-    "浮动图"
+    "形状 1",
+    "浮动图",
+    "艺术字"
    ]
   },
   "document|Ignorable": {
