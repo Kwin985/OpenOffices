@@ -134,8 +134,15 @@ async function patched(xml, shells) {
   const css = read('../src/index.css')
   check('docPrShells 从源包正则提取（不进保真账）', /const docPrShells = \[\.\.\.docXml\.matchAll\(\/<wp:docPr/.test(w))
   check('主链挂 patchDocPr', /const withDocPr = await patchDocPr\(withRev, meta\?\.docPrShells, sess\)/.test(w))
-  check('后续补丁接 withDocPr 不绕过它',
-    /const withFf = await patchFormFields\(withDocPr,/.test(w) && /: withFf|patchTcPr\(withFf,/.test(w))
+  // v0.190：动态链校验，不钉链尾变量名（见 test-bookmark-ids.mjs）
+  const chainOk = (src) => {
+    const defs = [...src.matchAll(/^  const (with[A-Z]\w*) =/gm)].map((m) => ({ name: m[1], at: m.index ?? 0 }))
+    const a = defs.findIndex((d) => d.name === 'withBm'), b = defs.findIndex((d) => d.name === 'withNumStart')
+    if (a < 0 || b <= a) return false
+    const core = defs.slice(a, b + 1)
+    return core.every((d, i) => i === 0 || src.slice(d.at, i + 1 < core.length ? core[i + 1].at : d.at + 600).includes(core[i - 1].name))
+  }
+  check('后续补丁接 withDocPr 不绕过它（动态链校验）', chainOk(w))
   check('patchDocPr 复用 tagWithAttrs 改值', /const next = tagWithAttrs\(tag, kv\)/.test(w))
   // 只收窄到 Document 构造的那一段：DEFAULT_DOC_PROPS 里那两枚字面量是回落值，
   // 不算「构造里硬编码」，别把整份文件的 'OpenOffices' 都算进来

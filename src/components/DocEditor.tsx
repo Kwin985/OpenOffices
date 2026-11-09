@@ -13,6 +13,8 @@ import {
   pageNumberParts,
   pageSetupOf,
   resolvePage,
+  DEFAULT_PAGE_BORDERS,
+  PAGE_BORDER_STYLES,
   contentPxOf,
   MM_PX,
   PAGE_NUMBER_FORMATS,
@@ -2659,6 +2661,45 @@ function DocEditor({ tab }: Props) {
               ))}
             </span>
           )}
+          <span className="doc-pg-borders" title="页面边框：走 docx 包原生槽，随 .odoc 与 docx 往返；屏上纸面与打印预览都不画">
+            <label className="tb-check">
+              <input
+                type="checkbox"
+                checked={!!pg.pageBorders}
+                onChange={(e) => setPg({ pageBorders: e.target.checked ? { ...DEFAULT_PAGE_BORDERS } : undefined })}
+              />
+              页面边框
+            </label>
+            {pg.pageBorders && (
+              <>
+                <select
+                  className="tb-select"
+                  value={pg.pageBorders.style}
+                  onChange={(e) => setPg({ pageBorders: { ...pg.pageBorders!, style: e.target.value } })}
+                  title="线型（只认四档，其它档位导入时宁缺毋滥）"
+                >
+                  {PAGE_BORDER_STYLES.map((s) => <option key={s} value={s}>{s}</option>)}
+                </select>
+                <input
+                  className="tb-input doc-color"
+                  type="color"
+                  value={`#${pg.pageBorders.color}`}
+                  onChange={(e) => setPg({ pageBorders: { ...pg.pageBorders!, color: e.target.value.replace(/^#/, '').toUpperCase() } })}
+                  title="边框颜色"
+                />
+                <input
+                  className="tb-input doc-num"
+                  type="number"
+                  min={2}
+                  max={96}
+                  step={2}
+                  value={pg.pageBorders.size}
+                  onChange={(e) => setPg({ pageBorders: { ...pg.pageBorders!, size: Math.max(2, Math.min(96, Number(e.target.value) || 4)) } })}
+                  title="线宽（w:sz，八分之一磅，2–96）"
+                />
+              </>
+            )}
+          </span>
           {meta.page && btn('重置', () => patchMeta({ page: undefined }), false, '恢复 A4 + 默认边距 + 不分栏')}
         </div>
       )}

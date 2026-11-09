@@ -54,7 +54,9 @@ async function main() {
   check('这两处函数体内只剩对照腿一处物化',
     (num.match(/\[\.\.\.xml\.matchAll\(/g) ?? []).length === 1
       && (bdr.match(/\[\.\.\.xml\.matchAll\(/g) ?? []).length === 1)
-  check('循环内按边名编译的 edgeRe 仍在（顺延，不冒充收干净）', /const edgeRe = new RegExp/.test(bdr))
+  // v0.190：这处顺延已收干净（findEdgeTag 字符串定位，对照腿仍复刻 new RegExp）
+  check('循环内按边名编译的 edgeRe 已收掉', /: findEdgeTag\(block, edge\)/.test(bdr)
+    && !/const edgeRe = new RegExp/.test(bdr))
 
   // ── ② 端到端：两腿逐部件字符串归一后逐字相同 ─────────────────────
   const z = new JSZip()

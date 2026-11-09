@@ -1579,6 +1579,26 @@ button {
   width: 64px;
 }
 
+/* v0.190 页面边框：与页面设置面板同排，颜色块与线宽各占一小格 */
+.doc-pg-borders {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.doc-pg-borders .tb-check {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  white-space: nowrap;
+}
+
+.doc-pg-borders .doc-color {
+  width: 34px;
+  height: 24px;
+  padding: 2px;
+}
+
 .doc-table-bar,
 .doc-img-bar,
 .doc-para-bar,

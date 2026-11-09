@@ -120,10 +120,16 @@ async function numPatched(xml, starts) {
   check('读手：复用同一次 startOverride 查问回填', /out\.starts\[startAt\] = so/.test(r))
   check('写手：主链挂 patchRevIds', /const withRev = await patchRevIds\(withBm, meta\?\.revIds \?\? \[\], sess\)/.test(w))
   // v0.188 在 withRev 之后又插了 withDocPr，按「逐笔接上一笔」判，不钉死链尾
-  check('写手：后续补丁接 withRev 不绕过它',
-    /const withDocPr = await patchDocPr\(withRev,/.test(w)
-      && /const withFf = await patchFormFields\(withDocPr,/.test(w)
-      && /patchTcPr\(withFf,| : withFf/.test(w))
+  // v0.190：与 test-bookmark-ids 同一条动态链校验，不钉链尾变量名
+  const chainOk = (src) => {
+    const defs = [...src.matchAll(/^  const (with[A-Z]\w*) =/gm)].map((m) => ({ name: m[1], at: m.index ?? 0 }))
+    const a = defs.findIndex((d) => d.name === 'withBm'), b = defs.findIndex((d) => d.name === 'withNumStart')
+    if (a < 0 || b <= a) return false
+    const core = defs.slice(a, b + 1)
+    return core.every((d, i) => i === 0 || src.slice(d.at, i + 1 < core.length ? core[i + 1].at : d.at + 600).includes(core[i - 1].name))
+  }
+  check('写手：后续补丁接 withRev 不绕过它（动态链校验）',
+    /const withDocPr = await patchDocPr\(withRev,/.test(w) && chainOk(w))
   check('写手：主链挂 patchNumOverrides', /const withNumStart = await patchNumOverrides\(withNum, meta\?\.numbering\?\.starts, sess\)/.test(w))
   check('写手：后续补丁接 withNumStart', /: withNumStart/.test(w))
 }

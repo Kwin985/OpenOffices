@@ -130,11 +130,18 @@ async function patched(xml, ids) {
   // 链尾会随轮次增加（v0.188 又插了 withDocPr），按「逐笔接上一笔」判整条链
   // 链尾会随轮次增加（v0.187 withRev、v0.188 withDocPr、v0.189 withFf），
   // 按「逐笔接上一笔」判整条链，不钉死链尾名字
-  check('写手：后续补丁没有绕过 withBm',
-    /const withRev = await patchRevIds\(withBm,/.test(w)
-      && /const withDocPr = await patchDocPr\(withRev,/.test(w)
-      && /const withFf = await patchFormFields\(withDocPr,/.test(w)
-      && /patchTcPr\(withFf,| : withFf/.test(w))
+  // v0.190：链尾变量名连续三轮让断言过期，改成动态链校验——
+  // 核心补丁链（withBm → withNumStart）每笔的输入必须是上一笔的输出名，
+  // 以后在链中插新补丁只要接上就不再红，不钉死任何链尾名字。
+  const chainOk = (src) => {
+    const defs = [...src.matchAll(/^  const (with[A-Z]\w*) =/gm)].map((m) => ({ name: m[1], at: m.index ?? 0 }))
+    const a = defs.findIndex((d) => d.name === 'withBm'), b = defs.findIndex((d) => d.name === 'withNumStart')
+    if (a < 0 || b <= a) return false
+    const core = defs.slice(a, b + 1)
+    return core.every((d, i) => i === 0 || src.slice(d.at, i + 1 < core.length ? core[i + 1].at : d.at + 600).includes(core[i - 1].name))
+  }
+  check('写手：withBm 是主链上的一笔', /const withBm = await patchBookmarkIds\(withImg,/.test(w))
+  check('写手：核心补丁链逐笔接上一笔（动态校验）', chainOk(w))
   check('写手：Start 压栈 / End 弹栈', /if \(isStart\) stack\.push\(want\)/.test(w) && /stack\.pop\(\)/.test(w))
   check('schema：注释改成「w:id 随载荷往返」，不再说库会重排', /按名回填源值/.test(s))
 }

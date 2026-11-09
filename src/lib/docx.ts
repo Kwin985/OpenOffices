@@ -1,6 +1,7 @@
 import {
   AlignmentType,
   BorderStyle,
+  type IPageBordersOptions,
   Bookmark,
   Column,
   CommentRangeEnd,
@@ -137,8 +138,27 @@ export interface PageMargin {
   left: number
 }
 
+/**
+ * 页面边框（v0.190）：四边统一一套值，走 docx 包 `sections[].properties.borders`
+ * 原生槽（包自己发 `<w:pgBorders>`，不手拼 XML）。屏上不画，只随 .odoc / docx 往返。
+ */
+export interface PageBorders {
+  /** OOXML `w:val` 字面，只认 `PAGE_BORDER_STYLES` 里的档位 */
+  style: string
+  /** hex，不带 `#` */
+  color: string
+  /** `w:sz`，八分之一磅（2..96） */
+  size: number
+  /** `w:space`，磅（0..31） */
+  space?: number
+}
+export const PAGE_BORDER_STYLES = ['single', 'dotted', 'dashed', 'double'] as const
+export const DEFAULT_PAGE_BORDERS: PageBorders = { style: 'single', color: '000000', size: 4, space: 1 }
+
 export interface PageSetup {
   size?: 'A4' | 'Letter' | 'custom'
+  /** 页面边框（v0.190）：四边统一；屏上不画，只往返 */
+  pageBorders?: PageBorders
   w?: number
   h?: number
   margin?: Partial<PageMargin>
@@ -313,6 +333,8 @@ export function resolvePage(p?: PageSetup): {
   paperCode?: string
   pageNum?: { fmt?: string; start?: number }
   colsLayout?: { equalWidth?: boolean; widths?: { w: number; space?: number }[] }
+  /** v0.190：页面边框，原值透传给包的 borders 原生槽 */
+  pageBorders?: PageBorders
 } {
   const preset = p?.size === 'Letter' ? PAGE_SIZES_MM.Letter : PAGE_SIZES_MM.A4
   const w = p?.size === 'custom' && p.w ? p.w : preset[0]
@@ -333,6 +355,7 @@ export function resolvePage(p?: PageSetup): {
     ...(p?.colsLayout ? { colsLayout: p.colsLayout } : {}),
     ...(p?.sectionType ? { sectionType: p.sectionType } : {}),
     ...(p?.paperCode ? { paperCode: p.paperCode } : {}),
+    ...(p?.pageBorders ? { pageBorders: p.pageBorders } : {}),
   }
 }
 
@@ -719,6 +742,24 @@ export function docPropsOf(meta: DocMeta | undefined): DocProps {
   return { ...DEFAULT_DOC_PROPS, ...(meta?.docProps ?? {}) }
 }
 
+/**
+ * 整片字面包裹壳（v0.190 泛化）：读手把「壳 + 一枚结果 run」展平成结果文字时，
+ * 模型与 docx 包都没有那个壳的槽，写手侧就从源包留下壳的**字面原件**，按结果
+ * 文字认领写出包里那枚 run、前后贴回去。
+ *
+ * 目前两类同形状：Word 表单域（v0.189，五枚 run）与 `w:smartTag`（v0.190，
+ * 一对开闭标签）。`marker` 是逐片幂等标记——写出包已有它就别叠第二层壳。
+ */
+export interface LiteralWrapper {
+  marker: string
+  /** 贴在结果 run 之前 */
+  before: string
+  /** 贴在结果 run 之后 */
+  after: string
+  /** 用来认领结果 run 的文字 */
+  text: string
+}
+
 // 页眉页脚设置 + 批注列表 + 页面设置：随 .odoc meta 存储，导出写入 OOXML
 export interface DocMeta {
   headerText?: string
@@ -748,14 +789,11 @@ export interface DocMeta {
    */
   docPrShells?: { id: string; name: string }[]
   /**
-   * Word 表单域整片字面（v0.189）：每个域存「结果文字 + 它前面三枚 run
-   * （begin/ffData、instrText、separate）+ 后面一枚 run（end）」。
-   * 读手把表单域展平成结果文字、模型与 docx 包都没有表单域的槽，所以写手侧
-   * 从源包按字面整片搬回（正则读的部件不进保真账，读手早查问过 fldChar 与
-   * ffData 全族，零新增查问对）。按**结果文字**对位而不是出现序：用户改过
-   * 结果文字就认不出，宁可不贴（见 patchFormFields）。
+   * 整片字面包裹壳（v0.189 表单域 / v0.190 智能标记），按**源包出现序**。
+   * 写手侧从源包正则取（不进保真账、零新增查问），`patchLiteralWrappers`
+   * 按结果文字对位贴回；用户改过结果文字就认不出，宁可不贴。
    */
-  formFields?: { before: string; after: string; text: string }[]
+  literalWrappers?: LiteralWrapper[]
   /** 文档属性（v0.188）：由 `docxToDocMeta` 从 docProps/core.xml 读出，编辑器可改 */
   docProps?: DocProps
   page?: PageSetup
@@ -831,17 +869,20 @@ export async function openDocxZip(bytes: Uint8Array): Promise<DocxZipSession> {
 
 // mammoth 不读页眉页脚：直接解 zip 里 sectPr 引用的 header/footer XML，抽文本与 PAGE 页码域
 /**
- * Word 表单域整片字面提取（v0.189）。
+ * 整片字面包裹壳提取（v0.189 表单域 / v0.190 泛化 + 智能标记）。
  *
- * 源件里一个表单域是五枚连续的 run：`begin`(带 ffData) / `instrText` /
- * `separate` / 结果文字 / `end`。读手把它展平成结果文字，模型与 docx 包都没有
- * 表单域的槽，所以**写手侧**从源包按字面整片搬回：只存结果文字与它前后两组
- * run，按结果文字对位到写出包（用户改过结果文字就认不出，宁可不贴）。
+ * 两类壳同形状：读手把「壳 + 一枚结果 run」展平成结果文字，模型与 docx 包都
+ * 没有那个壳的槽。写手侧从源包按字面留下壳的前后两片，按结果文字对位贴回
+ * （用户改过结果文字就认不出，宁可不贴）。① 表单域是五枚 run：`begin`(带
+ * ffData) / `instrText` / `separate` / 结果文字 / `end`；② `w:smartTag` 是
+ * 一对开闭标签包住一枚结果 run。
  * 边界限定在单个 `<w:p>…</w:p>` 内，绝不跨段吞 run；段落切法沿用夹具通用口径
- * （非贪婪 `<w:p>` 会截断 wps 文本框内嵌段落，但那些段落不含 ffData，会被跳过）。
+ * （非贪婪 `<w:p>` 会截断 wps 文本框内嵌段落，但那些段落不含壳，会被跳过）。
+ * 泛化点（教训⑪）：第二处同形状需求出现时才抽共用通道，`marker` 让每片各判
+ * 各的幂等，避免「包发过普通域就整笔不贴」这种跨类误伤。
  */
-export function formFieldsOf(docXml: string): { before: string; after: string; text: string }[] {
-  const out: { before: string; after: string; text: string }[] = []
+export function literalWrappersOf(docXml: string): LiteralWrapper[] {
+  const out: (LiteralWrapper & { at: number })[] = []
   // `<w:r>` 与带属性的 `<w:r w:rsidR=…>` 都认，且不会把 `<w:rPr>` 误当 run 开标签
   const runStart = (s: string, at: number) => Math.max(s.lastIndexOf('<w:r>', at), s.lastIndexOf('<w:r ', at))
   for (const pm of docXml.matchAll(/<w:p(?:\s[^>]*)?>[\s\S]*?<\/w:p>/g)) {
@@ -864,9 +905,26 @@ export function formFieldsOf(docXml: string): { before: string; after: string; t
     const after = p.slice(endRunStart, endRunEnd + '</w:r>'.length)
     // 三态守卫：拿到的真是 begin→separate 与 end 两片，不是误配到别的域
     if (!before.includes('<w:ffData>') || !after.includes('fldCharType="end"')) continue
-    out.push({ before, after, text })
+    // marker 取 `<w:ffData>` 而不是 `<w:fldChar`：包自己发的**普通域**没有 ffData，
+    // 不该因为「文档里有别处一个域」就把这张表单的壳整笔跳过（v0.190 口径收窄）
+    out.push({ at: pm.index ?? 0, marker: '<w:ffData>', before, after, text })
   }
-  return out
+  // ② 智能标记（v0.190）：`<w:smartTag w:element=… w:uri=…>` 包住一枚结果 run，
+  // 读手下钻照旧、两枚属性只读记账。壳是纯元数据（Word 2003 的「认出这是地址」），
+  // 屏上不兑现，但导入另存不该把它抹掉——同一条通道，marker 用开标签名逐片判幂等。
+  for (const pm of docXml.matchAll(/<w:p(?:\s[^>]*)?>[\s\S]*?<\/w:p>/g)) {
+    const p = pm[0]
+    const open = /<w:smartTag\b[^>]*>/.exec(p)
+    if (!open) continue
+    const close = p.lastIndexOf('</w:smartTag>')
+    if (close < open.index + open[0].length) continue
+    const inner = p.slice(open.index + open[0].length, close)
+    const t = /<w:t[^>]*>([^<]*)<\/w:t>/.exec(inner)
+    if (!t?.[1]) continue
+    out.push({ at: pm.index ?? 0, marker: '<w:smartTag', before: open[0], after: '</w:smartTag>', text: t[1] })
+  }
+  // 两类壳按**源包出现序**排好，补丁才能用单调 cursor 一次走完（不回头找 run）
+  return out.sort((a, b) => a.at - b.at).map(({ marker, before, after, text }) => ({ marker, before, after, text }))
 }
 
 export async function docxToDocMeta(bytes: Uint8Array, shared?: DocxZipSession): Promise<DocMeta> {
@@ -987,6 +1045,9 @@ export async function docxToDocMeta(bytes: Uint8Array, shared?: DocxZipSession):
     const gap = tw(colsEl, 'space')
     if (gap && Math.abs(gap - DEFAULT_COL_GAP) > 0.6) page.colGap = rmm(gap)
   }
+  // v0.190：页面边框走写手侧正则读（不进保真账、读手零改动），放进 page 一起持久化
+  const pageBorders = pageBordersOf(docXml)
+  if (pageBorders) page.pageBorders = pageBorders
   if (Object.keys(page).length) out.page = page
   // 主题件（v0.164）：整份原样带走，导出时原样放回（见 attachThemePart）。
   // v0.180：走共享会话的 read（读手那份 theme1.xml 也走同一处），省掉第二次解压；
@@ -998,9 +1059,10 @@ export async function docxToDocMeta(bytes: Uint8Array, shared?: DocxZipSession):
   if (coreXml.trim()) out.docProps = parseCoreProps(coreXml)
   if (revIds.length) out.revIds = revIds
   if (docPrShells.length) out.docPrShells = docPrShells
-  // v0.189：表单域整片字面，与上面两笔同源（写手侧从源包正则读，不进保真账）
-  const formFields = formFieldsOf(docXml)
-  if (formFields.length) out.formFields = formFields
+  // v0.189/190：整片字面包裹壳（表单域 + 智能标记），与上面几笔同源
+  // （写手侧从源包正则读，不进保真账）
+  const literalWrappers = literalWrappersOf(docXml)
+  if (literalWrappers.length) out.literalWrappers = literalWrappers
   return out
 }
 
@@ -2365,6 +2427,38 @@ const BDR_LINE: Record<string, (typeof BorderStyle)[keyof typeof BorderStyle]> =
 }
 
 /**
+ * 页面边框读侧（v0.190）：从源包 `document.xml` 正则读 `<w:pgBorders>` 的第一枚边，
+ * 组成「四边统一」的一套值。走 `docxToDocMeta`（正则读的部件不进保真账），读手
+ * `sectionOf` 一行没动，零新增查问。只认 `PAGE_BORDER_STYLES` 四档、脏值各自回落；
+ * 整片认不出就返回 undefined，宁可少一枚，不赌坏件。
+ */
+export function pageBordersOf(docXml: string): PageBorders | undefined {
+  const block = /<w:pgBorders\b[^>]*>([\s\S]*?)<\/w:pgBorders>/.exec(docXml)
+  if (!block) return undefined
+  const edge = /<w:(?:top|left|bottom|right)\b([^>]*)\/>/.exec(block[1])
+  if (!edge) return undefined
+  // 字符串定位，不按属性名编译动态正则（与 v0.187 的 hasAttrNamed 同款纪律）
+  const a = (k: string) => {
+    const needle = `w:${k}="`
+    const i = edge[1].indexOf(needle)
+    if (i < 0) return undefined
+    const j = edge[1].indexOf('"', i + needle.length)
+    return j < 0 ? undefined : edge[1].slice(i + needle.length, j)
+  }
+  const style = (a('val') ?? '').toLowerCase()
+  if (!(PAGE_BORDER_STYLES as readonly string[]).includes(style)) return undefined
+  const color = (a('color') ?? '').replace(/^#/, '').toUpperCase()
+  const size = Number(a('sz'))
+  const space = Number(a('space'))
+  return {
+    style,
+    color: /^[0-9A-F]{6}$/.test(color) ? color : DEFAULT_PAGE_BORDERS.color,
+    size: Number.isFinite(size) && size >= 2 && size <= 96 ? Math.round(size) : DEFAULT_PAGE_BORDERS.size,
+    ...(Number.isFinite(space) && space >= 0 && space <= 31 ? { space: Math.round(space) } : {}),
+  }
+}
+
+/**
  * 字符边框的主题三枚（v0.166）：`data-rbdr` 载荷 → 追加进 `<w:bdr>` 的属性串。
  * 空串 = 这一枚不补（补丁按 `<w:bdr>` 出现序对位，空串占位）。
  *
@@ -3151,12 +3245,13 @@ async function finishPatch(
 export async function prosemirrorToDocxBytes(
   json: PMNode,
   meta?: DocMeta,
-  opts?: { legacyPartText?: boolean; legacyRetag?: boolean; legacyAttrScan?: boolean; legacyBlockScan?: boolean },
+  opts?: { legacyPartText?: boolean; legacyRetag?: boolean; legacyAttrScan?: boolean; legacyBlockScan?: boolean; legacyEdgeScan?: boolean },
 ): Promise<Uint8Array> {
-  // v0.186–v0.188：只给同进程 A/B 对照腿用（入口设一次），产品路径恒为 false
+  // v0.186–v0.190：只给同进程 A/B 对照腿用（入口设一次），产品路径恒为 false
   legacyRetag = !!opts?.legacyRetag
   legacyAttrScan = !!opts?.legacyAttrScan
   legacyBlockScan = !!opts?.legacyBlockScan
+  legacyEdgeScan = !!opts?.legacyEdgeScan
   const dt = newDocTrack()
   // 编号注册表（v0.142）：blocksOf 一路往里传，收齐全篇的自定义档位后进 Document.numbering。
   // 带上源文档的编号定义（v0.158）：重建一串列表时能照原样逐层发，而不是三层拍成一个符面
@@ -3165,6 +3260,16 @@ export async function prosemirrorToDocxBytes(
   const twips = (mm: number) => Math.round(mm * MM_TWIPS)
   // 版心宽度：与界面上的精确列宽同一个算法（contentTwipsOf），没有宽度账的表按它等分写真网格
   const contentTw = contentTwipsOf(pg)
+  // v0.190：页面边框四边统一一套值（读侧只认源件第一枚边，不假装还原四边各异的件）
+  const pb = pg.pageBorders
+  const pageBorderOption = pb
+    ? {
+        style: BDR_LINE[pb.style] ?? BorderStyle.SINGLE,
+        color: pb.color,
+        size: pb.size,
+        ...(pb.space !== undefined ? { space: pb.space } : {}),
+      }
+    : undefined
   const section: {
     children: (Paragraph | Table | TableOfContents)[]
     properties?: {
@@ -3174,6 +3279,9 @@ export async function prosemirrorToDocxBytes(
         margin: Record<string, number>
         /** 页码型别与起始值（v0.170）：包的 sections[].properties.page.pageNumbers 原生槽 */
         pageNumbers?: { start?: number; formatType?: (typeof NumberFormat)[keyof typeof NumberFormat] }
+        /** v0.190：页面边框。**挂在 page 下**（ISectionPropertiesOptionsBase.page.borders），
+         * 放 properties 顶层会被包静默忽略；键名是 pageBorderTop 一族，不是 OOXML 的 top */
+        borders?: IPageBordersOptions
       }
       /** v0.183：节起法 w:type（nextPage/continuous/evenPage…），包的原生槽 */
       type?: (typeof SectionType)[keyof typeof SectionType]
@@ -3225,6 +3333,19 @@ export async function prosemirrorToDocxBytes(
                 ...(pg.pageNum.fmt
                   ? { formatType: pg.pageNum.fmt as (typeof NumberFormat)[keyof typeof NumberFormat] }
                   : {}),
+              },
+            }
+          : {}),
+        // v0.190：页面边框。包没传 borders 时根本不发 `<w:pgBorders>`，所以走
+        // 原生槽而不是 post-pack 手拼 XML（纪律⑦：包不发就走包）。四边统一一套值；
+        // **挂在 page 下**——放 properties 顶层会被包静默忽略。
+        ...(pageBorderOption
+          ? {
+              borders: {
+                pageBorderTop: pageBorderOption,
+                pageBorderBottom: pageBorderOption,
+                pageBorderLeft: pageBorderOption,
+                pageBorderRight: pageBorderOption,
               },
             }
           : {}),
@@ -3461,8 +3582,8 @@ export async function prosemirrorToDocxBytes(
   const withRev = await patchRevIds(withBm, meta?.revIds ?? [], sess)
   // v0.188：画布级 docPr 的 id/name（源包出现序前缀对位），与上面几笔共用会话
   const withDocPr = await patchDocPr(withRev, meta?.docPrShells, sess)
-  // v0.189：Word 表单域整片字面（按结果文字对位），与上面几笔共用会话
-  const withFf = await patchFormFields(withDocPr, meta?.formFields, sess)
+  // v0.189/190：整片字面包裹壳（表单域 + 智能标记，按结果文字对位），共用会话
+  const withLit = await patchLiteralWrappers(withDocPr, meta?.literalWrappers, sess)
   // 表闸门三样都要补：样式推出来的（looks）与表自己带的（dt.tblLooks），
   // v0.152 起再加表级条件格式尺寸两枚（dt.tblPrs，与 tblLook 同住 tblPr）
   const needTbl =
@@ -3473,7 +3594,7 @@ export async function prosemirrorToDocxBytes(
     dt.cnfStyles.some((x) => x) ||
     dt.tblBorders.some((x) => x)
   // 单元格不换行（v0.152）：包里没有 noWrap 的槽，按 <w:tc> 出现序插 <w:noWrap/>
-  const withCell = dt.cellExtras.some((x) => x) ? await patchTcPr(withFf, dt.cellExtras, sess) : withFf
+  const withCell = dt.cellExtras.some((x) => x) ? await patchTcPr(withLit, dt.cellExtras, sess) : withLit
   // 底纹的存盘原件（v0.164）：按 <w:shd> 出现序**合并**属性（包只发 val/color/fill 三枚，
   // 且 fill 写的是解析后的屏上色——源件的字面色与主题三枚都要改回来/补上去）
   const withShd = await patchShdAttrs(withCell, dt.shdExtras, sess)
@@ -3800,19 +3921,20 @@ export async function patchDocPr(
 }
 
 /**
- * Word 表单域整片回填（v0.189）。
+ * 整片字面包裹壳回填（v0.189 表单域 / v0.190 泛化 + 智能标记）。
  *
- * 读手把 `begin/ffData → instrText → separate → 结果文字 → end` 五枚 run 展平成
- * 结果文字，模型与 docx 包都没有表单域的槽；写手侧 `formFieldsOf` 从源包留下
- * 前后两组 run 的字面，这里按**结果文字**找回写出包里那枚 run，把壳贴回去。
- * 三道守卫：① 写出包已有 `w:fldChar` 就整体不动（幂等，不叠第二套域）；
- * ② 结果文字被用户改过就认不出，宁缺毋滥跳过（不凭空造域）；
- * ③ 只贴提取时验过含 `ffData` 的片，且插入区间按 cursor 单调前进，不重叠。
- * 正则读的部件不进保真账，读手早查问过 fldChar 与 ffData 全族，零新增查问对。
+ * 写手侧 `literalWrappersOf` 从源包留下壳的前后两片字面，这里按**结果文字**
+ * 找回写出包里那枚 run，前后贴回去。四道守卫：① **逐片**按 `marker` 判幂等
+ * （v0.190 把 v0.189 的全局 `<w:fldChar` 闸门收窄成各片自己的标记，包发的
+ * 普通域不再误伤表单域、已有的 smartTag 也不影响表单域）；② 结果文字被用户
+ * 改过就认不出，宁缺毋滥跳过（不凭空造壳）；③ 片自身四格齐全才贴；
+ * ④ 插入区间按 cursor 单调前进，不重叠（两类壳已按源包出现序排好）。
+ * 正则读的部件不进保真账，读手早查问过 fldChar / ffData / smartTag 全族，
+ * 零新增查问对。
  */
-export async function patchFormFields(
+export async function patchLiteralWrappers(
   bytes: Uint8Array,
-  fields: { before: string; after: string; text: string }[] | undefined,
+  fields: LiteralWrapper[] | undefined,
   sess?: PackSession,
 ): Promise<Uint8Array> {
   if (!fields?.length) return bytes
@@ -3820,12 +3942,11 @@ export async function patchFormFields(
   const file = zip.file('word/document.xml')
   if (!file) return bytes
   const xml = await partText(zip, 'word/document.xml', sess)
-  if (xml.includes('<w:fldChar')) return bytes
   let out = ''
   let cursor = 0
   let touched = false
   for (const f of fields) {
-    if (!f.text || !f.before.includes('<w:ffData>')) continue
+    if (!f.text || !f.marker || !f.before || !f.after || xml.includes(f.marker)) continue
     const needle = `>${f.text}</w:t>`
     let from = cursor
     let runStart = -1
@@ -4466,6 +4587,29 @@ async function patchBeforeElem(bytes: Uint8Array, anchor: string, extras: string
 let legacyAttrScan = false
 /** v0.188：`patchImgXml` 的对照腿物化 `<w:drawing>` 块数组，产品路径惰性遍历 */
 let legacyBlockScan = false
+/** v0.190：`patchBorderBlocks` 的对照腿按边名编译 `edgeRe`，产品路径字符串定位 */
+let legacyEdgeScan = false
+
+/**
+ * v0.190：循环内按边名编译的 `edgeRe` 换成字符串定位（零动态正则）。
+ * 与原 `<w:${edge}(?=[\s/>])[^>]*>` 等价：标签名后必须是空白 / `/` / `>`，
+ * 命中第一枚开标签、返回它的字面与位置；没命中就是写侧没发这一边（用户删了），
+ * 不是错位。`edge` 里的正则元字符也不再被当模式解析（顺带修一个隐患）。
+ */
+export function findEdgeTag(block: string, edge: string): { at: number; xml: string } | undefined {
+  const needle = `<w:${edge}`
+  let from = 0
+  while (true) {
+    const i = block.indexOf(needle, from)
+    if (i < 0) return undefined
+    const next = block[i + needle.length]
+    if (next !== undefined && (next <= ' ' || next === '/' || next === '>')) {
+      const end = block.indexOf('>', i)
+      return end < 0 ? undefined : { at: i, xml: block.slice(i, end + 1) }
+    }
+    from = i + needle.length
+  }
+}
 
 /** 开标签上有没有这枚「空白收边」的属性（零动态正则、零临时数组） */
 function hasAttrNamed(tag: string, name: string): boolean {
@@ -4650,10 +4794,18 @@ async function patchBorderBlocks(bytes: Uint8Array, tag: 'w:pBdr' | 'w:tcBorders
         }
         continue
       }
-      const edgeRe = new RegExp(`<w:${edge}(?=[\\s/>])[^>]*>`)
+      // v0.190：循环内按边名编译的 edgeRe → 字符串定位（零动态正则）。
+      // `legacyEdgeScan:true` 复刻改前的 `new RegExp` 路径，两腿同源只差一个参数。
+      const hit = legacyEdgeScan
+        ? (() => {
+            const re = new RegExp(`<w:${edge}(?=[\\s/>])[^>]*>`)
+            const m = re.exec(block)
+            return m ? { at: m.index ?? 0, xml: m[0] } : undefined
+          })()
+        : findEdgeTag(block, edge)
       // 块里没有这条边 = 写侧没发它（用户删了这一边），不是错位，跳过
-      if (!edgeRe.test(block)) continue
-      block = block.replace(edgeRe, (t) => mergeTagAttrs(t, attrs))
+      if (!hit) continue
+      block = block.slice(0, hit.at) + mergeTagAttrs(hit.xml, attrs) + block.slice(hit.at + hit.xml.length)
     }
     out += xml.slice(cursor, start) + block
     cursor = stop
