@@ -3124,7 +3124,65 @@ HEAD 逐字节相同、四条变异腿不动，pptx 70.1/74.3、42/19 全绿、
   未实测；PDF 页序只在 pdf-lib 内存夹具与源码级断言验证，没拿带真实标注与
   表单域的文件对撞；惰性遍历端到端收益在噪声内。
 
-### 顺延清单（D49）
+### v0.190 追加节：整片通道泛化 + `smartTag` 两族 + 页面边框 + `edgeRe` 收尾
+
+**往返账动 2 对，全部 `lost → kept`**：`smartTag|element`(address) /
+`smartTag|uri`(urn:schemas-microsoft-com:office:smarttags)。
+正文 **270/300 = 90.0% → 272/300 = 90.7%**、合计 **354/619 57.2% →
+356/619 57.5%**，掉 260 → 258、值变 5 不动、图形壳 84/319 = 26.3% 不动。
+
+- **一族不是两个 bug**：`w:smartTag` 是 Word 2003 的「认出这是个地址/人名」
+  包裹壳（`<w:smartTag w:element=… w:uri=…><w:r><w:t>…</w:t></w:r>
+  </w:smartTag>`）。读手 v0.154 起就下钻照旧、两枚属性 `attrL` 只读记账，
+  模型与 docx 包都没有这个槽；写出包只剩结果文字那一枚 run，壳和两枚属性
+  一起掉。补一片壳，两对一起回来。
+- **泛化点（教训⑪）**：v0.189 为表单域写的「按结果文字认领、前后贴回字面
+  原件」在第二处同形状需求出现时才抽成共用通道 `literalWrappersOf` /
+  `patchLiteralWrappers`，两类壳统一 `{ marker, before, after, text }`，按
+  **源包出现序**排好让补丁用单调 cursor 一次走完。`test-smart-tag.mjs`
+  31 项钉两类壳混排、半截壳、空结果文字、逐片幂等与写出包逐字相同。
+- **幂等口径收窄（顺手修的跨类误伤）**：v0.189 的全局 `<w:fldChar` 闸门会
+  因为「文档里别处有一个普通域」就把表单域壳整笔跳过。本轮改成**逐片**按
+  `marker` 判：表单域 marker 用 `<w:ffData>`（普通域没有），smartTag 用开标签
+  名。构造夹具验证：写出包已有 smartTag 时只跳过那一片，表单域那片照贴；
+  两类 marker 都在时整笔不动。
+- **零新增查问**：源包是**正则读**的部件（不进保真账），读手源码一行没动，
+  查问仍 **672**，`docs/fidelity.*` 与 HEAD **逐字节相同**，四条变异腿
+  52.5 / 59.4 / 99.0 / 96.5 与记录对 392/416/715/685 一字不动。
+  `modules` 仍 68（纯函数放既有 `docx.ts`）。
+- **判断复查、不改口**：`.d.ts` 里 `outline` 有多处命中，逐个看过是图形
+  `a:ln` 描边、段落 `outlineLevel` 与 `Wpg` 媒体数据，**不是 `IRunOptions`**。
+  D49 记的「镂空没有原生槽，要先定 rPr 内位次并新建 charExtra 槽」成立，
+  本轮没为凑数字动它。
+- **功能：页面边框**（WPS 评估里挂了多轮的缺口，修的是坏件）。包**有**
+  原生槽 `IPageBordersOptions`，但层级与键名都要验：挂在
+  `properties.page.borders`（不是 `properties.borders`），选项键是
+  `pageBorderTop/Right/Bottom/Left`（不是 OOXML 的 `top/left/...`）。第一次
+  接错只发出空 `<w:pgBorders/>`，dump 写出包才发现；改用包导出的类型钉死。
+  读侧 `pageBordersOf` 从源包正则读四边统一值（零新增查问、读手零改动），
+  写侧走原生槽让包自己发 XML，DocEditor 页面设置面板开关 + 线型/颜色/线宽，
+  随 `.odoc` 与 docx 真双向。**默认路径不发 pgBorders**（账本不受扰，
+  `test-page-borders.mjs` 34 项含这一条）。只认四档线型、四边统一一套值，
+  屏上纸面与打印预览不画。
+- **性能**：`patchBorderBlocks` 里按边名编译的 `edgeRe`（每块每 chunk 一次
+  `new RegExp`）换成 `findEdgeTag` 字符串定位 + `slice` 拼接，
+  `legacyEdgeScan:true` 复刻改前路径、两腿逐部件归一逐字相同。纯函数段
+  50/500/2000 块 **−26.7% / −27.1% / −26.1%**（收益比前几轮小，如实写）；
+  **端到端 27.4 → 29.6ms（+8.2%，噪声内，不写成降幅）**。顺带修掉 `edge`
+  含正则元字符被当模式解析的隐患。
+- **门禁**：tsc 0、`tsc && vite build` ✓（`pnpm run build` 的 pdfjs 资源清理仍
+  被环境安全策略拦下）；**42 组结构测试全绿**（新增 31 + 34 + 20 项；4 条旧
+  断言按新口径改，其中三条钉死链尾变量名的改成**动态链校验**：核心补丁链
+  12 笔每笔输入 = 上一笔输出名，以后插补丁不再红）；保真 99.0/98.4 与 HEAD
+  逐字节相同、四条变异腿不动，pptx 70.1/74.3、42/19 全绿、
+  `--selftest --mut no-ga` 42 条全红后复位；往返账 `355d70bc…`/`fa96ade6…`
+  两次复跑一致；`bench-docx-pack` 语义等价 ✓、`bench-docx-parts` 部件解压
+  **23 → 5**（本轮没新增部件读）。
+- **诚实边界**：整片壳按结果文字认领，用户改过结果文字就不贴回，真件里
+  smartTag 嵌套 / 多枚未实测；页面边框只有合成夹具与端到端断言，没做真机
+  WPS / Word 对撞，四边统一、只认四档、屏上不画；ODT 链没扩。
+
+### 顺延清单（D50）
 
 - 图形壳剩余 **233 对**：三维族 `sp3d`(3) / `props3d`(3) / `lightRig`(2)
   要先定「夹具结构非法、真件应写成 effectLst 之后的兄弟」的口径；**删
@@ -3133,10 +3191,12 @@ HEAD 逐字节相同、四条变异腿不动，pptx 70.1/74.3、42/19 全绿、
   `line`(14) 仍是模型无槽、写手发不出 `w:pict`。`wp:posOffset` 值在元素
   文本里、账本压根没这一对，**动 0 对**；`sizeRelH/V` 是 wp14 扩展，
   夹具写 `wp:` 前缀、真件要 `mc:AlternateContent`。
-- 正文长尾：`outline|val`（要先定 rPr 内 schema 位次并新建 charExtra 槽，
-  包没原生槽）、`smartTag|*`、±5 缇、`docPr|descr`（包把 alt 顶进来，归属
-  口径未定）、`theme1.xml` 口径未定；**编号 id 三族是引用图、不是坏件，
-  v0.189 探过按纪律不碰**。`fldChar`/`ffData` 一族 v0.189、
+- 正文长尾：`outline|val`（要先定 rPr 内 schema 位次并新建 charExtra 槽；
+  **v0.190 复查 `.d.ts` 确认命中的 outline 都不是 `IRunOptions`，判断成立**）、
+  `w:sdt` 内容控件壳、±5 缇、`docPr|descr`（包把 alt 顶进来，归属口径未定）、
+  `theme1.xml` 口径未定；**编号 id 三族是引用图、不是坏件，v0.189 探过按纪律
+  不碰**。`smartTag|element`/`smartTag|uri` v0.190、
+  `fldChar`/`ffData` 一族 v0.189、
   `docPr|id`/`docPr|name` v0.188、`ins|id`/`startOverride|val` v0.187、
   `bookmark*|id` v0.186、`ind|left`/`ind|right` 显式 0 v0.185、
   `color|val`/`lvlJc|val` v0.184、`legacy|*` 与 `type|val`/`pgSz|code` v0.183、
@@ -3145,15 +3205,17 @@ HEAD 逐字节相同、四条变异腿不动，pptx 70.1/74.3、42/19 全绿、
   `patchNumberingXml` 的 `pick.indexOf` 撑不起来（写出包 abstractNum 块恒为 3、
   不随 defs 增长）。
 - PDF 页序重排 v0.189、Impress 占位矩形编辑（第二套拖拽状态机）v0.186、
-  Writer 自动缩放两档 v0.187（三处 UI 共用 `fitZoom`）、文档属性面板 v0.188
-  已补；Calc 视图缩放（落点在预存改动文件 `SheetEditor.tsx`，按房规换落点或
-  只记结论）；**pdf-lib 按需加载**仍等 `pdf-text-edit.ts` 入库（本轮 build 仍见
-  `INEFFECTIVE_DYNAMIC_IMPORT`）；版式库 / SmartArt / 3D / Fontwork、页面边框 /
-  水印 / 邮件合并 / 公式编辑器 / 数据透视表仍未做。Writer 标尺 v0.179、
+  Writer 自动缩放两档 v0.187（三处 UI 共用 `fitZoom`）、文档属性面板 v0.188、
+  页面边框读写链 v0.190 已补；Calc 视图缩放（落点在预存改动文件
+  `SheetEditor.tsx`，按房规换落点或只记结论）；**pdf-lib 按需加载**仍等
+  `pdf-text-edit.ts` 入库（本轮 build 仍见 `INEFFECTIVE_DYNAMIC_IMPORT`）；
+  版式库 / SmartArt / 3D / Fontwork、水印 / 邮件合并 / 公式编辑器 /
+  数据透视表仍未做。Writer 标尺 v0.179、
   状态栏 v0.180、逐页翻页预览 v0.181、Impress 母版配色 v0.182、
   清除格式 v0.183、PDF 首页末页 v0.184 已补。
-- 写手 `patchBorderBlocks` 循环内按边名编译的 `edgeRe` 仍物化为动态正则，
-  顺延；文档属性与 `docPr` / 表单域两族都只在 docx 链，ODT 写手没跟着扩。
-- D32–D48 原账不动（同上）。
+- 写手补丁链的循环内动态正则 v0.190 已收干净（`edgeRe` → `findEdgeTag`）；
+  文档属性、`docPr`、表单域 / `smartTag` 与页面边框都只在 docx 链，
+  ODT 写手没跟着扩。
+- D32–D49 原账不动（同上）。
 
 

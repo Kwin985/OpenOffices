@@ -22,9 +22,9 @@
  },
  "totals": {
   "read": 619,
-  "kept": 354,
+  "kept": 356,
   "value": 5,
-  "lost": 260,
+  "lost": 258,
   "part": 0,
   "consulted": 672,
   "srcParts": 7,
@@ -4890,20 +4890,24 @@
    ]
   },
   "smartTag|element": {
-   "bucket": "lost",
+   "bucket": "kept",
    "n": 1,
    "src": [
     "address"
    ],
-   "out": []
+   "out": [
+    "address"
+   ]
   },
   "smartTag|uri": {
-   "bucket": "lost",
+   "bucket": "kept",
    "n": 1,
    "src": [
     "urn:schemas-microsoft-com:office:smarttags"
    ],
-   "out": []
+   "out": [
+    "urn:schemas-microsoft-com:office:smarttags"
+   ]
   },
   "snapToGrid|val": {
    "bucket": "kept",
