@@ -44,9 +44,9 @@ docx ──读手──▶ HTML ──TipTap schema──▶ PM 模型 ──写
 | | 值 |
 |---|---:|
 | 读到的对 | 619 |
-| 保留 | **346（55.9%）** |
-| 值变 | 6 |
-| 掉了 | 267 |
+| 保留 | **354（57.2%）** |
+| 值变 | 5 |
+| 掉了 | 260 |
 | 缺件 | 0 |
 | 源包部件 | 7 |
 | 写出包部件 | 7 |
@@ -61,13 +61,13 @@ docx ──读手──▶ HTML ──TipTap schema──▶ PM 模型 ──写
 
 | 族 | 读到的 | 保留 | 值变 | 掉了 | 保留率 |
 |---|---:|---:|---:|---:|---:|
-| 正文属性（`w:*`） | 300 | 262 | 6 | 32 | **87.3%** |
+| 正文属性（`w:*`） | 300 | 270 | 5 | 25 | **90.0%** |
 | 图形壳（`a:`/`v:`/`wp:`/`pic:`/`wps:`/`o:`） | 319 | 84 | 0 | 235 | **26.3%** |
 
 口径说明：一个对算正文，当且仅当它在源包里**只**出现在 `w:*` 元素上（沾过图形壳就算图形壳）。
 对名按 local name 归并（与保真账本同口径），所以 `fill|type` 这种两族同名的会并成一笔。
 
-### 掉了（267）
+### 掉了（260）
 
 名字一次都没写出来。这里每一行都是一条**单边通道**：读手读了，模型或写手没有它的槽。
 
@@ -75,7 +75,6 @@ docx ──读手──▶ HTML ──TipTap schema──▶ PM 模型 ──写
 |---|---:|---|---|
 | `schemeClr|val` | 8 | accent1, accent2, accent3, lt1 | — |
 | `gs|pos` | 4 | 0, 100000 | — |
-| `fldChar|fldCharType` | 3 | begin, separate, end | — |
 | `lumMod|val` | 3 | 50000, 80000 | — |
 | `ext|uri` | 2 | {1234-5678-9abc-def0}, {1234-5678-9abc-def1} | — |
 | `imagedata|id` | 2 | rid# | — |
@@ -91,7 +90,6 @@ docx ──读手──▶ HTML ──TipTap schema──▶ PM 模型 ──写
 | `srgbClr|val` | 2 | ff0000, 0000ff | — |
 | `alpha|val` | 1 | 50000 | — |
 | `alphaOff|val` | 1 | 200 | — |
-| `appearance|val` | 1 | normal | — |
 | `attr|name` | 1 | x | — |
 | `attr|val` | 1 | y | — |
 | `blipFill|rotWithShape` | 1 | 1 | — |
@@ -113,15 +111,16 @@ docx ──读手──▶ HTML ──TipTap schema──▶ PM 模型 ──写
 | `bodyPr|upright` | 1 | 0 | — |
 | `bodyPr|vert` | 1 | horz | — |
 | `bodyPr|vertOverflow` | 1 | overflow | — |
-| …共 267 条，完整清单见 `docs/fidelity-roundtrip.json` | | | |
+| `bodyPr|wrap` | 1 | square | — |
+| `chExt|cx` | 1 | 1000 | — |
+| …共 260 条，完整清单见 `docs/fidelity-roundtrip.json` | | | |
 
-### 值变（6）
+### 值变（5）
 
 名字在，但某个源值没写回去。比「掉了」更隐蔽——普查看着它在场，屏上也像那么回事。
 
 | 对 | 源里出现 | 源值 | 写出值 |
 |---|---:|---|---|
-| `name|val` | 7 | text1, normal, report head, report | table grid, normal, plain, report |
 | `gridCol|w` | 4 | 5000, 2500 | 4995, 2505 |
 | `abstractNum|abstractNumId` | 1 | 0 | 1, 2, 3 |
 | `abstractNumId|val` | 1 | 0 | 1, 3 |
@@ -134,12 +133,13 @@ docx ──读手──▶ HTML ──TipTap schema──▶ PM 模型 ──写
 
 （空）
 
-### 保留（346）
+### 保留（354）
 
 这些是真的双向。列出来是为了让「保留」也可核对，而不是一个孤零零的百分比。
 
 | 对 | 源里出现 | 源值 | 写出值 |
 |---|---:|---|---|
+| `name|val` | 7 | text1, normal, report head, report | text1, table grid, normal, plain |
 | `style|styleId` | 6 | normal, reporthead, report, reportchar | tablegrid, normal, plain, report |
 | `style|type` | 6 | paragraph, character, table | table, paragraph, character |
 | `docPr|id` | 5 | 7, 8, 9, 11 | 7, 8, 9, 11 |
@@ -156,15 +156,14 @@ docx ──读手──▶ HTML ──TipTap schema──▶ PM 模型 ──写
 | `blip|embed` | 3 | rid# | rid# |
 | `cNvPr|id` | 3 | 3, 4, 11 | 3, 4, 0, 11 |
 | `cNvPr|name` | 3 | cnv 名, 浮动图, 图形余量 | cnv 名, 浮动图, , 图形余量 |
+| `fldChar|fldCharType` | 3 | begin, separate, end | begin, separate, end |
 | `ind|left` | 3 | 420, 0 | 420, 0, 720, 1440 |
 | `left|color` | 3 | 00ff00, auto, 000000 | 00ff00, auto, 000000, adbbd4 |
 | `left|space` | 3 | 2, 0 | 2, 0, 3 |
 | `left|sz` | 3 | 4 | 4 |
 | `left|val` | 3 | dotted, dashed, single | dotted, single, dashed |
 | `ln|w` | 3 | 9525 | 9525 |
-| `picLocks|noChangeAspect` | 3 | 0, 1 | 0, 1 |
-| `spacing|after` | 3 | 240, 0, 120 | 240, 0, 120 |
-| …共 346 条，完整清单见 `docs/fidelity-roundtrip.json` | | | |
+| …共 354 条，完整清单见 `docs/fidelity-roundtrip.json` | | | |
 
 ## 边界
 

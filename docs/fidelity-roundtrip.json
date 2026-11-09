@@ -22,9 +22,9 @@
  },
  "totals": {
   "read": 619,
-  "kept": 346,
-  "value": 6,
-  "lost": 267,
+  "kept": 354,
+  "value": 5,
+  "lost": 260,
   "part": 0,
   "consulted": 672,
   "srcParts": 7,
@@ -207,12 +207,14 @@
    ]
   },
   "appearance|val": {
-   "bucket": "lost",
+   "bucket": "kept",
    "n": 1,
    "src": [
     "normal"
    ],
-   "out": []
+   "out": [
+    "normal"
+   ]
   },
   "attr|name": {
    "bucket": "lost",
@@ -784,12 +786,14 @@
    ]
   },
   "calcOnExit|val": {
-   "bucket": "lost",
+   "bucket": "kept",
    "n": 1,
    "src": [
     "1"
    ],
-   "out": []
+   "out": [
+    "1"
+   ]
   },
   "caps|val": {
    "bucket": "kept",
@@ -1244,12 +1248,14 @@
    "out": []
   },
   "default|val": {
-   "bucket": "lost",
+   "bucket": "kept",
    "n": 1,
    "src": [
     "默认"
    ],
-   "out": []
+   "out": [
+    "默认"
+   ]
   },
   "docGrid|charSpace": {
    "bucket": "kept",
@@ -1427,12 +1433,14 @@
    ]
   },
   "entryMacro|val": {
-   "bucket": "lost",
+   "bucket": "kept",
    "n": 1,
    "src": [
     ""
    ],
-   "out": []
+   "out": [
+    ""
+   ]
   },
   "ext|cx": {
    "bucket": "kept",
@@ -1668,22 +1676,28 @@
    "out": []
   },
   "fldChar|fldCharType": {
-   "bucket": "lost",
+   "bucket": "kept",
    "n": 3,
    "src": [
     "begin",
     "end",
     "separate"
    ],
-   "out": []
+   "out": [
+    "begin",
+    "end",
+    "separate"
+   ]
   },
   "fldChar|fldLock": {
-   "bucket": "lost",
+   "bucket": "kept",
    "n": 1,
    "src": [
     "1"
    ],
-   "out": []
+   "out": [
+    "1"
+   ]
   },
   "fontRef|idx": {
    "bucket": "lost",
@@ -3156,12 +3170,14 @@
    ]
   },
   "maxLength|val": {
-   "bucket": "lost",
+   "bucket": "kept",
    "n": 1,
    "src": [
     "10"
    ],
-   "out": []
+   "out": [
+    "10"
+   ]
   },
   "miter|lim": {
    "bucket": "kept",
@@ -3184,7 +3200,7 @@
    ]
   },
   "name|val": {
-   "bucket": "value",
+   "bucket": "kept",
    "n": 7,
    "src": [
     "normal",
@@ -3201,7 +3217,8 @@
     "report",
     "report char",
     "report head",
-    "table grid"
+    "table grid",
+    "text1"
    ]
   },
   "next|val": {

@@ -3062,7 +3062,69 @@ HEAD 逐字节相同、四条变异腿不动，pptx 70.1/74.3、42/19 全绿、
 −55.3%、`bench-docx-parts` 部件解压 **21 → 22 → 5**（`docxToDocMeta` 多读
 一次 core.xml，预期）。
 
-### 顺延清单（D48）
+### v0.189 追加节：表单域整片字面往返 + PDF 页序重排 + 补丁链两处惰性化
+
+**往返账动 8 对（7 对 `lost → kept`、1 对 `value → kept`）**：`fldChar|fldCharType`
+(begin/separate/end)、`fldChar|fldLock`、`name|val`(Text1)、`appearance|val`、
+`calcOnExit|val`、`entryMacro|val`、`default|val`、`maxLength|val`。
+正文 **262/300 = 87.3% → 270/300 = 90.0%**、合计 **346/619 55.9% →
+354/619 57.2%**，值变 6 → 5、掉了 267 → 260、图形壳 84/319 = 26.3% 不动。
+
+- **为什么是这一族，不是八个 bug**：源件一个 Word 表单域是五枚连续 run——
+  `begin`(带 `w:ffData`) → `instrText` → `separate` → 结果文字 → `end`。
+  读手 v0.155 就把 `fldChar` 三态、`fldLock` 与 `ffData` 八格全部**只读记账**
+  （注释里写明「屏上一个都不兑现，写侧也不发表单域」），模型与 docx 包都
+  没有这个槽。于是读手展平成结果文字、写手只发那一枚 run，**整片一起掉**。
+  补的时候只补一片：壳回来，里面 6 对属性与域锁就一起回来。
+- **机制（第四次走「写手侧源包正则」）**：`formFieldsOf(docXml)` 在单个
+  `<w:p>…</w:p>` 边界内定位 `ffData` / separate / 结果文字 / end，取出
+  「结果文字 + 前三枚 run + end 一枚 run」的**字面原件**存进
+  `DocMeta.formFields`；`patchFormFields` 按**结果文字**找回写出包那枚 run，
+  前插三枚、后插一枚。用结果文字对位而不是出现序，是身份型令牌按内容认领。
+- **三道守卫**：① 写出包已有 `<w:fldChar` 就整体不动（幂等，不叠第二套域）；
+  ② 结果文字被用户改过就认不出，**宁缺毋滥**跳过，不凭空造域；③ 插入区间
+  按 cursor 单调前进，多域各插一次不重叠。写出段落与源件剥掉包发的 `rPr` /
+  `xml:space` 后逐字相同（`test-form-fields.mjs` 43 项，含半截域、多域、
+  带属性 `<w:r w:rsidR=…>`、跨段不吞 run）。
+- **零新增查问**：源包是**正则读**的部件（不进保真账），读手源码一行没动，
+  查问仍 **672**，`docs/fidelity.*` 与 HEAD **逐字节相同**，四条变异腿
+  52.5 / 59.4 / 99.0 / 96.5 与记录对 392/416/715/685 一字不动。
+  `modules` 仍 68（纯函数放在既有 `docx.ts`）。
+- **探过但放弃：编号 id 三族**（`abstractNum|abstractNumId`、
+  `abstractNumId|val`、`numId|val`）。dump 出的是**引用图**而非三个独立值：
+  源件 1 个 `abstractNumId=0`、1 个 `numId=1`、段落引用 1；写出包由
+  ListRegistry 重建出 3 个 abstractNum(1/2/3)、2 个 num(1→1、2→3)，段落
+  引用 2。前缀改值要同时改三处引用才不自洽，而「包按段引用重建编号」本身
+  **不是坏件**（Word 里显示一致）。按「假红比真红更坏」不为了数字动它。
+- **功能**：PDF 页序重排。`reorderPageOrder` 纯函数（冒泡交换，一次只挪一格，
+  连续选区整体平移、非选中页相对顺序不变、边界与全选都不动）；
+  `movePagesInPlace` 用 pdf-lib `removePage`/`insertPage` **只摘页树节点不复制
+  页面**，标注与资源跟原对象走，页序没变就不写盘。页签加 ↑/↓ 两枚按钮，
+  复用 `pageOp`（未选中对当前页生效），冒烟钩子同挂 `move` 保持两条出口一致。
+  `test-pdf-page-order.mjs` 28 项含 pdf-lib 内存往返（四页不同尺寸按新序落位、
+  反向挪一次回原序），不是只钉源码。
+- **性能**：v0.188 顺延的两处物化收干净——`patchNumOverrides` 够数即停
+  （`starts` 只几枚不必扫完全部 `<w:num>`），`patchBorderBlocks` 块数闸门
+  从循环前移到循环末尾（对不上就整笔丢弃、不写盘）。三处共用
+  `legacyBlockScan:true` 一个对照腿，逐部件字符串归一逐字相同。纯函数段 A
+  50/500/2000 块 **−78.9% / −97.6% / −99.4%**（够数即停；高降幅来自
+  「starts 只 2 枚、全文放大到 2000 块」的合成形状，真件 `w:num` 远没这么多）；
+  B **−6.7% / −6.7% / −7.3%**（只省数组分配）；**端到端 28.7 → 27.2ms
+  （−5.5%，噪声内）**。`patchBorderBlocks` 循环内按边名编译的 `edgeRe` 仍在，
+  顺延，不冒充「正则也收干净了」。
+- **门禁**：tsc 0、`tsc && vite build` ✓（`pnpm run build` 的 pdfjs 资源清理仍
+  被环境安全策略拦下）；**39 组结构测试全绿**（新增 43 + 28 + 14 项；三条旧
+  断言按「逐笔接上一笔」新口径改，不改产品代码凑测试）；保真 99.0/98.4 与
+  HEAD 逐字节相同、四条变异腿不动，pptx 70.1/74.3、42/19 全绿、
+  `--selftest --mut no-ga` 42 条全红后复位；往返账 `5aef0217…`/`5426c9d6…`
+  两次复跑一致；`bench-docx-pack` 语义等价 ✓、`bench-docx-parts` 部件解压
+  **22 → 23 → 5**（新增表单域补丁多一次读，预期）。
+- **诚实边界**：壳是写手侧从源包按字面搬回的（不改模型、不进保真账），
+  用户改过结果文字就不贴回，ODT 链没扩，真件里多个表单域 / 复选框 / 下拉域
+  未实测；PDF 页序只在 pdf-lib 内存夹具与源码级断言验证，没拿带真实标注与
+  表单域的文件对撞；惰性遍历端到端收益在噪声内。
+
+### 顺延清单（D49）
 
 - 图形壳剩余 **233 对**：三维族 `sp3d`(3) / `props3d`(3) / `lightRig`(2)
   要先定「夹具结构非法、真件应写成 effectLst 之后的兄弟」的口径；**删
@@ -3071,27 +3133,27 @@ HEAD 逐字节相同、四条变异腿不动，pptx 70.1/74.3、42/19 全绿、
   `line`(14) 仍是模型无槽、写手发不出 `w:pict`。`wp:posOffset` 值在元素
   文本里、账本压根没这一对，**动 0 对**；`sizeRelH/V` 是 wp14 扩展，
   夹具写 `wp:` 前缀、真件要 `mc:AlternateContent`。
-- 正文长尾：`fldChar|fldCharType`(3 个源值) / `fldChar|fldLock`、
-  `outline|val`、`smartTag|*`、±5 缇、`docPr|descr`、
-  `name|val`(表单域 `text1`)；`theme1.xml` 口径未定。`outline|val` 要先定
-  rPr 内的 schema 位次并新建 charExtra 槽（包没原生槽）；`docPr|descr` 与
-  本轮两枚同元素，但包会把 alt 顶进来，归属口径未定。
+- 正文长尾：`outline|val`（要先定 rPr 内 schema 位次并新建 charExtra 槽，
+  包没原生槽）、`smartTag|*`、±5 缇、`docPr|descr`（包把 alt 顶进来，归属
+  口径未定）、`theme1.xml` 口径未定；**编号 id 三族是引用图、不是坏件，
+  v0.189 探过按纪律不碰**。`fldChar`/`ffData` 一族 v0.189、
   `docPr|id`/`docPr|name` v0.188、`ins|id`/`startOverride|val` v0.187、
-  `bookmark*|id` v0.186、
-  `ind|left`/`ind|right` 显式 0 v0.185、
+  `bookmark*|id` v0.186、`ind|left`/`ind|right` 显式 0 v0.185、
   `color|val`/`lvlJc|val` v0.184、`legacy|*` 与 `type|val`/`pgSz|code` v0.183、
   `col|w`/`col|space`/`w:cols equalWidth` v0.182 已补。
-- Impress 占位矩形编辑（第二套拖拽状态机）v0.186 已补；Calc 视图缩放（落点在
-  预存改动文件 `SheetEditor.tsx`，按房规换落点或只记结论）；**pdf-lib 按需加载**
-  仍等 `pdf-text-edit.ts` 入库（本轮 build 仍见 `INEFFECTIVE_DYNAMIC_IMPORT`）；
-  Writer 自动缩放两档 v0.187 已补（三处 UI 共用 `fitZoom`）。版式库 /
-  SmartArt / 3D / Fontwork、页面边框 / 水印 / 邮件合并 / 公式编辑器 /
-  数据透视表仍未做。Writer 标尺 v0.179、状态栏 v0.180、
-  逐页翻页预览 v0.181、Impress 母版配色 v0.182、清除格式 v0.183、
-  PDF 首页末页 v0.184 已补。
-- 写手 `patchBorderBlocks` / `patchNumOverrides` 两处 `[...matchAll]` 仍物化数组
-  （v0.188 只改了最热的 `patchImgXml`）；文档属性与 `docPr` 两族都只在 docx 链，
-  ODT 写手没跟着扩。
-- D32–D47 原账不动（同上）。
+  **探过但放弃**：`gridCol|w`/`tcW|w` ±5 缇要新表级载荷 + 改宽守卫；
+  `patchNumberingXml` 的 `pick.indexOf` 撑不起来（写出包 abstractNum 块恒为 3、
+  不随 defs 增长）。
+- PDF 页序重排 v0.189、Impress 占位矩形编辑（第二套拖拽状态机）v0.186、
+  Writer 自动缩放两档 v0.187（三处 UI 共用 `fitZoom`）、文档属性面板 v0.188
+  已补；Calc 视图缩放（落点在预存改动文件 `SheetEditor.tsx`，按房规换落点或
+  只记结论）；**pdf-lib 按需加载**仍等 `pdf-text-edit.ts` 入库（本轮 build 仍见
+  `INEFFECTIVE_DYNAMIC_IMPORT`）；版式库 / SmartArt / 3D / Fontwork、页面边框 /
+  水印 / 邮件合并 / 公式编辑器 / 数据透视表仍未做。Writer 标尺 v0.179、
+  状态栏 v0.180、逐页翻页预览 v0.181、Impress 母版配色 v0.182、
+  清除格式 v0.183、PDF 首页末页 v0.184 已补。
+- 写手 `patchBorderBlocks` 循环内按边名编译的 `edgeRe` 仍物化为动态正则，
+  顺延；文档属性与 `docPr` / 表单域两族都只在 docx 链，ODT 写手没跟着扩。
+- D32–D48 原账不动（同上）。
 
 
