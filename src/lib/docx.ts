@@ -747,6 +747,15 @@ export interface DocMeta {
    * 正则提取（不进保真账），`patchDocPr` 按 `<wp:docPr>` 出现序改回去。
    */
   docPrShells?: { id: string; name: string }[]
+  /**
+   * Word 表单域整片字面（v0.189）：每个域存「结果文字 + 它前面三枚 run
+   * （begin/ffData、instrText、separate）+ 后面一枚 run（end）」。
+   * 读手把表单域展平成结果文字、模型与 docx 包都没有表单域的槽，所以写手侧
+   * 从源包按字面整片搬回（正则读的部件不进保真账，读手早查问过 fldChar 与
+   * ffData 全族，零新增查问对）。按**结果文字**对位而不是出现序：用户改过
+   * 结果文字就认不出，宁可不贴（见 patchFormFields）。
+   */
+  formFields?: { before: string; after: string; text: string }[]
   /** 文档属性（v0.188）：由 `docxToDocMeta` 从 docProps/core.xml 读出，编辑器可改 */
   docProps?: DocProps
   page?: PageSetup
@@ -821,6 +830,45 @@ export async function openDocxZip(bytes: Uint8Array): Promise<DocxZipSession> {
 }
 
 // mammoth 不读页眉页脚：直接解 zip 里 sectPr 引用的 header/footer XML，抽文本与 PAGE 页码域
+/**
+ * Word 表单域整片字面提取（v0.189）。
+ *
+ * 源件里一个表单域是五枚连续的 run：`begin`(带 ffData) / `instrText` /
+ * `separate` / 结果文字 / `end`。读手把它展平成结果文字，模型与 docx 包都没有
+ * 表单域的槽，所以**写手侧**从源包按字面整片搬回：只存结果文字与它前后两组
+ * run，按结果文字对位到写出包（用户改过结果文字就认不出，宁可不贴）。
+ * 边界限定在单个 `<w:p>…</w:p>` 内，绝不跨段吞 run；段落切法沿用夹具通用口径
+ * （非贪婪 `<w:p>` 会截断 wps 文本框内嵌段落，但那些段落不含 ffData，会被跳过）。
+ */
+export function formFieldsOf(docXml: string): { before: string; after: string; text: string }[] {
+  const out: { before: string; after: string; text: string }[] = []
+  // `<w:r>` 与带属性的 `<w:r w:rsidR=…>` 都认，且不会把 `<w:rPr>` 误当 run 开标签
+  const runStart = (s: string, at: number) => Math.max(s.lastIndexOf('<w:r>', at), s.lastIndexOf('<w:r ', at))
+  for (const pm of docXml.matchAll(/<w:p(?:\s[^>]*)?>[\s\S]*?<\/w:p>/g)) {
+    const p = pm[0]
+    const ff = p.indexOf('<w:ffData>')
+    if (ff < 0) continue
+    const sepAt = p.indexOf('w:fldCharType="separate"', ff)
+    const sepRunEnd = sepAt < 0 ? -1 : p.indexOf('</w:r>', sepAt)
+    const tAt = sepRunEnd < 0 ? -1 : p.indexOf('<w:t', sepRunEnd)
+    const tClose = tAt < 0 ? -1 : p.indexOf('</w:t>', tAt)
+    const endAt = tClose < 0 ? -1 : p.indexOf('w:fldCharType="end"', tClose)
+    if (sepAt < 0 || tAt < 0 || tClose < 0 || endAt < 0) continue
+    const text = p.slice(p.indexOf('>', tAt) + 1, tClose)
+    const beginRunStart = runStart(p, ff)
+    const resultRunStart = runStart(p, tAt)
+    const endRunStart = runStart(p, endAt)
+    const endRunEnd = p.indexOf('</w:r>', endAt)
+    if (!text || beginRunStart < 0 || resultRunStart < 0 || endRunStart < 0 || endRunEnd < 0) continue
+    const before = p.slice(beginRunStart, resultRunStart)
+    const after = p.slice(endRunStart, endRunEnd + '</w:r>'.length)
+    // 三态守卫：拿到的真是 begin→separate 与 end 两片，不是误配到别的域
+    if (!before.includes('<w:ffData>') || !after.includes('fldCharType="end"')) continue
+    out.push({ before, after, text })
+  }
+  return out
+}
+
 export async function docxToDocMeta(bytes: Uint8Array, shared?: DocxZipSession): Promise<DocMeta> {
   let zip: ZipView
   if (shared) {
@@ -950,6 +998,9 @@ export async function docxToDocMeta(bytes: Uint8Array, shared?: DocxZipSession):
   if (coreXml.trim()) out.docProps = parseCoreProps(coreXml)
   if (revIds.length) out.revIds = revIds
   if (docPrShells.length) out.docPrShells = docPrShells
+  // v0.189：表单域整片字面，与上面两笔同源（写手侧从源包正则读，不进保真账）
+  const formFields = formFieldsOf(docXml)
+  if (formFields.length) out.formFields = formFields
   return out
 }
 
@@ -3410,6 +3461,8 @@ export async function prosemirrorToDocxBytes(
   const withRev = await patchRevIds(withBm, meta?.revIds ?? [], sess)
   // v0.188：画布级 docPr 的 id/name（源包出现序前缀对位），与上面几笔共用会话
   const withDocPr = await patchDocPr(withRev, meta?.docPrShells, sess)
+  // v0.189：Word 表单域整片字面（按结果文字对位），与上面几笔共用会话
+  const withFf = await patchFormFields(withDocPr, meta?.formFields, sess)
   // 表闸门三样都要补：样式推出来的（looks）与表自己带的（dt.tblLooks），
   // v0.152 起再加表级条件格式尺寸两枚（dt.tblPrs，与 tblLook 同住 tblPr）
   const needTbl =
@@ -3420,7 +3473,7 @@ export async function prosemirrorToDocxBytes(
     dt.cnfStyles.some((x) => x) ||
     dt.tblBorders.some((x) => x)
   // 单元格不换行（v0.152）：包里没有 noWrap 的槽，按 <w:tc> 出现序插 <w:noWrap/>
-  const withCell = dt.cellExtras.some((x) => x) ? await patchTcPr(withDocPr, dt.cellExtras, sess) : withDocPr
+  const withCell = dt.cellExtras.some((x) => x) ? await patchTcPr(withFf, dt.cellExtras, sess) : withFf
   // 底纹的存盘原件（v0.164）：按 <w:shd> 出现序**合并**属性（包只发 val/color/fill 三枚，
   // 且 fill 写的是解析后的屏上色——源件的字面色与主题三枚都要改回来/补上去）
   const withShd = await patchShdAttrs(withCell, dt.shdExtras, sess)
@@ -3747,6 +3800,61 @@ export async function patchDocPr(
 }
 
 /**
+ * Word 表单域整片回填（v0.189）。
+ *
+ * 读手把 `begin/ffData → instrText → separate → 结果文字 → end` 五枚 run 展平成
+ * 结果文字，模型与 docx 包都没有表单域的槽；写手侧 `formFieldsOf` 从源包留下
+ * 前后两组 run 的字面，这里按**结果文字**找回写出包里那枚 run，把壳贴回去。
+ * 三道守卫：① 写出包已有 `w:fldChar` 就整体不动（幂等，不叠第二套域）；
+ * ② 结果文字被用户改过就认不出，宁缺毋滥跳过（不凭空造域）；
+ * ③ 只贴提取时验过含 `ffData` 的片，且插入区间按 cursor 单调前进，不重叠。
+ * 正则读的部件不进保真账，读手早查问过 fldChar 与 ffData 全族，零新增查问对。
+ */
+export async function patchFormFields(
+  bytes: Uint8Array,
+  fields: { before: string; after: string; text: string }[] | undefined,
+  sess?: PackSession,
+): Promise<Uint8Array> {
+  if (!fields?.length) return bytes
+  const zip = sess ? sess.zip : await loadZipOf(bytes)
+  const file = zip.file('word/document.xml')
+  if (!file) return bytes
+  const xml = await partText(zip, 'word/document.xml', sess)
+  if (xml.includes('<w:fldChar')) return bytes
+  let out = ''
+  let cursor = 0
+  let touched = false
+  for (const f of fields) {
+    if (!f.text || !f.before.includes('<w:ffData>')) continue
+    const needle = `>${f.text}</w:t>`
+    let from = cursor
+    let runStart = -1
+    let runEnd = -1
+    while (true) {
+      const t = xml.indexOf(needle, from)
+      if (t < 0) break
+      from = t + needle.length
+      const tAt = xml.lastIndexOf('<w:t', t)
+      if (tAt < 0 || tAt > t) continue
+      const st = Math.max(xml.lastIndexOf('<w:r>', tAt), xml.lastIndexOf('<w:r ', tAt))
+      const en = xml.indexOf('</w:r>', t)
+      if (st < cursor || en < 0 || en < t) continue
+      runStart = st
+      runEnd = en + '</w:r>'.length
+      break
+    }
+    if (runStart < 0) continue
+    out += xml.slice(cursor, runStart) + f.before + xml.slice(runStart, runEnd) + f.after
+    cursor = runEnd
+    touched = true
+  }
+  if (!touched) return bytes
+  out += xml.slice(cursor)
+  setPart(zip, 'word/document.xml', out, sess)
+  return finishPatch(bytes, zip, sess)
+}
+
+/**
  * `w:startOverride` 原值回填（v0.187）。
  *
  * 包对每个重建出来的 `<w:num>` 恒发 `<w:startOverride w:val="1"/>`，源件说的
@@ -3764,14 +3872,18 @@ export async function patchNumOverrides(
   const file = zip.file('word/numbering.xml')
   if (!file) return bytes
   const xml = await partText(zip, 'word/numbering.xml', sess)
-  const blocks = [...xml.matchAll(/<w:num\b[^>]*>[\s\S]*?<\/w:num>/g)]
+  // v0.189：改前会把全部 <w:num> 物化成数组，而真正要看的只有 starts.length 枚。
+  // 惰性腿边走边拼、够数就停；`legacyBlockScan:true` 复刻改前路径供 A/B。
+  const re = /<w:num\b[^>]*>[\s\S]*?<\/w:num>/g
+  const blocks: Iterable<RegExpMatchArray> = legacyBlockScan ? [...xml.matchAll(re)] : xml.matchAll(re)
   let out = ''
   let cursor = 0
   let touched = false
-  for (let i = 0; i < blocks.length && i < starts.length; i++) {
-    const want = starts[i]
+  let i = 0
+  for (const m of blocks) {
+    if (i >= starts.length) break
+    const want = starts[i++]
     if (want === undefined) continue
-    const m = blocks[i]
     const at = m.index ?? 0
     const next = m[0].replace(
       /(<w:startOverride\b[^>]*?\sw:val=")[^"]*(")/,
@@ -4497,16 +4609,18 @@ async function patchBorderBlocks(bytes: Uint8Array, tag: 'w:pBdr' | 'w:tcBorders
   const file = zip.file('word/document.xml')
   if (!file) return bytes
   const xml = await partText(zip, 'word/document.xml', sess)
-  const blocks = [...xml.matchAll(new RegExp(`<${tag}(?=[\\s/>])[^>]*?(?:/>|>[\\s\\S]*?</${tag}>)`, 'g'))]
-  if (blocks.length !== extras.length) return bytes
+  // v0.189：与 patchImgXml / patchNumOverrides 同款——物化数组换惰性迭代器，
+  // 块数闸门从「循环前先数一遍」移到「循环末尾对账」（不符就整笔丢弃，不写盘）。
+  const re = new RegExp(`<${tag}(?=[\\s/>])[^>]*?(?:/>|>[\\s\\S]*?</${tag}>)`, 'g')
+  const blocks: Iterable<RegExpMatchArray> = legacyBlockScan ? [...xml.matchAll(re)] : xml.matchAll(re)
   let out = ''
   let cursor = 0
   let touched = false
-  for (let i = 0; i < blocks.length; i++) {
-    const m = blocks[i]
+  let count = 0
+  for (const m of blocks) {
     const start = m.index ?? 0
     const stop = start + m[0].length
-    const add = extras[i]
+    const add = extras[count++]
     if (!add) {
       out += xml.slice(cursor, stop)
       cursor = stop
@@ -4545,6 +4659,7 @@ async function patchBorderBlocks(bytes: Uint8Array, tag: 'w:pBdr' | 'w:tcBorders
     cursor = stop
     touched = true
   }
+  if (count !== extras.length) return bytes
   if (!touched) return bytes
   out += xml.slice(cursor)
   setPart(zip, 'word/document.xml', out, sess)

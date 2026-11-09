@@ -134,7 +134,8 @@ async function patched(xml, shells) {
   const css = read('../src/index.css')
   check('docPrShells 从源包正则提取（不进保真账）', /const docPrShells = \[\.\.\.docXml\.matchAll\(\/<wp:docPr/.test(w))
   check('主链挂 patchDocPr', /const withDocPr = await patchDocPr\(withRev, meta\?\.docPrShells, sess\)/.test(w))
-  check('后续补丁接 withDocPr 不绕过它', /: withDocPr/.test(w))
+  check('后续补丁接 withDocPr 不绕过它',
+    /const withFf = await patchFormFields\(withDocPr,/.test(w) && /: withFf|patchTcPr\(withFf,/.test(w))
   check('patchDocPr 复用 tagWithAttrs 改值', /const next = tagWithAttrs\(tag, kv\)/.test(w))
   // 只收窄到 Document 构造的那一段：DEFAULT_DOC_PROPS 里那两枚字面量是回落值，
   // 不算「构造里硬编码」，别把整份文件的 'OpenOffices' 都算进来

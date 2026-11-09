@@ -24,6 +24,40 @@ async function saveDoc(doc: Doc, path: string) {
 /** 1-based 页号 → 0-based 索引 */
 const idx = (pages: number[]) => pages.map((p) => p - 1)
 
+/**
+ * 页序重排的纯函数（v0.189）：返回「新位置上应该放哪一枚**原页**（0-based）」。
+ *
+ * 选中页整体朝 delta 方向挪 |delta| 格，非选中页保持相对顺序；选中集合按原页
+ * 身份跟随移动，所以连续选区整体平移、不连续选区各自让位。三处边界都不动：
+ * 没选页 / delta=0 / 已经在边界（首上移、末下移、全选）。
+ * 用冒泡交换而不是切片重排，是为了让「一次只挪一格」的语义可逐格验证。
+ */
+export function reorderPageOrder(total: number, selected: number[], delta: number): number[] {
+  const order = Array.from({ length: total }, (_, i) => i)
+  const sel = new Set(idx(selected).filter((i) => i >= 0 && i < total))
+  if (!sel.size || !delta || total < 2) return order
+  for (let step = 0; step < Math.abs(delta); step++) {
+    if (delta < 0) {
+      for (let i = 1; i < total; i++) {
+        if (sel.has(order[i]) && !sel.has(order[i - 1])) {
+          const t = order[i - 1]
+          order[i - 1] = order[i]
+          order[i] = t
+        }
+      }
+    } else {
+      for (let i = total - 2; i >= 0; i--) {
+        if (sel.has(order[i]) && !sel.has(order[i + 1])) {
+          const t = order[i + 1]
+          order[i + 1] = order[i]
+          order[i] = t
+        }
+      }
+    }
+  }
+  return order
+}
+
 /** 按 90° 步进旋转指定页（delta 取 ±90） */
 export async function rotatePagesInPlace(path: string, pages: number[], delta: number) {
   const { doc, lib } = await loadDoc(path)
@@ -37,6 +71,24 @@ export async function rotatePagesInPlace(path: string, pages: number[], delta: n
   }
   await saveDoc(doc, path)
   return pages.length
+}
+
+/**
+ * 选中页整体上移 / 下移（v0.189）。页序由 `reorderPageOrder` 算，没动就不写盘
+ * （避免一次无谓覆盖改掉文件时间戳）。pdf-lib 的 `removePage` 只从 /Pages 树
+ * 摘节点，页面对象仍在文档上下文里，按新序 `insertPage` 插回去即可——不复制
+ * 页面，标注 / 表单域 / 资源都跟着原对象走。
+ */
+export async function movePagesInPlace(path: string, pages: number[], delta: number) {
+  const { doc } = await loadDoc(path)
+  const total = doc.getPageCount()
+  const order = reorderPageOrder(total, pages, delta)
+  if (order.every((v, i) => v === i)) return { total, moved: 0 }
+  const kept = doc.getPages()
+  for (let i = total - 1; i >= 0; i--) doc.removePage(i)
+  for (let i = 0; i < total; i++) doc.insertPage(i, kept[order[i]])
+  await saveDoc(doc, path)
+  return { total, moved: idx(pages).filter((i) => i >= 0 && i < total).length }
 }
 
 /** 删除指定页，返回剩余页数；删空时拒写（PDF 至少要有一页） */

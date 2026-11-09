@@ -35,6 +35,7 @@ import { sampleBackdrop, applyTextEdits, type TextEdit } from '../lib/pdf-text-e
 import {
   extractPages,
   mergePdfs,
+  movePagesInPlace,
   removePagesInPlace,
   rotatePagesInPlace,
   splitPdf,
@@ -2117,6 +2118,15 @@ function PdfViewer({ tab }: Props) {
       return `已删除 ${pages.length} 页，剩 ${left} 页`
     })
 
+  // v0.189：页序重排。选中页整体平移一格，边界上不动；未选中时对当前页生效
+  const opMove = (delta: number) =>
+    pageOp(delta < 0 ? '上移页面' : '下移页面', async (path, pages) => {
+      const { moved } = await movePagesInPlace(path, pages, delta)
+      return moved
+        ? `已${delta < 0 ? '上移' : '下移'} ${moved} 页（相邻选中页整体平移）`
+        : '已在边界，页序未变'
+    })
+
   const opExtract = async () => {
     if (!tab.path) return
     const stem = baseName(tab.path).replace(/\.pdf$/i, '')
@@ -2259,6 +2269,7 @@ function PdfViewer({ tab }: Props) {
       sel: () => [...pageSel].sort((a, b) => a - b),
       setSel: (xs: number[]) => setPageSel(new Set(xs)),
       rotate: (pages: number[], delta: number) => rotatePagesInPlace(tab.path!, pages, delta),
+      move: (pages: number[], delta: number) => movePagesInPlace(tab.path!, pages, delta),
       remove: (pages: number[]) => removePagesInPlace(tab.path!, pages),
       extract: (out: string, pages: number[]) => extractPages(tab.path!, out, pages),
       merge: (files: string[]) => mergePdfs(tab.path!, files),
@@ -2651,6 +2662,8 @@ function PdfViewer({ tab }: Props) {
                 <div className="pdf-pages-acts">
                   {btn('⟲ 左转', () => opRotate(-90), pageBusy, '逆时针 90°（未选中时对当前页）')}
                   {btn('⟳ 右转', () => opRotate(90), pageBusy, '顺时针 90°（未选中时对当前页）')}
+                  {btn('↑ 上移', () => opMove(-1), pageBusy, '选中页整体前移一位；未选中时对当前页生效')}
+                  {btn('↓ 下移', () => opMove(1), pageBusy, '选中页整体后移一位；未选中时对当前页生效')}
                   {btn('删除页', opRemove, pageBusy)}
                   {btn('提取为新 PDF', opExtract, pageBusy)}
                   {btn('合并其他 PDF', opMerge, pageBusy)}

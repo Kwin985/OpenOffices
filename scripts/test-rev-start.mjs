@@ -121,7 +121,9 @@ async function numPatched(xml, starts) {
   check('写手：主链挂 patchRevIds', /const withRev = await patchRevIds\(withBm, meta\?\.revIds \?\? \[\], sess\)/.test(w))
   // v0.188 在 withRev 之后又插了 withDocPr，按「逐笔接上一笔」判，不钉死链尾
   check('写手：后续补丁接 withRev 不绕过它',
-    /const withDocPr = await patchDocPr\(withRev,/.test(w) && /patchTcPr\(withDocPr,| : withDocPr/.test(w))
+    /const withDocPr = await patchDocPr\(withRev,/.test(w)
+      && /const withFf = await patchFormFields\(withDocPr,/.test(w)
+      && /patchTcPr\(withFf,| : withFf/.test(w))
   check('写手：主链挂 patchNumOverrides', /const withNumStart = await patchNumOverrides\(withNum, meta\?\.numbering\?\.starts, sess\)/.test(w))
   check('写手：后续补丁接 withNumStart', /: withNumStart/.test(w))
 }
