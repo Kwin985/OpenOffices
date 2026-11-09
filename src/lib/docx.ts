@@ -661,6 +661,64 @@ export interface DocxNumbering {
   starts?: (number | undefined)[]
 }
 
+/**
+ * 文档属性（v0.188）：`docProps/core.xml` 里那五格，随 meta 持久化。
+ * 此前 `new Document` 把 creator/title 硬编码成 OpenOffices，导入别人的文档
+ * 另存一次就把原作者与标题冲掉了——这是坏件，不只是功能缺失。
+ */
+export interface DocProps {
+  title?: string
+  subject?: string
+  creator?: string
+  keywords?: string
+  description?: string
+}
+
+/** 源件没写 core.xml、或手造新文档时的回落值（与历史行为逐字一致） */
+export const DEFAULT_DOC_PROPS: DocProps = {
+  creator: 'OpenOffices',
+  title: 'OpenOffices 文档',
+}
+
+const CORE_FIELDS: Record<keyof DocProps, string> = {
+  title: 'dc:title',
+  subject: 'dc:subject',
+  creator: 'dc:creator',
+  keywords: 'cp:keywords',
+  description: 'dc:description',
+}
+
+const decodeCoreText = (s: string): string =>
+  s
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&quot;/g, '"')
+    .replace(/&apos;/g, "'")
+    .replace(/&#x([0-9a-f]+);/gi, (_all, h: string) => String.fromCodePoint(Number.parseInt(h, 16)))
+    .replace(/&#(\d+);/g, (_all, d: string) => String.fromCodePoint(Number(d)))
+    .replace(/&amp;/g, '&')
+
+/**
+ * core.xml → 五格。**正则读**（这一部件不在保真账的漏斗里，也不该进）；
+ * 空串不落字段，于是 `docPropsOf` 能干净地用缺省值补位。
+ */
+export function parseCoreProps(xml: string): DocProps {
+  const out: DocProps = {}
+  if (!xml.trim()) return out
+  for (const [key, tag] of Object.entries(CORE_FIELDS) as [keyof DocProps, string][]) {
+    const m = new RegExp(`<${tag}[^>]*>([\\s\\S]*?)</${tag}>`).exec(xml)
+    if (!m) continue
+    const v = decodeCoreText(m[1]).trim()
+    if (v) out[key] = v
+  }
+  return out
+}
+
+/** 写手取用：源件说过的话优先，没说的用缺省；用户后来改过的也在 meta 里，别冲掉 */
+export function docPropsOf(meta: DocMeta | undefined): DocProps {
+  return { ...DEFAULT_DOC_PROPS, ...(meta?.docProps ?? {}) }
+}
+
 // 页眉页脚设置 + 批注列表 + 页面设置：随 .odoc meta 存储，导出写入 OOXML
 export interface DocMeta {
   headerText?: string
@@ -682,6 +740,15 @@ export interface DocMeta {
    * 写手 `revId` 恒从 1 起，`patchRevIds` 按出现序把源值改回去。
    */
   revIds?: string[]
+  /**
+   * 源包 `<wp:docPr>` 的 id / name 原值（v0.188），按出现序。
+   * 读手把 WPS 形状 / 艺术字展平成文字后没有为它们生成 `data-img` 载荷，
+   * 包于是发出 `id="1" name=""` 的空壳。与 revIds 同款——写手侧从源包
+   * 正则提取（不进保真账），`patchDocPr` 按 `<wp:docPr>` 出现序改回去。
+   */
+  docPrShells?: { id: string; name: string }[]
+  /** 文档属性（v0.188）：由 `docxToDocMeta` 从 docProps/core.xml 读出，编辑器可改 */
+  docProps?: DocProps
   page?: PageSetup
   /** 文档带进来的段落样式清单（v0.102）：随 meta 持久化，导出时重建样式表 */
   styles?: DocxStyleInfo[]
@@ -768,6 +835,12 @@ export async function docxToDocMeta(bytes: Uint8Array, shared?: DocxZipSession):
   // 不进 PM 模型（revision mark 只有 author/date，且那份文件是预存改动不能碰）。
   // 正则读的部件不进保真账，读手也早查问过 w:id，所以零新增查问对。
   const revIds = [...docXml.matchAll(/<w:(?:ins|del)\b[^>]*\bw:id="([^"]*)"/g)].map((m) => m[1])
+  // v0.188：画布级对象序号与对象名，按 `<wp:docPr>` 出现序。两枚属性顺序不固定，
+  // 各自按名取（读不到就空串占位，保持对位）；空串在补丁里一律不回写。
+  const docPrShells = [...docXml.matchAll(/<wp:docPr\b([^>]*)>/g)].map((m) => ({
+    id: /\bid="([^"]*)"/.exec(m[1])?.[1] ?? '',
+    name: /\bname="([^"]*)"/.exec(m[1])?.[1] ?? '',
+  }))
   const relsText = await readText('word/_rels/document.xml.rels')
   const relFor = (rid: string) =>
     relsText.match(new RegExp(`Id="${rid}"[^>]*Target="([^"]+)"`))?.[1] ??
@@ -872,7 +945,11 @@ export async function docxToDocMeta(bytes: Uint8Array, shared?: DocxZipSession):
   // 缺件时返回空串，与原来 `if (themeFile)` 的门逐字同义
   const themeXml = await readText('word/theme/theme1.xml')
   if (themeXml.trim()) out.themeXml = themeXml
+  // v0.188：文档属性。源件没这个部件就留空，写手用 DEFAULT_DOC_PROPS 回落。
+  const coreXml = await readText('docProps/core.xml')
+  if (coreXml.trim()) out.docProps = parseCoreProps(coreXml)
   if (revIds.length) out.revIds = revIds
+  if (docPrShells.length) out.docPrShells = docPrShells
   return out
 }
 
@@ -3023,11 +3100,12 @@ async function finishPatch(
 export async function prosemirrorToDocxBytes(
   json: PMNode,
   meta?: DocMeta,
-  opts?: { legacyPartText?: boolean; legacyRetag?: boolean; legacyAttrScan?: boolean },
+  opts?: { legacyPartText?: boolean; legacyRetag?: boolean; legacyAttrScan?: boolean; legacyBlockScan?: boolean },
 ): Promise<Uint8Array> {
-  // v0.186 / v0.187：只给同进程 A/B 对照腿用（入口设一次），产品路径恒为 false
+  // v0.186–v0.188：只给同进程 A/B 对照腿用（入口设一次），产品路径恒为 false
   legacyRetag = !!opts?.legacyRetag
   legacyAttrScan = !!opts?.legacyAttrScan
+  legacyBlockScan = !!opts?.legacyBlockScan
   const dt = newDocTrack()
   // 编号注册表（v0.142）：blocksOf 一路往里传，收齐全篇的自定义档位后进 Document.numbering。
   // 带上源文档的编号定义（v0.158）：重建一串列表时能照原样逐层发，而不是三层拍成一个符面
@@ -3205,9 +3283,15 @@ export async function prosemirrorToDocxBytes(
     }
     return kind === 'footnote' ? { footnotes: rec } : { endnotes: rec }
   }
+  // v0.188：五格文档属性走包原生槽（docx 包自己转义，不手拼 core.xml）。
+  // 源件说过的优先、没说的回落到历史缺省；用户在属性面板改过的也在 meta 里。
+  const coreProps = docPropsOf(meta)
   const doc = new Document({
-    creator: 'OpenOffices',
-    title: 'OpenOffices 文档',
+    creator: coreProps.creator,
+    title: coreProps.title,
+    ...(coreProps.subject ? { subject: coreProps.subject } : {}),
+    ...(coreProps.keywords ? { keywords: coreProps.keywords } : {}),
+    ...(coreProps.description ? { description: coreProps.description } : {}),
     features: { updateFields: true },
     // 文档背景（v0.155）：整篇底色。有主题槽就按主题回（与源件同一种引用方式），
     // 没有主题槽才发解析出来的字面 hex——反过来会把「跟着主题变」写成「钉死一个色」
@@ -3324,6 +3408,8 @@ export async function prosemirrorToDocxBytes(
   const withBm = await patchBookmarkIds(withImg, dt.bookmarkIds, sess)
   // v0.187：修订壳 w:id 原值（源包出现序前缀对位），与书签补丁同一条改值纪律
   const withRev = await patchRevIds(withBm, meta?.revIds ?? [], sess)
+  // v0.188：画布级 docPr 的 id/name（源包出现序前缀对位），与上面几笔共用会话
+  const withDocPr = await patchDocPr(withRev, meta?.docPrShells, sess)
   // 表闸门三样都要补：样式推出来的（looks）与表自己带的（dt.tblLooks），
   // v0.152 起再加表级条件格式尺寸两枚（dt.tblPrs，与 tblLook 同住 tblPr）
   const needTbl =
@@ -3334,7 +3420,7 @@ export async function prosemirrorToDocxBytes(
     dt.cnfStyles.some((x) => x) ||
     dt.tblBorders.some((x) => x)
   // 单元格不换行（v0.152）：包里没有 noWrap 的槽，按 <w:tc> 出现序插 <w:noWrap/>
-  const withCell = dt.cellExtras.some((x) => x) ? await patchTcPr(withRev, dt.cellExtras, sess) : withRev
+  const withCell = dt.cellExtras.some((x) => x) ? await patchTcPr(withDocPr, dt.cellExtras, sess) : withDocPr
   // 底纹的存盘原件（v0.164）：按 <w:shd> 出现序**合并**属性（包只发 val/color/fill 三枚，
   // 且 fill 写的是解析后的屏上色——源件的字面色与主题三枚都要改回来/补上去）
   const withShd = await patchShdAttrs(withCell, dt.shdExtras, sess)
@@ -3605,6 +3691,50 @@ export async function patchRevIds(
     const want = ids[i++]
     if (!want) continue
     const next = tag.replace(/\sw:id="[^"]*"/, () => ` w:id="${xmlAttr(want)}"`)
+    if (next === tag) continue
+    out += xml.slice(cursor, at) + next
+    cursor = at + tag.length
+    touched = true
+  }
+  if (!touched) return bytes
+  out += xml.slice(cursor)
+  setPart(zip, 'word/document.xml', out, sess)
+  return finishPatch(bytes, zip, sess)
+}
+
+/**
+ * 画布级对象序号 / 对象名回填（v0.188）。
+ *
+ * 源包里 5 枚 `<wp:docPr>` 各有自己的 id 与 name，但 WPS 形状与艺术字被读手
+ * 展平成文字后没生成 `data-img` 载荷，包就为那两枚发出 `id="1" name=""` 的空壳
+ * （选择窗格与定位里要用的对象名没了）。与 `patchRevIds` 同款：写手侧从源包
+ * 按出现序正则提取，post-pack 前缀对位；复用 `tagWithAttrs` 做同名改值 / 缺则追加，
+ * 绝不追加第二枚同名属性。源里没写过的留空占位，不凭空造名字。
+ */
+export async function patchDocPr(
+  bytes: Uint8Array,
+  shells: { id: string; name: string }[] | undefined,
+  sess?: PackSession,
+): Promise<Uint8Array> {
+  if (!shells?.length) return bytes
+  const zip = sess ? sess.zip : await loadZipOf(bytes)
+  const file = zip.file('word/document.xml')
+  if (!file) return bytes
+  const xml = await partText(zip, 'word/document.xml', sess)
+  let i = 0
+  let out = ''
+  let cursor = 0
+  let touched = false
+  for (const m of xml.matchAll(/<wp:docPr\b[^>]*>/g)) {
+    const at = m.index ?? 0
+    const tag = m[0]
+    const want = shells[i++]
+    if (!want) continue
+    const kv: Record<string, string> = {}
+    if (want.id) kv.id = want.id
+    if (want.name) kv.name = want.name
+    if (!Object.keys(kv).length) continue
+    const next = tagWithAttrs(tag, kv)
     if (next === tag) continue
     out += xml.slice(cursor, at) + next
     cursor = at + tag.length
@@ -4222,6 +4352,8 @@ async function patchBeforeElem(bytes: Uint8Array, anchor: string, extras: string
  * `legacyAttrScan` 只给同进程 A/B 对照腿用（入口设一次），产品路径恒为 false。
  */
 let legacyAttrScan = false
+/** v0.188：`patchImgXml` 的对照腿物化 `<w:drawing>` 块数组，产品路径惰性遍历 */
+let legacyBlockScan = false
 
 /** 开标签上有没有这枚「空白收边」的属性（零动态正则、零临时数组） */
 function hasAttrNamed(tag: string, name: string): boolean {
@@ -4967,16 +5099,22 @@ async function patchImgXml(bytes: Uint8Array, shells: string[], sess?: PackSessi
   const file = zip.file('word/document.xml')
   if (!file) return bytes
   const xml = await partText(zip, 'word/document.xml', sess)
-  const blocks = [...xml.matchAll(/<w:drawing>[\s\S]*?<\/w:drawing>/g)]
-  if (blocks.length !== shells.length) return bytes
+  const DRAWING_RE = /<w:drawing>[\s\S]*?<\/w:drawing>/g
+  // v0.188：产品路径用惰性迭代器，不物化「每个元素都是整块 XML」的大数组；
+  // 计数闸门移到末尾，块数对不上就丢弃已算结果（与原先「先数再改」逐字等价，
+  // 只是异常件上多做一点无用功）。`legacyBlockScan:true` 是 A/B 对照腿。
+  const iter: Iterable<RegExpMatchArray> = legacyBlockScan
+    ? [...xml.matchAll(DRAWING_RE)]
+    : xml.matchAll(DRAWING_RE)
   let out = ''
   let cursor = 0
   let touched = false
-  for (let i = 0; i < blocks.length; i++) {
-    const m = blocks[i]
+  let i = 0
+  for (const m of iter) {
     const start = m.index ?? 0
     const stop = start + m[0].length
-    const kv = parseImgPayload(shells[i])
+    const kv = parseImgPayload(shells[i] ?? '')
+    i++
     if (!Object.keys(kv).length) {
       out += xml.slice(cursor, stop)
       cursor = stop
@@ -5160,6 +5298,7 @@ async function patchImgXml(bytes: Uint8Array, shells: string[], sess?: PackSessi
     cursor = stop
     touched = true
   }
+  if (i !== shells.length) return bytes
   if (!touched) return bytes
   out += xml.slice(cursor)
   setPart(zip, 'word/document.xml', out, sess)

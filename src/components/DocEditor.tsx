@@ -26,6 +26,8 @@ import {
   type PMNode,
   type TableCond,
   type TableCondType,
+  type DocProps,
+  docPropsOf,
   openDocxZip,
 } from '../lib/docx'
 import { addCommentMark, findCommentAnchor, removeCommentMark } from '../lib/comment-extension'
@@ -159,6 +161,8 @@ function DocEditor({ tab }: Props) {
   const [linkDraft, setLinkDraft] = useState<string | null>(null)
   const [meta, setMeta] = useState<DocMeta>({})
   const [hfOpen, setHfOpen] = useState(false)
+  // v0.188：文档属性面板（标题/主题/作者/关键词/备注 → docProps/core.xml）
+  const [propsOpen, setPropsOpen] = useState(false)
   // 样式表面板（v0.106）：清单在 meta.styles 上，编辑即回写——渲染层与导出共用这一份
   const [styleEdOpen, setStyleEdOpen] = useState(false)
   const [pgOpen, setPgOpen] = useState(false)
@@ -1767,6 +1771,7 @@ function DocEditor({ tab }: Props) {
         {btn('分页符', () => editor.chain().focus().insertPageBreak().run(), false, 'Ctrl+Enter：打印与导出 PDF 时从此处另起一页（docx/odt 同步写分页）')}
         {btn('页眉页脚', () => setHfOpen((v) => !v), hfOpen || !!(meta.headerText || meta.footerText || meta.footerPageNumber), '设置页眉、页脚与页码')}
         {btn('页面设置', () => setPgOpen((v) => !v), pgOpen || !!meta.page, '纸张与页边距：同步应用到视图、打印与 docx/odt 导出')}
+        {btn('文档属性', () => setPropsOpen((v) => !v), propsOpen || !!meta.docProps, '标题 / 主题 / 作者 / 关键词 / 备注：写入 docProps/core.xml，随 docx 与 .odoc 往返')}
         {btn('批注', () => setCmOpen((v) => !v), cmOpen || comments.length > 0, '批注侧栏：选中文字后可添加批注，导出为 docx 原生批注')}
         {btn('新建批注', startComment, !!draft, '选中正文文字后点击，为其添加一条批注')}
         {btn('接受修订', () => runRevision('accept'), false, '接受修订（docx 修订/批注模式读入的 w:ins/w:del）：有选区只裁决选区内的，否则全文；插入文字转正、删除文字移除')}
@@ -2705,6 +2710,31 @@ function DocEditor({ tab }: Props) {
             >
               {new Date(h.t).toLocaleTimeString()} · {h.note}
             </button>
+          ))}
+        </div>
+      )}
+      {propsOpen && (
+        <div className="doc-hf-panel doc-props-panel" title="五格写入 docProps/core.xml，随 .odoc 与 docx 往返；留空用缺省值">
+          {([
+            ['title', '标题'],
+            ['subject', '主题'],
+            ['creator', '作者'],
+            ['keywords', '关键词'],
+            ['description', '备注'],
+          ] as const).map(([key, label]) => (
+            <label className="doc-hf-field" key={key}>
+              {label}
+              <input
+                className="tb-input"
+                value={meta.docProps?.[key] ?? ''}
+                placeholder={docPropsOf(meta)[key] ?? ''}
+                onChange={(e) => {
+                  const v = e.target.value
+                  const next: DocProps = { ...(meta.docProps ?? {}), [key]: v || undefined }
+                  patchMeta({ docProps: next })
+                }}
+              />
+            </label>
           ))}
         </div>
       )}

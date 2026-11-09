@@ -93,8 +93,11 @@ check('写手：包发的 a:noFill 没被顶掉', (outXml.match(/<a:noFill\s*\/>
     /box\.endsWith\('\/>'\)/.test(writer) && /lastIndexOf\('<\/a:ln>'\)/.test(writer))
   check('纪律：没碰 wp:anchor 锚点表 / mc:AlternateContent / wp14',
     !/mc:AlternateContent|wp14:sizeRel/.test(writer.slice(writer.indexOf('async function patchImgXml'), writer.indexOf('async function patchImgXml') + 9000)))
+  // v0.188：blocks 数组改成惰性迭代器，分块对位与计数闸门的纪律不变
   check('纪律：插入只在单个 w:drawing 块内（沿用分块对位）',
-    /const blocks = \[\.\.\.xml\.matchAll\(\/<w:drawing>/.test(writer))
+    /const DRAWING_RE = \/<w:drawing>/.test(writer)
+      && /xml\.matchAll\(DRAWING_RE\)/.test(writer)
+      && /if \(i !== shells\.length\) return bytes/.test(writer))
 }
 
 console.log(`通过 ${ok.length} 项` + (bad.length ? `，**失败 ${bad.length} 项**` : '，失败 0 项'))
