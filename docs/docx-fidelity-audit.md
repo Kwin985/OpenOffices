@@ -3339,7 +3339,67 @@ LibreOffice / WPS 对撞，屏上仍是 CSS 近似、四边统一，不做 `offs
 **端到端 31.2 → 34.0ms（+9.2%，变慢，噪声内，不写成降幅）**。
 旧尺部件解压 **24 → 28 → 6**：`docxToDocMeta` 多读三个部件 + 补丁读，预期。
 
-### 顺延清单（D53）
+### v0.194 追加节：rPr 字符特性四枚 + ODT 超链接两枚 + styleView 去重
+
+承接 D53。正文侧 lost 只剩 9 对，四枚 rPr 字符特性是挂了多轮的最大一组。
+D53 记「要先新建载荷槽 + 定 CT_RPr 位次」，本轮复查后把口径改成分两截：
+**位次定下来，槽不新建**——判断修正显式写在这里，不悄悄改口。
+
+- **为什么是这四对**：`ligatures|val` / `numForm|val` / `numSpacing|val` /
+  `outline|val`（外加同片的 `w:cntxtalts`，账本里没这一对）同住源件的一枚
+  `<w:rPr>`：`<w:em/><w:ligatures/><w:numForm/><w:numSpacing/><w:cntxtalts/>`
+  `<w:emboss/><w:imprint/><w:outline/>`。写出包那枚 run 的 rPr 只有包自己发的
+  `b/bCs/i/iCs/strike/emboss/imprint/em`——五枚全丢。读手 v0.155 起
+  `RunProps` 里虽有 `lig`/`numForm`/`numSpacing`/`cntxtalts` 字段，但只兑现成
+  屏上 `font-variant-*` CSS，**没进 HTML/PM 载荷**（peek 出的 PM `charExtra`
+  mark 只有 `em`/`emboss`/`imprint`）；包 `.d.ts` 里 `outline` 的命中全是
+  `OutlineOptions`（图形描边 / 段落级别），不是 `IRunOptions`，没有原生槽。
+  一个设计丢一族，不是四个 bug。
+- **判断修正**：D53 说「要新建载荷槽」。本轮没扩 `charExtra`：那要改 mark 定义
+  + 读手 HTML 载荷 + 写手构造三处并动 schema，而包仍没有原生槽、最终还是要
+  post-pack 插 rPr；「用户能改这些 OpenType 档位」的收益抵不过改动面。于是沿
+  前几轮成熟的写手侧字面通道（`revIds` → `docPrShells` → `literalWrappers`
+  → `metaExtras`）继续走，代价是**不是真双向**，写进诚实边界。
+- **位次口径（本轮定的那一半）**：`w:outline` 是 CT_RPrBase 标准元素，插在
+  第一枚 `emboss`/`imprint`/`shadow`/`noProof` 之前；`ligatures`/`numForm`/
+  `numSpacing`/`cntxtalts` 是 Word 2010+ 的 OpenType 扩展，Word 自己放在 rPr
+  末尾，插在 `</w:rPr>` 前。夹具写无前缀 `w:` 字面，按源件原样搬回、不做
+  命名空间改写。这是按 schema 推理而非真机 Word 对撞，口径写清。
+- **三道守卫**（与 `literalWrappers` 同款）：按**元素名**判幂等（值变了也算
+  已有，不覆盖）、按结果文字认领 run（用户改过文字就认不出、宁可不贴）、
+  插入区间按 cursor 单调前进。`patchRPrFeatures` 与其余补丁共用同一只会话。
+- **纪律核对**：写手侧 `docxToDocMeta` 从 document.xml 正则读（不进保真账），
+  读手源码零改动、查问仍 **672**；`docs/fidelity.*` 与 HEAD 逐字节相同，
+  四条变异腿 52.5 / 59.4 / 99.0 / 96.5 一字不动，`modules` 仍 68。往返账
+  两次复跑 `30e28284…` / `bd1415a4…` 一致。
+- **数字**：正文 **279/300 93.0% → 283/300 94.3%**、合计
+  **364/619 58.8% → 368/619 59.5%**、掉 **250 → 246**、值变仍 5、
+  图形壳 26.6% 不动。
+- **探过但放弃**：`w:sdt` 内容控件壳（包整个段落，不是 run 前后两片）、
+  `w:proofErr`（body 直子裸元素）、`a:ext|uri`（嵌在 `a:ln` 内）与
+  `byId`/`roots`/`literalWrappers` 三种形状都不同，不为凑数字硬塞通道；
+  sectPr 的 `rtlGutter`/`formProt` 要按 CT_SectPr 序另定锚点，顺延。
+
+**功能：ODT 超链接 title / target（D53 顺延项）** — v0.191 的 docx 两枚
+从 PM link mark 接回写出包，ODT 写手却只发 `xlink:href`、读手只读
+`xlink:href`，导入带提示 / 目标框架的 `.odt` 另存一次就抹掉。ODF 的
+`<text:a>` 有 `xlink:title` 与 `office:target-frame-name` 两枚标准属性正好
+同义：写侧从 link mark 取 `title`/`target`（只发非空格），读侧读回 HTML
+`<a title/target>`，与 PM link mark / DocEditor 真双向（改 mark 写新值、
+旧字面不留）。默认路径一个属性都不发、`href` 仍走原来的转义，新增属性用
+含引号转义的 `esc`；第三方 .odt 的两枚也能读回。只有合成夹具与端到端断言，
+没做真机 LibreOffice / WPS 对撞。
+
+**性能：读手 styleView 每段两次 → 一次** — `effPPrOf()` 与 `paragraph()`
+对同一个 styleId 各算一次 `styleView`（链合并 + `mergePPr`），结果完全相同。
+本轮把 `view` 从 `effPPrOf` 带出来给 `paragraph` 复用，**不引入跨段落共享的
+可变树**（教训㉒：共享可变树时顺序就是语义），纯去重复计算。
+`legacyStyleView:true` 复刻改前路径供同进程 A/B，两腿导入结果逐字相同
+（含 20 / 200 段放大语料）。原始夹具 7.1 → 7.2ms（**−1.4%，变慢**），
+放大语料 50 / 500 / 2000 段 **−3.7% / −5.0% / −4.3%**，全在噪声内、
+不冒充整链收益。旧尺部件解压 **28 → 29 → 6**：新增 rPr 补丁多一次读，预期。
+
+### 顺延清单（D54）
 
 - 图形壳剩余 **234 对**：三维族 `sp3d`(3) / `props3d`(3) / `lightRig`(2)
   要先定「夹具结构非法、真件应写成 effectLst 之后的兄弟」的口径；**删
@@ -3347,16 +3407,15 @@ LibreOffice / WPS 对撞，屏上仍是 CSS 近似、四边统一，不做 `offs
   老式形状族 `shape`(20) / `bodyPr`(19) / `rect`(15) / `fill`(14) /
   `line`(14) 仍是模型无槽、写手发不出 `w:pict`。`wp:posOffset` 值在元素
   文本里、账本压根没这一对，**动 0 对**；`sizeRelH/V` 是 wp14 扩展，
-  夹具写 `wp:` 前缀、真件要 `mc:AlternateContent`。`creationId|id` v0.193
-  补回后 kept 85/319。
-- 正文长尾：`outline|val` 与 `ligatures|val`/`numForm|val`/`numSpacing|val`
-  四枚 rPr 字符特性（要先新建载荷槽 + 定 CT_RPr 位次；**v0.190 确认命中的
-  outline 都不是 `IRunOptions`、v0.192 确认读手只把它们变成屏上 CSS 没进模型**）、
-  `w:sdt` 内容控件壳、`w:proofErr`、`a:ext|uri` 两枚、±5 缇、
-  `docPr|descr`（包把 alt 顶进来，归属口径未定）、`theme1.xml` 口径未定；
-  **编号 id 三族是引用图、不是坏件，v0.189 探过按纪律不碰；页眉页脚引用
-  四对是只读记账，不能发空引用；`tblpPr|overlap` 是同义表示，v0.193 探过
-  不碰**。部件级字面元信息五族 v0.193、`comment|initials` v0.192、
+  夹具写 `wp:` 前缀、真件要 `mc:AlternateContent`。`a:ext|uri` 两枚
+  （嵌在 `a:ln` 内）仍未做。
+- 正文长尾：`w:sdt` 内容控件壳（`id|val`）、`w:proofErr`、`formProt|val` /
+  `rtlGutter|val`（要按 CT_SectPr 序定锚点）、`comments|Ignorable`
+  （comments.xml 根属性）、±5 缇、`docPr|descr`（包把 alt 顶进来，
+  归属口径未定）、`theme1.xml` 口径未定；**编号 id 三族是引用图、不是坏件，
+  v0.189 探过按纪律不碰；页眉页脚引用四对是只读记账，不能发空引用；
+  `tblpPr|overlap` 是同义表示，v0.193 探过不碰**。rPr 字符特性四枚 v0.194、
+  部件级字面元信息五族 v0.193、`comment|initials` v0.192、
   `hyperlink|tooltip`/`hyperlink|tgtFrame` v0.191、
   `smartTag|element`/`smartTag|uri` v0.190、
   `fldChar`/`ffData` 一族 v0.189、
@@ -3370,7 +3429,8 @@ LibreOffice / WPS 对撞，屏上仍是 CSS 近似、四边统一，不做 `offs
 - PDF 页序重排 v0.189、Impress 占位矩形编辑（第二套拖拽状态机）v0.186、
   Writer 自动缩放两档 v0.187（三处 UI 共用 `fitZoom`）、文档属性面板 v0.188、
   页面边框读写链 v0.190、ODT 文档属性（meta.xml 五格）与 pptx 表格文本零数组
-  v0.191、批注 initials 与页面边框屏上预览 v0.192、ODT 页面边框 v0.193 已补；
+  v0.191、批注 initials 与页面边框屏上预览 v0.192、ODT 页面边框 v0.193、
+  ODT 超链接 title/target 与 rPr 四枚 v0.194 已补；
   Calc 视图缩放（落点在预存改动文件 `SheetEditor.tsx`，按房规换落点或只记结论）；
   **pdf-lib 按需加载**仍等 `pdf-text-edit.ts` 入库（本轮 build 仍见
   `INEFFECTIVE_DYNAMIC_IMPORT`）；版式库 / SmartArt / 3D / Fontwork、
@@ -3379,9 +3439,10 @@ LibreOffice / WPS 对撞，屏上仍是 CSS 近似、四边统一，不做 `offs
   清除格式 v0.183、PDF 首页末页 v0.184 已补。
 - 写手补丁链的循环内动态正则 v0.190 已收干净（`edgeRe` → `findEdgeTag`），
   pptx 导入最后一处摊平数组 v0.191、写手「先数一遍再逐块改」的物化开标签
-  数组 v0.192（一处）与 v0.193（六处，共用 `legacyElemScan`）已收干净；
-  ODT 链目前扩了文档属性（v0.191）与页面边框（v0.193），
-  `docPr`、表单域 / `smartTag` 与超链接两枚仍只在 docx 链。
-- D32–D52 原账不动（同上）。
+  数组 v0.192（一处）与 v0.193（六处，共用 `legacyElemScan`）、读手每段重复
+  的 styleView v0.194 已收干净；ODT 链扩了文档属性（v0.191）、页面边框
+  （v0.193）与超链接两枚（v0.194），`docPr`、表单域 / `smartTag`、
+  rPr 四枚与部件级元信息五族仍只在 docx 链。
+- D32–D53 原账不动（同上）。
 
 

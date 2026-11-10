@@ -22,9 +22,9 @@
  },
  "totals": {
   "read": 619,
-  "kept": 364,
+  "kept": 368,
   "value": 5,
-  "lost": 250,
+  "lost": 246,
   "part": 0,
   "consulted": 672,
   "srcParts": 7,
@@ -2748,12 +2748,14 @@
    ]
   },
   "ligatures|val": {
-   "bucket": "lost",
+   "bucket": "kept",
    "n": 1,
    "src": [
     "standardcontextual"
    ],
-   "out": []
+   "out": [
+    "standardcontextual"
+   ]
   },
   "lightRig|dir": {
    "bucket": "lost",
@@ -3307,12 +3309,14 @@
    ]
   },
   "numForm|val": {
-   "bucket": "lost",
+   "bucket": "kept",
    "n": 1,
    "src": [
     "oldstyle"
    ],
-   "out": []
+   "out": [
+    "oldstyle"
+   ]
   },
   "numId|val": {
    "bucket": "value",
@@ -3345,12 +3349,14 @@
    ]
   },
   "numSpacing|val": {
-   "bucket": "lost",
+   "bucket": "kept",
    "n": 1,
    "src": [
     "proportional"
    ],
-   "out": []
+   "out": [
+    "proportional"
+   ]
   },
   "object|dxaOrig": {
    "bucket": "lost",
@@ -3463,12 +3469,14 @@
    ]
   },
   "outline|val": {
-   "bucket": "lost",
+   "bucket": "kept",
    "n": 1,
    "src": [
     "1"
    ],
-   "out": []
+   "out": [
+    "1"
+   ]
   },
   "overflowPunct|val": {
    "bucket": "kept",

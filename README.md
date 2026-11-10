@@ -11748,6 +11748,67 @@ ODT 文档属性顺延落地，收掉 pptx 导入最后一处摊平数组。
   LibreOffice / WPS 对撞，第三方件四边分写时只认 top。惰性化的端到端是
   **变慢 9.2%（噪声内）**，确定收益只在纯函数段且只有个位数。
 
+## v0.194（rPr 字符特性四枚 + ODT 超链接 title/target + 读手 styleView 去重）
+
+承接 D53。正文侧 lost 只剩 9 对，其中四枚 rPr 字符特性是挂了多轮的最大一组；
+本轮把它的**位次口径**定下来一次带回 4 对，另补上 D53 顺延的 ODT 超链接两枚，
+再收掉读手里一处「同一段算两次样式视图」的重复计算。
+
+**保真：4 对 `lost → kept`，正文 93.0% → 94.3%**
+
+- `ligatures|val` / `numForm|val` / `numSpacing|val` / `outline|val`（外加同片的
+  `w:cntxtalts`，账本里没这一对）：读手 v0.155 起把它们只兑现成屏上的
+  `font-variant-*` CSS，**没进 HTML/PM 载荷**；`RunProps` 里虽有字段，docx 包
+  的 `.d.ts` 也没有 `IRunOptions` 的对应槽（v0.190 复查过 `outline` 的命中全是
+  图形/段落描边）。D53 写「要先新建载荷槽 + 定 CT_RPr 位次」——本轮定的是
+  **位次而不新建槽**：走写手侧从源包留下字面，按**结果文字**认领写出包里
+  那一枚 run，贴回它的 `<w:rPr>`。
+- 位次口径：`w:outline` 是 CT_RPrBase 标准元素，插在第一枚
+  `emboss`/`imprint`/`shadow`/`noProof` 之前；`ligatures`/`numForm`/
+  `numSpacing`/`cntxtalts` 是 Word 2010+ 的 OpenType 扩展，Word 自己放在 rPr
+  末尾，于是插在 `</w:rPr>` 前。夹具写的是无前缀 `w:` 字面，按源件原样搬回。
+- 三道守卫与 `literalWrappers` 同款：已有同名元素（按**元素名**判，不是整串
+  字面）不覆盖、结果文字被用户改过就认不出宁可不贴、插入区间按 cursor 单调
+  前进。`patchRPrFeatures` 与其余补丁共用同一只会话。
+- 读手源码零改动、查问仍 **672**，`docs/fidelity.*` 与 HEAD **逐字节相同**，
+  四条变异腿 52.5 / 59.4 / 99.0 / 96.5 一字不动，`modules` 仍 68。
+- 正文 **279/300 → 283/300 = 94.3%**、合计 **364/619 58.8% → 368/619 59.5%**、
+  掉 **250 → 246**、值变仍 5、图形壳 26.6% 不动。
+
+**功能：ODT 超链接 title / target（D53 顺延，修的是坏件）**
+
+- v0.191 把 docx 的 `w:tooltip`/`w:tgtFrame` 从 PM link mark 接回写出包，
+  但 ODT 写手只发 `xlink:href`、读手只读 `xlink:href`——导入带提示 / 目标
+  框架的 `.odt` 另存一次这两枚就没了。ODF 的 `<text:a>` 有 `xlink:title` 与
+  `office:target-frame-name` 两枚标准属性，正好同义：写侧从 link mark 取
+  `title`/`target`（只发非空格），读侧读回 HTML `<a title/target>`，PM link
+  mark 与 DocEditor 直接可用（**真双向**：改 mark 写新值、旧字面不留）。
+- 默认路径一个属性都不发，`href` 仍走原来的转义，没设这两枚的件产出与
+  改前逐字相同；新增属性走含引号转义的 `esc`，第三方 .odt 的两枚也能读回。
+
+**性能：读手 styleView 每段两次 → 一次**
+
+- `effPPrOf()` 与 `paragraph()` 对同一个 styleId 各算一次 `styleView`（链合并 +
+  `mergePPr`），结果完全相同。本轮把 `view` 从 `effPPrOf` 一并带出来给
+  `paragraph` 复用：**不引入跨段落共享的可变树**，纯去重复计算。
+  `legacyStyleView:true` 复刻改前路径供同进程 A/B，两腿导入结果逐字相同。
+- 原始夹具 7.1 → 7.2ms（**−1.4%，变慢，噪声内**）；放大语料 50 / 500 /
+  2000 段 **−3.7% / −5.0% / −4.3%（噪声内，未粉饰）**。
+
+**门禁**：tsc 0、`tsc && vite build` ✓；**53 组结构测试全绿**（新增 33 + 20
++ 12 项，1 条钉死链尾的旧断言改成动态链校验）；保真 99.0% / 98.4% 且与 HEAD
+逐字节相同、四条变异腿一字不动；pptx 70.1 / 74.3 且 `no-ga` 42 条全红后
+复位；往返账 `30e28284…` / `bd1415a4…` 两次复跑一致；两把旧尺语义等价 ✓，
+部件解压 **28 → 29 → 6**（新增 rPr 补丁多一次读，预期）。`pnpm run build`
+的 pdfjs 资源清理仍被环境安全策略拦下，改跑等价两步验证。
+
+- **诚实边界**：rPr 四枚是写手侧按源包字面搬回，**不是真双向**——用户改不了
+  这些 OpenType 档位，改过结果文字就不贴回；夹具是无前缀 `w:` 写法，真件里
+  它们常带 `w14:`/`w15:` 命名空间与 `mc:Ignorable`，没做真机 Word 对撞，
+  `outline` 插在 `emboss` 前是按 CT_RPrBase 序推理而非实测。ODT 两枚只有合成
+  夹具与端到端断言，没做真机 LibreOffice / WPS 对撞。styleView 去重的收益
+  全在噪声内，保留它是因为语义严格等价且去掉一处明显的重复计算。
+
 ## 性能（v0.3）
 
 
