@@ -22,9 +22,9 @@
  },
  "totals": {
   "read": 619,
-  "kept": 358,
+  "kept": 359,
   "value": 5,
-  "lost": 256,
+  "lost": 255,
   "part": 0,
   "consulted": 672,
   "srcParts": 7,
@@ -1147,12 +1147,14 @@
    ]
   },
   "comment|initials": {
-   "bucket": "lost",
+   "bucket": "kept",
    "n": 1,
    "src": [
     "zs"
    ],
-   "out": []
+   "out": [
+    "zs"
+   ]
   },
   "commentEx|done": {
    "bucket": "kept",

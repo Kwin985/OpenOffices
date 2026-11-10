@@ -3238,7 +3238,49 @@ HEAD 逐字节相同、四条变异腿不动，pptx 70.1/74.3、42/19 全绿、
   pptx 表格零数组端到端收益在噪声内、纯函数段也只有个位数，保留它是为收掉
   顺延项且语义严格等价，不冒充提速。
 
-### 顺延清单（D51）
+### v0.192 追加节：批注 initials + 页面边框屏上预览 + patchElemAttrs 惰性遍历
+
+**往返账动 1 对 `lost → kept`**：`comment|initials`(ZS)。
+正文 **274/300 = 91.3% → 275/300 = 91.7%**、合计 **358/619 57.8% →
+359/619 58.0%**，掉 256 → 255、值变 5 不动、图形壳 84/319 = 26.3% 不动。
+
+- **一族不是新槽**：`DocComment.initials` 字段、读手 v0.154 的
+  `attr(c,'w:initials')` 解析、包 `ICommentOptions.initials` 原生槽三样都在，
+  写手 `anchored.map` 只差把这一格传给 `new Comment`。补一行即真双向：
+  改模型写回新值，没写过的批注不凭空造。`test-comment-initials.mjs` 12 项
+  含端到端写出包、改值、缺省不补与 `.d.ts` 类型面核实。
+- **零新增查问**：读手源码一行没动、查问仍 **672**，`docs/fidelity.*` 与 HEAD
+  **逐字节相同**，四条变异腿 52.5 / 59.4 / 99.0 / 96.5 与记录对
+  392/416/715/685 一字不动。`modules` 仍 68。
+- **探过但放弃（两处口径写清）**：① `outline|val` / `ligatures|val` /
+  `numForm|val` / `numSpacing|val` 四枚 rPr 字符特性同根，读手只把它们变成屏上
+  `font-variant-*` CSS、没进模型载荷；补回来要新建槽、按 CT_RPr 定插入位次，
+  且按 `<w:rPr>` 出现序对位会在「包给每个 run 都发 rPr」时错位。②
+  `headerReference|id/type` / `footerReference|id/type` 四对是 v0.152 的只读
+  记账（rId 由包重编、type 只发 default），为凑数字发空引用会指向不存在的
+  部件。按「假红比真红更坏」都不碰。
+- **功能：页面边框屏上预览**（v0.190 遗留的口径修正）。此前读写链只随 docx
+  往返、屏上纸面与打印预览都不画；本轮 `pageBorderCss` 把四档线型映射成 CSS、
+  `w:sz`（八分之一磅）折 px、脏色回落黑，`.doc-page` 加内联 `border`，打印时
+  内联优先级高于 `@media print` 的 `border:none`。只认四档、不画 `w:space`
+  内边距，屏上是 CSS 近似、没做真机 WPS/Word 对撞。`test-page-borders.mjs`
+  扩 8 项覆盖纯函数、纸面 JSX 接线与面板文案。
+- **性能**：`patchElemAttrs` 里最后一类 `[...xml.matchAll(...)]`（先数够不够再
+  逐块补属性）换成惰性迭代器，计数闸门移到循环末尾（不符整笔丢弃、不写盘），
+  `legacyElemScan:true` 复刻改前路径、两腿逐部件归一逐字相同。纯函数段
+  50/500/2000 标签 **−7.2% / −1.0% / −3.4%**（收益小，如实写）；
+  **端到端 31.8 → 31.4ms（−1.2%，噪声内）**。
+- **门禁**：tsc 0、`tsc && vite build` ✓（`pnpm run build` 的 pdfjs 资源清理仍
+  被环境安全策略拦下）；**47 组结构测试全绿**（新增 12 + 10 项 + 页面边框扩
+  8 项，无过期断言）；保真 99.0/98.4 与 HEAD 逐字节相同、四条变异腿不动，
+  pptx 70.1/74.3、42/19 全绿、`--selftest --mut no-ga` 42 条全红后复位；
+  往返账 `a5a3afc2…`/`a0dbd1da…` 两次复跑一致；`bench-docx-pack` 语义等价 ✓、
+  `bench-docx-parts` 部件解压仍 **24 → 5**。
+- **诚实边界**：批注 initials 只有合成夹具与端到端断言，真件多作者/多批注
+  未实测；页面边框屏上是 CSS 近似、与 Word 的 `offsetFrom` 口径不同；
+  惰性化端到端收益在噪声内、纯函数段个位数，不冒充提速。
+
+### 顺延清单（D52）
 
 - 图形壳剩余 **233 对**：三维族 `sp3d`(3) / `props3d`(3) / `lightRig`(2)
   要先定「夹具结构非法、真件应写成 effectLst 之后的兄弟」的口径；**删
@@ -3247,11 +3289,13 @@ HEAD 逐字节相同、四条变异腿不动，pptx 70.1/74.3、42/19 全绿、
   `line`(14) 仍是模型无槽、写手发不出 `w:pict`。`wp:posOffset` 值在元素
   文本里、账本压根没这一对，**动 0 对**；`sizeRelH/V` 是 wp14 扩展，
   夹具写 `wp:` 前缀、真件要 `mc:AlternateContent`。
-- 正文长尾：`outline|val`（要先定 rPr 内 schema 位次并新建 charExtra 槽；
-  **v0.190 复查 `.d.ts` 确认命中的 outline 都不是 `IRunOptions`，判断成立**）、
+- 正文长尾：`outline|val` 与 `ligatures|val`/`numForm|val`/`numSpacing|val`
+  四枚 rPr 字符特性（要先新建载荷槽 + 定 CT_RPr 位次；**v0.190 确认命中的
+  outline 都不是 `IRunOptions`、v0.192 确认读手只把它们变成屏上 CSS 没进模型**）、
   `w:sdt` 内容控件壳、±5 缇、`docPr|descr`（包把 alt 顶进来，归属口径未定）、
   `theme1.xml` 口径未定；**编号 id 三族是引用图、不是坏件，v0.189 探过按纪律
-  不碰**。`hyperlink|tooltip`/`hyperlink|tgtFrame` v0.191、
+  不碰；页眉页脚引用四对是只读记账，不能发空引用**。
+  `comment|initials` v0.192、`hyperlink|tooltip`/`hyperlink|tgtFrame` v0.191、
   `smartTag|element`/`smartTag|uri` v0.190、
   `fldChar`/`ffData` 一族 v0.189、
   `docPr|id`/`docPr|name` v0.188、`ins|id`/`startOverride|val` v0.187、
@@ -3264,7 +3308,7 @@ HEAD 逐字节相同、四条变异腿不动，pptx 70.1/74.3、42/19 全绿、
 - PDF 页序重排 v0.189、Impress 占位矩形编辑（第二套拖拽状态机）v0.186、
   Writer 自动缩放两档 v0.187（三处 UI 共用 `fitZoom`）、文档属性面板 v0.188、
   页面边框读写链 v0.190、ODT 文档属性（meta.xml 五格）与 pptx 表格文本零数组
-  v0.191 已补；Calc 视图缩放（落点在预存改动文件
+  v0.191、批注 initials 与页面边框屏上预览 v0.192 已补；Calc 视图缩放（落点在预存改动文件
   `SheetEditor.tsx`，按房规换落点或只记结论）；**pdf-lib 按需加载**仍等
   `pdf-text-edit.ts` 入库（本轮 build 仍见 `INEFFECTIVE_DYNAMIC_IMPORT`）；
   版式库 / SmartArt / 3D / Fontwork、水印 / 邮件合并 / 公式编辑器 /
@@ -3272,8 +3316,9 @@ HEAD 逐字节相同、四条变异腿不动，pptx 70.1/74.3、42/19 全绿、
   状态栏 v0.180、逐页翻页预览 v0.181、Impress 母版配色 v0.182、
   清除格式 v0.183、PDF 首页末页 v0.184 已补。
 - 写手补丁链的循环内动态正则 v0.190 已收干净（`edgeRe` → `findEdgeTag`），
-  pptx 导入最后一处摊平数组 v0.191 已收；ODT 链目前只扩了文档属性，
+  pptx 导入最后一处摊平数组 v0.191、写手最后一类物化开标签数组
+  （`patchElemAttrs`）v0.192 已收；ODT 链目前只扩了文档属性，
   `docPr`、表单域 / `smartTag`、页面边框与超链接两枚仍只在 docx 链。
-- D32–D50 原账不动（同上）。
+- D32–D51 原账不动（同上）。
 
 
