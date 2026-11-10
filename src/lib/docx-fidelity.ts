@@ -2472,6 +2472,8 @@ class Fidelity {
     /** 主题字体槽（v0.138）：document 树在 run() 里落地，styles/numbering 在读入时已落地 */
     private theme?: ThemeFonts,    /** 主题色槽（v0.142）：w:color/@w:themeColor、w:shd/@w:themeFill 与边框上的同名属性引用的就是这些槽 */
     private themeColors?: ThemeColors,
+    /** v0.194：只给同进程 A/B 对照腿复刻「每段算两次 styleView」的改前路径，产品路径恒为 false */
+    private legacyStyleView = false,
   ) {}
 
   private warn(msg: string) {
@@ -2648,10 +2650,12 @@ class Fidelity {
   }
 
   /** 段落的生效 pPr：样式链给基线，段落自己的 pPr 覆盖同名项（Word 的直接格式优先于样式） */
-  private effPPrOf(el: XEl): { pPr?: XEl; effPPr?: XEl } {
+  private effPPrOf(el: XEl): { pPr?: XEl; effPPr?: XEl; view: ReturnType<typeof styleView> } {
     const pPr = find(el, 'w:pPr')
     const view = styleView(this.book, pPr ? val(pPr, 'w:pStyle') : undefined)
-    return { pPr, effPPr: mergePPr([view.pPr, pPr]) }
+    // v0.194：把 view 一并带出去，paragraph 不必对同一个 styleId 再算一遍链合并
+    // （styleView 是纯函数，复用结果与改前逐字相同；没有跨段落共享可变树）。
+    return { pPr, effPPr: mergePPr([view.pPr, pPr]), view }
   }
 
   /**
@@ -2696,9 +2700,13 @@ class Fidelity {
   }
 
   private async paragraph(el: XEl, list: ListState, inCell: boolean, betweenCss = '', runSeed: RunProps = NONE): Promise<string> {
-    const { pPr, effPPr } = this.effPPrOf(el)
-    const view = styleView(this.book, pPr ? val(pPr, 'w:pStyle') : undefined)
-    const base = baseRunProps(view.chain, effPPr, this.themeColors, runSeed)
+    const { pPr, effPPr, view } = this.effPPrOf(el)
+    // v0.194：改前这里对同一个 styleId 又调一次 styleView（每段两次）；本轮直接复用
+    // effPPrOf 的结果。legacyStyleView 只给 A/B 对照腿复刻改前的重复计算。
+    const chain = this.legacyStyleView
+      ? styleView(this.book, pPr ? val(pPr, 'w:pStyle') : undefined).chain
+      : view.chain
+    const base = baseRunProps(chain, effPPr, this.themeColors, runSeed)
     // 段落标记自身的修订（v0.100）：pPr/w:ins = 这是新插入的段落（接受后留下来）；文字若没被
     // w:ins 单独包住，段落级插入就是它唯一的变化，按普通段落读不丢内容。pPr/rPr/w:del =
     // 段落标记被删（接受后本段并入下一段），这一层意思模型里没有承载，如实记账
@@ -5404,6 +5412,8 @@ export async function docxToHtmlFidelity(
   bytes: Uint8Array,
   depth = 0,
   shared?: { zip: unknown; read(name: string): Promise<string> },
+  /** v0.194：同进程 A/B 对照腿只切这一个开关（产品路径不传，走去重后的链） */
+  opts?: { legacyStyleView?: boolean },
 ): Promise<DocxImport> {
   let zip: ZipLike
   if (shared) {
@@ -5427,7 +5437,7 @@ export async function docxToHtmlFidelity(
   // 主题色（v0.142）：与字体同读一份 theme1.xml，clrScheme 住 fontScheme 旁边
   const themeColors = readThemeColors(themeXml)
   const numbering = readNumbering(await read('word/numbering.xml'), theme)
-  const f = new Fidelity(readStyles(await read('word/styles.xml'), theme), numbering, depth, theme, themeColors)
+  const f = new Fidelity(readStyles(await read('word/styles.xml'), theme), numbering, depth, theme, themeColors, !!opts?.legacyStyleView)
   // 编号定义的多级身份（v0.145）：multiLevelType 描述「这份定义是否设计成多级联动」，
   // 而模型把编号定义塌成逐段档位（ListRegistry 按段引用重建），这个身份带不回来——
   // 每种类型记一条（不逐实例刷屏）

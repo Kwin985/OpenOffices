@@ -134,9 +134,16 @@ async function main() {
   const w = read('../src/lib/docx.ts')
   const r = read('../src/lib/docx-fidelity.ts')
   check('DocMeta 有 metaExtras 字段', /metaExtras\?: MetaExtras/.test(w))
-  check('主链挂 withMeta 且逐笔接上一笔',
-    /const withMeta = await patchMetaExtras\(withLink, meta\?\.metaExtras, sess\)/.test(w) &&
-    /patchTcPr\(withMeta,|: withMeta/.test(w))
+  // 链尾变量名每加一支补丁就红，改「每笔输入 = 上一笔输出」的动态校验（v0.190 同款）
+  const chainOk = (src) => {
+    const defs = [...src.matchAll(/^  const (with[A-Z]\w*) =/gm)].map((m) => ({ name: m[1], at: m.index ?? 0 }))
+    const a = defs.findIndex((d) => d.name === 'withMeta'), b = defs.findIndex((d) => d.name === 'withNumStart')
+    if (a < 0 || b <= a) return false
+    const core = defs.slice(a, b + 1)
+    return core.every((d, i) => i === 0 || src.slice(d.at, i + 1 < core.length ? core[i + 1].at : d.at + 600).includes(core[i - 1].name))
+  }
+  check('主链挂 withMeta，且后续补丁逐笔接上一笔（动态校验）',
+    /const withMeta = await patchMetaExtras\(withLink, meta\?\.metaExtras, sess\)/.test(w) && chainOk(w))
   check('meta 构造确实读三个部件',
     ["readText('word/numbering.xml')", "readText('word/styles.xml')", "readText('word/commentsExtended.xml')"]
       .every((s) => w.includes(s)))

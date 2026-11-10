@@ -829,8 +829,18 @@ class OdtBuilder {
           }
           inner = `<text:span text:style-name="${name}">${inner}</text:span>`
         }
-        const href = at('link')?.href as string | undefined
-        if (href) inner = `<text:a xlink:type="simple" xlink:href="${esc(href)}">${inner}</text:a>`
+        const link = at('link')
+        const href = link?.href as string | undefined
+        if (href) {
+          // v0.194：ODF 的 <text:a> 有 xlink:title（链接提示）与
+          // office:target-frame-name（目标框架）两枚标准属性，正好对应 docx 的
+          // w:tooltip / w:tgtFrame。PM link mark 自带 title/target 两格，
+          // 此前 ODT 写手只发 href、读手只读 href，另存一次就把这两枚抹掉了。
+          // 只发非空格：没说过的件不写空属性（Office 命名空间已在根声明）。
+          const title = typeof link?.title === 'string' && link.title ? ` xlink:title="${esc(link.title)}"` : ''
+          const target = typeof link?.target === 'string' && link.target ? ` office:target-frame-name="${esc(link.target)}"` : ''
+          inner = `<text:a xlink:type="simple" xlink:href="${esc(href)}"${title}${target}>${inner}</text:a>`
+        }
         out += inner
       } else if (n.type === 'hardBreak') {
         out += '<text:line-break/>'
@@ -2048,9 +2058,19 @@ export async function odtToHtml(
           case 'span':
             out += htmlOfStyle(resolveStyle(e.getAttribute('text:style-name')), await renderInline(e))
             break
-          case 'a':
-            out += `<a href="${escapeHtml(e.getAttribute('xlink:href') ?? '')}">${await renderInline(e)}</a>`
+          case 'a': {
+            // v0.194：把 ODF 的 xlink:title / office:target-frame-name 读回 HTML
+            // <a title/target>，TipTap 的 link mark 自带这两格，于是与 docx 链共用；
+            // 用 esc（含引号转义）而不是 escapeHtml（只转 & < >）写新增属性，属性值不会被写坏；
+            // href 仍走原来的 escapeHtml，没设这两枚的件产出与改前逐字相同。
+            const title = e.getAttribute('xlink:title') ?? ''
+            const target = e.getAttribute('office:target-frame-name') ?? ''
+            out += `<a href="${escapeHtml(e.getAttribute('xlink:href') ?? '')}"` +
+              (title ? ` title="${esc(title)}"` : '') +
+              (target ? ` target="${esc(target)}"` : '') +
+              `>${await renderInline(e)}</a>`
             break
+          }
           case 'annotation': {
             // 批注本体：收进 DocComment（作者/日期/正文），正文不摊进段落；区间从此处包 span
             // 不收 e 的孩子——批注的 text:p 是内容不是正文，掉进 default 递归就会整段漏进文档（v0.86 前置实测量到的污染格）

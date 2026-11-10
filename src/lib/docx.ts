@@ -801,6 +801,44 @@ export interface MetaExtras {
   roots?: { part: string; close: string; literals: string[] }[]
 }
 
+/**
+ * rPr 字符特性字面片（v0.194）：`w:ligatures` / `w:numForm` / `w:numSpacing` /
+ * `w:cntxtalts` / `w:outline` 五枚。读手 v0.155 起只把它们变成屏上的
+ * `font-variant-*` CSS，**没进 HTML/PM 载荷**；docx 包的 `.d.ts` 里也没有
+ * IRunOptions 的对应槽（v0.190 复查过 outline 的命中全是图形/段落描边）。
+ * 于是写手侧从源包留下这几枚元素的字面，按**结果文字**认领写出包里那一枚
+ * run，把壳贴回它的 `<w:rPr>`（用户改过文字就认不出，宁可不贴）。
+ *
+ * 位次口径（CT_RPrBase）：`w:outline` 是标准元素，排在 `shadow`/`emboss`/
+ * `imprint` 之前；另外四枚是 Word 2010+ 的 OpenType 扩展，Word 自己放在
+ * rPr 末尾。夹具写的是无前缀 `w:` 字面，按源件原样搬回、不做命名空间改写。
+ */
+export interface RPrFeature {
+  /** 结果文字，用来认领写出包里那一枚 run */
+  text: string
+  /** 源件 rPr 里那几枚元素的字面（按源序） */
+  extras: string[]
+}
+
+const RPR_FEATURE_TAGS = 'ligatures|numForm|numSpacing|cntxtalts|outline'
+
+/** 从源包 document.xml 提取含目标特性的 run；只收自闭合的这几枚，别把 rPr 整块搬走 */
+export function rPrFeaturesOf(docXml: string): RPrFeature[] {
+  const out: RPrFeature[] = []
+  const featureRe = new RegExp(`<w:(?:${RPR_FEATURE_TAGS})\\b[^>]*?\\/>`, 'g')
+  for (const m of docXml.matchAll(/<w:r(?:\s[^>]*)?>([\s\S]*?)<\/w:r>/g)) {
+    const run = m[0]
+    const rp = /<w:rPr(?:\s[^>]*)?>([\s\S]*?)<\/w:rPr>/.exec(run)
+    if (!rp) continue
+    const extras = [...rp[1].matchAll(featureRe)].map((x) => x[0])
+    if (!extras.length) continue
+    const t = /<w:t(?:\s[^>]*)?>([\s\S]*?)<\/w:t>/.exec(run)
+    if (!t?.[1]) continue
+    out.push({ text: t[1], extras })
+  }
+  return out
+}
+
 // 页眉页脚设置 + 批注列表 + 页面设置：随 .odoc meta 存储，导出写入 OOXML
 export interface DocMeta {
   headerText?: string
@@ -840,6 +878,11 @@ export interface DocMeta {
    * commentsExtended.xml 正则提取，`patchMetaExtras` 按身份键或根容器贴回写出包。
    */
   metaExtras?: MetaExtras
+  /**
+   * rPr 字符特性字面片（v0.194）：按结果文字认领 run，`patchRPrFeatures`
+   * 按 CT_RPr 序贴回；写手侧正则读、读手零改动。
+   */
+  rPrFeatures?: RPrFeature[]
   /** 文档属性（v0.188）：由 `docxToDocMeta` 从 docProps/core.xml 读出，编辑器可改 */
   docProps?: DocProps
   page?: PageSetup
@@ -1188,6 +1231,9 @@ export async function docxToDocMeta(bytes: Uint8Array, shared?: DocxZipSession):
   if (byId.length || roots.length) {
     out.metaExtras = { ...(byId.length ? { byId } : {}), ...(roots.length ? { roots } : {}) }
   }
+  // v0.194：rPr 字符特性五枚（读手只兑现成屏上 CSS、没进模型），同样写手侧正则读
+  const rPrFeatures = rPrFeaturesOf(docXml)
+  if (rPrFeatures.length) out.rPrFeatures = rPrFeatures
   return out
 }
 
@@ -3737,6 +3783,8 @@ export async function prosemirrorToDocxBytes(
   const withLink = await patchHyperlinkAttrs(withLit, dt.linkExtras, sess)
   // v0.193：部件级字面元信息（numbering / styles / commentsExtended），与上面几笔共用会话
   const withMeta = await patchMetaExtras(withLink, meta?.metaExtras, sess)
+  // v0.194：rPr 字符特性（按结果文字认领 run，按 CT_RPr 序插回），与上面几笔共用会话
+  const withFeat = await patchRPrFeatures(withMeta, meta?.rPrFeatures, sess)
   // 表闸门三样都要补：样式推出来的（looks）与表自己带的（dt.tblLooks），
   // v0.152 起再加表级条件格式尺寸两枚（dt.tblPrs，与 tblLook 同住 tblPr）
   const needTbl =
@@ -3747,7 +3795,7 @@ export async function prosemirrorToDocxBytes(
     dt.cnfStyles.some((x) => x) ||
     dt.tblBorders.some((x) => x)
   // 单元格不换行（v0.152）：包里没有 noWrap 的槽，按 <w:tc> 出现序插 <w:noWrap/>
-  const withCell = dt.cellExtras.some((x) => x) ? await patchTcPr(withMeta, dt.cellExtras, sess) : withMeta
+  const withCell = dt.cellExtras.some((x) => x) ? await patchTcPr(withFeat, dt.cellExtras, sess) : withFeat
   // 底纹的存盘原件（v0.164）：按 <w:shd> 出现序**合并**属性（包只发 val/color/fill 三枚，
   // 且 fill 写的是解析后的屏上色——源件的字面色与主题三枚都要改回来/补上去）
   const withShd = await patchShdAttrs(withCell, dt.shdExtras, sess)
@@ -4095,6 +4143,77 @@ export async function patchDocPr(
  * 差别是这次跨多个部件，所以一个补丁里共用同一只 zip / 同一份文本缓存，
  * 末尾只标一次脏。
  */
+/** 一枚字面片属于哪枚元素；幂等按**元素名**判，不按整串字面（值变了也算已有） */
+function featureTagOf(x: string): string {
+  return /^<w:([A-Za-z]+)/.exec(x)?.[1] ?? ''
+}
+
+/**
+ * rPr 字符特性回填（v0.194）。
+ *
+ * 按**结果文字**认领写出包里那一枚 `<w:r>`，只动它的 `<w:rPr>` 内容：
+ * ① 只补缺、不覆盖（写出包已有同名元素就跳过这一枚）；
+ * ② `w:outline` 按 CT_RPrBase 序插在第一枚 `emboss`/`imprint`/`shadow`/
+ *    `noProof` 之前，另外四枚扩展插在 `</w:rPr>` 前（Word 自己就放末尾）；
+ * ③ 结果文字被用户改过就认不出，宁可不贴；插入区间按 cursor 单调前进。
+ *
+ * 与 `patchLiteralWrappers` 同源（写手侧从源包正则读、不进保真账、
+ * 读手零改动、零新增查问），差别只是这次的落点在 run 的 rPr 而不是 run 前后。
+ */
+export async function patchRPrFeatures(
+  bytes: Uint8Array,
+  items: RPrFeature[] | undefined,
+  sess?: PackSession,
+): Promise<Uint8Array> {
+  if (!items?.length) return bytes
+  const zip = sess ? sess.zip : await loadZipOf(bytes)
+  const file = zip.file('word/document.xml')
+  if (!file) return bytes
+  const xml = await partText(zip, 'word/document.xml', sess)
+  let out = ''
+  let cursor = 0
+  let touched = false
+  for (const it of items) {
+    if (!it.text || !it.extras.length) continue
+    const t = xml.indexOf(`>${it.text}</w:t>`, cursor)
+    if (t < 0) continue
+    // `<w:r>` 与带属性的 `<w:r w:rsidR=…>` 都认，但别把 `<w:rPr>` 当成 run 开标签
+    const rAt = Math.max(xml.lastIndexOf('<w:r>', t), xml.lastIndexOf('<w:r ', t))
+    if (rAt < cursor) continue
+    const rpOpen = xml.indexOf('<w:rPr', rAt)
+    const rpClose = rpOpen < 0 ? -1 : xml.indexOf('</w:rPr>', rpOpen)
+    if (rpOpen < 0 || rpClose < 0 || rpOpen > t || rpClose > t) continue
+    const tagEnd = xml.indexOf('>', rpOpen)
+    if (tagEnd < 0 || tagEnd >= rpClose) continue
+    const body = xml.slice(tagEnd + 1, rpClose)
+    const std: string[] = []
+    const ext: string[] = []
+    for (const x of it.extras) {
+      const tag = featureTagOf(x)
+      if (!tag || body.includes(`<w:${tag}`)) continue
+      ;(tag === 'outline' ? std : ext).push(x)
+    }
+    if (!std.length && !ext.length) continue
+    let next = body
+    if (std.length) {
+      let at = -1
+      for (const anchor of ['<w:emboss', '<w:imprint', '<w:shadow', '<w:noProof']) {
+        const i = next.indexOf(anchor)
+        if (i >= 0) { at = i; break }
+      }
+      next = at >= 0 ? next.slice(0, at) + std.join('') + next.slice(at) : next + std.join('')
+    }
+    next += ext.join('')
+    out += xml.slice(cursor, tagEnd + 1) + next
+    cursor = rpClose
+    touched = true
+  }
+  if (!touched) return bytes
+  out += xml.slice(cursor)
+  setPart(zip, 'word/document.xml', out, sess)
+  return finishPatch(bytes, zip, sess)
+}
+
 export async function patchMetaExtras(
   bytes: Uint8Array,
   extras: MetaExtras | undefined,
