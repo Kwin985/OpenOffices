@@ -1387,6 +1387,16 @@ function childToRuns(child: PMNode, inherited: Inherited, cs?: CommentTrack, dt?
         }
       }
       if (href) {
+        // v0.191：模型里的 title/target 就是源件 w:tooltip/w:tgtFrame 的屏上替身，
+        // 登记一格供 post-pack 回填（从模型取，用户改过就写回新值）。`_blank` 是
+        // TipTap 在没写 target 时补的默认值，与「源件显式写 _blank」同形，认不出来
+        // 就不凭空补——宁缺毋滥，也不给没写过的链接造一枚属性。
+        const tip = markAttr(child, 'link', 'title')
+        const frame = markAttr(child, 'link', 'target')
+        dt?.linkExtras.push({
+          ...(tip ? { tip } : {}),
+          ...(frame && frame !== '_blank' ? { frame } : {}),
+        })
         // 超链接里的文字不包修订壳（docx 库的链接子元素类型不收 Inserted/DeletedTextRun）：
         // 链接文字带修订是罕见写法，内容保住、标记丢失，这层边界在 README 里如实记着
         out.push(
@@ -2481,6 +2491,14 @@ function bdrRunExtraOf(raw: string): string {
 }
 
 interface DocTrack {
+  /**
+   * 超链接壳的两枚属性（v0.191）：与写出包里每个 `<w:hyperlink>` 一一对应、同序。
+   * 读手 v0.155 早已把 `w:tooltip`/`w:tgtFrame` 兑现成 HTML `<a title/target>`，
+   * TipTap 的 link mark 也自带这两格，但 `ExternalHyperlink` 只收 `link`——
+   * 典型的「模型已有载荷、写手没接」。这里从**模型**登记（不是源包正则），
+   * 用户改过 title/target 能写回新值；`patchHyperlinkAttrs` 按出现序补回壳。
+   */
+  linkExtras: { tip?: string; frame?: string }[]
   used: Set<number>
   ranges: Set<number>
   skipped: Set<number>
@@ -2619,6 +2637,7 @@ type NoteRecordOption = {
 
 function newDocTrack(): DocTrack {
   return {
+    linkExtras: [],
     used: new Set(),
     ranges: new Set(),
     skipped: new Set(),
@@ -3584,6 +3603,8 @@ export async function prosemirrorToDocxBytes(
   const withDocPr = await patchDocPr(withRev, meta?.docPrShells, sess)
   // v0.189/190：整片字面包裹壳（表单域 + 智能标记，按结果文字对位），共用会话
   const withLit = await patchLiteralWrappers(withDocPr, meta?.literalWrappers, sess)
+  // v0.191：超链接壳的 tooltip / tgtFrame（从模型登记、按 hyperlink 出现序对位）
+  const withLink = await patchHyperlinkAttrs(withLit, dt.linkExtras, sess)
   // 表闸门三样都要补：样式推出来的（looks）与表自己带的（dt.tblLooks），
   // v0.152 起再加表级条件格式尺寸两枚（dt.tblPrs，与 tblLook 同住 tblPr）
   const needTbl =
@@ -3594,7 +3615,7 @@ export async function prosemirrorToDocxBytes(
     dt.cnfStyles.some((x) => x) ||
     dt.tblBorders.some((x) => x)
   // 单元格不换行（v0.152）：包里没有 noWrap 的槽，按 <w:tc> 出现序插 <w:noWrap/>
-  const withCell = dt.cellExtras.some((x) => x) ? await patchTcPr(withLit, dt.cellExtras, sess) : withLit
+  const withCell = dt.cellExtras.some((x) => x) ? await patchTcPr(withLink, dt.cellExtras, sess) : withLink
   // 底纹的存盘原件（v0.164）：按 <w:shd> 出现序**合并**属性（包只发 val/color/fill 三枚，
   // 且 fill 写的是解析后的屏上色——源件的字面色与主题三枚都要改回来/补上去）
   const withShd = await patchShdAttrs(withCell, dt.shdExtras, sess)
@@ -3912,6 +3933,49 @@ export async function patchDocPr(
     if (next === tag) continue
     out += xml.slice(cursor, at) + next
     cursor = at + tag.length
+    touched = true
+  }
+  if (!touched) return bytes
+  out += xml.slice(cursor)
+  setPart(zip, 'word/document.xml', out, sess)
+  return finishPatch(bytes, zip, sess)
+}
+
+/**
+ * 超链接壳的 `w:tooltip` / `w:tgtFrame` 回填（v0.191）。
+ *
+ * 这不是「包没有槽」——读手 v0.155 早把两枚属性兑现成 HTML `<a title/target>`，
+ * TipTap 的 link mark 也自带这两格，只是 `ExternalHyperlink` 只收 `link`。
+ * 所以从**模型**登记（不是源包正则），用户改过 title/target 就写回新值：
+ * 屏上替身能认回，是这轮与前几轮「写手侧字面搬回」最大的不同。
+ * 按 `<w:hyperlink>` 出现序对位，复用 `tagWithAttrs` 做同名改值 / 缺则追加，
+ * 绝不追加第二枚同名属性；两枚都没写过的链接整枚跳过，不凭空造属性。
+ */
+export async function patchHyperlinkAttrs(
+  bytes: Uint8Array,
+  extras: { tip?: string; frame?: string }[] | undefined,
+  sess?: PackSession,
+): Promise<Uint8Array> {
+  if (!extras?.some((x) => x.tip || x.frame)) return bytes
+  const zip = sess ? sess.zip : await loadZipOf(bytes)
+  const file = zip.file('word/document.xml')
+  if (!file) return bytes
+  const xml = await partText(zip, 'word/document.xml', sess)
+  let i = 0
+  let out = ''
+  let cursor = 0
+  let touched = false
+  for (const m of xml.matchAll(/<w:hyperlink\b[^>]*>/g)) {
+    const at = m.index ?? 0
+    const want = extras[i++]
+    if (!want || (!want.tip && !want.frame)) continue
+    const kv: Record<string, string> = {}
+    if (want.tip) kv['w:tooltip'] = xmlAttr(want.tip)
+    if (want.frame) kv['w:tgtFrame'] = xmlAttr(want.frame)
+    const next = tagWithAttrs(m[0], kv)
+    if (next === m[0]) continue
+    out += xml.slice(cursor, at) + next
+    cursor = at + m[0].length
     touched = true
   }
   if (!touched) return bytes

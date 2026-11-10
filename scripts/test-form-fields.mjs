@@ -141,7 +141,15 @@ async function main() {
   check('DocMeta 有 literalWrappers 字段', /literalWrappers\?: LiteralWrapper\[\]/.test(w))
   check('LiteralWrapper 带 marker（逐片幂等）', /export interface LiteralWrapper \{[\s\S]*?marker: string/.test(w))
   check('主链挂 withLit，逐笔接上一笔', /const withLit = await patchLiteralWrappers\(withDocPr, meta\?\.literalWrappers, sess\)/.test(w))
-  check('两条出口都接 withLit（不绕过）', /patchTcPr\(withLit,/.test(w) && /: withLit/.test(w))
+  // v0.191：链尾会随轮次变，按「核心补丁链逐笔接上一笔」动态判（见 test-bookmark-ids.mjs）
+  const chainOk = (src) => {
+    const defs = [...src.matchAll(/^  const (with[A-Z]\w*) =/gm)].map((m) => ({ name: m[1], at: m.index ?? 0 }))
+    const a = defs.findIndex((d) => d.name === 'withBm'), b = defs.findIndex((d) => d.name === 'withNumStart')
+    if (a < 0 || b <= a) return false
+    const core = defs.slice(a, b + 1)
+    return core.every((d, i) => i === 0 || src.slice(d.at, i + 1 < core.length ? core[i + 1].at : d.at + 600).includes(core[i - 1].name))
+  }
+  check('主链逐笔接上一笔（动态链校验，不钉链尾变量名）', chainOk(w))
   check('逐片幂等（不再全局 fldChar 闸门）', /xml\.includes\(f\.marker\)\) continue/.test(w) && !/if \(xml\.includes\('<w:fldChar'\)\) return bytes/.test(w))
   check('两类壳按源包出现序排好', /out\.sort\(\(a, b\) => a\.at - b\.at\)/.test(w))
   check('陈旧守卫按结果文字认领', /const needle = `>\$\{f\.text\}<\/w:t>`/.test(w))

@@ -195,6 +195,29 @@ function hasExitEffect(c: PEl): boolean {
  * `legacyParaText` 只给同进程 A/B 对照腿用（入口设一次），产品路径恒为 false。
  */
 let legacyParaText = false
+/** v0.191：表格单元格文本拼接的对照腿（v0.185 顺延的最后一处摊平数组） */
+let legacyTblText = false
+
+/**
+ * 表格单元格文本（v0.191）：一次前序、命中 `a:t` 即拼接，零中间数组。
+ * 与 `paragraphText` 同款，但作用于整个 `<a:tc>`——**保持改前「跨段落摊平成
+ * 一个串」的语义**（不插换行，性能优化不顺手改语义，教训㉖）。
+ */
+export function tableCellText(tc: PEl): string {
+  let s = ''
+  const walk = (n: PEl) => {
+    for (const k of n.kids) {
+      // 与改前 `descendantsByName` 的递归口径**严格一致**：命中 a:t 仍下钻。
+      // 改前会把嵌套的 t 也单收一枚、textOf 又拼一遍它的子树；若这里命中即停，
+      // 病态件（a:t 带子节点）两腿就不等价。真件里 a:t 不带子节点，这条分支是
+      // 纯兼容，不改语义也不增加可见开销。
+      if (k.localName === 't') s += textOf(k)
+      walk(k)
+    }
+  }
+  walk(tc)
+  return s.trim()
+}
 
 function paragraphText(p: PEl): string {
   if (legacyParaText) {
@@ -780,10 +803,9 @@ async function slideToDeckSlide(
         if (!pos) continue
         const rows = childrenByName(tbl, 'tr').map((tr) =>
           childrenByName(tr, 'tc').map((tc) =>
-            descendantsByName(tc, 't')
-              .map((t) => textOf(t))
-              .join('')
-              .trim(),
+            legacyTblText
+              ? descendantsByName(tc, 't').map((t) => textOf(t)).join('').trim()
+              : tableCellText(tc),
           ),
         )
         if (!rows.length || !rows.some((r) => r.some((c) => c))) continue
@@ -942,12 +964,14 @@ async function slideToDeckSlide(
 
 export async function pptxBytesToDeck(
   bytes: Uint8Array,
-  opts?: { legacyAnimScan?: boolean; legacyParaText?: boolean },
+  opts?: { legacyAnimScan?: boolean; legacyParaText?: boolean; legacyTblText?: boolean },
 ): Promise<Deck> {
   // v0.184：A/B 对照腿只切这一个开关；不传（产品路径）走命中即停的早停遍历
   legacyAnimScan = !!opts?.legacyAnimScan
   // v0.185：文本拼接的 A/B 对照腿，与上面那只开关互不干扰（可以单独切）
   legacyParaText = !!opts?.legacyParaText
+  // v0.191：表格单元格那一处摊平数组的对照腿，同样可单独切
+  legacyTblText = !!opts?.legacyTblText
   const { default: JSZip } = await import('jszip')
   const zip = await JSZip.loadAsync(bytes)
   const slideFiles = Object.values(zip.files)

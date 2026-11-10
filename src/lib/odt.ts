@@ -9,6 +9,7 @@ import {
   pageNumberParts,
   resolvePage,
   type DocMeta,
+  type DocProps,
   type DocComment,
   type DocxStyleInfo,
   type PageMargin,
@@ -176,6 +177,58 @@ function esc(s: string): string {
     .replace(/</g, '&lt;')
     .replace(/>/g, '&gt;')
     .replace(/"/g, '&quot;')
+}
+
+/**
+ * 文档属性五格 → ODF `meta.xml`（v0.191）。
+ *
+ * docx 侧 v0.188 已做 `DocMeta.docProps` 的读写链，ODT 侧此前**根本不发
+ * meta.xml**——导入别人的 .odt 另存一次，标题/作者/关键词全没。这里走 ODF
+ * 标准的 office:document-meta / office:meta，只发非空格（没话说的件不发空元素）；
+ * keyword 允许重复多枚，本实现只发一枚整体串，见 README 诚实边界。
+ */
+export function odtMetaXml(props?: DocProps): string {
+  const el = (tag: string, v?: string) => (v ? `<${tag}>${esc(v)}</${tag}>` : '')
+  return `<?xml version="1.0" encoding="UTF-8"?>` +
+    `<office:document-meta xmlns:office="urn:oasis:names:tc:opendocument:xmlns:office:1.0" ` +
+    `xmlns:dc="http://purl.org/dc/elements/1.1/" ` +
+    `xmlns:meta="urn:oasis:names:tc:opendocument:xmlns:meta:1.0" office:version="1.2">` +
+    `<office:meta>` +
+    el('dc:title', props?.title) +
+    el('dc:subject', props?.subject) +
+    el('dc:creator', props?.creator) +
+    el('meta:keyword', props?.keywords) +
+    el('dc:description', props?.description) +
+    `</office:meta></office:document-meta>`
+}
+
+/** `meta.xml` → 五格。字符串定位，不按标签名编译动态正则；实体按 esc() 的逆序解 */
+export function parseOdtMetaProps(xml: string): DocProps | undefined {
+  const unesc = (s: string) => s
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&quot;/g, '"')
+    .replace(/&amp;/g, '&')
+  const grab = (tag: string) => {
+    const i = xml.indexOf(`<${tag}`)
+    if (i < 0) return ''
+    const gt = xml.indexOf('>', i)
+    const close = xml.indexOf(`</${tag}>`, gt)
+    if (gt < 0 || close < 0) return ''
+    return unesc(xml.slice(gt + 1, close)).replace(/\s+/g, ' ').trim()
+  }
+  const out: DocProps = {}
+  const title = grab('dc:title')
+  const subject = grab('dc:subject')
+  const creator = grab('dc:creator')
+  const keywords = grab('meta:keyword')
+  const description = grab('dc:description')
+  if (title) out.title = title
+  if (subject) out.subject = subject
+  if (creator) out.creator = creator
+  if (keywords) out.keywords = keywords
+  if (description) out.description = description
+  return Object.keys(out).length ? out : undefined
 }
 
 interface ImageEntry {
@@ -984,7 +1037,8 @@ class OdtBuilder {
     let entries =
       `<manifest:file-entry manifest:full-path="/" manifest:media-type="${OD_MIME}"/>` +
       `<manifest:file-entry manifest:full-path="content.xml" manifest:media-type="text/xml"/>` +
-      `<manifest:file-entry manifest:full-path="styles.xml" manifest:media-type="text/xml"/>`
+      `<manifest:file-entry manifest:full-path="styles.xml" manifest:media-type="text/xml"/>` +
+      `<manifest:file-entry manifest:full-path="meta.xml" manifest:media-type="text/xml"/>`
     for (const e of this.images.values()) {
       entries += `<manifest:file-entry manifest:full-path="${e.file}" manifest:media-type="${e.mime}"/>`
     }
@@ -1013,6 +1067,8 @@ export async function prosemirrorToOdtBytes(json: PMNode, meta?: DocMeta): Promi
   zip.file('META-INF/manifest.xml', parts.manifest)
   zip.file('content.xml', parts.content)
   zip.file('styles.xml', parts.styles)
+  // v0.191：文档属性随 .odt 往返（与 docx 的 DocMeta.docProps 同一份模型）
+  zip.file('meta.xml', odtMetaXml(meta?.docProps))
   for (const e of builder.images.values()) zip.file(e.file, e.bytes)
   return zip.generateAsync({ type: 'uint8array', compression: 'DEFLATE' }) as Promise<Uint8Array>
 }
@@ -1279,6 +1335,7 @@ export async function odtToHtml(
   const contentText = await zip.file('content.xml')?.async('string')
   if (!contentText) throw new Error('odt 缺少 content.xml')
   const stylesText = (await zip.file('styles.xml')?.async('string')) ?? ''
+  const metaText = (await zip.file('meta.xml')?.async('string')) ?? ''
   const parser = new DOMParser()
   const cdoc = parser.parseFromString(contentText, 'text/xml')
   // 解析失败时 DOMParser 不抛错，只给一棵 parsererror 树：不挡的话整篇是"打开了一份空白文档"，
@@ -2225,8 +2282,10 @@ export async function odtToHtml(
   const otext = body ? pick(body, 'text') : null
   const html = otext ? `${await renderChildrenBlocks(otext)}${tail()}` : ''
 
-  // —— meta：styles.xml 的 master-page 头脚
+  // —— meta：styles.xml 的 master-page 头脚 + v0.191 的 meta.xml 文档属性
   const meta: DocMeta = {}
+  const docProps = parseOdtMetaProps(metaText)
+  if (docProps) meta.docProps = docProps
   if (comments.length) meta.comments = comments
   if (sdoc) {
     const master = allDescOf(sdoc, sdocAll).find((x) => x.localName === 'master-page')
