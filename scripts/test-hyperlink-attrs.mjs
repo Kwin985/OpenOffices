@@ -112,7 +112,16 @@ async function main() {
   check('补丁是导出的独立函数', /export async function patchHyperlinkAttrs\(/.test(w))
   check('复用 tagWithAttrs 同名改值/追加', /const next = tagWithAttrs\(m\[0\], kv\)/.test(w))
   check('主链挂 withLink，逐笔接上一笔', /const withLink = await patchHyperlinkAttrs\(withLit, dt\.linkExtras, sess\)/.test(w))
-  check('两条出口都接 withLink', /patchTcPr\(withLink,/.test(w) && /: withLink/.test(w))
+  // 链尾变量名每加一支补丁就过期，改「每笔输入 = 上一笔输出」的动态校验（v0.190 同款）
+  const chainOk = (src) => {
+    const defs = [...src.matchAll(/^  const (with[A-Z]\w*) =/gm)].map((m) => ({ name: m[1], at: m.index ?? 0 }))
+    const a = defs.findIndex((d) => d.name === 'withLink'), b = defs.findIndex((d) => d.name === 'withNumStart')
+    if (a < 0 || b <= a) return false
+    const core = defs.slice(a, b + 1)
+    return core.every((d, i) => i === 0 || src.slice(d.at, i + 1 < core.length ? core[i + 1].at : d.at + 600).includes(core[i - 1].name))
+  }
+  check('写手：withLink 是主链上的一笔', /const withLink = await patchHyperlinkAttrs\(withLit,/.test(w))
+  check('写手：后续补丁逐笔接上一笔（动态校验）', chainOk(w))
   check('读手零改动（v0.155 的兑现注释仍在）', /HTML 的 title 与 target 正好是这两个含义/.test(r))
 }
 

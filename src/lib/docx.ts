@@ -777,6 +777,30 @@ export interface LiteralWrapper {
   text: string
 }
 
+/**
+ * 部件级字面元信息（v0.193）：包不会自己发的两种同形状残片。
+ *
+ * ① `byId` —— 开标签上的属性，按**身份属性**认领（如 `w:num` 的 `w:numId`、
+ *    `w:style` 的 `w:styleId`）；身份令牌按名字对位、认不出就跳过，绝不用出现序
+ *    （写出包的 `w:num` 常常比源件多，按序会贴错人）。只补缺、不覆盖。
+ * ② `roots` —— 部件根容器闭标签前的自闭合元信息片（`w:numPicBullet`、
+ *    `w:numIdMacAtCleanup`、`w15:creationId`），按**源包出现序**逐片贴回，
+ *    逐片判幂等（写出包已有同字面就不叠第二枚）。
+ *
+ * 两处都是写手侧从源包正则读（不进保真账、读手零改动、零新增查问），
+ * 与 `revIds` / `docPrShells` / `literalWrappers` 同源；差别只是这一次落在
+ * **多个部件**而不是 document.xml。
+ */
+export interface MetaExtras {
+  byId?: {
+    part: string
+    tag: string
+    idAttr: string
+    items: { id: string; attrs: Record<string, string> }[]
+  }[]
+  roots?: { part: string; close: string; literals: string[] }[]
+}
+
 // 页眉页脚设置 + 批注列表 + 页面设置：随 .odoc meta 存储，导出写入 OOXML
 export interface DocMeta {
   headerText?: string
@@ -811,6 +835,11 @@ export interface DocMeta {
    * 按结果文字对位贴回；用户改过结果文字就认不出，宁可不贴。
    */
   literalWrappers?: LiteralWrapper[]
+  /**
+   * 部件级字面元信息（v0.193）：`docxToDocMeta` 从 numbering.xml / styles.xml /
+   * commentsExtended.xml 正则提取，`patchMetaExtras` 按身份键或根容器贴回写出包。
+   */
+  metaExtras?: MetaExtras
   /** 文档属性（v0.188）：由 `docxToDocMeta` 从 docProps/core.xml 读出，编辑器可改 */
   docProps?: DocProps
   page?: PageSetup
@@ -942,6 +971,59 @@ export function literalWrappersOf(docXml: string): LiteralWrapper[] {
   }
   // 两类壳按**源包出现序**排好，补丁才能用单调 cursor 一次走完（不回头找 run）
   return out.sort((a, b) => a.at - b.at).map(({ marker, before, after, text }) => ({ marker, before, after, text }))
+}
+
+/** 在开标签里按属性名取字面值；只认前导空白后的 `name="…"`，避免把 `x-w:val` 当 `w:val` */
+function attrLitOf(tag: string, name: string): string | undefined {
+  const needle = `${name}="`
+  let at = tag.indexOf(needle)
+  while (at >= 0) {
+    if (at > 0 && tag[at - 1] <= ' ') {
+      const end = tag.indexOf('"', at + needle.length)
+      if (end > 0) return tag.slice(at + needle.length, end)
+    }
+    at = tag.indexOf(needle, at + needle.length)
+  }
+  return undefined
+}
+
+/**
+ * 按身份键提取开标签上要补的属性（v0.193）。返回 `{id, attrs}`，**只收源件真的
+ * 说过的属性**；没说过的连空串都不落，写手也就不会凭空造一枚属性。
+ */
+export function identityAttrsOf(
+  xml: string,
+  tag: string,
+  idAttr: string,
+  wanted: string[],
+): { id: string; attrs: Record<string, string> }[] {
+  const out: { id: string; attrs: Record<string, string> }[] = []
+  for (const m of xml.matchAll(new RegExp(`<${tag}(?=[\\s/>])[^>]*>`, 'g'))) {
+    const id = attrLitOf(m[0], idAttr)
+    if (!id) continue
+    const attrs: Record<string, string> = {}
+    for (const k of wanted) {
+      const v = attrLitOf(m[0], k)
+      if (v) attrs[k] = v
+    }
+    if (Object.keys(attrs).length) out.push({ id, attrs })
+  }
+  return out
+}
+
+/**
+ * 提取根级自闭合元信息片的字面（v0.193）：按**源包出现序**，不按调用方给的 tag 顺序。
+ * 只认自闭合——有内容的容器片另说，别把开标签当成一整片贴回去。
+ */
+export function rootExtrasOf(xml: string, tags: string[]): string[] {
+  const hits: { at: number; s: string }[] = []
+  for (const tag of tags) {
+    for (const m of xml.matchAll(new RegExp(`<${tag}(?=[\\s/>])[^>]*?\\/>`, 'g'))) {
+      hits.push({ at: m.index ?? 0, s: m[0] })
+    }
+  }
+  hits.sort((a, b) => a.at - b.at)
+  return hits.map((h) => h.s)
 }
 
 export async function docxToDocMeta(bytes: Uint8Array, shared?: DocxZipSession): Promise<DocMeta> {
@@ -1080,6 +1162,32 @@ export async function docxToDocMeta(bytes: Uint8Array, shared?: DocxZipSession):
   // （写手侧从源包正则读，不进保真账）
   const literalWrappers = literalWrappersOf(docXml)
   if (literalWrappers.length) out.literalWrappers = literalWrappers
+  // v0.193：部件级字面元信息。两处「按身份键补属性」+ 两处「根容器前插字面片」，
+  // 共用 `patchMetaExtras` 一条通道；三个部件都由这里正则读，不进保真账。
+  const numberingXml = await readText('word/numbering.xml')
+  const stylesXml = await readText('word/styles.xml')
+  const extXml = await readText('word/commentsExtended.xml')
+  const byId: NonNullable<MetaExtras['byId']> = []
+  const numItems = identityAttrsOf(numberingXml, 'w:num', 'w:numId', ['w:durableId'])
+  if (numItems.length) {
+    byId.push({ part: 'word/numbering.xml', tag: 'w:num', idAttr: 'w:numId', items: numItems })
+  }
+  const styleItems = identityAttrsOf(stylesXml, 'w:style', 'w:styleId', ['w:default'])
+  if (styleItems.length) {
+    byId.push({ part: 'word/styles.xml', tag: 'w:style', idAttr: 'w:styleId', items: styleItems })
+  }
+  const roots: NonNullable<MetaExtras['roots']> = []
+  const numRoots = rootExtrasOf(numberingXml, ['w:numPicBullet', 'w:numIdMacAtCleanup'])
+  if (numRoots.length) {
+    roots.push({ part: 'word/numbering.xml', close: '</w:numbering>', literals: numRoots })
+  }
+  const extRoots = rootExtrasOf(extXml, ['w15:creationId'])
+  if (extRoots.length) {
+    roots.push({ part: 'word/commentsExtended.xml', close: '</w15:commentsEx>', literals: extRoots })
+  }
+  if (byId.length || roots.length) {
+    out.metaExtras = { ...(byId.length ? { byId } : {}), ...(roots.length ? { roots } : {}) }
+  }
   return out
 }
 
@@ -3627,6 +3735,8 @@ export async function prosemirrorToDocxBytes(
   const withLit = await patchLiteralWrappers(withDocPr, meta?.literalWrappers, sess)
   // v0.191：超链接壳的 tooltip / tgtFrame（从模型登记、按 hyperlink 出现序对位）
   const withLink = await patchHyperlinkAttrs(withLit, dt.linkExtras, sess)
+  // v0.193：部件级字面元信息（numbering / styles / commentsExtended），与上面几笔共用会话
+  const withMeta = await patchMetaExtras(withLink, meta?.metaExtras, sess)
   // 表闸门三样都要补：样式推出来的（looks）与表自己带的（dt.tblLooks），
   // v0.152 起再加表级条件格式尺寸两枚（dt.tblPrs，与 tblLook 同住 tblPr）
   const needTbl =
@@ -3637,7 +3747,7 @@ export async function prosemirrorToDocxBytes(
     dt.cnfStyles.some((x) => x) ||
     dt.tblBorders.some((x) => x)
   // 单元格不换行（v0.152）：包里没有 noWrap 的槽，按 <w:tc> 出现序插 <w:noWrap/>
-  const withCell = dt.cellExtras.some((x) => x) ? await patchTcPr(withLink, dt.cellExtras, sess) : withLink
+  const withCell = dt.cellExtras.some((x) => x) ? await patchTcPr(withMeta, dt.cellExtras, sess) : withMeta
   // 底纹的存盘原件（v0.164）：按 <w:shd> 出现序**合并**属性（包只发 val/color/fill 三枚，
   // 且 fill 写的是解析后的屏上色——源件的字面色与主题三枚都要改回来/补上去）
   const withShd = await patchShdAttrs(withCell, dt.shdExtras, sess)
@@ -3973,6 +4083,72 @@ export async function patchDocPr(
  * 按 `<w:hyperlink>` 出现序对位，复用 `tagWithAttrs` 做同名改值 / 缺则追加，
  * 绝不追加第二枚同名属性；两枚都没写过的链接整枚跳过，不凭空造属性。
  */
+/**
+ * 部件级字面元信息回填（v0.193）。
+ *
+ * `byId`：按身份属性（`w:numId` / `w:styleId`）认领开标签，只补**缺**的属性、
+ * 已有同名属性一律不动（用户或包自己写过的算新事实，别拿源件盖回去）；
+ * 身份认不出就跳过，绝不退回落「出现序」——写出包的 `w:num` 常比源件多。
+ * `roots`：在部件根容器闭标签前按源包出现序插自闭合字面片，逐片判幂等。
+ *
+ * 与 `patchDocPr` 同源（写手侧从源包正则读，不进保真账、读手零改动），
+ * 差别是这次跨多个部件，所以一个补丁里共用同一只 zip / 同一份文本缓存，
+ * 末尾只标一次脏。
+ */
+export async function patchMetaExtras(
+  bytes: Uint8Array,
+  extras: MetaExtras | undefined,
+  sess?: PackSession,
+): Promise<Uint8Array> {
+  if (!extras?.byId?.length && !extras?.roots?.length) return bytes
+  const zip = sess ? sess.zip : await loadZipOf(bytes)
+  let touched = false
+  for (const b of extras.byId ?? []) {
+    if (!b.items.length) continue
+    const xml = await partText(zip, b.part, sess)
+    if (!xml) continue
+    const items = new Map(b.items.map((x) => [x.id, x.attrs]))
+    let out = ''
+    let cursor = 0
+    let changed = false
+    for (const m of xml.matchAll(new RegExp(`<${b.tag}(?=[\\s/>])[^>]*>`, 'g'))) {
+      const at = m.index ?? 0
+      const tag = m[0]
+      const id = attrLitOf(tag, b.idAttr)
+      const kv = id ? items.get(id) : undefined
+      if (!kv) continue
+      const need: Record<string, string> = {}
+      for (const [k, v] of Object.entries(kv)) {
+        if (v && !hasAttrNamed(tag, k)) need[k] = v
+      }
+      if (!Object.keys(need).length) continue
+      const close = tag.endsWith('/>') ? '/>' : '>'
+      const body = tag.slice(0, -close.length)
+      const next = body + Object.entries(need).map(([k, v]) => ` ${k}="${v}"`).join('') + close
+      out += xml.slice(cursor, at) + next
+      cursor = at + tag.length
+      changed = true
+    }
+    if (!changed) continue
+    out += xml.slice(cursor)
+    setPart(zip, b.part, out, sess)
+    touched = true
+  }
+  for (const r of extras.roots ?? []) {
+    const xml = await partText(zip, r.part, sess)
+    if (!xml) continue
+    const at = xml.lastIndexOf(r.close)
+    if (at < 0) continue
+    // 逐片幂等：写出包已经有这枚字面就不叠第二遍（与 literalWrappers 的 marker 同纪律）
+    const add = r.literals.filter((l) => l && !xml.includes(l)).join('')
+    if (!add) continue
+    setPart(zip, r.part, xml.slice(0, at) + add + xml.slice(at), sess)
+    touched = true
+  }
+  if (!touched) return bytes
+  return finishPatch(bytes, zip, sess)
+}
+
 export async function patchHyperlinkAttrs(
   bytes: Uint8Array,
   extras: { tip?: string; frame?: string }[] | undefined,
@@ -4520,13 +4696,16 @@ async function patchParaProps(bytes: Uint8Array, extras: string[], sess?: PackSe
   if (!file) return bytes
   const xml = await partText(zip, 'word/document.xml', sess)
   // 自闭合的 `<w:p/>` 也算一段（空的段、只有分页符的段都可能写成这样）
-  const opens = [...xml.matchAll(/<w:p(?:\s[^>]*)?\/?>/g)]
-  if (opens.length !== extras.length) return bytes
+  const re = /<w:p(?:\s[^>]*)?\/?>/g
+  const opens = (legacyElemScan ? [...xml.matchAll(re)] : xml.matchAll(re))[Symbol.iterator]()
   let out = ''
   let cursor = 0
   let touched = false
-  for (let i = 0; i < opens.length; i++) {
-    const m = opens[i]
+  for (let i = 0; i <= extras.length; i++) {
+    const next = opens.next()
+    if (next.done) { if (i < extras.length) return bytes; break }
+    if (i === extras.length) return bytes
+    const m = next.value
     const start = m.index ?? 0
     const selfClosed = m[0].endsWith('/>')
     const closeAt = selfClosed ? -1 : xml.indexOf('</w:p>', start)
@@ -4642,13 +4821,16 @@ async function patchBeforeElem(bytes: Uint8Array, anchor: string, extras: string
   const file = zip.file('word/document.xml')
   if (!file) return bytes
   const xml = await partText(zip, 'word/document.xml', sess)
-  const opens = [...xml.matchAll(new RegExp(`<w:${anchor}(?=[\\s/>])[^>]*>`, 'g'))]
-  if (opens.length !== extras.length) return bytes
+  const re = new RegExp(`<w:${anchor}(?=[\\s/>])[^>]*>`, 'g')
+  const opens = (legacyElemScan ? [...xml.matchAll(re)] : xml.matchAll(re))[Symbol.iterator]()
   let out = ''
   let cursor = 0
   let touched = false
-  for (let i = 0; i < opens.length; i++) {
-    const start = opens[i].index ?? 0
+  for (let i = 0; i <= extras.length; i++) {
+    const next = opens.next()
+    if (next.done) { if (i < extras.length) return bytes; break }
+    if (i === extras.length) return bytes
+    const start = next.value.index ?? 0
     const add = extras[i]
     if (!add) continue
     out += xml.slice(cursor, start) + add
@@ -4679,7 +4861,11 @@ let legacyAttrScan = false
 let legacyBlockScan = false
 /** v0.190：`patchBorderBlocks` 的对照腿按边名编译 `edgeRe`，产品路径字符串定位 */
 let legacyEdgeScan = false
-/** v0.192：`patchElemAttrs` 的对照腿物化开标签数组，产品路径惰性迭代 */
+/**
+ * v0.192 的 `patchElemAttrs` + v0.193 的另外六处「先数一遍再逐块改」补丁共用：
+ * 对照腿物化开标签数组，产品路径惰性迭代。数量闸门搬到循环头里，
+ * 块数不足 / 多出一块都照旧整体不动（与 `opens.length !== extras.length` 逐字同义）。
+ */
 let legacyElemScan = false
 
 /**
@@ -4757,13 +4943,16 @@ async function patchColorLits(bytes: Uint8Array, extras: string[], sess?: PackSe
   const file = zip.file('word/document.xml')
   if (!file) return bytes
   const xml = await partText(zip, 'word/document.xml', sess)
-  const opens = [...xml.matchAll(/<w:color(?=[\s/>])[^>]*>/g)]
-  if (opens.length !== extras.length) return bytes
+  const re = /<w:color(?=[\s/>])[^>]*>/g
+  const opens = (legacyElemScan ? [...xml.matchAll(re)] : xml.matchAll(re))[Symbol.iterator]()
   let out = ''
   let cursor = 0
   let touched = false
-  for (let i = 0; i < opens.length; i++) {
-    const m = opens[i]
+  for (let i = 0; i <= extras.length; i++) {
+    const next = opens.next()
+    if (next.done) { if (i < extras.length) return bytes; break }
+    if (i === extras.length) return bytes
+    const m = next.value
     const start = m.index ?? 0
     const stop = start + m[0].length
     const add = extras[i]
@@ -4799,13 +4988,16 @@ async function patchShdAttrs(bytes: Uint8Array, extras: string[], sess?: PackSes
   const file = zip.file('word/document.xml')
   if (!file) return bytes
   const xml = await partText(zip, 'word/document.xml', sess)
-  const opens = [...xml.matchAll(/<w:shd(?=[\s/>])[^>]*>/g)]
-  if (opens.length !== extras.length) return bytes
+  const re = /<w:shd(?=[\s/>])[^>]*>/g
+  const opens = (legacyElemScan ? [...xml.matchAll(re)] : xml.matchAll(re))[Symbol.iterator]()
   let out = ''
   let cursor = 0
   let touched = false
-  for (let i = 0; i < opens.length; i++) {
-    const m = opens[i]
+  for (let i = 0; i <= extras.length; i++) {
+    const next = opens.next()
+    if (next.done) { if (i < extras.length) return bytes; break }
+    if (i === extras.length) return bytes
+    const m = next.value
     const start = m.index ?? 0
     const stop = start + m[0].length
     const add = extras[i]
@@ -5261,14 +5453,18 @@ async function patchTrPr(bytes: Uint8Array, extras: string[], sess?: PackSession
   const file = zip.file('word/document.xml')
   if (!file) return bytes
   const xml = await partText(zip, 'word/document.xml', sess)
-  const rows = [...xml.matchAll(/<w:tr(?=[\s>])[^>]*>/g)]
-  if (rows.length !== extras.length) return bytes
+  const re = /<w:tr(?=[\s>])[^>]*>/g
+  const rows = (legacyElemScan ? [...xml.matchAll(re)] : xml.matchAll(re))[Symbol.iterator]()
   let out = ''
   let cursor = 0
   let touched = false
-  for (let i = 0; i < rows.length; i++) {
-    const start = rows[i].index ?? 0
-    const stop = start + rows[i][0].length
+  for (let i = 0; i <= extras.length; i++) {
+    const next = rows.next()
+    if (next.done) { if (i < extras.length) return bytes; break }
+    if (i === extras.length) return bytes
+    const m = next.value
+    const start = m.index ?? 0
+    const stop = start + m[0].length
     const add = extras[i]
     if (!add) {
       out += xml.slice(cursor, stop)
@@ -5311,13 +5507,16 @@ async function patchTcPr(bytes: Uint8Array, extras: string[], sess?: PackSession
   const file = zip.file('word/document.xml')
   if (!file) return bytes
   const xml = await partText(zip, 'word/document.xml', sess)
-  const opens = [...xml.matchAll(/<w:tc(?:\s[^>]*)?\/?>/g)]
-  if (opens.length !== extras.length) return bytes
+  const re = /<w:tc(?:\s[^>]*)?\/?>/g
+  const opens = (legacyElemScan ? [...xml.matchAll(re)] : xml.matchAll(re))[Symbol.iterator]()
   let out = ''
   let cursor = 0
   let touched = false
-  for (let i = 0; i < opens.length; i++) {
-    const m = opens[i]
+  for (let i = 0; i <= extras.length; i++) {
+    const next = opens.next()
+    if (next.done) { if (i < extras.length) return bytes; break }
+    if (i === extras.length) return bytes
+    const m = next.value
     const start = m.index ?? 0
     const selfClosed = m[0].endsWith('/>')
     const closeAt = selfClosed ? -1 : xml.indexOf('</w:tc>', start)

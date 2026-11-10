@@ -13,6 +13,7 @@ import {
   type DocComment,
   type DocxStyleInfo,
   type PageMargin,
+  type PageBorders,
   type PageSetup,
   type PMNode,
 } from './docx'
@@ -34,6 +35,61 @@ const OD_MIME = 'application/vnd.oasis.opendocument.text'
 
 // mm → ODF 长度字面量（cm 两位小数）
 const mm2cm = (mm: number) => `${(mm / 10).toFixed(2)}cm`
+
+/** 页面边框（v0.193）：docx 的 `w:val` 四档 ↔ ODF 的 fo:border 线型 */
+const OOXML_TO_ODF_BORDER: Record<string, string> = {
+  single: 'solid', dotted: 'dotted', dashed: 'dashed', double: 'double',
+}
+const ODF_TO_OOXML_BORDER: Record<string, string> = {
+  solid: 'single', dotted: 'dotted', dashed: 'dashed', double: 'double',
+}
+const ODF_LEN_PT: Record<string, number> = { pt: 1, cm: 28.3465, mm: 2.83465 }
+
+/**
+ * `PageBorders` → `style:page-layout-properties` 上的属性串。
+ * 没设边框就返回空串（默认路径一个属性都不发，别污染没有边框的 .odt）。
+ * `w:sz`（八分之一磅）直接除 8 得 pt，四档线型与 `pageBorderCss` 同一套口径；
+ * `w:space`（磅）写 ODF 的 fo:padding。屏上是 CSS 近似、ODF 是四边同值，
+ * 这两层边界与 docx 链一致。
+ */
+export function odtPageBorderAttrs(b: PageBorders | undefined): string {
+  if (!b) return ''
+  const style = OOXML_TO_ODF_BORDER[b.style] ?? 'solid'
+  const pt = b.size / 8
+  const color = /^[0-9a-fA-F]{6}$/.test(b.color) ? b.color : '000000'
+  return `fo:border="${pt}pt ${style} #${color}"` + (b.space ? ` fo:padding="${b.space}pt"` : '')
+}
+
+/**
+ * ODF 页面边框反解：只认「宽度 + 四档线型 + #rrggbb」这一形，
+ * 认不出就返回 undefined（宁可没有边框，也别给模型造一个错档位）。
+ * 第三方件常写 cm/mm，按 ODF 换算折回 pt；四边分写时只认 top 那一枚。
+ */
+export function parseOdtPageBorderAttrs(a: {
+  border?: string | null
+  borderTop?: string | null
+  padding?: string | null
+  paddingTop?: string | null
+}): PageBorders | undefined {
+  const v = (a.border || a.borderTop || '').trim()
+  const m = /^([\d.]+)(pt|cm|mm)?\s+(solid|dotted|dashed|double)\s+#([0-9a-fA-F]{6})$/.exec(v)
+  if (!m) return undefined
+  const len = Number(m[1]) * (ODF_LEN_PT[m[2] || 'pt'] ?? 1)
+  if (!Number.isFinite(len) || len <= 0) return undefined
+  const out: PageBorders = {
+    style: ODF_TO_OOXML_BORDER[m[3]] ?? 'single',
+    color: m[4],
+    size: Math.max(2, Math.min(96, Math.round(len * 8))),
+  }
+  const pv = (a.padding || a.paddingTop || '').trim()
+  const pm = /^([\d.]+)(pt|cm|mm)?$/.exec(pv)
+  if (pm) {
+    const space = Math.round(Number(pm[1]) * (ODF_LEN_PT[pm[2] || 'pt'] ?? 1))
+    if (Number.isFinite(space) && space > 0 && space <= 31) out.space = space
+  }
+  return out
+}
+
 // CSS px → ODF 长度：缩进写 cm，三位小数以免往返掉精度（32px ≈ 0.847cm）
 const px2cm = (px: number) => `${(px / 37.795).toFixed(3)}cm`
 // CSS px → ODF 长度：段前段后与绝对行距写 pt（px↔pt 是精确换算，cm 第三位小数就会磨掉零点几 px）
@@ -1006,11 +1062,13 @@ class OdtBuilder {
       .filter((p) => /office|style|text|fo/.test(p))
       .join(' ')
     const pg = resolvePage(this.meta?.page)
+    const borderAttrs = odtPageBorderAttrs(pg.pageBorders)
     const pageProps =
       `<style:page-layout-properties ` +
       `fo:page-width="${mm2cm(pg.w)}" fo:page-height="${mm2cm(pg.h)}" ` +
       `fo:margin-top="${mm2cm(pg.margin.top)}" fo:margin-bottom="${mm2cm(pg.margin.bottom)}" ` +
       `fo:margin-left="${mm2cm(pg.margin.left)}" fo:margin-right="${mm2cm(pg.margin.right)}" ` +
+      (borderAttrs ? `${borderAttrs} ` : '') +
       `style:num-format="1"/>`
     // 多栏：ODF 的栏数写在 page-layout 的 style:columns，栏分隔子元素个数 = 栏数-1（等宽用 rel-width="*"）
     const columns =
@@ -2342,6 +2400,15 @@ export async function odtToHtml(
     const pw = cm2mm(plp?.getAttribute('fo:page-width') ?? null)
     const ph = cm2mm(plp?.getAttribute('fo:page-height') ?? null)
     const page: PageSetup = {}
+    // v0.193：页面边框（page-layout-properties 的 fo:border / fo:padding）。
+    // 读回来就进 DocMeta.page.pageBorders，DocEditor 的页面设置面板与 docx 写手共用这一格。
+    const pageBorders = parseOdtPageBorderAttrs({
+      border: plp?.getAttribute('fo:border') ?? null,
+      borderTop: plp?.getAttribute('fo:border-top') ?? null,
+      padding: plp?.getAttribute('fo:padding') ?? null,
+      paddingTop: plp?.getAttribute('fo:padding-top') ?? null,
+    })
+    if (pageBorders) page.pageBorders = pageBorders
     if (pw && ph) {
       const near = (a: number, b: number) => Math.abs(a - b) < 1.5
       const size = near(pw, 210) && near(ph, 297) ? 'A4' : near(pw, 215.9) && near(ph, 279.4) ? 'Letter' : 'custom'
