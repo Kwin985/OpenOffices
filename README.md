@@ -11535,6 +11535,81 @@ HEAD 逐字节相同、四条变异腿不动；pptx 70.1/74.3、42/19 全绿、
   端到端断言，没做真机 WPS/Word 对撞，屏上不画、四边统一、只认四档；
   零正则的端到端是**变慢 8.2%（噪声内）**，确定收益只在纯函数段。
 
+## v0.191（超链接两族 `lost→kept` + ODT 文档属性链 + pptx 表格文本零数组）
+
+承接 D50。这轮保真换了条更干净的路：前几轮都是「写手侧从源包正则搬字面」，
+本轮是**模型里本来就有载荷、只是写手没接**——补完就是真双向。另把挂了多轮的
+ODT 文档属性顺延落地，收掉 pptx 导入最后一处摊平数组。
+
+**保真：2 对 `lost → kept`，正文 90.7% → 91.3%**
+
+| 族 | 源值 → 旧写出 | 为什么是一族 |
+|---|---|---|
+| `hyperlink\|tooltip` / `hyperlink\|tgtFrame` | `悬停提示` / `blank` → 两枚都没了 | 读手 v0.155 早把两枚属性兑现成 HTML `<a title/target>`，TipTap 的 link mark 也自带这两格；`IExternalHyperlinkOptions` 只收 `children` + `link`，写手没接 |
+
+- **从模型取，不是从源包取**：`childToRuns` 在有 `href` 的分支里用
+  `markAttr(child,'link','title'/'target')` 登记进 `DocTrack.linkExtras`，
+  `patchHyperlinkAttrs` 按 `<w:hyperlink>` 出现序、复用 `tagWithAttrs` 补回
+  `w:tooltip` / `w:tgtFrame`（已有同名属性只改值、不叠第二枚）。
+  与前几轮「字面搬回」最大的不同是**屏上替身能认回**：改 PM 的 link mark，
+  写出包就是改后的新值，不再冒出源包旧字面。
+- **两道守卫**：源件没写过的链接整枚跳过，不凭空造属性；`target="_blank"`
+  是 TipTap 在没写 target 时补的默认值，与「源件显式写 `_blank`」同形，认不出
+  就不补（真件里这一档会漏，如实记在边界里）。
+- **零新增查问**：读手源码一行没动、查问仍 **672**，`docs/fidelity.*` 与 HEAD
+  **逐字节相同**，四条变异腿 52.5 / 59.4 / 99.0 / 96.5 一字不动，`modules` 仍 68。
+- 正文 **272/300 → 274/300 = 91.3%**、合计 **356/619 57.5% → 358/619 57.8%**、
+  掉 **258 → 256**、值变仍 5、图形壳 26.3% 不动。
+
+**功能：ODT 文档属性（D50 顺延，修的是坏件）**
+
+- docx 侧 v0.188 已有 `DocMeta.docProps` 读写链，但 ODT 导出**根本不发
+  `meta.xml`**——导入别人的 .odt 另存一次，标题/主题/作者/关键词/备注全没。
+  现在写侧 `odtMetaXml` 生成 ODF 标准的 `office:document-meta` 五格并在
+  manifest 里声明 `meta.xml`，读侧 `parseOdtMetaProps` 解析回同一份
+  `DocMeta.docProps`，DocEditor 现有的「文档属性」面板直接可用（真双向）。
+- 只发非空格（没话说的件不发空元素），字符串定位不编译动态正则，
+  `keyword` 只发一枚整体串；`test-odt-docprops.mjs` 23 项覆盖实体转义、
+  外部 .odt 的 meta.xml、改值再导出、缺省回落与部件接线。
+
+**性能：pptx 表格单元格文本零数组（v0.185 顺延）**
+
+- 改前 `descendantsByName(tc,'t').map(textOf).join('')` 把整棵子树摊成两个数组；
+  本轮 `tableCellText` 一次前序、命中 `a:t` 即拼接。**语义严格等价**：命中后
+  仍下钻（改前的 `descendantsByName` 会把嵌套 `t` 也单收一枚），不插段落换行，
+  性能优化没顺手改语义。`legacyTblText:true` 是改前对照腿。
+- **纯函数段 −9.6% / −6.5% / −0.9%**（收益小，如实写）；**端到端 3/20/60 行
+  +4.5% / −0.7% / −4.4%，在噪声内，不冒充整链收益**。基准把树构造移出计时、
+  两腿各用一份独立同形的预构造池，避免 `textOf` 缓存让后跑的一腿白捡便宜。
+
+**门禁**：tsc 0、`tsc && vite build` ✓（`pnpm run build` 的 pdfjs 资源清理仍被
+环境安全策略的批量删除守卫拦下）；**45 组结构测试全绿**（新增 23 + 23 + 16 项；
+1 条钉死链尾的旧断言改成与其它三条一致的**动态链校验**，不改产品代码凑测试）。
+保真 99.0%/98.4% 且与 HEAD 逐字节相同、四条变异腿不动；pptx 70.1/74.3、
+42/19 全绿、`--selftest --mut no-ga` 42 条全红后复位；往返账
+`8c8fc661…`/`c06a2ac2…` 两次复跑一致。两把旧尺语义等价 ✓，部件解压
+**23 → 24 → 5**（新增超链接补丁多一次读，预期）。
+
+### 顺延（D51）
+
+- 图形壳剩 **233 对**：三维族 `sp3d`/`props3d`/`lightRig` 要先定「夹具结构
+  非法」口径；VML 老式形状族仍是模型无槽。`wp:posOffset` 动 0 对、
+  `sizeRelH/V` 真件要 `mc:AlternateContent`。
+- 正文长尾：`outline|val`（要先定 rPr 内位次 + 新建 charExtra 槽，v0.190 复查
+  确认包没原生槽）、`w:sdt` 内容控件壳、±5 缇、`docPr|descr`、`theme1.xml`
+  口径未定；编号 id 三族是引用图、按纪律不碰。`hyperlink|tooltip`/`tgtFrame`
+  v0.191、`smartTag` 两族 v0.190、表单域一族 v0.189 已补。
+- Calc 缩放（落点在预存改动 `SheetEditor.tsx`，按房规换落点或只记结论）；
+  **pdf-lib 按需加载**仍等 `pdf-text-edit.ts` 入库（本轮 build 仍见
+  `INEFFECTIVE_DYNAMIC_IMPORT`）；版式库 / SmartArt / 3D / Fontwork、
+  水印 / 邮件合并 / 公式编辑器 / 数据透视表未做。ODT 链目前只扩了文档属性，
+  docPr / 表单域 / smartTag / 页面边框仍未扩。D32–D50 长尾原账不动。
+- **诚实边界**：本轮及历轮 A/B 都是合成夹具；超链接按出现序对位，真件里链接
+  数在导入后变多/变少未实测，`tgtFrame="_blank"` 与 TipTap 默认值同形会漏；
+  ODT 的 `meta.xml` 只认 `dc:`/`meta:` 标准前缀与单枚 keyword，没做真机
+  LibreOffice/WPS 对撞；pptx 表格零数组的端到端收益在噪声内，纯函数段也只有
+  个位数，保留它是为收掉顺延项且语义严格等价，不冒充提速。
+
 ## 性能（v0.3）
 
 

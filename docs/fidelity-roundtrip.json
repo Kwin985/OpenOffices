@@ -22,9 +22,9 @@
  },
  "totals": {
   "read": 619,
-  "kept": 356,
+  "kept": 358,
   "value": 5,
-  "lost": 258,
+  "lost": 256,
   "part": 0,
   "consulted": 672,
   "srcParts": 7,
@@ -2117,20 +2117,24 @@
    ]
   },
   "hyperlink|tgtFrame": {
-   "bucket": "lost",
+   "bucket": "kept",
    "n": 1,
    "src": [
     "blank"
    ],
-   "out": []
+   "out": [
+    "blank"
+   ]
   },
   "hyperlink|tooltip": {
-   "bucket": "lost",
+   "bucket": "kept",
    "n": 1,
    "src": [
     "悬停提示"
    ],
-   "out": []
+   "out": [
+    "悬停提示"
+   ]
   },
   "i|val": {
    "bucket": "kept",

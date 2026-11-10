@@ -3182,7 +3182,63 @@ HEAD 逐字节相同、四条变异腿不动，pptx 70.1/74.3、42/19 全绿、
   smartTag 嵌套 / 多枚未实测；页面边框只有合成夹具与端到端断言，没做真机
   WPS / Word 对撞，四边统一、只认四档、屏上不画；ODT 链没扩。
 
-### 顺延清单（D50）
+### v0.191 追加节：超链接两族 + ODT 文档属性 + pptx 表格文本零数组
+
+**往返账动 2 对，全部 `lost → kept`**：`hyperlink|tooltip`(悬停提示) /
+`hyperlink|tgtFrame`(blank)。
+正文 **272/300 = 90.7% → 274/300 = 91.3%**、合计 **356/619 57.5% →
+358/619 57.8%**，掉 258 → 256、值变 5 不动、图形壳 84/319 = 26.3% 不动。
+
+- **一族不是两个 bug，也不是「包没槽」**：读手 v0.155 的 `case 'hyperlink'`
+  早把 `w:tooltip`/`w:tgtFrame` 查问并兑现成 HTML `<a title/target>`（注释里
+  写的是「屏上是真的兑现，写侧发不出：ExternalHyperlink 只收 link」）。
+  `.d.ts` 复核 `IExternalHyperlinkOptions = { children, link }` 确实没有这两枚，
+  但 **PM 的 link mark 自带 `title`/`target` 两格**——所以这是「模型已有载荷、
+  写手没接」的差集，不是要新建槽，也不必走前几轮的「源包字面搬回」。
+- **机制（真双向）**：`childToRuns` 的 `if (href)` 分支用
+  `markAttr(child,'link','title'/'target')` 登记进 `DocTrack.linkExtras`（与
+  写出包里每个 `<w:hyperlink>` 一一对应、同序）；`patchHyperlinkAttrs` 按出现序
+  复用 `tagWithAttrs` 补 `w:tooltip`/`w:tgtFrame`，已有同名属性只改值不叠第二枚。
+  与前几轮最大的不同：**用户改过 title/target 就写回新值**——测试里改 PM 的
+  link mark 后写出包是新值、旧字面不再出现，屏上替身能认回（教训⑯）。
+- **两道守卫**：两枚都没写过的链接整枚跳过，不凭空造属性；`target="_blank"`
+  是 TipTap 在没写 target 时补的默认值，与「源件显式写 `_blank`」同形，认不出
+  就不补（真件里这一档会漏，如实记）。`test-hyperlink-attrs.mjs` 23 项覆盖
+  出现序、缺则追加、已有不叠、实体转义、重复跑幂等、端到端写出包与真双向。
+- **零新增查问**：读手源码一行没动、查问仍 **672**，`docs/fidelity.*` 与 HEAD
+  **逐字节相同**，四条变异腿 52.5 / 59.4 / 99.0 / 96.5 与记录对
+  392/416/715/685 一字不动。`modules` 仍 68（没有新增 lib 文件）。
+- **功能：ODT 文档属性**（D50 顺延，修的是坏件）。docx 侧 v0.188 已有
+  `DocMeta.docProps` 读写链，但 `prosemirrorToOdtBytes` 只写 mimetype /
+  manifest / content.xml / styles.xml，**根本不发 meta.xml**——导入别人的 .odt
+  另存一次，五格属性全没。本轮写侧 `odtMetaXml` 生成 ODF 标准的
+  `office:document-meta`（dc:title / dc:subject / dc:creator / meta:keyword /
+  dc:description）并在 manifest 声明 meta.xml，读侧 `parseOdtMetaProps` 解析回
+  同一份 `DocMeta.docProps`，DocEditor 现有面板直接可用。只发非空格、字符串
+  定位不编译动态正则、keyword 只发一枚整体串。`test-odt-docprops.mjs` 23 项
+  含实体转义、外部 .odt 的 meta.xml、改值再导出、缺省回落与部件接线。
+- **性能**：pptx 表格单元格文本（v0.185 顺延）从
+  `descendantsByName(tc,'t').map(textOf).join('')` 换成 `tableCellText` 单次
+  前序拼接。为**语义严格等价**，命中 `a:t` 后仍下钻（改前会把嵌套 `t` 也单收
+  一枚、`textOf` 再拼一遍子树），不插段落换行；病态件用例两腿逐字相同。
+  `legacyTblText:true` 复刻改前路径。纯函数段 **−9.6% / −6.5% / −0.9%**
+  （收益小，如实写）；**端到端 3/20/60 行 +4.5% / −0.7% / −4.4%，噪声内**。
+  基准把树构造移出计时、两腿各用独立同形预构造池，避免 `textOf` 的 `_text`
+  缓存让后跑的一腿白捡便宜（教训㉔：两腿同源只差一件事）。
+- **门禁**：tsc 0、`tsc && vite build` ✓（`pnpm run build` 的 pdfjs 资源清理仍
+  被环境安全策略拦下）；**45 组结构测试全绿**（新增 23 + 23 + 16 项；1 条钉死
+  链尾变量名的旧断言改成动态链校验）；保真 99.0/98.4 与 HEAD 逐字节相同、
+  四条变异腿不动，pptx 70.1/74.3、42/19 全绿、`--selftest --mut no-ga`
+  42 条全红后复位；往返账 `8c8fc661…`/`c06a2ac2…` 两次复跑一致；
+  `bench-docx-pack` 语义等价 ✓、`bench-docx-parts` 部件解压 **23 → 24 → 5**
+  （新增超链接补丁多一次读，预期）。
+- **诚实边界**：超链接按出现序对位，真件里链接数在导入后变多/变少未实测，
+  `tgtFrame="_blank"` 与 TipTap 默认值同形会漏；ODT 的 meta.xml 只认
+  `dc:`/`meta:` 标准前缀与单枚 keyword，没做真机 LibreOffice / WPS 对撞；
+  pptx 表格零数组端到端收益在噪声内、纯函数段也只有个位数，保留它是为收掉
+  顺延项且语义严格等价，不冒充提速。
+
+### 顺延清单（D51）
 
 - 图形壳剩余 **233 对**：三维族 `sp3d`(3) / `props3d`(3) / `lightRig`(2)
   要先定「夹具结构非法、真件应写成 effectLst 之后的兄弟」的口径；**删
@@ -3195,7 +3251,8 @@ HEAD 逐字节相同、四条变异腿不动，pptx 70.1/74.3、42/19 全绿、
   **v0.190 复查 `.d.ts` 确认命中的 outline 都不是 `IRunOptions`，判断成立**）、
   `w:sdt` 内容控件壳、±5 缇、`docPr|descr`（包把 alt 顶进来，归属口径未定）、
   `theme1.xml` 口径未定；**编号 id 三族是引用图、不是坏件，v0.189 探过按纪律
-  不碰**。`smartTag|element`/`smartTag|uri` v0.190、
+  不碰**。`hyperlink|tooltip`/`hyperlink|tgtFrame` v0.191、
+  `smartTag|element`/`smartTag|uri` v0.190、
   `fldChar`/`ffData` 一族 v0.189、
   `docPr|id`/`docPr|name` v0.188、`ins|id`/`startOverride|val` v0.187、
   `bookmark*|id` v0.186、`ind|left`/`ind|right` 显式 0 v0.185、
@@ -3206,16 +3263,17 @@ HEAD 逐字节相同、四条变异腿不动，pptx 70.1/74.3、42/19 全绿、
   不随 defs 增长）。
 - PDF 页序重排 v0.189、Impress 占位矩形编辑（第二套拖拽状态机）v0.186、
   Writer 自动缩放两档 v0.187（三处 UI 共用 `fitZoom`）、文档属性面板 v0.188、
-  页面边框读写链 v0.190 已补；Calc 视图缩放（落点在预存改动文件
+  页面边框读写链 v0.190、ODT 文档属性（meta.xml 五格）与 pptx 表格文本零数组
+  v0.191 已补；Calc 视图缩放（落点在预存改动文件
   `SheetEditor.tsx`，按房规换落点或只记结论）；**pdf-lib 按需加载**仍等
   `pdf-text-edit.ts` 入库（本轮 build 仍见 `INEFFECTIVE_DYNAMIC_IMPORT`）；
   版式库 / SmartArt / 3D / Fontwork、水印 / 邮件合并 / 公式编辑器 /
   数据透视表仍未做。Writer 标尺 v0.179、
   状态栏 v0.180、逐页翻页预览 v0.181、Impress 母版配色 v0.182、
   清除格式 v0.183、PDF 首页末页 v0.184 已补。
-- 写手补丁链的循环内动态正则 v0.190 已收干净（`edgeRe` → `findEdgeTag`）；
-  文档属性、`docPr`、表单域 / `smartTag` 与页面边框都只在 docx 链，
-  ODT 写手没跟着扩。
-- D32–D49 原账不动（同上）。
+- 写手补丁链的循环内动态正则 v0.190 已收干净（`edgeRe` → `findEdgeTag`），
+  pptx 导入最后一处摊平数组 v0.191 已收；ODT 链目前只扩了文档属性，
+  `docPr`、表单域 / `smartTag`、页面边框与超链接两枚仍只在 docx 链。
+- D32–D50 原账不动（同上）。
 
 
