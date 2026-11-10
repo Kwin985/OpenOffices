@@ -3280,22 +3280,84 @@ HEAD 逐字节相同、四条变异腿不动，pptx 70.1/74.3、42/19 全绿、
   未实测；页面边框屏上是 CSS 近似、与 Word 的 `offsetFrom` 口径不同；
   惰性化端到端收益在噪声内、纯函数段个位数，不冒充提速。
 
-### 顺延清单（D52）
+### v0.193 追加节：部件级字面元信息五族 + ODT 页面边框 + 补丁链六处惰性化
 
-- 图形壳剩余 **233 对**：三维族 `sp3d`(3) / `props3d`(3) / `lightRig`(2)
+承接 D52。前几轮的「写手侧从源包正则读 + post-pack 贴回」一直只落在
+`document.xml`（`ins|id` v0.187、`docPr|id|name` v0.188、表单域 v0.189、
+`smartTag` v0.190）；本轮第一次推到**三个部件**，用一条共用通道带回 5 对。
+
+- **为什么是这五对**：`num|durableId` / `numPicBullet|numPicBulletId` /
+  `numIdMacAtCleanup|val` 在 `word/numbering.xml`，`style|default` 在
+  `word/styles.xml`，`creationId|id` 在 `word/commentsExtended.xml`——
+  三份部件的写出包都由 docx 包重建，包只发它自己知道的那几枚：写出包的
+  `<w:num>` 没有 `w:durableId`（持久会话号，Word 合并文档时按它对账）、
+  Normal 样式没有 `w:default="1"`、批注扩展没有 `w15:creationId`。
+  读手 v0.152–v0.155 早把这些族查问过并只读记账，模型与包都没有槽，
+  所以是「一个设计丢一族」而不是五个 bug。分族按账本规则：`creationId`
+  是 `w15:` 前缀算图形壳，另四对算正文。
+- **通道形状**：`MetaExtras` 只分两种同形状。① `byId` 按身份属性认领
+  （`w:numId` / `w:styleId`）——身份令牌按**名字**对位、认不出就跳过，
+  不用出现序（写出包有 3 个 `w:num`、源件只有 1 个；按序会把令牌贴到
+  包新建的 `numId=2` 上），且只补缺不覆盖（教训⑦「已有同名属性」那一层）。
+  ② `roots` 在部件根容器闭标签前按源包出现序贴自闭合字面片，逐片判幂等
+  （与 `literalWrappers` 的 marker 同纪律）。`patchMetaExtras` 一支补丁
+  共用同一只 zip / 同一份文本缓存，末尾只标一次脏；`byId` 与 `roots`
+  指到同一部件时靠 `setPart` 同步缓存，两处改动都生效（有测试钉）。
+- **纪律核对**：写手侧 `docxToDocMeta` 正则读三个部件（正则读的部件不进
+  保真账），读手源码零改动、查问仍 **672**；`docs/fidelity.*` 与 HEAD
+  逐字节相同，四条变异腿 52.5 / 59.4 / 99.0 / 96.5 一字不动，
+  `modules` 仍 68（纯函数放已有 `src/lib/docx.ts`）。往返账两次复跑
+  `1a019f16…` / `a77591df…` 一致。
+- **数字**：正文 **275/300 91.7% → 279/300 93.0%**、图形壳
+  **84/319 26.3% → 85/319 26.6%**、合计 **359/619 58.0% → 364/619 58.8%**、
+  掉 **255 → 250**、值变仍 5。
+- **探过但放弃（口径写清）**：`tblpPr|overlap` 与 `tblOverlap|val` 是同义的
+  两种表示——包把属性写成子元素，`tblOverlap|val` 已 kept，补回一枚非法
+  属性是假绿；`w:sdt` 内容控件壳、`w:proofErr`、`a:ext|uri` 与 `byId`/
+  `roots` 两种形状都不同（一个包整段内容、一个是 body 直子裸元素、一个嵌在
+  `a:ln` 内），不为凑数字硬塞通道。
+- **诚实边界**：按身份键认领，键变了就认不出、宁可不贴；但**根级片与模型
+  无关**，用户删掉对应编号后那两枚全局元信息仍会贴回，这一条没有陈旧
+  守卫。真件里多 `w:num` / 多枚 `creationId` 未实测，ODT 链没跟着扩这五族。
+
+**功能：ODT 页面边框（D52 顺延项）** — v0.190 的 docx 页面边框走包原生槽，
+ODT 导出的 `style:page-layout-properties` 却根本不发 `fo:border`，导入带边框
+的 `.odt` 另存一次边框就没了。写侧 `odtPageBorderAttrs` 发 `fo:border` /
+`fo:padding`，读侧 `parseOdtPageBorderAttrs` 反解回同一个 `PageBorders`，
+DocEditor 现有面板与 docx 写手共用（真双向，改模型写新值、旧字面不留）。
+默认路径一个属性都不发；只认四档线型 + `#rrggbb` + pt/cm/mm，认不出返回
+undefined；第三方件四边分写只认 top。只有合成夹具与端到端断言，没做真机
+LibreOffice / WPS 对撞，屏上仍是 CSS 近似、四边统一，不做 `offsetFrom`。
+
+**性能：写手补丁链六处物化数组收干净** — `patchParaProps` /
+`patchBeforeElem` / `patchColorLits` / `patchShdAttrs` / `patchTrPr` /
+`patchTcPr` 的 `[...matchAll]` 换惰性迭代器，与 v0.192 的 `patchElemAttrs`
+共用 `legacyElemScan` 对照腿。数量闸门从「循环前比长度」搬进循环头
+（`i <= extras.length` 多跑一次对账），块数不足 / 多出一块都整笔不动、
+已拼的局部串不写盘——两腿逐部件归一逐字相同，纯函数段还把两种失败形状
+逐腿对撞。纯函数段 50 / 500 / 2000 块 **−7.3% / −3.7% / −5.9%**（收益小），
+**端到端 31.2 → 34.0ms（+9.2%，变慢，噪声内，不写成降幅）**。
+旧尺部件解压 **24 → 28 → 6**：`docxToDocMeta` 多读三个部件 + 补丁读，预期。
+
+### 顺延清单（D53）
+
+- 图形壳剩余 **234 对**：三维族 `sp3d`(3) / `props3d`(3) / `lightRig`(2)
   要先定「夹具结构非法、真件应写成 effectLst 之后的兄弟」的口径；**删
   `props3d` 会动往返账分母、留它就得发一个非法元素**，两难需先裁决。VML
   老式形状族 `shape`(20) / `bodyPr`(19) / `rect`(15) / `fill`(14) /
   `line`(14) 仍是模型无槽、写手发不出 `w:pict`。`wp:posOffset` 值在元素
   文本里、账本压根没这一对，**动 0 对**；`sizeRelH/V` 是 wp14 扩展，
-  夹具写 `wp:` 前缀、真件要 `mc:AlternateContent`。
+  夹具写 `wp:` 前缀、真件要 `mc:AlternateContent`。`creationId|id` v0.193
+  补回后 kept 85/319。
 - 正文长尾：`outline|val` 与 `ligatures|val`/`numForm|val`/`numSpacing|val`
   四枚 rPr 字符特性（要先新建载荷槽 + 定 CT_RPr 位次；**v0.190 确认命中的
   outline 都不是 `IRunOptions`、v0.192 确认读手只把它们变成屏上 CSS 没进模型**）、
-  `w:sdt` 内容控件壳、±5 缇、`docPr|descr`（包把 alt 顶进来，归属口径未定）、
-  `theme1.xml` 口径未定；**编号 id 三族是引用图、不是坏件，v0.189 探过按纪律
-  不碰；页眉页脚引用四对是只读记账，不能发空引用**。
-  `comment|initials` v0.192、`hyperlink|tooltip`/`hyperlink|tgtFrame` v0.191、
+  `w:sdt` 内容控件壳、`w:proofErr`、`a:ext|uri` 两枚、±5 缇、
+  `docPr|descr`（包把 alt 顶进来，归属口径未定）、`theme1.xml` 口径未定；
+  **编号 id 三族是引用图、不是坏件，v0.189 探过按纪律不碰；页眉页脚引用
+  四对是只读记账，不能发空引用；`tblpPr|overlap` 是同义表示，v0.193 探过
+  不碰**。部件级字面元信息五族 v0.193、`comment|initials` v0.192、
+  `hyperlink|tooltip`/`hyperlink|tgtFrame` v0.191、
   `smartTag|element`/`smartTag|uri` v0.190、
   `fldChar`/`ffData` 一族 v0.189、
   `docPr|id`/`docPr|name` v0.188、`ins|id`/`startOverride|val` v0.187、
@@ -3308,17 +3370,18 @@ HEAD 逐字节相同、四条变异腿不动，pptx 70.1/74.3、42/19 全绿、
 - PDF 页序重排 v0.189、Impress 占位矩形编辑（第二套拖拽状态机）v0.186、
   Writer 自动缩放两档 v0.187（三处 UI 共用 `fitZoom`）、文档属性面板 v0.188、
   页面边框读写链 v0.190、ODT 文档属性（meta.xml 五格）与 pptx 表格文本零数组
-  v0.191、批注 initials 与页面边框屏上预览 v0.192 已补；Calc 视图缩放（落点在预存改动文件
-  `SheetEditor.tsx`，按房规换落点或只记结论）；**pdf-lib 按需加载**仍等
-  `pdf-text-edit.ts` 入库（本轮 build 仍见 `INEFFECTIVE_DYNAMIC_IMPORT`）；
-  版式库 / SmartArt / 3D / Fontwork、水印 / 邮件合并 / 公式编辑器 /
-  数据透视表仍未做。Writer 标尺 v0.179、
+  v0.191、批注 initials 与页面边框屏上预览 v0.192、ODT 页面边框 v0.193 已补；
+  Calc 视图缩放（落点在预存改动文件 `SheetEditor.tsx`，按房规换落点或只记结论）；
+  **pdf-lib 按需加载**仍等 `pdf-text-edit.ts` 入库（本轮 build 仍见
+  `INEFFECTIVE_DYNAMIC_IMPORT`）；版式库 / SmartArt / 3D / Fontwork、
+  水印 / 邮件合并 / 公式编辑器 / 数据透视表仍未做。Writer 标尺 v0.179、
   状态栏 v0.180、逐页翻页预览 v0.181、Impress 母版配色 v0.182、
   清除格式 v0.183、PDF 首页末页 v0.184 已补。
 - 写手补丁链的循环内动态正则 v0.190 已收干净（`edgeRe` → `findEdgeTag`），
-  pptx 导入最后一处摊平数组 v0.191、写手最后一类物化开标签数组
-  （`patchElemAttrs`）v0.192 已收；ODT 链目前只扩了文档属性，
-  `docPr`、表单域 / `smartTag`、页面边框与超链接两枚仍只在 docx 链。
-- D32–D51 原账不动（同上）。
+  pptx 导入最后一处摊平数组 v0.191、写手「先数一遍再逐块改」的物化开标签
+  数组 v0.192（一处）与 v0.193（六处，共用 `legacyElemScan`）已收干净；
+  ODT 链目前扩了文档属性（v0.191）与页面边框（v0.193），
+  `docPr`、表单域 / `smartTag` 与超链接两枚仍只在 docx 链。
+- D32–D52 原账不动（同上）。
 
 

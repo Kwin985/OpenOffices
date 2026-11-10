@@ -22,9 +22,9 @@
  },
  "totals": {
   "read": 619,
-  "kept": 359,
+  "kept": 364,
   "value": 5,
-  "lost": 255,
+  "lost": 250,
   "part": 0,
   "consulted": 672,
   "srcParts": 7,
@@ -1226,12 +1226,14 @@
    ]
   },
   "creationId|id": {
-   "bucket": "lost",
+   "bucket": "kept",
    "n": 1,
    "src": [
     "00000001"
    ],
-   "out": []
+   "out": [
+    "00000001"
+   ]
   },
   "cxn|ang": {
    "bucket": "lost",
@@ -3258,12 +3260,14 @@
    ]
   },
   "num|durableId": {
-   "bucket": "lost",
+   "bucket": "kept",
    "n": 1,
    "src": [
     "3c7b9a2e"
    ],
-   "out": []
+   "out": [
+    "3c7b9a2e"
+   ]
   },
   "num|numId": {
    "bucket": "kept",
@@ -3321,20 +3325,24 @@
    ]
   },
   "numIdMacAtCleanup|val": {
-   "bucket": "lost",
+   "bucket": "kept",
    "n": 1,
    "src": [
     "0"
    ],
-   "out": []
+   "out": [
+    "0"
+   ]
   },
   "numPicBullet|numPicBulletId": {
-   "bucket": "lost",
+   "bucket": "kept",
    "n": 1,
    "src": [
     "7"
    ],
-   "out": []
+   "out": [
+    "7"
+   ]
   },
   "numSpacing|val": {
    "bucket": "lost",
@@ -5200,12 +5208,14 @@
    ]
   },
   "style|default": {
-   "bucket": "lost",
+   "bucket": "kept",
    "n": 1,
    "src": [
     "1"
    ],
-   "out": []
+   "out": [
+    "1"
+   ]
   },
   "style|styleId": {
    "bucket": "kept",
