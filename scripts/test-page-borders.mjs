@@ -14,7 +14,7 @@ import { DOMParser as PMDOMParser } from '@tiptap/pm/model'
 import { fixtureParts } from './lib/fixture.mjs'
 import { docxToHtmlFidelity } from '../src/lib/docx-fidelity.ts'
 import {
-  DEFAULT_PAGE_BORDERS, PAGE_BORDER_STYLES, docxToDocMeta, pageBordersOf, pageSetupOf,
+  DEFAULT_PAGE_BORDERS, PAGE_BORDER_STYLES, docxToDocMeta, pageBordersOf, pageBorderCss, pageSetupOf,
   prosemirrorToDocxBytes, resolvePage,
 } from '../src/lib/docx.ts'
 import { docExtensions } from '../src/lib/doc-schema.ts'
@@ -117,7 +117,18 @@ async function main() {
   check('面板有开关与四档选择', /checked=\{!!pg\.pageBorders\}/.test(ui) && /PAGE_BORDER_STYLES\.map/.test(ui))
   check('面板可改颜色与线宽', /type="color"/.test(ui) && /pageBorders: \{ \.\.\.pg\.pageBorders!, size:/.test(ui))
   check('CSS 有边框小节', /\.doc-pg-borders/.test(css))
-  check('诚实边界写明屏上不画', /屏上纸面与打印预览都不画/.test(ui))
+  // v0.192：屏上纸面与打印预览也画出来（v0.190 「屏上不画」的口径修正）
+  eq('没设边框时不画', pageBorderCss(undefined), undefined)
+  eq('默认单线', pageBorderCss(DEFAULT_PAGE_BORDERS), '1px solid #000000')
+  eq('双线/颜色/线宽换算（w:sz=24 → 4px）',
+    pageBorderCss({ style: 'double', color: 'FF0000', size: 24 }), '4px double #FF0000')
+  eq('虚线与小写色', pageBorderCss({ style: 'dashed', color: 'aabbcc', size: 12 }), '2px dashed #aabbcc')
+  eq('脏色回落黑', pageBorderCss({ style: 'single', color: 'red', size: 4 }), '1px solid #000000')
+  eq('不认识的线型回落 solid', pageBorderCss({ style: 'thick', color: '112233', size: 6 }), '1px solid #112233')
+  eq('脏线宽不炸', pageBorderCss({ style: 'single', color: '112233', size: Number.NaN }), '1px solid #112233')
+  check('纸面 JSX 接 pageBorderCss', /const pageBorder = pageBorderCss\(pg\.pageBorders\)/.test(ui)
+    && /\.\.\.\(pageBorder \? \{ border: pageBorder \} : \{\}\)/.test(ui))
+  check('面板文案改成同步显示', /屏上纸面与打印预览同步显示/.test(ui))
 }
 
 await main()

@@ -155,6 +155,23 @@ export interface PageBorders {
 export const PAGE_BORDER_STYLES = ['single', 'dotted', 'dashed', 'double'] as const
 export const DEFAULT_PAGE_BORDERS: PageBorders = { style: 'single', color: '000000', size: 4, space: 1 }
 
+/**
+ * 页面边框 → 屏上纸面的 CSS `border` 值（v0.192）。
+ *
+ * v0.190 做的读写链只随 docx 往返、屏上不画；本轮把纸面也画出来（教训㉓：
+ * 补外壳观感收益高于长尾）。`w:sz` 是八分之一磅，pt→px 按 96/72 折算即 sz/6，
+ * 最小 1px；只认四档线型、脏色回落黑。打印时 `.doc-page` 的内联 border 优先级
+ * 高于 `@media print` 里的 `border:none`，所以打印预览也带着框。
+ */
+export function pageBorderCss(pb?: PageBorders): string | undefined {
+  if (!pb) return undefined
+  const line: Record<string, string> = { single: 'solid', dotted: 'dotted', dashed: 'dashed', double: 'double' }
+  const style = line[pb.style] ?? 'solid'
+  const color = /^[0-9A-Fa-f]{6}$/.test(pb.color) ? `#${pb.color}` : '#000000'
+  const px = Math.max(1, Math.round((Number.isFinite(pb.size) ? pb.size : 4) / 6))
+  return `${px}px ${style} ${color}`
+}
+
 export interface PageSetup {
   size?: 'A4' | 'Letter' | 'custom'
   /** 页面边框（v0.190）：四边统一；屏上不画，只往返 */
@@ -3264,13 +3281,14 @@ async function finishPatch(
 export async function prosemirrorToDocxBytes(
   json: PMNode,
   meta?: DocMeta,
-  opts?: { legacyPartText?: boolean; legacyRetag?: boolean; legacyAttrScan?: boolean; legacyBlockScan?: boolean; legacyEdgeScan?: boolean },
+  opts?: { legacyPartText?: boolean; legacyRetag?: boolean; legacyAttrScan?: boolean; legacyBlockScan?: boolean; legacyEdgeScan?: boolean; legacyElemScan?: boolean },
 ): Promise<Uint8Array> {
-  // v0.186–v0.190：只给同进程 A/B 对照腿用（入口设一次），产品路径恒为 false
+  // v0.186–v0.192：只给同进程 A/B 对照腿用（入口设一次），产品路径恒为 false
   legacyRetag = !!opts?.legacyRetag
   legacyAttrScan = !!opts?.legacyAttrScan
   legacyBlockScan = !!opts?.legacyBlockScan
   legacyEdgeScan = !!opts?.legacyEdgeScan
+  legacyElemScan = !!opts?.legacyElemScan
   const dt = newDocTrack()
   // 编号注册表（v0.142）：blocksOf 一路往里传，收齐全篇的自定义档位后进 Document.numbering。
   // 带上源文档的编号定义（v0.158）：重建一串列表时能照原样逐层发，而不是三层拍成一个符面
@@ -3512,6 +3530,10 @@ export async function prosemirrorToDocxBytes(
               return {
                 id: c.id,
                 author: c.author || 'OpenOffices',
+                // v0.192：批注身份链第四枚。`DocComment.initials` 与读手 v0.154 的
+                // 解析早就有，包 `ICommentOptions.initials` 也是原生槽，只差写手这一行——
+                // 此前导入别人的 docx 另存一次，作者姓名缩写就没了
+                ...(c.initials ? { initials: c.initials } : {}),
                 date: Number.isNaN(d.getTime()) ? new Date() : d,
                 ...(anyResolved ? { parentId: -1 } : {}),
                 ...(c.resolved ? { resolved: true } : {}),
@@ -4571,16 +4593,19 @@ async function patchElemAttrs(bytes: Uint8Array, tag: string, extras: string[], 
   const file = zip.file('word/document.xml')
   if (!file) return bytes
   const xml = await partText(zip, 'word/document.xml', sess)
-  const opens = [...xml.matchAll(new RegExp(`<w:${tag}(?=[\\s/>])[^>]*>`, 'g'))]
-  if (opens.length !== extras.length) return bytes
+  // v0.192：与 patchImgXml / patchNumOverrides / patchBorderBlocks 同款——物化开标签
+  // 数组换惰性迭代器，计数闸门从「循环前先数一遍」移到「循环末尾对账」（不符就整笔
+  // 丢弃，已拼的局部串不写盘）。`legacyElemScan:true` 复刻改前路径供 A/B。
+  const re = new RegExp(`<w:${tag}(?=[\\s/>])[^>]*>`, 'g')
+  const opens: Iterable<RegExpMatchArray> = legacyElemScan ? [...xml.matchAll(re)] : xml.matchAll(re)
   let out = ''
   let cursor = 0
   let touched = false
-  for (let i = 0; i < opens.length; i++) {
-    const m = opens[i]
+  let count = 0
+  for (const m of opens) {
     const start = m.index ?? 0
     const stop = start + m[0].length
-    const add = extras[i]
+    const add = extras[count++]
     if (!add) {
       out += xml.slice(cursor, stop)
       cursor = stop
@@ -4593,6 +4618,7 @@ async function patchElemAttrs(bytes: Uint8Array, tag: string, extras: string[], 
     cursor = stop
     touched = true
   }
+  if (count !== extras.length) return bytes
   if (!touched) return bytes
   out += xml.slice(cursor)
   setPart(zip, 'word/document.xml', out, sess)
@@ -4653,6 +4679,8 @@ let legacyAttrScan = false
 let legacyBlockScan = false
 /** v0.190：`patchBorderBlocks` 的对照腿按边名编译 `edgeRe`，产品路径字符串定位 */
 let legacyEdgeScan = false
+/** v0.192：`patchElemAttrs` 的对照腿物化开标签数组，产品路径惰性迭代 */
+let legacyElemScan = false
 
 /**
  * v0.190：循环内按边名编译的 `edgeRe` 换成字符串定位（零动态正则）。

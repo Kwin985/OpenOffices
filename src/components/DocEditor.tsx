@@ -15,6 +15,7 @@ import {
   resolvePage,
   DEFAULT_PAGE_BORDERS,
   PAGE_BORDER_STYLES,
+  pageBorderCss,
   contentPxOf,
   MM_PX,
   PAGE_NUMBER_FORMATS,
@@ -1011,6 +1012,8 @@ function DocEditor({ tab }: Props) {
 
   const pg = meta.page ?? {}
   const setPg = (p: Partial<typeof pg>) => patchMeta({ page: { ...pg, ...p } })
+  // v0.192：页面边框不只随 docx 往返，屏上纸面与打印预览也画出来
+  const pageBorder = pageBorderCss(pg.pageBorders)
 
   // 图片宽度按版心百分比设定；height 用当前显示比例换算，docx/odt 导出才能保形
   const setImageWidth = (pct: number) => {
@@ -2661,7 +2664,7 @@ function DocEditor({ tab }: Props) {
               ))}
             </span>
           )}
-          <span className="doc-pg-borders" title="页面边框：走 docx 包原生槽，随 .odoc 与 docx 往返；屏上纸面与打印预览都不画">
+          <span className="doc-pg-borders" title="页面边框：走 docx 包原生槽，随 .odoc 与 docx 往返；v0.192 起屏上纸面与打印预览同步显示">
             <label className="tb-check">
               <input
                 type="checkbox"
@@ -3258,6 +3261,7 @@ function DocEditor({ tab }: Props) {
               minHeight: effPx.h,
               padding: `${effPx.top}px ${effPx.right}px ${effPx.bottom}px ${effPx.left}px`,
               zoom,
+              ...(pageBorder ? { border: pageBorder } : {}),
             }}
           >
             <div className="doc-pg-lines" style={{ '--pgh': `${effPx.h}px` } as CSSProperties} />
