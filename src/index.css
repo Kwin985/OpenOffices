@@ -2090,6 +2090,31 @@ button {
   margin-bottom: 8px;
 }
 
+/* v0.195：批注侧栏筛选条——复选框与作者下拉同一行，窄侧栏里下拉收得住 */
+.doc-comments-tools {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+  font-weight: 400;
+  font-size: 12px;
+}
+
+.doc-comments-tools .tb-check {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  white-space: nowrap;
+  color: var(--text-2);
+  cursor: pointer;
+}
+
+.doc-comments-tools .tb-input {
+  min-width: 0;
+  width: 100%;
+  flex: 1;
+}
+
 .doc-comment-empty {
   color: var(--text-2);
   font-size: 12px;

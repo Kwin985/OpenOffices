@@ -31,6 +31,7 @@ import {
   type TableCondType,
   type DocProps,
   docPropsOf,
+  filterDocComments,
   openDocxZip,
 } from '../lib/docx'
 import { addCommentMark, findCommentAnchor, removeCommentMark } from '../lib/comment-extension'
@@ -171,6 +172,9 @@ function DocEditor({ tab }: Props) {
   const [pgOpen, setPgOpen] = useState(false)
   const [docH, setDocH] = useState(0)
   const [cmOpen, setCmOpen] = useState(false)
+  // v0.195：批注侧栏筛选（只看未解决 / 按作者），纯 UI 状态、不进文档
+  const [cmOnlyOpen, setCmOnlyOpen] = useState(false)
+  const [cmAuthor, setCmAuthor] = useState('')
   const [draft, setDraft] = useState<{ cid: number; text: string } | null>(null)
   const [noteDraft, setNoteDraft] = useState<{ kind: NoteKind; text: string } | null>(null)
   // 边框的待用档位（线型/磅/颜色）：点哪条边才把它写下去，所以这一份不进文档、只是工具条上的"笔"
@@ -1354,6 +1358,9 @@ function DocEditor({ tab }: Props) {
   }
 
   const comments = meta.comments ?? []
+  // 作者下拉按显示口径去重（没写 author 的显示「我」），筛选与卡片同名
+  const cmAuthors = Array.from(new Set(comments.map((c) => c.author || '我')))
+  const shownComments = filterDocComments(comments, { openOnly: cmOnlyOpen, author: cmAuthor })
   const nextCid = () => comments.reduce((m, c) => Math.max(m, c.id), 0) + 1
 
   const startComment = () => {
@@ -3362,9 +3369,23 @@ function DocEditor({ tab }: Props) {
         {cmOpen && (
           <aside className="doc-comments">
             <div className="doc-comments-head">
-              <span>批注 {comments.length}</span>
+              <span>批注 {comments.length}{shownComments.length !== comments.length ? ` · 显示 ${shownComments.length}` : ''}</span>
               <button className="tb-btn" onClick={() => setCmOpen(false)}>收起</button>
             </div>
+            {/* v0.195：筛选只影响侧栏显示，不改动文档里的批注；作者口径与卡片一致 */}
+            <div className="doc-comments-tools" title="只看未解决 / 按作者筛选：仅影响侧栏显示，不改动文档里的批注">
+              <label className="tb-check">
+                <input type="checkbox" checked={cmOnlyOpen} onChange={(e) => setCmOnlyOpen(e.target.checked)} />
+                只看未解决
+              </label>
+              <select className="tb-input" value={cmAuthor} onChange={(e) => setCmAuthor(e.target.value)} title="按作者筛选">
+                <option value="">全部作者</option>
+                {cmAuthors.map((a) => <option key={a} value={a}>{a}</option>)}
+              </select>
+            </div>
+            {shownComments.length === 0 && comments.length > 0 && (
+              <div className="doc-comment-empty">没有符合筛选的批注</div>
+            )}
             {draft && (
               <div className="doc-comment-card doc-comment-draft">
                 <textarea
@@ -3387,7 +3408,7 @@ function DocEditor({ tab }: Props) {
             {comments.length === 0 && !draft && (
               <div className="doc-comment-empty">选中正文文字后点「新建批注」</div>
             )}
-            {[...comments]
+            {[...shownComments]
               .sort(
                 (a, b) =>
                   (findCommentAnchor(editor, a.id)?.pos ?? Number.MAX_SAFE_INTEGER) -

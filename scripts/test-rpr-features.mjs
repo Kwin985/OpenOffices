@@ -124,9 +124,16 @@ async function main() {
   const w = read('../src/lib/docx.ts')
   const r = read('../src/lib/docx-fidelity.ts')
   check('DocMeta 有 rPrFeatures 字段', /rPrFeatures\?: RPrFeature\[\]/.test(w))
-  check('主链挂 withFeat 且逐笔接上一笔',
-    /const withFeat = await patchRPrFeatures\(withMeta, meta\?\.rPrFeatures, sess\)/.test(w) &&
-    /patchTcPr\(withFeat,|: withFeat/.test(w))
+  // 链尾变量名每加一支补丁就红，改「每笔输入 = 上一笔输出」的动态校验（v0.190 同款）
+  const chainOk = (src) => {
+    const defs = [...src.matchAll(/^  const (with[A-Z]\w*) =/gm)].map((m) => ({ name: m[1], at: m.index ?? 0 }))
+    const a = defs.findIndex((d) => d.name === 'withFeat'), b = defs.findIndex((d) => d.name === 'withNumStart')
+    if (a < 0 || b <= a) return false
+    const core = defs.slice(a, b + 1)
+    return core.every((d, i) => i === 0 || src.slice(d.at, i + 1 < core.length ? core[i + 1].at : d.at + 600).includes(core[i - 1].name))
+  }
+  check('主链挂 withFeat，且后续补丁逐笔接上一笔（动态校验）',
+    /const withFeat = await patchRPrFeatures\(withMeta, meta\?\.rPrFeatures, sess\)/.test(w) && chainOk(w))
   check('meta 构造从 document.xml 正则提取',
     /const rPrFeatures = rPrFeaturesOf\(docXml\)/.test(w) && /out\.rPrFeatures = rPrFeatures/.test(w))
   check('按结果文字认领、不用出现序', /xml\.indexOf\(`>\$\{it\.text\}<\/w:t>`, cursor\)/.test(w))

@@ -2474,6 +2474,8 @@ class Fidelity {
     private themeColors?: ThemeColors,
     /** v0.194：只给同进程 A/B 对照腿复刻「每段算两次 styleView」的改前路径，产品路径恒为 false */
     private legacyStyleView = false,
+    /** v0.195：只给对照腿复刻「无直接格式也走一遍 mergePPr」的改前路径 */
+    private legacyMergePPr = false,
   ) {}
 
   private warn(msg: string) {
@@ -2653,9 +2655,11 @@ class Fidelity {
   private effPPrOf(el: XEl): { pPr?: XEl; effPPr?: XEl; view: ReturnType<typeof styleView> } {
     const pPr = find(el, 'w:pPr')
     const view = styleView(this.book, pPr ? val(pPr, 'w:pStyle') : undefined)
-    // v0.194：把 view 一并带出去，paragraph 不必对同一个 styleId 再算一遍链合并
-    // （styleView 是纯函数，复用结果与改前逐字相同；没有跨段落共享可变树）。
-    return { pPr, effPPr: mergePPr([view.pPr, pPr]), view }
+    // v0.194：把 view 一并带出去，paragraph 不必对同一个 styleId 再算一遍链合并。
+    // v0.195：段落没有自己的 pPr 时 mergePPr([view.pPr, undefined]) 本来就原样返回
+    // view.pPr，这一趟函数调用 + 数组创建可以省掉（短路与改前逐字同义）。
+    const effPPr = !this.legacyMergePPr && !pPr ? view.pPr : mergePPr([view.pPr, pPr])
+    return { pPr, effPPr, view }
   }
 
   /**
@@ -5412,8 +5416,8 @@ export async function docxToHtmlFidelity(
   bytes: Uint8Array,
   depth = 0,
   shared?: { zip: unknown; read(name: string): Promise<string> },
-  /** v0.194：同进程 A/B 对照腿只切这一个开关（产品路径不传，走去重后的链） */
-  opts?: { legacyStyleView?: boolean },
+  /** v0.194/195：同进程 A/B 对照腿只切这两个开关（产品路径不传，走去重后的链） */
+  opts?: { legacyStyleView?: boolean; legacyMergePPr?: boolean },
 ): Promise<DocxImport> {
   let zip: ZipLike
   if (shared) {
@@ -5437,7 +5441,7 @@ export async function docxToHtmlFidelity(
   // 主题色（v0.142）：与字体同读一份 theme1.xml，clrScheme 住 fontScheme 旁边
   const themeColors = readThemeColors(themeXml)
   const numbering = readNumbering(await read('word/numbering.xml'), theme)
-  const f = new Fidelity(readStyles(await read('word/styles.xml'), theme), numbering, depth, theme, themeColors, !!opts?.legacyStyleView)
+  const f = new Fidelity(readStyles(await read('word/styles.xml'), theme), numbering, depth, theme, themeColors, !!opts?.legacyStyleView, !!opts?.legacyMergePPr)
   // 编号定义的多级身份（v0.145）：multiLevelType 描述「这份定义是否设计成多级联动」，
   // 而模型把编号定义塌成逐段档位（ListRegistry 按段引用重建），这个身份带不回来——
   // 每种类型记一条（不逐实例刷屏）

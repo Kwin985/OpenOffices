@@ -56,8 +56,9 @@ async function main() {
   }
 
   const w = read('../src/lib/docx-fidelity.ts')
-  check('effPPrOf 把 view 一并返回',
-    /return \{ pPr, effPPr: mergePPr\(\[view\.pPr, pPr\]\), view \}/.test(w))
+  check('effPPrOf 把 view 一并返回（v0.195 起 effPPr 走短路变量）',
+    /const effPPr = !this\.legacyMergePPr && !pPr \? view\.pPr : mergePPr\(\[view\.pPr, pPr\]\)/.test(w) &&
+    /return \{ pPr, effPPr, view \}/.test(w))
   check('paragraph 直接复用 view.chain',
     /: view\.chain/.test(w) && /const \{ pPr, effPPr, view \} = this\.effPPrOf\(el\)/.test(w))
   const para = w.slice(w.indexOf('private async paragraph('), w.indexOf('private async paragraph(') + 1400)
@@ -66,9 +67,9 @@ async function main() {
     (para.match(/styleView\(/g) ?? []).length === 1)
   check('不引入跨段落缓存（没有 Map 缓存 view）', !/viewCache|styleViews = new Map/.test(w))
   check('构造有独立开关', /private legacyStyleView = false/.test(w))
-  check('入口第 4 个可选参数接开关',
-    /opts\?: \{ legacyStyleView\?: boolean \}/.test(w) &&
-    /themeColors, !!opts\?\.legacyStyleView\)/.test(w))
+  check('入口第 4 个可选参数接两个独立开关',
+    /opts\?: \{ legacyStyleView\?: boolean; legacyMergePPr\?: boolean \}/.test(w) &&
+    /!!opts\?\.legacyStyleView, !!opts\?\.legacyMergePPr\)/.test(w))
 }
 
 await main()

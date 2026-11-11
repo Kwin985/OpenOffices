@@ -130,6 +130,21 @@ export interface DocComment {
   resolved?: boolean
 }
 
+/**
+ * 批注侧栏筛选（v0.195）：只看未解决 / 按作者。纯函数，空条件不筛；
+ * 作者名按侧栏显示口径归一（没写 author 的显示「我」），筛选与显示不能两套房。
+ */
+export function filterDocComments(
+  comments: DocComment[],
+  opts: { openOnly?: boolean; author?: string } = {},
+): DocComment[] {
+  const { openOnly, author } = opts
+  if (!openOnly && !author) return comments
+  return comments.filter(
+    (c) => (!openOnly || !c.resolved) && (!author || (c.author || '我') === author),
+  )
+}
+
 // 页面设置：mm 存储；size=custom 时用 w/h，margin 缺项回退默认
 export interface PageMargin {
   top: number
@@ -791,6 +806,79 @@ export interface LiteralWrapper {
  * 与 `revIds` / `docPrShells` / `literalWrappers` 同源；差别只是这一次落在
  * **多个部件**而不是 document.xml。
  */
+/**
+ * 源包字面片按锚点贴回（v0.195）。四类同形状的残片都是「包不会自己发、
+ * 读手只读记账」，写手侧从源包留下一枚自闭合元素 / 一枚根属性，按定位串贴回：
+ *   `before`/`after` —— 插在锚点串之前 / 之后；
+ *   `beforeParagraph`/`afterParagraph` —— 找锚点前最近的一枚 `<w:p` 开标签 /
+ *   锚点后第一枚 `</w:p>`，在段落边界外插（body 直子壳与裸元素）。
+ * `anchor` 是候选锚点表（按序取第一枚命中的），`guard` 逐片判幂等。
+ *
+ * 位次口径：sectPr 的 `w:formProt`/`w:rtlGutter` 在夹具里被写在 pgNumType
+ * 与 pgMar 之间（CT_SectPr 序里非法）；本轮按**标准序**贴回——formProt 放
+ * cols 之后、rtlGutter 放 docGrid 之前，不复刻结构非法坏件。
+ */
+export interface LiteralPlacement {
+  part: string
+  anchor: string[]
+  mode: 'before' | 'after' | 'beforeParagraph' | 'afterParagraph'
+  literal: string
+  guard: string
+  last?: boolean
+}
+
+/** 从源包提取要贴回的字面片；源件没说过的枚一律不生成指令 */
+export function literalPlacementsOf(docXml: string): LiteralPlacement[] {
+  const out: LiteralPlacement[] = []
+  const DOC = 'word/document.xml'
+  const sect = /<w:sectPr\b[^>]*>[\s\S]*?<\/w:sectPr>/.exec(docXml)?.[0] ?? ''
+  const fp = /<w:formProt\b[^>]*\/>/.exec(sect)?.[0]
+  if (fp) {
+    out.push({
+      part: DOC, anchor: ['</w:cols>', '<w:pgNumType', '</w:pgSz>'], mode: 'after',
+      literal: fp, guard: '<w:formProt', last: true,
+    })
+  }
+  const rg = /<w:rtlGutter\b[^>]*\/>/.exec(sect)?.[0]
+  if (rg) {
+    out.push({
+      part: DOC, anchor: ['<w:docGrid', '</w:cols>'], mode: 'before',
+      literal: rg, guard: '<w:rtlGutter',
+    })
+  }
+  // w:proofErr 是 body 直子裸元素：用「它前面最后一段的结果文字」认领写出包里的段落
+  const pe = /<w:proofErr\b[^>]*\/>/.exec(docXml)
+  if (pe) {
+    const before = docXml.slice(0, pe.index)
+    const texts = [...before.matchAll(/<w:t(?:\s[^>]*)?>([\s\S]*?)<\/w:t>/g)].map((m) => m[1])
+    const text = texts[texts.length - 1]
+    if (text) {
+      out.push({
+        part: DOC, anchor: [`>${text}</w:t>`], mode: 'afterParagraph',
+        literal: pe[0], guard: '<w:proofErr',
+      })
+    }
+  }
+  // w:sdt 内容控件壳包一整个段落：按结果文字认领，开壳插在 <w:p> 前、闭壳插在 </w:p> 后。
+  // 两条指令 guard 分开（前者看开标签、后者看闭标签），第二条才不会被幂等守卫误跳过。
+  const sdt = /<w:sdt\b[^>]*>([\s\S]*?)<\/w:sdt>/.exec(docXml)?.[0]
+  if (sdt) {
+    const text = /<w:t(?:\s[^>]*)?>([\s\S]*?)<\/w:t>/.exec(sdt)?.[1]
+    const open = /<w:sdt\b[^>]*>[\s\S]*?<w:sdtContent\b[^>]*>/.exec(sdt)?.[0]
+    if (text && open) {
+      out.push({
+        part: DOC, anchor: [`>${text}</w:t>`], mode: 'beforeParagraph',
+        literal: open, guard: '<w:sdt',
+      })
+      out.push({
+        part: DOC, anchor: [`>${text}</w:t>`], mode: 'afterParagraph',
+        literal: '</w:sdtContent></w:sdt>', guard: '</w:sdt>',
+      })
+    }
+  }
+  return out
+}
+
 export interface MetaExtras {
   byId?: {
     part: string
@@ -883,6 +971,11 @@ export interface DocMeta {
    * 按 CT_RPr 序贴回；写手侧正则读、读手零改动。
    */
   rPrFeatures?: RPrFeature[]
+  /**
+   * 源包字面片贴回指令（v0.195）：sectPr 两枚 / comments 根属性 / proofErr，
+   * 由 `docxToDocMeta` 正则提取，`patchLiteralPlacements` 按锚点贴回。
+   */
+  literalPlacements?: LiteralPlacement[]
   /** 文档属性（v0.188）：由 `docxToDocMeta` 从 docProps/core.xml 读出，编辑器可改 */
   docProps?: DocProps
   page?: PageSetup
@@ -1234,6 +1327,9 @@ export async function docxToDocMeta(bytes: Uint8Array, shared?: DocxZipSession):
   // v0.194：rPr 字符特性五枚（读手只兑现成屏上 CSS、没进模型），同样写手侧正则读
   const rPrFeatures = rPrFeaturesOf(docXml)
   if (rPrFeatures.length) out.rPrFeatures = rPrFeatures
+  // v0.195：正文长尾——sectPr 两枚 / proofErr / w:sdt 壳，写手侧从 document.xml 正则读
+  const literalPlacements = literalPlacementsOf(docXml)
+  if (literalPlacements.length) out.literalPlacements = literalPlacements
   return out
 }
 
@@ -3785,6 +3881,8 @@ export async function prosemirrorToDocxBytes(
   const withMeta = await patchMetaExtras(withLink, meta?.metaExtras, sess)
   // v0.194：rPr 字符特性（按结果文字认领 run，按 CT_RPr 序插回），与上面几笔共用会话
   const withFeat = await patchRPrFeatures(withMeta, meta?.rPrFeatures, sess)
+  // v0.195：正文长尾四枚字面片（sectPr / comments 根 / proofErr），共用会话
+  const withPlacements = await patchLiteralPlacements(withFeat, meta?.literalPlacements, sess)
   // 表闸门三样都要补：样式推出来的（looks）与表自己带的（dt.tblLooks），
   // v0.152 起再加表级条件格式尺寸两枚（dt.tblPrs，与 tblLook 同住 tblPr）
   const needTbl =
@@ -3795,7 +3893,7 @@ export async function prosemirrorToDocxBytes(
     dt.cnfStyles.some((x) => x) ||
     dt.tblBorders.some((x) => x)
   // 单元格不换行（v0.152）：包里没有 noWrap 的槽，按 <w:tc> 出现序插 <w:noWrap/>
-  const withCell = dt.cellExtras.some((x) => x) ? await patchTcPr(withFeat, dt.cellExtras, sess) : withFeat
+  const withCell = dt.cellExtras.some((x) => x) ? await patchTcPr(withPlacements, dt.cellExtras, sess) : withPlacements
   // 底纹的存盘原件（v0.164）：按 <w:shd> 出现序**合并**属性（包只发 val/color/fill 三枚，
   // 且 fill 写的是解析后的屏上色——源件的字面色与主题三枚都要改回来/补上去）
   const withShd = await patchShdAttrs(withCell, dt.shdExtras, sess)
@@ -4160,6 +4258,69 @@ function featureTagOf(x: string): string {
  * 与 `patchLiteralWrappers` 同源（写手侧从源包正则读、不进保真账、
  * 读手零改动、零新增查问），差别只是这次的落点在 run 的 rPr 而不是 run 前后。
  */
+/**
+ * 字面片贴回（v0.195）。逐片独立判幂等、独立找锚点，认同不出就跳过；
+ * 同一部件多片靠 `setPart` 同步缓存串起来，末尾只标一次脏。
+ * 与 `patchMetaExtras` / `patchRPrFeatures` 同源（写手侧源包正则读、读手零改动）。
+ */
+export async function patchLiteralPlacements(
+  bytes: Uint8Array,
+  items: LiteralPlacement[] | undefined,
+  sess?: PackSession,
+): Promise<Uint8Array> {
+  if (!items?.length) return bytes
+  const zip = sess ? sess.zip : await loadZipOf(bytes)
+  // 同一部件的多片合成一趟：一次读、按序应用（片与片之间有定位依赖）、一次写。
+  // 无会话时这也把「每条指令各自解压一遍」收成一次。
+  const byPart = new Map<string, LiteralPlacement[]>()
+  for (const it of items) {
+    if (!it.literal || !it.guard || !it.anchor.length) continue
+    const list = byPart.get(it.part) ?? []
+    list.push(it)
+    byPart.set(it.part, list)
+  }
+  let touched = false
+  for (const [part, list] of byPart) {
+    let xml = await partText(zip, part, sess)
+    if (!xml) continue
+    let changed = false
+    for (const it of list) {
+      if (xml.includes(it.guard)) continue
+      let at = -1
+      let hit = ''
+      for (const a of it.anchor) {
+        const i = it.last ? xml.lastIndexOf(a) : xml.indexOf(a)
+        if (i >= 0) { at = i; hit = a; break }
+      }
+      if (at < 0) continue
+      let next = ''
+      if (it.mode === 'before') {
+        next = xml.slice(0, at) + it.literal + xml.slice(at)
+      } else if (it.mode === 'after') {
+        const end = at + hit.length
+        next = xml.slice(0, end) + it.literal + xml.slice(end)
+      } else if (it.mode === 'afterParagraph') {
+        const p = xml.indexOf('</w:p>', at)
+        if (p < 0) continue
+        const end = p + '</w:p>'.length
+        next = xml.slice(0, end) + it.literal + xml.slice(end)
+      } else {
+        // beforeParagraph：往回找最近的一枚段落开标签，插在它之前
+        const p = Math.max(xml.lastIndexOf('<w:p>', at), xml.lastIndexOf('<w:p ', at))
+        if (p < 0 || p > at) continue
+        next = xml.slice(0, p) + it.literal + xml.slice(p)
+      }
+      xml = next
+      changed = true
+    }
+    if (!changed) continue
+    setPart(zip, part, xml, sess)
+    touched = true
+  }
+  if (!touched) return bytes
+  return finishPatch(bytes, zip, sess)
+}
+
 export async function patchRPrFeatures(
   bytes: Uint8Array,
   items: RPrFeature[] | undefined,
