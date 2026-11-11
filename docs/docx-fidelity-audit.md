@@ -3399,7 +3399,51 @@ D53 记「要先新建载荷槽 + 定 CT_RPr 位次」，本轮复查后把口�
 放大语料 50 / 500 / 2000 段 **−3.7% / −5.0% / −4.3%**，全在噪声内、
 不冒充整链收益。旧尺部件解压 **28 → 29 → 6**：新增 rPr 补丁多一次读，预期。
 
-### 顺延清单（D54）
+### v0.195 追加节：正文长尾清尾四对 + 批注筛选 + mergePPr 空链短路
+
+承接 D54。正文侧 lost 只剩 6 对（其中 `tblpPr|overlap` 是同义表示），本轮把
+能做的 4 对一次带回，往返账**首次破 60%**。
+
+- **为什么是这四对**：`formProt|val` / `rtlGutter|val` 住在 sectPr、
+  `proofErr|type` 是 body 直子裸元素、`id|val` 住在 `w:sdt` 内容控件壳里。
+  四类形状不同，但都是「包不会自己发、读手只读记账」的**字面残片**——
+  写出包 sectPr 里两枚元信息全无、body 里没有 proofErr、内容控件被读手展平成
+  一段普通文字。一个设计丢一片，不是四个独立 bug。
+- **位次口径（本轮定的）**：夹具把 `formProt`/`rtlGutter` 写在 `pgNumType`
+  与 `pgMar` 之间，按 CT_SectPr 序这位置非法。本轮按**标准序**贴回：
+  `formProt` 放 `</w:cols>` 之后、`rtlGutter` 放 `<w:docGrid` 之前，
+  不复刻结构非法坏件（与三维族同纪律）。`w:sdt` 壳按结果文字认领段落，
+  开壳插在 `<w:p>` 前、闭壳插在 `</w:p>` 后，写出的是合法的 body 直子控件。
+- **通道**：`LiteralPlacement` 四种落点 `before`/`after`/`beforeParagraph`/
+  `afterParagraph`，`anchor` 是候选锚点表、`guard` 逐片判幂等；同一部件的片
+  **合成一趟读、按序应用、一趟写**（sdt 开闭两条有定位依赖，必须看到前一条
+  改过的 xml）。写手侧 `docxToDocMeta` 从 document.xml 正则读，读手零改动。
+- **探过但放弃（口径写清）**：`comments|Ignorable` 账本记 lost，但写出包
+  `word/comments.xml` 根**自己就发了** `mc:Ignorable="w14"`（dump 全文确认）——
+  这是普查口径造成的假红，不是真丢件；按「假红比真红更坏」不补，也不多读
+  一个部件。`tblpPr|overlap` 与已 kept 的 `tblOverlap|val` 是同义表示，仍不碰。
+- **纪律核对**：查问仍 **672**；`docs/fidelity.*` 与 HEAD 逐字节相同，四条变异腿
+  52.5 / 59.4 / 99.0 / 96.5 一字不动，`modules` 仍 68（纯函数放已有
+  `src/lib/docx.ts`）。往返账两次复跑 `3e0c9bdd…` / `5c4251fe…` 一致。
+- **数字**：正文 **283/300 94.3% → 287/300 95.7%**、合计
+  **368/619 59.5% → 372/619 60.1%**、掉 **246 → 242**、值变仍 5、
+  图形壳 26.6% 不动。
+
+**功能：Writer 批注侧栏筛选（D54 挂了多轮的外壳缺口）** — 加「只看未解决」
+复选框与「按作者」下拉，头部把「显示全部 / 显示 N」分开，筛空给提示；筛选
+只影响侧栏显示、不改动文档里的批注。作者名按卡片显示口径归一（没写 author
+的显示「我」），纯函数 `filterDocComments` 放已有 `src/lib/docx.ts`，
+不新增 lib 文件（`modules` 不变）。只有纯函数与源码级断言，没做真机浏览器对撞。
+
+**性能：读手 `mergePPr` 空链短路** — 段落没有自己的 `w:pPr` 时
+`mergePPr([view.pPr, undefined])` 本来就原样返回 `view.pPr`，省掉一趟函数
+调用 + 数组创建。`legacyMergePPr:true` 复刻改前路径，与 v0.194 的
+`legacyStyleView` 是两个独立开关；两腿导入结果逐字相同（含 20 / 200 组放大
+语料）。原始夹具 7.7 → 7.9ms、50 / 500 / 2000 组 **−0.8% / +0.9% / −2.4%**，
+**全在噪声内、不冒充提速**。旧尺部件解压 **29 → 30 → 6**：新补丁按部件合成
+一趟读，只多一次，预期。
+
+### 顺延清单（D55）
 
 - 图形壳剩余 **234 对**：三维族 `sp3d`(3) / `props3d`(3) / `lightRig`(2)
   要先定「夹具结构非法、真件应写成 effectLst 之后的兄弟」的口径；**删
@@ -3409,12 +3453,13 @@ D53 记「要先新建载荷槽 + 定 CT_RPr 位次」，本轮复查后把口�
   文本里、账本压根没这一对，**动 0 对**；`sizeRelH/V` 是 wp14 扩展，
   夹具写 `wp:` 前缀、真件要 `mc:AlternateContent`。`a:ext|uri` 两枚
   （嵌在 `a:ln` 内）仍未做。
-- 正文长尾：`w:sdt` 内容控件壳（`id|val`）、`w:proofErr`、`formProt|val` /
-  `rtlGutter|val`（要按 CT_SectPr 序定锚点）、`comments|Ignorable`
-  （comments.xml 根属性）、±5 缇、`docPr|descr`（包把 alt 顶进来，
+- 正文长尾：`comments|Ignorable`（**假红**：写出包 comments.xml 根自己就发了
+  `mc:Ignorable="w14"`，账本 lost 是普查口径，v0.195 探过按纪律不补）、
+  `tblpPr|overlap` 同义表示、±5 缇、`docPr|descr`（包把 alt 顶进来，
   归属口径未定）、`theme1.xml` 口径未定；**编号 id 三族是引用图、不是坏件，
-  v0.189 探过按纪律不碰；页眉页脚引用四对是只读记账，不能发空引用；
-  `tblpPr|overlap` 是同义表示，v0.193 探过不碰**。rPr 字符特性四枚 v0.194、
+  v0.189 探过按纪律不碰；页眉页脚引用四对是只读记账，不能发空引用**。
+  正文长尾四枚（`formProt`/`rtlGutter`/`proofErr`/`sdt` 壳）v0.195、
+  rPr 字符特性四枚 v0.194、
   部件级字面元信息五族 v0.193、`comment|initials` v0.192、
   `hyperlink|tooltip`/`hyperlink|tgtFrame` v0.191、
   `smartTag|element`/`smartTag|uri` v0.190、
@@ -3429,8 +3474,9 @@ D53 记「要先新建载荷槽 + 定 CT_RPr 位次」，本轮复查后把口�
 - PDF 页序重排 v0.189、Impress 占位矩形编辑（第二套拖拽状态机）v0.186、
   Writer 自动缩放两档 v0.187（三处 UI 共用 `fitZoom`）、文档属性面板 v0.188、
   页面边框读写链 v0.190、ODT 文档属性（meta.xml 五格）与 pptx 表格文本零数组
-  v0.191、批注 initials 与页面边框屏上预览 v0.192、ODT 页面边框 v0.193、
-  ODT 超链接 title/target 与 rPr 四枚 v0.194 已补；
+  v0.191、  批注 initials 与页面边框屏上预览 v0.192、ODT 页面边框 v0.193、
+  ODT 超链接 title/target 与 rPr 四枚 v0.194、Writer 批注侧栏筛选与正文长尾
+  四枚 v0.195 已补；
   Calc 视图缩放（落点在预存改动文件 `SheetEditor.tsx`，按房规换落点或只记结论）；
   **pdf-lib 按需加载**仍等 `pdf-text-edit.ts` 入库（本轮 build 仍见
   `INEFFECTIVE_DYNAMIC_IMPORT`）；版式库 / SmartArt / 3D / Fontwork、
@@ -3440,9 +3486,9 @@ D53 记「要先新建载荷槽 + 定 CT_RPr 位次」，本轮复查后把口�
 - 写手补丁链的循环内动态正则 v0.190 已收干净（`edgeRe` → `findEdgeTag`），
   pptx 导入最后一处摊平数组 v0.191、写手「先数一遍再逐块改」的物化开标签
   数组 v0.192（一处）与 v0.193（六处，共用 `legacyElemScan`）、读手每段重复
-  的 styleView v0.194 已收干净；ODT 链扩了文档属性（v0.191）、页面边框
+  的 styleView v0.194、读手空链的 mergePPr v0.195 已收干净；ODT 链扩了文档属性（v0.191）、页面边框
   （v0.193）与超链接两枚（v0.194），`docPr`、表单域 / `smartTag`、
   rPr 四枚与部件级元信息五族仍只在 docx 链。
-- D32–D53 原账不动（同上）。
+- D32–D54 原账不动（同上）。
 
 

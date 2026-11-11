@@ -22,9 +22,9 @@
  },
  "totals": {
   "read": 619,
-  "kept": 368,
+  "kept": 372,
   "value": 5,
-  "lost": 246,
+  "lost": 242,
   "part": 0,
   "consulted": 672,
   "srcParts": 7,
@@ -1740,12 +1740,14 @@
    ]
   },
   "formProt|val": {
-   "bucket": "lost",
+   "bucket": "kept",
    "n": 1,
    "src": [
     "1"
    ],
-   "out": []
+   "out": [
+    "1"
+   ]
   },
   "framePr|anchorLock": {
    "bucket": "kept",
@@ -2163,12 +2165,14 @@
    ]
   },
   "id|val": {
-   "bucket": "lost",
+   "bucket": "kept",
    "n": 1,
    "src": [
     "42"
    ],
-   "out": []
+   "out": [
+    "42"
+   ]
   },
   "ilvl|val": {
    "bucket": "kept",
@@ -3799,12 +3803,14 @@
    ]
   },
   "proofErr|type": {
-   "bucket": "lost",
+   "bucket": "kept",
    "n": 1,
    "src": [
     "spellstart"
    ],
-   "out": []
+   "out": [
+    "spellstart"
+   ]
   },
   "props3d|contourW": {
    "bucket": "lost",
@@ -4401,12 +4407,14 @@
    ]
   },
   "rtlGutter|val": {
-   "bucket": "lost",
+   "bucket": "kept",
    "n": 1,
    "src": [
     "1"
    ],
-   "out": []
+   "out": [
+    "1"
+   ]
   },
   "satOff|val": {
    "bucket": "lost",
