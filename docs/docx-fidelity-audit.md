@@ -3443,21 +3443,59 @@ D53 记「要先新建载荷槽 + 定 CT_RPr 位次」，本轮复查后把口�
 **全在噪声内、不冒充提速**。旧尺部件解压 **29 → 30 → 6**：新补丁按部件合成
 一趟读，只多一次，预期。
 
-### 顺延清单（D55）
+## v0.196（VML 老式形状整片字面往返，+176 对）
 
-- 图形壳剩余 **234 对**：三维族 `sp3d`(3) / `props3d`(3) / `lightRig`(2)
-  要先定「夹具结构非法、真件应写成 effectLst 之后的兄弟」的口径；**删
-  `props3d` 会动往返账分母、留它就得发一个非法元素**，两难需先裁决。VML
-  老式形状族 `shape`(20) / `bodyPr`(19) / `rect`(15) / `fill`(14) /
-  `line`(14) 仍是模型无槽、写手发不出 `w:pict`。`wp:posOffset` 值在元素
-  文本里、账本压根没这一对，**动 0 对**；`sizeRelH/V` 是 wp14 扩展，
-  夹具写 `wp:` 前缀、真件要 `mc:AlternateContent`。`a:ext|uri` 两枚
-  （嵌在 `a:ln` 内）仍未做。
+- **判断修正**：D55 挂了多轮的「VML 老式形状族模型无槽、写手发不出
+  `w:pict`」只说明**不能靠包的原生槽重建**，不等于「搬不回来」。读手
+  v0.149 起把 `<w:pict>` / `<w:object>` 展平成一行可见占位文字，写出包里
+  `pict 2 / object 1` 变成 `0 / 0`。写手侧从源包按段落边界留整段字面，
+  用占位文字段认领位置**替换**回去（`〔嵌入对象…，内容未提取〕` 这个屏上
+  替身认回来，不留下多余空行），与表单域 / smartTag / 字面片同一路数。
+- **引用图先 dump 再动手**：源包 `rId1` = `media/image1.png`，写出包同号
+  `rId1` = `styles.xml`（包重建关系表会换号）。照搬字面就写出断裂引用，
+  所以 `outImageRId` 按**关系类型**找写出包 image 关系（实测 `rId8`），
+  `vmlShapesOf` 只把指向源包 image 关系的 `r:id` 记进 `imageRIds`，映射不到
+  就跳过该段。写出包根已由 docx 包声明 `xmlns:v` / `xmlns:o` / `xmlns:w10`，
+  补丁仍做守卫（缺一个前缀整笔不贴），贴回去不是未声明前缀的坏件。
+- 另三道守卫：已有 `w:pict`/`w:object` 整笔不动（幂等）；锚点
+  `内容未提取〕` 认不出整笔不贴；非贪婪 `<w:p>` 截断的半截片（VML 文字框
+  内嵌段落那种，没有 `</w:pict>` / `</w:object>`）跳过。产品链验证三段逐字
+  与源件相同（仅 rId 换号）、linkedom 解析零 parsererror、占位文字消失。
+- 账本：**176 对全是 `lost → kept`**，0 消失、0 新值变。正文
+  **287/300 95.7% → 289/300 96.3%**（`object|dxaOrig` / `object|dyaOrig`
+  两枚是 `w:` 前缀算正文）、图形壳 **85/319 26.6% → 259/319 81.2%**、合计
+  **372/619 60.1% → 548/619 88.5%**、掉 **242 → 66**、值变 5、查问 672、
+  `modules` 68 全不动。保真账与 HEAD 逐字节相同、四条变异腿
+  52.5 / 59.4 / 99.0 / 96.5 一字不动。
+- **诚实边界**：非真双向（用户改不了老式形状），ODT 未扩；占位段认不出
+  （真件没有 `w:object`，或用户删了嵌入对象）就整笔不贴；带 VML 文字框
+  内嵌段落的真件会被半截片守卫跳过；真件多段 VML / 多枚 image 关系 /
+  真机 Word 对撞都未实测。
+- 功能：PDF 页签「插入空白页 / 复制选中页」（`insertAfterIndex` +
+  `insertBlankPagesInPlace` / `duplicatePagesInPlace`，复用 `pageOp`）。
+- 性能：写手 `parseCoreProps` 五格与 `twipsAttrOf` 的动态正则 → 字符串定位
+  （`legacyMetaRegex` 供 A/B），纯函数段 −42~44%、端到端 −0.2% 噪声内，
+  两腿逐部件归一逐字相同（归一随机 hyperlink `rId`，不只是数字 rId）。
+- **门禁**：59 组结构测试全绿（新增 38 + 26 + 34 项，4 条旧断言按新口径改）；
+  往返账 `34c6c58d…` / `e18c56a3…` 两次一致；部件解压 30 → 32 → 7。
+
+### 顺延清单（D56）
+
+- 图形壳剩余 **60 对**：`bodyPr`(19，wps 文本框那一支，包没原生槽)、
+  三维族 `sp3d`(3) / `props3d`(3) / `lightRig`(2) 要先定「夹具结构非法、
+  真件应写成 effectLst 之后的兄弟」的口径（**删 `props3d` 会动往返账分母、
+  留它就得发一个非法元素**）；颜色填充族（`scrgbClr` / `gradFill` /
+  `schemeClr` / `alpha` / `gs` / `lumMod` 等约 20 枚）、`a:ext|uri` 两枚
+  （嵌在 `a:ln` 内）、`sizeRelH/V`（真件要 `mc:AlternateContent`）仍未做。
+  **VML 老式形状族 v0.196 已整片搬回**（判断修正见上）；`wp:posOffset`
+  值在元素文本里、账本压根没这一对，**动 0 对**；页眉页脚引用四对是只读
+  记账，不能发空引用。
 - 正文长尾：`comments|Ignorable`（**假红**：写出包 comments.xml 根自己就发了
   `mc:Ignorable="w14"`，账本 lost 是普查口径，v0.195 探过按纪律不补）、
   `tblpPr|overlap` 同义表示、±5 缇、`docPr|descr`（包把 alt 顶进来，
   归属口径未定）、`theme1.xml` 口径未定；**编号 id 三族是引用图、不是坏件，
   v0.189 探过按纪律不碰；页眉页脚引用四对是只读记账，不能发空引用**。
+  VML 整片 176 对（174 图形壳 + `object|dxaOrig`/`dyaOrig` 两枚正文）v0.196、
   正文长尾四枚（`formProt`/`rtlGutter`/`proofErr`/`sdt` 壳）v0.195、
   rPr 字符特性四枚 v0.194、
   部件级字面元信息五族 v0.193、`comment|initials` v0.192、
@@ -3476,7 +3514,7 @@ D53 记「要先新建载荷槽 + 定 CT_RPr 位次」，本轮复查后把口�
   页面边框读写链 v0.190、ODT 文档属性（meta.xml 五格）与 pptx 表格文本零数组
   v0.191、  批注 initials 与页面边框屏上预览 v0.192、ODT 页面边框 v0.193、
   ODT 超链接 title/target 与 rPr 四枚 v0.194、Writer 批注侧栏筛选与正文长尾
-  四枚 v0.195 已补；
+  四枚 v0.195、PDF 插入空白页 / 复制选中页 v0.196 已补；
   Calc 视图缩放（落点在预存改动文件 `SheetEditor.tsx`，按房规换落点或只记结论）；
   **pdf-lib 按需加载**仍等 `pdf-text-edit.ts` 入库（本轮 build 仍见
   `INEFFECTIVE_DYNAMIC_IMPORT`）；版式库 / SmartArt / 3D / Fontwork、
@@ -3486,9 +3524,10 @@ D53 记「要先新建载荷槽 + 定 CT_RPr 位次」，本轮复查后把口�
 - 写手补丁链的循环内动态正则 v0.190 已收干净（`edgeRe` → `findEdgeTag`），
   pptx 导入最后一处摊平数组 v0.191、写手「先数一遍再逐块改」的物化开标签
   数组 v0.192（一处）与 v0.193（六处，共用 `legacyElemScan`）、读手每段重复
-  的 styleView v0.194、读手空链的 mergePPr v0.195 已收干净；ODT 链扩了文档属性（v0.191）、页面边框
-  （v0.193）与超链接两枚（v0.194），`docPr`、表单域 / `smartTag`、
-  rPr 四枚与部件级元信息五族仍只在 docx 链。
-- D32–D54 原账不动（同上）。
+  的 styleView v0.194、读手空链的 mergePPr v0.195、写手 `parseCoreProps` /
+  `twipsAttrOf` 最后两处动态正则 v0.196 已收干净；ODT 链扩了文档属性
+  （v0.191）、页面边框（v0.193）与超链接两枚（v0.194），`docPr`、表单域 /
+  `smartTag`、rPr 四枚、部件级元信息五族与 VML 整片仍只在 docx 链。
+- D32–D55 原账不动（同上）。
 
 

@@ -22,9 +22,9 @@
  },
  "totals": {
   "read": 619,
-  "kept": 372,
+  "kept": 548,
   "value": 5,
-  "lost": 242,
+  "lost": 66,
   "part": 0,
   "consulted": 672,
   "srcParts": 7,
@@ -217,20 +217,24 @@
    ]
   },
   "attr|name": {
-   "bucket": "lost",
+   "bucket": "kept",
    "n": 1,
    "src": [
     "x"
    ],
-   "out": []
+   "out": [
+    "x"
+   ]
   },
   "attr|val": {
-   "bucket": "lost",
+   "bucket": "kept",
    "n": 1,
    "src": [
     "y"
    ],
-   "out": []
+   "out": [
+    "y"
+   ]
   },
   "autoSpaceDE|val": {
    "bucket": "kept",
@@ -806,36 +810,44 @@
    ]
   },
   "chExt|cx": {
-   "bucket": "lost",
+   "bucket": "kept",
    "n": 1,
    "src": [
     "1000"
    ],
-   "out": []
+   "out": [
+    "1000"
+   ]
   },
   "chExt|cy": {
-   "bucket": "lost",
+   "bucket": "kept",
    "n": 1,
    "src": [
     "1000"
    ],
-   "out": []
+   "out": [
+    "1000"
+   ]
   },
   "chOff|x": {
-   "bucket": "lost",
+   "bucket": "kept",
    "n": 1,
    "src": [
     "0"
    ],
-   "out": []
+   "out": [
+    "0"
+   ]
   },
   "chOff|y": {
-   "bucket": "lost",
+   "bucket": "kept",
    "n": 1,
    "src": [
     "0"
    ],
-   "out": []
+   "out": [
+    "0"
+   ]
   },
   "Choice|Requires": {
    "bucket": "lost",
@@ -1236,20 +1248,24 @@
    ]
   },
   "cxn|ang": {
-   "bucket": "lost",
+   "bucket": "kept",
    "n": 1,
    "src": [
     "0"
    ],
-   "out": []
+   "out": [
+    "0"
+   ]
   },
   "cxnSpLocks|noChangeShapeType": {
-   "bucket": "lost",
+   "bucket": "kept",
    "n": 1,
    "src": [
     "1"
    ],
-   "out": []
+   "out": [
+    "1"
+   ]
   },
   "default|val": {
    "bucket": "kept",
@@ -1504,140 +1520,174 @@
    ]
   },
   "f|eqn": {
-   "bucket": "lost",
+   "bucket": "kept",
    "n": 1,
    "src": [
     "sum 0 0 0"
    ],
-   "out": []
+   "out": [
+    "sum 0 0 0"
+   ]
   },
   "fill|color2": {
-   "bucket": "lost",
+   "bucket": "kept",
    "n": 1,
    "src": [
     "#00ff00"
    ],
-   "out": []
+   "out": [
+    "#00ff00"
+   ]
   },
   "fill|colors": {
-   "bucket": "lost",
+   "bucket": "kept",
    "n": 1,
    "src": [
     "0% #fff,100% #000"
    ],
-   "out": []
+   "out": [
+    "0% #fff,100% #000"
+   ]
   },
   "fill|ext": {
-   "bucket": "lost",
+   "bucket": "kept",
    "n": 1,
    "src": [
     "view"
    ],
-   "out": []
+   "out": [
+    "view"
+   ]
   },
   "fill|focus": {
-   "bucket": "lost",
+   "bucket": "kept",
    "n": 1,
    "src": [
     "50%"
    ],
-   "out": []
+   "out": [
+    "50%"
+   ]
   },
   "fill|focusposition": {
-   "bucket": "lost",
+   "bucket": "kept",
    "n": 1,
    "src": [
     "0,0"
    ],
-   "out": []
+   "out": [
+    "0,0"
+   ]
   },
   "fill|focussize": {
-   "bucket": "lost",
+   "bucket": "kept",
    "n": 1,
    "src": [
     "0,0"
    ],
-   "out": []
+   "out": [
+    "0,0"
+   ]
   },
   "fill|id": {
-   "bucket": "lost",
+   "bucket": "kept",
    "n": 1,
    "src": [
     "fill1"
    ],
-   "out": []
+   "out": [
+    "fill1"
+   ]
   },
   "fill|on": {
-   "bucket": "lost",
+   "bucket": "kept",
    "n": 1,
    "src": [
     "t"
    ],
-   "out": []
+   "out": [
+    "t"
+   ]
   },
   "fill|opacity": {
-   "bucket": "lost",
+   "bucket": "kept",
    "n": 1,
    "src": [
     "0.5"
    ],
-   "out": []
+   "out": [
+    "0.5"
+   ]
   },
   "fill|opacity2": {
-   "bucket": "lost",
+   "bucket": "kept",
    "n": 1,
    "src": [
     "1"
    ],
-   "out": []
+   "out": [
+    "1"
+   ]
   },
   "fill|recolor": {
-   "bucket": "lost",
+   "bucket": "kept",
    "n": 1,
    "src": [
     "t"
    ],
-   "out": []
+   "out": [
+    "t"
+   ]
   },
   "fill|rotate": {
-   "bucket": "lost",
+   "bucket": "kept",
    "n": 1,
    "src": [
     "t"
    ],
-   "out": []
+   "out": [
+    "t"
+   ]
   },
   "fill|title": {
-   "bucket": "lost",
+   "bucket": "kept",
    "n": 1,
    "src": [
     "填充标题"
    ],
-   "out": []
+   "out": [
+    "填充标题"
+   ]
   },
   "fill|type": {
-   "bucket": "lost",
+   "bucket": "kept",
    "n": 1,
    "src": [
     "gradient"
    ],
-   "out": []
+   "out": [
+    "gradient"
+   ]
   },
   "fillRect|b": {
-   "bucket": "lost",
+   "bucket": "kept",
    "n": 1,
    "src": [
     "0"
    ],
-   "out": []
+   "out": [
+    "0"
+   ]
   },
   "fillRect|t": {
-   "bucket": "lost",
+   "bucket": "kept",
    "n": 1,
    "src": [
     "0"
    ],
-   "out": []
+   "out": [
+    "0"
+   ]
   },
   "fillRef|idx": {
    "bucket": "lost",
@@ -1648,36 +1698,44 @@
    "out": []
   },
   "fillToRect|b": {
-   "bucket": "lost",
+   "bucket": "kept",
    "n": 1,
    "src": [
     "0"
    ],
-   "out": []
+   "out": [
+    "0"
+   ]
   },
   "fillToRect|l": {
-   "bucket": "lost",
+   "bucket": "kept",
    "n": 1,
    "src": [
     "0"
    ],
-   "out": []
+   "out": [
+    "0"
+   ]
   },
   "fillToRect|r": {
-   "bucket": "lost",
+   "bucket": "kept",
    "n": 1,
    "src": [
     "0"
    ],
-   "out": []
+   "out": [
+    "0"
+   ]
   },
   "fillToRect|t": {
-   "bucket": "lost",
+   "bucket": "kept",
    "n": 1,
    "src": [
     "0"
    ],
-   "out": []
+   "out": [
+    "0"
+   ]
   },
   "fldChar|fldCharType": {
    "bucket": "kept",
@@ -1860,20 +1918,24 @@
    ]
   },
   "gd|fmla": {
-   "bucket": "lost",
+   "bucket": "kept",
    "n": 1,
    "src": [
     "sum 0 0 0"
    ],
-   "out": []
+   "out": [
+    "sum 0 0 0"
+   ]
   },
   "gd|name": {
-   "bucket": "lost",
+   "bucket": "kept",
    "n": 1,
    "src": [
     "x1"
    ],
-   "out": []
+   "out": [
+    "x1"
+   ]
   },
   "glow|rad": {
    "bucket": "kept",
@@ -1944,68 +2006,84 @@
    ]
   },
   "group|anchorId": {
-   "bucket": "lost",
+   "bucket": "kept",
    "n": 1,
    "src": [
     "a4"
    ],
-   "out": []
+   "out": [
+    "a4"
+   ]
   },
   "group|coordorigin": {
-   "bucket": "lost",
+   "bucket": "kept",
    "n": 1,
    "src": [
     "0,0"
    ],
-   "out": []
+   "out": [
+    "0,0"
+   ]
   },
   "group|coordsize": {
-   "bucket": "lost",
+   "bucket": "kept",
    "n": 1,
    "src": [
     "1000,1000"
    ],
-   "out": []
+   "out": [
+    "1000,1000"
+   ]
   },
   "group|editas": {
-   "bucket": "lost",
+   "bucket": "kept",
    "n": 1,
    "src": [
     "canvas"
    ],
-   "out": []
+   "out": [
+    "canvas"
+   ]
   },
   "group|id": {
-   "bucket": "lost",
+   "bucket": "kept",
    "n": 1,
    "src": [
     "_x0000_s1025"
    ],
-   "out": []
+   "out": [
+    "_x0000_s1025"
+   ]
   },
   "group|spid": {
-   "bucket": "lost",
+   "bucket": "kept",
    "n": 1,
    "src": [
     "_x0000_s1026"
    ],
-   "out": []
+   "out": [
+    "_x0000_s1026"
+   ]
   },
   "group|spt": {
-   "bucket": "lost",
+   "bucket": "kept",
    "n": 1,
    "src": [
     "0"
    ],
-   "out": []
+   "out": [
+    "0"
+   ]
   },
   "group|style": {
-   "bucket": "lost",
+   "bucket": "kept",
    "n": 1,
    "src": [
     "position:absolute"
    ],
-   "out": []
+   "out": [
+    "position:absolute"
+   ]
   },
   "gs|pos": {
    "bucket": "lost",
@@ -2017,28 +2095,34 @@
    "out": []
   },
   "h|position": {
-   "bucket": "lost",
+   "bucket": "kept",
    "n": 1,
    "src": [
     "0,0"
    ],
-   "out": []
+   "out": [
+    "0,0"
+   ]
   },
   "h|xrange": {
-   "bucket": "lost",
+   "bucket": "kept",
    "n": 1,
    "src": [
     "0,10"
    ],
-   "out": []
+   "out": [
+    "0,10"
+   ]
   },
   "h|yrange": {
-   "bucket": "lost",
+   "bucket": "kept",
    "n": 1,
    "src": [
     "0,10"
    ],
-   "out": []
+   "out": [
+    "0,10"
+   ]
   },
   "headEnd|len": {
    "bucket": "kept",
@@ -2087,12 +2171,14 @@
    "out": []
   },
   "hiddenLine|w": {
-   "bucket": "lost",
+   "bucket": "kept",
    "n": 1,
    "src": [
     "1pt"
    ],
-   "out": []
+   "out": [
+    "1pt"
+   ]
   },
   "hueOff|val": {
    "bucket": "lost",
@@ -2185,52 +2271,64 @@
    ]
   },
   "imagedata|cropbottom": {
-   "bucket": "lost",
+   "bucket": "kept",
    "n": 1,
    "src": [
     "5%"
    ],
-   "out": []
+   "out": [
+    "5%"
+   ]
   },
   "imagedata|cropleft": {
-   "bucket": "lost",
+   "bucket": "kept",
    "n": 1,
    "src": [
     "0"
    ],
-   "out": []
+   "out": [
+    "0"
+   ]
   },
   "imagedata|cropright": {
-   "bucket": "lost",
+   "bucket": "kept",
    "n": 1,
    "src": [
     "0.2"
    ],
-   "out": []
+   "out": [
+    "0.2"
+   ]
   },
   "imagedata|croptop": {
-   "bucket": "lost",
+   "bucket": "kept",
    "n": 1,
    "src": [
     "0.1"
    ],
-   "out": []
+   "out": [
+    "0.1"
+   ]
   },
   "imagedata|id": {
-   "bucket": "lost",
+   "bucket": "kept",
    "n": 2,
    "src": [
     "rid#"
    ],
-   "out": []
+   "out": [
+    "rid#"
+   ]
   },
   "imagedata|title": {
-   "bucket": "lost",
+   "bucket": "kept",
    "n": 1,
    "src": [
     "老式图的标题"
    ],
-   "out": []
+   "out": [
+    "老式图的标题"
+   ]
   },
   "imprint|val": {
    "bucket": "kept",
@@ -2778,132 +2876,164 @@
    "out": []
   },
   "lin|ang": {
-   "bucket": "lost",
+   "bucket": "kept",
    "n": 1,
    "src": [
     "45"
    ],
-   "out": []
+   "out": [
+    "45"
+   ]
   },
   "lin|scaled": {
-   "bucket": "lost",
+   "bucket": "kept",
    "n": 1,
    "src": [
     "0"
    ],
-   "out": []
+   "out": [
+    "0"
+   ]
   },
   "line|allowincell": {
-   "bucket": "lost",
+   "bucket": "kept",
    "n": 1,
    "src": [
     "f"
    ],
-   "out": []
+   "out": [
+    "f"
+   ]
   },
   "line|anchorId": {
-   "bucket": "lost",
+   "bucket": "kept",
    "n": 1,
    "src": [
     "a2"
    ],
-   "out": []
+   "out": [
+    "a2"
+   ]
   },
   "line|coordsize": {
-   "bucket": "lost",
+   "bucket": "kept",
    "n": 1,
    "src": [
     "1000,1000"
    ],
-   "out": []
+   "out": [
+    "1000,1000"
+   ]
   },
   "line|fillcolor": {
-   "bucket": "lost",
+   "bucket": "kept",
    "n": 1,
    "src": [
     "#0000ff"
    ],
-   "out": []
+   "out": [
+    "#0000ff"
+   ]
   },
   "line|filled": {
-   "bucket": "lost",
+   "bucket": "kept",
    "n": 1,
    "src": [
     "f"
    ],
-   "out": []
+   "out": [
+    "f"
+   ]
   },
   "line|from": {
-   "bucket": "lost",
+   "bucket": "kept",
    "n": 1,
    "src": [
     "0,0"
    ],
-   "out": []
+   "out": [
+    "0,0"
+   ]
   },
   "line|id": {
-   "bucket": "lost",
+   "bucket": "kept",
    "n": 1,
    "src": [
     "ln1"
    ],
-   "out": []
+   "out": [
+    "ln1"
+   ]
   },
   "line|spid": {
-   "bucket": "lost",
+   "bucket": "kept",
    "n": 1,
    "src": [
     "ln2"
    ],
-   "out": []
+   "out": [
+    "ln2"
+   ]
   },
   "line|spt": {
-   "bucket": "lost",
+   "bucket": "kept",
    "n": 1,
    "src": [
     "20"
    ],
-   "out": []
+   "out": [
+    "20"
+   ]
   },
   "line|strokecolor": {
-   "bucket": "lost",
+   "bucket": "kept",
    "n": 1,
    "src": [
     "#000080"
    ],
-   "out": []
+   "out": [
+    "#000080"
+   ]
   },
   "line|stroked": {
-   "bucket": "lost",
+   "bucket": "kept",
    "n": 1,
    "src": [
     "t"
    ],
-   "out": []
+   "out": [
+    "t"
+   ]
   },
   "line|strokeweight": {
-   "bucket": "lost",
+   "bucket": "kept",
    "n": 1,
    "src": [
     "2pt"
    ],
-   "out": []
+   "out": [
+    "2pt"
+   ]
   },
   "line|style": {
-   "bucket": "lost",
+   "bucket": "kept",
    "n": 1,
    "src": [
     "position:absolute"
    ],
-   "out": []
+   "out": [
+    "position:absolute"
+   ]
   },
   "line|to": {
-   "bucket": "lost",
+   "bucket": "kept",
    "n": 1,
    "src": [
     "100,100"
    ],
-   "out": []
+   "out": [
+    "100,100"
+   ]
   },
   "link|val": {
    "bucket": "kept",
@@ -2956,28 +3086,34 @@
    "out": []
   },
   "lock|aspectratio": {
-   "bucket": "lost",
+   "bucket": "kept",
    "n": 1,
    "src": [
     "f"
    ],
-   "out": []
+   "out": [
+    "f"
+   ]
   },
   "lock|ext": {
-   "bucket": "lost",
+   "bucket": "kept",
    "n": 1,
    "src": [
     "edit"
    ],
-   "out": []
+   "out": [
+    "edit"
+   ]
   },
   "lock|shapetype": {
-   "bucket": "lost",
+   "bucket": "kept",
    "n": 1,
    "src": [
     "t"
    ],
-   "out": []
+   "out": [
+    "t"
+   ]
   },
   "lsdException|locked": {
    "bucket": "kept",
@@ -3363,20 +3499,24 @@
    ]
   },
   "object|dxaOrig": {
-   "bucket": "lost",
+   "bucket": "kept",
    "n": 1,
    "src": [
     "5486"
    ],
-   "out": []
+   "out": [
+    "5486"
+   ]
   },
   "object|dyaOrig": {
-   "bucket": "lost",
+   "bucket": "kept",
    "n": 1,
    "src": [
     "3200"
    ],
-   "out": []
+   "out": [
+    "3200"
+   ]
   },
   "off|x": {
    "bucket": "kept",
@@ -3399,28 +3539,34 @@
    ]
   },
   "OLEObject|DrawAspect": {
-   "bucket": "lost",
+   "bucket": "kept",
    "n": 1,
    "src": [
     "content"
    ],
-   "out": []
+   "out": [
+    "content"
+   ]
   },
   "OLEObject|ObjectID": {
-   "bucket": "lost",
+   "bucket": "kept",
    "n": 1,
    "src": [
     "_1"
    ],
-   "out": []
+   "out": [
+    "_1"
+   ]
   },
   "OLEObject|ShapeID": {
-   "bucket": "lost",
+   "bucket": "kept",
    "n": 1,
    "src": [
     "_x0000_s1027"
    ],
-   "out": []
+   "out": [
+    "_x0000_s1027"
+   ]
   },
   "outerShdw|algn": {
    "bucket": "kept",
@@ -3514,68 +3660,84 @@
    ]
   },
   "path|arrowok": {
-   "bucket": "lost",
+   "bucket": "kept",
    "n": 1,
    "src": [
     "t"
    ],
-   "out": []
+   "out": [
+    "t"
+   ]
   },
   "path|connectangles": {
-   "bucket": "lost",
+   "bucket": "kept",
    "n": 1,
    "src": [
     ""
    ],
-   "out": []
+   "out": [
+    ""
+   ]
   },
   "path|connectlocs": {
-   "bucket": "lost",
+   "bucket": "kept",
    "n": 1,
    "src": [
     ""
    ],
-   "out": []
+   "out": [
+    ""
+   ]
   },
   "path|connecttype": {
-   "bucket": "lost",
+   "bucket": "kept",
    "n": 1,
    "src": [
     "custom"
    ],
-   "out": []
+   "out": [
+    "custom"
+   ]
   },
   "path|extrusionok": {
-   "bucket": "lost",
+   "bucket": "kept",
    "n": 1,
    "src": [
     "f"
    ],
-   "out": []
+   "out": [
+    "f"
+   ]
   },
   "path|fillok": {
-   "bucket": "lost",
+   "bucket": "kept",
    "n": 1,
    "src": [
     "f"
    ],
-   "out": []
+   "out": [
+    "f"
+   ]
   },
   "path|gradientshapeok": {
-   "bucket": "lost",
+   "bucket": "kept",
    "n": 1,
    "src": [
     "t"
    ],
-   "out": []
+   "out": [
+    "t"
+   ]
   },
   "path|h": {
-   "bucket": "lost",
+   "bucket": "kept",
    "n": 2,
    "src": [
     "1000"
    ],
-   "out": []
+   "out": [
+    "1000"
+   ]
   },
   "path|path": {
    "bucket": "lost",
@@ -3586,20 +3748,24 @@
    "out": []
   },
   "path|textboxrect": {
-   "bucket": "lost",
+   "bucket": "kept",
    "n": 1,
    "src": [
     "0,0,10,10"
    ],
-   "out": []
+   "out": [
+    "0,0,10,10"
+   ]
   },
   "path|w": {
-   "bucket": "lost",
+   "bucket": "kept",
    "n": 2,
    "src": [
     "1000"
    ],
-   "out": []
+   "out": [
+    "1000"
+   ]
   },
   "pgMar|bottom": {
    "bucket": "kept",
@@ -3754,20 +3920,24 @@
    ]
   },
   "pos|x": {
-   "bucket": "lost",
+   "bucket": "kept",
    "n": 1,
    "src": [
     "5"
    ],
-   "out": []
+   "out": [
+    "5"
+   ]
   },
   "pos|y": {
-   "bucket": "lost",
+   "bucket": "kept",
    "n": 1,
    "src": [
     "6"
    ],
-   "out": []
+   "out": [
+    "6"
+   ]
   },
   "position|val": {
    "bucket": "kept",
@@ -3884,142 +4054,178 @@
    ]
   },
   "pt|x": {
-   "bucket": "lost",
+   "bucket": "kept",
    "n": 2,
    "src": [
     "0",
     "10"
    ],
-   "out": []
+   "out": [
+    "0",
+    "10"
+   ]
   },
   "pt|y": {
-   "bucket": "lost",
+   "bucket": "kept",
    "n": 2,
    "src": [
     "0",
     "20"
    ],
-   "out": []
+   "out": [
+    "0",
+    "20"
+   ]
   },
   "rect|allowincell": {
-   "bucket": "lost",
+   "bucket": "kept",
    "n": 1,
    "src": [
     "t"
    ],
-   "out": []
+   "out": [
+    "t"
+   ]
   },
   "rect|b": {
-   "bucket": "lost",
+   "bucket": "kept",
    "n": 2,
    "src": [
     "0"
    ],
-   "out": []
+   "out": [
+    "0"
+   ]
   },
   "rect|coordsize": {
-   "bucket": "lost",
+   "bucket": "kept",
    "n": 1,
    "src": [
     "1000,1000"
    ],
-   "out": []
+   "out": [
+    "1000,1000"
+   ]
   },
   "rect|fillcolor": {
-   "bucket": "lost",
+   "bucket": "kept",
    "n": 1,
    "src": [
     "#eeeeee"
    ],
-   "out": []
+   "out": [
+    "#eeeeee"
+   ]
   },
   "rect|filled": {
-   "bucket": "lost",
+   "bucket": "kept",
    "n": 1,
    "src": [
     "t"
    ],
-   "out": []
+   "out": [
+    "t"
+   ]
   },
   "rect|id": {
-   "bucket": "lost",
+   "bucket": "kept",
    "n": 1,
    "src": [
     "rc1"
    ],
-   "out": []
+   "out": [
+    "rc1"
+   ]
   },
   "rect|l": {
-   "bucket": "lost",
+   "bucket": "kept",
    "n": 2,
    "src": [
     "0"
    ],
-   "out": []
+   "out": [
+    "0"
+   ]
   },
   "rect|r": {
-   "bucket": "lost",
+   "bucket": "kept",
    "n": 2,
    "src": [
     "0"
    ],
-   "out": []
+   "out": [
+    "0"
+   ]
   },
   "rect|spid": {
-   "bucket": "lost",
+   "bucket": "kept",
    "n": 1,
    "src": [
     "rc2"
    ],
-   "out": []
+   "out": [
+    "rc2"
+   ]
   },
   "rect|spt": {
-   "bucket": "lost",
+   "bucket": "kept",
    "n": 1,
    "src": [
     "1"
    ],
-   "out": []
+   "out": [
+    "1"
+   ]
   },
   "rect|strokecolor": {
-   "bucket": "lost",
+   "bucket": "kept",
    "n": 1,
    "src": [
     "#333333"
    ],
-   "out": []
+   "out": [
+    "#333333"
+   ]
   },
   "rect|stroked": {
-   "bucket": "lost",
+   "bucket": "kept",
    "n": 1,
    "src": [
     "f"
    ],
-   "out": []
+   "out": [
+    "f"
+   ]
   },
   "rect|strokeweight": {
-   "bucket": "lost",
+   "bucket": "kept",
    "n": 1,
    "src": [
     "0.75pt"
    ],
-   "out": []
+   "out": [
+    "0.75pt"
+   ]
   },
   "rect|style": {
-   "bucket": "lost",
+   "bucket": "kept",
    "n": 1,
    "src": [
     "width:10pt"
    ],
-   "out": []
+   "out": [
+    "width:10pt"
+   ]
   },
   "rect|t": {
-   "bucket": "lost",
+   "bucket": "kept",
    "n": 2,
    "src": [
     "0"
    ],
-   "out": []
+   "out": [
+    "0"
+   ]
   },
   "reflection|algn": {
    "bucket": "kept",
@@ -4275,124 +4481,154 @@
    ]
   },
   "rot|lat": {
-   "bucket": "lost",
+   "bucket": "kept",
    "n": 1,
    "src": [
     "0"
    ],
-   "out": []
+   "out": [
+    "0"
+   ]
   },
   "rot|lon": {
-   "bucket": "lost",
+   "bucket": "kept",
    "n": 1,
    "src": [
     "0"
    ],
-   "out": []
+   "out": [
+    "0"
+   ]
   },
   "rot|rev": {
-   "bucket": "lost",
+   "bucket": "kept",
    "n": 1,
    "src": [
     "0"
    ],
-   "out": []
+   "out": [
+    "0"
+   ]
   },
   "roundrect|anchorId": {
-   "bucket": "lost",
+   "bucket": "kept",
    "n": 1,
    "src": [
     "a1"
    ],
-   "out": []
+   "out": [
+    "a1"
+   ]
   },
   "roundrect|arcsize": {
-   "bucket": "lost",
+   "bucket": "kept",
    "n": 1,
    "src": [
     "0.1"
    ],
-   "out": []
+   "out": [
+    "0.1"
+   ]
   },
   "roundrect|coordsize": {
-   "bucket": "lost",
+   "bucket": "kept",
    "n": 1,
    "src": [
     "1000,1000"
    ],
-   "out": []
+   "out": [
+    "1000,1000"
+   ]
   },
   "roundrect|fillcolor": {
-   "bucket": "lost",
+   "bucket": "kept",
    "n": 1,
    "src": [
     "#ffff00"
    ],
-   "out": []
+   "out": [
+    "#ffff00"
+   ]
   },
   "roundrect|filled": {
-   "bucket": "lost",
+   "bucket": "kept",
    "n": 1,
    "src": [
     "t"
    ],
-   "out": []
+   "out": [
+    "t"
+   ]
   },
   "roundrect|id": {
-   "bucket": "lost",
+   "bucket": "kept",
    "n": 1,
    "src": [
     "rr1"
    ],
-   "out": []
+   "out": [
+    "rr1"
+   ]
   },
   "roundrect|spid": {
-   "bucket": "lost",
+   "bucket": "kept",
    "n": 1,
    "src": [
     "rr2"
    ],
-   "out": []
+   "out": [
+    "rr2"
+   ]
   },
   "roundrect|spt": {
-   "bucket": "lost",
+   "bucket": "kept",
    "n": 1,
    "src": [
     "201"
    ],
-   "out": []
+   "out": [
+    "201"
+   ]
   },
   "roundrect|strokecolor": {
-   "bucket": "lost",
+   "bucket": "kept",
    "n": 1,
    "src": [
     "#ff0000"
    ],
-   "out": []
+   "out": [
+    "#ff0000"
+   ]
   },
   "roundrect|stroked": {
-   "bucket": "lost",
+   "bucket": "kept",
    "n": 1,
    "src": [
     "t"
    ],
-   "out": []
+   "out": [
+    "t"
+   ]
   },
   "roundrect|strokeweight": {
-   "bucket": "lost",
+   "bucket": "kept",
    "n": 1,
    "src": [
     "1pt"
    ],
-   "out": []
+   "out": [
+    "1pt"
+   ]
   },
   "roundrect|style": {
-   "bucket": "lost",
+   "bucket": "kept",
    "n": 1,
    "src": [
     "width:80pt;height:40pt"
    ],
-   "out": []
+   "out": [
+    "width:80pt;height:40pt"
+   ]
   },
   "rsid|val": {
    "bucket": "kept",
@@ -4468,348 +4704,434 @@
    "out": []
   },
   "shadow|algn": {
-   "bucket": "lost",
+   "bucket": "kept",
    "n": 1,
    "src": [
     "tl"
    ],
-   "out": []
+   "out": [
+    "tl"
+   ]
   },
   "shadow|blurRad": {
-   "bucket": "lost",
+   "bucket": "kept",
    "n": 1,
    "src": [
     "2pt"
    ],
-   "out": []
+   "out": [
+    "2pt"
+   ]
   },
   "shadow|dir": {
-   "bucket": "lost",
+   "bucket": "kept",
    "n": 1,
    "src": [
     "2700000"
    ],
-   "out": []
+   "out": [
+    "2700000"
+   ]
   },
   "shadow|dist": {
-   "bucket": "lost",
+   "bucket": "kept",
    "n": 1,
    "src": [
     "3pt"
    ],
-   "out": []
+   "out": [
+    "3pt"
+   ]
   },
   "shadow|kx": {
-   "bucket": "lost",
+   "bucket": "kept",
    "n": 1,
    "src": [
     "0"
    ],
-   "out": []
+   "out": [
+    "0"
+   ]
   },
   "shadow|ky": {
-   "bucket": "lost",
+   "bucket": "kept",
    "n": 1,
    "src": [
     "0"
    ],
-   "out": []
+   "out": [
+    "0"
+   ]
   },
   "shadow|offset": {
-   "bucket": "lost",
+   "bucket": "kept",
    "n": 1,
    "src": [
     "2pt,2pt"
    ],
-   "out": []
+   "out": [
+    "2pt,2pt"
+   ]
   },
   "shadow|on": {
-   "bucket": "lost",
+   "bucket": "kept",
    "n": 1,
    "src": [
     "t"
    ],
-   "out": []
+   "out": [
+    "t"
+   ]
   },
   "shadow|opacity": {
-   "bucket": "lost",
+   "bucket": "kept",
    "n": 1,
    "src": [
     "0.5"
    ],
-   "out": []
+   "out": [
+    "0.5"
+   ]
   },
   "shadow|origin": {
-   "bucket": "lost",
+   "bucket": "kept",
    "n": 1,
    "src": [
     "0,0"
    ],
-   "out": []
+   "out": [
+    "0,0"
+   ]
   },
   "shadow|sx": {
-   "bucket": "lost",
+   "bucket": "kept",
    "n": 1,
    "src": [
     "1"
    ],
-   "out": []
+   "out": [
+    "1"
+   ]
   },
   "shadow|sy": {
-   "bucket": "lost",
+   "bucket": "kept",
    "n": 1,
    "src": [
     "1"
    ],
-   "out": []
+   "out": [
+    "1"
+   ]
   },
   "shadow|val": {
-   "bucket": "lost",
+   "bucket": "kept",
    "n": 1,
    "src": [
     "0.5"
    ],
-   "out": []
+   "out": [
+    "0.5"
+   ]
   },
   "shape|adj": {
-   "bucket": "lost",
+   "bucket": "kept",
    "n": 1,
    "src": [
     "0.5"
    ],
-   "out": []
+   "out": [
+    "0.5"
+   ]
   },
   "shape|alt": {
-   "bucket": "lost",
+   "bucket": "kept",
    "n": 1,
    "src": [
     "老式形状"
    ],
-   "out": []
+   "out": [
+    "老式形状"
+   ]
   },
   "shape|anchorId": {
-   "bucket": "lost",
+   "bucket": "kept",
    "n": 1,
    "src": [
     "a0"
    ],
-   "out": []
+   "out": [
+    "a0"
+   ]
   },
   "shape|bullet": {
-   "bucket": "lost",
+   "bucket": "kept",
    "n": 1,
    "src": [
     "f"
    ],
-   "out": []
+   "out": [
+    "f"
+   ]
   },
   "shape|connectortype": {
-   "bucket": "lost",
+   "bucket": "kept",
    "n": 1,
    "src": [
     "straight"
    ],
-   "out": []
+   "out": [
+    "straight"
+   ]
   },
   "shape|coordorigin": {
-   "bucket": "lost",
+   "bucket": "kept",
    "n": 1,
    "src": [
     "0,0"
    ],
-   "out": []
+   "out": [
+    "0,0"
+   ]
   },
   "shape|coordsize": {
-   "bucket": "lost",
+   "bucket": "kept",
    "n": 1,
    "src": [
     "1000,1000"
    ],
-   "out": []
+   "out": [
+    "1000,1000"
+   ]
   },
   "shape|fillcolor": {
-   "bucket": "lost",
+   "bucket": "kept",
    "n": 1,
    "src": [
     "#ffc0cb"
    ],
-   "out": []
+   "out": [
+    "#ffc0cb"
+   ]
   },
   "shape|filled": {
-   "bucket": "lost",
+   "bucket": "kept",
    "n": 1,
    "src": [
     "t"
    ],
-   "out": []
+   "out": [
+    "t"
+   ]
   },
   "shape|id": {
-   "bucket": "lost",
+   "bucket": "kept",
    "n": 1,
    "src": [
     "_x0000_s1026"
    ],
-   "out": []
+   "out": [
+    "_x0000_s1026"
+   ]
   },
   "shape|ole": {
-   "bucket": "lost",
+   "bucket": "kept",
    "n": 1,
    "src": [
     "f"
    ],
-   "out": []
+   "out": [
+    "f"
+   ]
   },
   "shape|path": {
-   "bucket": "lost",
+   "bucket": "kept",
    "n": 1,
    "src": [
     "m0,0 l100,0 e"
    ],
-   "out": []
+   "out": [
+    "m0,0 l100,0 e"
+   ]
   },
   "shape|preferrelative": {
-   "bucket": "lost",
+   "bucket": "kept",
    "n": 1,
    "src": [
     "t"
    ],
-   "out": []
+   "out": [
+    "t"
+   ]
   },
   "shape|spid": {
-   "bucket": "lost",
+   "bucket": "kept",
    "n": 1,
    "src": [
     "_x0000_s1027"
    ],
-   "out": []
+   "out": [
+    "_x0000_s1027"
+   ]
   },
   "shape|spt": {
-   "bucket": "lost",
+   "bucket": "kept",
    "n": 1,
    "src": [
     "75"
    ],
-   "out": []
+   "out": [
+    "75"
+   ]
   },
   "shape|strokecolor": {
-   "bucket": "lost",
+   "bucket": "kept",
    "n": 1,
    "src": [
     "#00ff00"
    ],
-   "out": []
+   "out": [
+    "#00ff00"
+   ]
   },
   "shape|stroked": {
-   "bucket": "lost",
+   "bucket": "kept",
    "n": 1,
    "src": [
     "f"
    ],
-   "out": []
+   "out": [
+    "f"
+   ]
   },
   "shape|strokeweight": {
-   "bucket": "lost",
+   "bucket": "kept",
    "n": 1,
    "src": [
     "2pt"
    ],
-   "out": []
+   "out": [
+    "2pt"
+   ]
   },
   "shape|style": {
-   "bucket": "lost",
+   "bucket": "kept",
    "n": 1,
    "src": [
     "width:100pt;height:50pt"
    ],
-   "out": []
+   "out": [
+    "width:100pt;height:50pt"
+   ]
   },
   "shape|type": {
-   "bucket": "lost",
+   "bucket": "kept",
    "n": 1,
    "src": [
     "#_x0000_t75"
    ],
-   "out": []
+   "out": [
+    "#_x0000_t75"
+   ]
   },
   "shapetype|adj": {
-   "bucket": "lost",
+   "bucket": "kept",
    "n": 1,
    "src": [
     "0"
    ],
-   "out": []
+   "out": [
+    "0"
+   ]
   },
   "shapetype|anchorId": {
-   "bucket": "lost",
+   "bucket": "kept",
    "n": 1,
    "src": [
     "a3"
    ],
-   "out": []
+   "out": [
+    "a3"
+   ]
   },
   "shapetype|coordsize": {
-   "bucket": "lost",
+   "bucket": "kept",
    "n": 1,
    "src": [
     "21600,21600"
    ],
-   "out": []
+   "out": [
+    "21600,21600"
+   ]
   },
   "shapetype|filled": {
-   "bucket": "lost",
+   "bucket": "kept",
    "n": 1,
    "src": [
     "f"
    ],
-   "out": []
+   "out": [
+    "f"
+   ]
   },
   "shapetype|id": {
-   "bucket": "lost",
+   "bucket": "kept",
    "n": 1,
    "src": [
     "_x0000_t202"
    ],
-   "out": []
+   "out": [
+    "_x0000_t202"
+   ]
   },
   "shapetype|oned": {
-   "bucket": "lost",
+   "bucket": "kept",
    "n": 1,
    "src": [
     "t"
    ],
-   "out": []
+   "out": [
+    "t"
+   ]
   },
   "shapetype|path": {
-   "bucket": "lost",
+   "bucket": "kept",
    "n": 1,
    "src": [
     "m0,0 l0,21600 e"
    ],
-   "out": []
+   "out": [
+    "m0,0 l0,21600 e"
+   ]
   },
   "shapetype|preferrelative": {
-   "bucket": "lost",
+   "bucket": "kept",
    "n": 1,
    "src": [
     "t"
    ],
-   "out": []
+   "out": [
+    "t"
+   ]
   },
   "shapetype|spt": {
-   "bucket": "lost",
+   "bucket": "kept",
    "n": 1,
    "src": [
     "202"
    ],
-   "out": []
+   "out": [
+    "202"
+   ]
   },
   "shapetype|stroked": {
-   "bucket": "lost",
+   "bucket": "kept",
    "n": 1,
    "src": [
     "t"
    ],
-   "out": []
+   "out": [
+    "t"
+   ]
   },
   "shd|color": {
    "bucket": "kept",
@@ -5142,76 +5464,94 @@
    ]
   },
   "stroke|color": {
-   "bucket": "lost",
+   "bucket": "kept",
    "n": 1,
    "src": [
     "#000080"
    ],
-   "out": []
+   "out": [
+    "#000080"
+   ]
   },
   "stroke|dashstyle": {
-   "bucket": "lost",
+   "bucket": "kept",
    "n": 1,
    "src": [
     "dash"
    ],
-   "out": []
+   "out": [
+    "dash"
+   ]
   },
   "stroke|endarrow": {
-   "bucket": "lost",
+   "bucket": "kept",
    "n": 1,
    "src": [
     "block"
    ],
-   "out": []
+   "out": [
+    "block"
+   ]
   },
   "stroke|endcap": {
-   "bucket": "lost",
+   "bucket": "kept",
    "n": 1,
    "src": [
     "round"
    ],
-   "out": []
+   "out": [
+    "round"
+   ]
   },
   "stroke|joinstyle": {
-   "bucket": "lost",
+   "bucket": "kept",
    "n": 1,
    "src": [
     "round"
    ],
-   "out": []
+   "out": [
+    "round"
+   ]
   },
   "stroke|miterlimit": {
-   "bucket": "lost",
+   "bucket": "kept",
    "n": 1,
    "src": [
     "8"
    ],
-   "out": []
+   "out": [
+    "8"
+   ]
   },
   "stroke|on": {
-   "bucket": "lost",
+   "bucket": "kept",
    "n": 1,
    "src": [
     "t"
    ],
-   "out": []
+   "out": [
+    "t"
+   ]
   },
   "stroke|startarrow": {
-   "bucket": "lost",
+   "bucket": "kept",
    "n": 1,
    "src": [
     "oval"
    ],
-   "out": []
+   "out": [
+    "oval"
+   ]
   },
   "stroke|weight": {
-   "bucket": "lost",
+   "bucket": "kept",
    "n": 1,
    "src": [
     "1pt"
    ],
-   "out": []
+   "out": [
+    "1pt"
+   ]
   },
   "style|customStyle": {
    "bucket": "kept",
@@ -5669,20 +6009,24 @@
    ]
   },
   "textbox|inset": {
-   "bucket": "lost",
+   "bucket": "kept",
    "n": 1,
    "src": [
     "2pt,2pt,2pt,2pt"
    ],
-   "out": []
+   "out": [
+    "2pt,2pt,2pt,2pt"
+   ]
   },
   "textbox|style": {
-   "bucket": "lost",
+   "bucket": "kept",
    "n": 1,
    "src": [
     "mso-fit-shape-to-text:t"
    ],
-   "out": []
+   "out": [
+    "mso-fit-shape-to-text:t"
+   ]
   },
   "textDirection|val": {
    "bucket": "kept",
@@ -5887,12 +6231,14 @@
    ]
   },
   "useLocalDpi|val": {
-   "bucket": "lost",
+   "bucket": "kept",
    "n": 1,
    "src": [
     "0"
    ],
-   "out": []
+   "out": [
+    "0"
+   ]
   },
   "vanish|val": {
    "bucket": "kept",
@@ -5957,36 +6303,44 @@
    ]
   },
   "wrap|anchorx": {
-   "bucket": "lost",
+   "bucket": "kept",
    "n": 1,
    "src": [
     "margin"
    ],
-   "out": []
+   "out": [
+    "margin"
+   ]
   },
   "wrap|anchory": {
-   "bucket": "lost",
+   "bucket": "kept",
    "n": 1,
    "src": [
     "page"
    ],
-   "out": []
+   "out": [
+    "page"
+   ]
   },
   "wrap|side": {
-   "bucket": "lost",
+   "bucket": "kept",
    "n": 1,
    "src": [
     "left"
    ],
-   "out": []
+   "out": [
+    "left"
+   ]
   },
   "wrap|type": {
-   "bucket": "lost",
+   "bucket": "kept",
    "n": 1,
    "src": [
     "square"
    ],
-   "out": []
+   "out": [
+    "square"
+   ]
   },
   "wrapSquare|wrapText": {
    "bucket": "kept",

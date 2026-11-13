@@ -44,9 +44,9 @@ docx ──读手──▶ HTML ──TipTap schema──▶ PM 模型 ──写
 | | 值 |
 |---|---:|
 | 读到的对 | 619 |
-| 保留 | **372（60.1%）** |
+| 保留 | **548（88.5%）** |
 | 值变 | 5 |
-| 掉了 | 242 |
+| 掉了 | 66 |
 | 缺件 | 0 |
 | 源包部件 | 7 |
 | 写出包部件 | 7 |
@@ -61,13 +61,13 @@ docx ──读手──▶ HTML ──TipTap schema──▶ PM 模型 ──写
 
 | 族 | 读到的 | 保留 | 值变 | 掉了 | 保留率 |
 |---|---:|---:|---:|---:|---:|
-| 正文属性（`w:*`） | 300 | 287 | 5 | 8 | **95.7%** |
-| 图形壳（`a:`/`v:`/`wp:`/`pic:`/`wps:`/`o:`） | 319 | 85 | 0 | 234 | **26.6%** |
+| 正文属性（`w:*`） | 300 | 289 | 5 | 6 | **96.3%** |
+| 图形壳（`a:`/`v:`/`wp:`/`pic:`/`wps:`/`o:`） | 319 | 259 | 0 | 60 | **81.2%** |
 
 口径说明：一个对算正文，当且仅当它在源包里**只**出现在 `w:*` 元素上（沾过图形壳就算图形壳）。
 对名按 local name 归并（与保真账本同口径），所以 `fill|type` 这种两族同名的会并成一笔。
 
-### 掉了（242）
+### 掉了（66）
 
 名字一次都没写出来。这里每一行都是一条**单边通道**：读手读了，模型或写手没有它的槽。
 
@@ -77,21 +77,10 @@ docx ──读手──▶ HTML ──TipTap schema──▶ PM 模型 ──写
 | `gs|pos` | 4 | 0, 100000 | — |
 | `lumMod|val` | 3 | 50000, 80000 | — |
 | `ext|uri` | 2 | {1234-5678-9abc-def0}, {1234-5678-9abc-def1} | — |
-| `imagedata|id` | 2 | rid# | — |
-| `path|h` | 2 | 1000 | — |
-| `path|w` | 2 | 1000 | — |
-| `pt|x` | 2 | 0, 10 | — |
-| `pt|y` | 2 | 0, 20 | — |
-| `rect|b` | 2 | 0 | — |
-| `rect|l` | 2 | 0 | — |
-| `rect|r` | 2 | 0 | — |
-| `rect|t` | 2 | 0 | — |
 | `spLocks|noEditPoints` | 2 | 1 | — |
 | `srgbClr|val` | 2 | ff0000, 0000ff | — |
 | `alpha|val` | 1 | 50000 | — |
 | `alphaOff|val` | 1 | 200 | — |
-| `attr|name` | 1 | x | — |
-| `attr|val` | 1 | y | — |
 | `blipFill|rotWithShape` | 1 | 1 | — |
 | `bodyPr|anchor` | 1 | ctr | — |
 | `bodyPr|anchorCtr` | 1 | 0 | — |
@@ -112,8 +101,19 @@ docx ──读手──▶ HTML ──TipTap schema──▶ PM 模型 ──写
 | `bodyPr|vert` | 1 | horz | — |
 | `bodyPr|vertOverflow` | 1 | overflow | — |
 | `bodyPr|wrap` | 1 | square | — |
-| `chExt|cx` | 1 | 1000 | — |
-| …共 242 条，完整清单见 `docs/fidelity-roundtrip.json` | | | |
+| `Choice|Requires` | 1 | wps | — |
+| `cNvSpPr|txBox` | 1 | 1 | — |
+| `comments|Ignorable` | 1 | w14 | — |
+| `effectRef|idx` | 1 | 0 | — |
+| `fillRef|idx` | 1 | 2 | — |
+| `fontRef|idx` | 1 | minor | — |
+| `footerReference|id` | 1 | rid# | — |
+| `footerReference|type` | 1 | default | — |
+| `gradFill|flip` | 1 | xy | — |
+| `gradFill|rotWithShape` | 1 | 0 | — |
+| `headerReference|id` | 1 | rid# | — |
+| `headerReference|type` | 1 | default | — |
+| …共 66 条，完整清单见 `docs/fidelity-roundtrip.json` | | | |
 
 ### 值变（5）
 
@@ -133,7 +133,7 @@ docx ──读手──▶ HTML ──TipTap schema──▶ PM 模型 ──写
 
 （空）
 
-### 保留（372）
+### 保留（548）
 
 这些是真的双向。列出来是为了让「保留」也可核对，而不是一个孤零零的百分比。
 
@@ -163,7 +163,7 @@ docx ──读手──▶ HTML ──TipTap schema──▶ PM 模型 ──写
 | `left|sz` | 3 | 4 | 4 |
 | `left|val` | 3 | dotted, dashed, single | dotted, single, dashed |
 | `ln|w` | 3 | 9525 | 9525 |
-| …共 372 条，完整清单见 `docs/fidelity-roundtrip.json` | | | |
+| …共 548 条，完整清单见 `docs/fidelity-roundtrip.json` | | | |
 
 ## 边界
 
