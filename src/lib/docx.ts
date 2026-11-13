@@ -347,6 +347,48 @@ export const DEFAULT_COL_GAP = 8
 export const MM_PX = 96 / 25.4
 const MM_TWIPS = 1440 / 25.4
 
+/**
+ * 从一枚 sectPr 子元素串上取数值属性（v0.196 零动态正则）。
+ * 按属性名找第一枚**纯数字**值——与改前 `new RegExp('w:'+attr+'="(\\d+)"')` 的
+ * 「非数字不算匹配、继续往后找」严格等价；返回毫米（缇 ÷ MM_TWIPS）。
+ */
+/** v0.196 A/B 对照腿：改前「每次 new RegExp」的解析，产品路径不用（只给基准/测试调） */
+export function legacyTwipsAttrOf(xml: string | undefined, attr: string): number | undefined {
+  const v = Number(xml?.match(new RegExp(`w:${attr}="(\\d+)"`))?.[1])
+  return Number.isFinite(v) && v > 0 ? v / MM_TWIPS : undefined
+}
+
+/** v0.196 A/B 对照腿：改前「五格各编译一枚动态正则」的 core.xml 解析 */
+export function legacyParseCoreProps(xml: string): DocProps {
+  const out: DocProps = {}
+  if (!xml.trim()) return out
+  for (const [key, tag] of Object.entries(CORE_FIELDS) as [keyof DocProps, string][]) {
+    const m = new RegExp(`<${tag}[^>]*>([\\s\\S]*?)</${tag}>`).exec(xml)
+    if (!m) continue
+    const v = decodeCoreText(m[1]).trim()
+    if (v) out[key] = v
+  }
+  return out
+}
+
+export function twipsAttrOf(xml: string | undefined, attr: string): number | undefined {
+  if (!xml) return undefined
+  const needle = `w:${attr}="`
+  let at = xml.indexOf(needle)
+  while (at >= 0) {
+    const from = at + needle.length
+    const stop = xml.indexOf('"', from)
+    if (stop < 0) break
+    const raw = xml.slice(from, stop)
+    if (/^\d+$/.test(raw)) {
+      const v = Number(raw)
+      return Number.isFinite(v) && v > 0 ? v / MM_TWIPS : undefined
+    }
+    at = xml.indexOf(needle, stop + 1)
+  }
+  return undefined
+}
+
 export function resolvePage(p?: PageSetup): {
   w: number
   h: number
@@ -761,9 +803,16 @@ export function parseCoreProps(xml: string): DocProps {
   const out: DocProps = {}
   if (!xml.trim()) return out
   for (const [key, tag] of Object.entries(CORE_FIELDS) as [keyof DocProps, string][]) {
-    const m = new RegExp(`<${tag}[^>]*>([\\s\\S]*?)</${tag}>`).exec(xml)
-    if (!m) continue
-    const v = decodeCoreText(m[1]).trim()
+    // v0.196：五格各编译一枚动态正则 → 字符串定位。与改前的「取第一枚匹配、
+    // 内容为空就跳过这一格」逐字等价（不继续找同 tag 的第二枚）。
+    const open = `<${tag}`
+    const at = xml.indexOf(open)
+    if (at < 0) continue
+    const g = xml.indexOf('>', at + open.length)
+    if (g < 0) continue
+    const close = xml.indexOf(`</${tag}>`, g + 1)
+    if (close < 0) continue
+    const v = decodeCoreText(xml.slice(g + 1, close)).trim()
     if (v) out[key] = v
   }
   return out
@@ -879,6 +928,60 @@ export function literalPlacementsOf(docXml: string): LiteralPlacement[] {
   return out
 }
 
+/**
+ * VML 老式形状整段字面（v0.196）。
+ *
+ * **判断修正**：D55 记的「模型无槽、写手发不出 `w:pict`」只说明「不能靠包的
+ * 原生槽重建」，不等于「搬不回来」。读手把 `<w:pict>` / `<w:object>` 展平成一行
+ * 占位文字，写手侧从源包按段落边界留下**整段字面**，再贴回写出包即可——与
+ * v0.189 表单域、v0.190 smartTag、v0.195 字面片同源，不需要模型槽。
+ *
+ * 两条硬守卫（缺一不贴，宁缺毋滥）：
+ * ① 写出包根必须已声明 `xmlns:v` / `xmlns:o` / `xmlns:w10`（docx 包默认带），
+ *    否则贴回去就是未声明前缀的坏件；
+ * ② 源段里的 `r:id` 指向源包的 image 关系，写出包的同号 rId 指向完全不同的
+ *    部件（实测源 `rId1`=image、写出包 `rId1`=styles.xml），必须按**关系类型**
+ *    重映射到写出包的 image rId；写出包没有 image 关系就跳过这一段。
+ */
+export interface VmlShape {
+  /** 源包里含 `<w:pict>` / `<w:object>` 的整段 `<w:p>…</w:p>` 字面 */
+  literal: string
+  /** 段内指向源包 image 关系的 `r:id` 值（可能多枚） */
+  imageRIds: string[]
+}
+
+/** 从源包按段落边界提取 VML/嵌入对象整段；源件没说过的一律不生成指令 */
+export function vmlShapesOf(docXml: string, relsText: string): VmlShape[] {
+  const imageRIds = new Set<string>()
+  for (const m of relsText.matchAll(/<Relationship\b[^>]*>/g)) {
+    const tag = m[0]
+    if (!/Type="[^"]*\/image"/.test(tag)) continue
+    const id = /Id="([^"]+)"/.exec(tag)?.[1]
+    if (id) imageRIds.add(id)
+  }
+  const out: VmlShape[] = []
+  for (const m of docXml.matchAll(/<w:p(?:\s[^>]*)?>[\s\S]*?<\/w:p>/g)) {
+    const p = m[0]
+    if (!/<w:pict\b|<w:object\b/.test(p)) continue
+    // 非贪婪 <w:p> 会截断 VML 文字框里内嵌的段落；半截片没有闭标签，跳过而不是贴坏件
+    if (!/<\/w:pict>|<\/w:object>/.test(p)) continue
+    const rids = new Set<string>()
+    for (const r of p.matchAll(/\br:id="([^"]+)"/g)) if (imageRIds.has(r[1])) rids.add(r[1])
+    out.push({ literal: p, imageRIds: [...rids] })
+  }
+  return out
+}
+
+/** 从写出包的 rels 里找第一枚 image 关系 id（按关系类型认，不按同号） */
+function outImageRId(relsText: string): string {
+  for (const m of relsText.matchAll(/<Relationship\b[^>]*>/g)) {
+    if (!/Type="[^"]*\/image"/.test(m[0])) continue
+    const id = /Id="([^"]+)"/.exec(m[0])?.[1]
+    if (id) return id
+  }
+  return ''
+}
+
 export interface MetaExtras {
   byId?: {
     part: string
@@ -976,6 +1079,11 @@ export interface DocMeta {
    * 由 `docxToDocMeta` 正则提取，`patchLiteralPlacements` 按锚点贴回。
    */
   literalPlacements?: LiteralPlacement[]
+  /**
+   * VML 老式形状整段字面（v0.196）：`vmlShapesOf` 从源包 document.xml + rels 提取，
+   * `patchVmlShapes` 重映射 image rId 后按占位段贴回；写手侧正则读、读手零改动。
+   */
+  vmlShapes?: VmlShape[]
   /** 文档属性（v0.188）：由 `docxToDocMeta` 从 docProps/core.xml 读出，编辑器可改 */
   docProps?: DocProps
   page?: PageSetup
@@ -1162,7 +1270,11 @@ export function rootExtrasOf(xml: string, tags: string[]): string[] {
   return hits.map((h) => h.s)
 }
 
-export async function docxToDocMeta(bytes: Uint8Array, shared?: DocxZipSession): Promise<DocMeta> {
+export async function docxToDocMeta(
+  bytes: Uint8Array,
+  shared?: DocxZipSession,
+  opts?: { legacyMetaRegex?: boolean },
+): Promise<DocMeta> {
   let zip: ZipView
   if (shared) {
     zip = shared.zip as ZipView
@@ -1232,10 +1344,7 @@ export async function docxToDocMeta(bytes: Uint8Array, shared?: DocxZipSession):
   const pgMar = docXml.match(/<w:pgMar[^>]*>/)?.[0]
   const colsEl = docXml.match(/<w:cols[^>]*>/)?.[0]
   const pgNumEl = docXml.match(/<w:pgNumType[^>]*>/)?.[0]
-  const tw = (xml: string | undefined, attr: string) => {
-    const v = Number(xml?.match(new RegExp(`w:${attr}="(\\d+)"`))?.[1])
-    return Number.isFinite(v) && v > 0 ? v / MM_TWIPS : undefined
-  }
+  const tw = opts?.legacyMetaRegex ? legacyTwipsAttrOf : twipsAttrOf
   const pw = tw(pgSz, 'w')
   const ph = tw(pgSz, 'h')
   const mt = tw(pgMar, 'top')
@@ -1291,7 +1400,7 @@ export async function docxToDocMeta(bytes: Uint8Array, shared?: DocxZipSession):
   if (themeXml.trim()) out.themeXml = themeXml
   // v0.188：文档属性。源件没这个部件就留空，写手用 DEFAULT_DOC_PROPS 回落。
   const coreXml = await readText('docProps/core.xml')
-  if (coreXml.trim()) out.docProps = parseCoreProps(coreXml)
+  if (coreXml.trim()) out.docProps = opts?.legacyMetaRegex ? legacyParseCoreProps(coreXml) : parseCoreProps(coreXml)
   if (revIds.length) out.revIds = revIds
   if (docPrShells.length) out.docPrShells = docPrShells
   // v0.189/190：整片字面包裹壳（表单域 + 智能标记），与上面几笔同源
@@ -1330,6 +1439,9 @@ export async function docxToDocMeta(bytes: Uint8Array, shared?: DocxZipSession):
   // v0.195：正文长尾——sectPr 两枚 / proofErr / w:sdt 壳，写手侧从 document.xml 正则读
   const literalPlacements = literalPlacementsOf(docXml)
   if (literalPlacements.length) out.literalPlacements = literalPlacements
+  // v0.196：VML 老式形状与嵌入对象整段字面（relsText 上面已经读过，零新增部件读）
+  const vmlShapes = vmlShapesOf(docXml, relsText)
+  if (vmlShapes.length) out.vmlShapes = vmlShapes
   return out
 }
 
@@ -3883,6 +3995,8 @@ export async function prosemirrorToDocxBytes(
   const withFeat = await patchRPrFeatures(withMeta, meta?.rPrFeatures, sess)
   // v0.195：正文长尾四枚字面片（sectPr / comments 根 / proofErr），共用会话
   const withPlacements = await patchLiteralPlacements(withFeat, meta?.literalPlacements, sess)
+  // v0.196：VML 老式形状整段字面（rId 按关系类型重映射），与上面几笔共用会话
+  const withVml = await patchVmlShapes(withPlacements, meta?.vmlShapes, sess)
   // 表闸门三样都要补：样式推出来的（looks）与表自己带的（dt.tblLooks），
   // v0.152 起再加表级条件格式尺寸两枚（dt.tblPrs，与 tblLook 同住 tblPr）
   const needTbl =
@@ -3893,7 +4007,7 @@ export async function prosemirrorToDocxBytes(
     dt.cnfStyles.some((x) => x) ||
     dt.tblBorders.some((x) => x)
   // 单元格不换行（v0.152）：包里没有 noWrap 的槽，按 <w:tc> 出现序插 <w:noWrap/>
-  const withCell = dt.cellExtras.some((x) => x) ? await patchTcPr(withPlacements, dt.cellExtras, sess) : withPlacements
+  const withCell = dt.cellExtras.some((x) => x) ? await patchTcPr(withVml, dt.cellExtras, sess) : withVml
   // 底纹的存盘原件（v0.164）：按 <w:shd> 出现序**合并**属性（包只发 val/color/fill 三枚，
   // 且 fill 写的是解析后的屏上色——源件的字面色与主题三枚都要改回来/补上去）
   const withShd = await patchShdAttrs(withCell, dt.shdExtras, sess)
@@ -4318,6 +4432,54 @@ export async function patchLiteralPlacements(
     touched = true
   }
   if (!touched) return bytes
+  return finishPatch(bytes, zip, sess)
+}
+
+/**
+ * VML 老式形状整段回填（v0.196）。
+ *
+ * 读手把 `<w:pict>` / `<w:object>` 展平成一行可见占位文字
+ * （`〔嵌入对象…，内容未提取〕`），写出包里三段 VML 全没了。这里用那行占位文字
+ * 认领段落，**替换**成源件的三段字面（按源包出现序），于是写出包的结构回到源件
+ * 同形——占位段本来就是读手为 `w:object` 做的替身，替身认回来才不留多余空行。
+ *
+ * 三道守卫：① 已有 `w:pict`/`w:object` 整笔不动（幂等，不叠第二套）；
+ * ② 根上没声明 v/o/w10 三个前缀就跳过（贴回去会是坏 XML）；
+ * ③ 带 image `r:id` 的段必须能重映射到写出包的 image 关系，映射不到就跳过这一段。
+ * 锚点认不出（用户删了嵌入对象、或真件压根没有 object 占位段）也整笔不贴。
+ *
+ * 写手侧正则读的部件不进保真账；读手零改动、零新增查问对。
+ */
+export async function patchVmlShapes(
+  bytes: Uint8Array,
+  items: VmlShape[] | undefined,
+  sess?: PackSession,
+): Promise<Uint8Array> {
+  if (!items?.length) return bytes
+  const zip = sess ? sess.zip : await loadZipOf(bytes)
+  const xml = await partText(zip, 'word/document.xml', sess)
+  if (!xml || xml.includes('<w:pict') || xml.includes('<w:object')) return bytes
+  const root = /<w:document\b[^>]*>/.exec(xml)?.[0] ?? ''
+  if (!root.includes('xmlns:v=') || !root.includes('xmlns:o=') || !root.includes('xmlns:w10=')) return bytes
+  const at = xml.indexOf('内容未提取〕')
+  if (at < 0) return bytes
+  const pStart = Math.max(xml.lastIndexOf('<w:p>', at), xml.lastIndexOf('<w:p ', at))
+  const pEnd = xml.indexOf('</w:p>', at)
+  if (pStart < 0 || pStart > at || pEnd < 0) return bytes
+  // 只在真的需要重映射时才读 rels（无会话路径少一次解压）
+  const needRid = items.some((it) => it.imageRIds.length)
+  const targetRId = needRid ? outImageRId(await partText(zip, 'word/_rels/document.xml.rels', sess)) : ''
+  const pieces: string[] = []
+  for (const it of items) {
+    if (!it.literal) continue
+    if (it.imageRIds.length && !targetRId) continue
+    let s = it.literal
+    for (const rid of it.imageRIds) s = s.split(`r:id="${rid}"`).join(`r:id="${targetRId}"`)
+    pieces.push(s)
+  }
+  if (!pieces.length) return bytes
+  const out = xml.slice(0, pStart) + pieces.join('') + xml.slice(pEnd + '</w:p>'.length)
+  setPart(zip, 'word/document.xml', out, sess)
   return finishPatch(bytes, zip, sess)
 }
 

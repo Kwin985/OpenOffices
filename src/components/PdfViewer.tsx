@@ -33,7 +33,9 @@ import {
 import { fitZoom, type FitMode } from '../lib/view-zoom'
 import { sampleBackdrop, applyTextEdits, type TextEdit } from '../lib/pdf-text-edit'
 import {
+  duplicatePagesInPlace,
   extractPages,
+  insertBlankPagesInPlace,
   mergePdfs,
   movePagesInPlace,
   removePagesInPlace,
@@ -2118,6 +2120,19 @@ function PdfViewer({ tab }: Props) {
       return `已删除 ${pages.length} 页，剩 ${left} 页`
     })
 
+  // v0.196：插入空白页 / 复制选中页，都落在「选中页整体之后」；未选中时对当前页生效
+  const opInsertBlank = () =>
+    pageOp('插入空白页', async (path, pages) => {
+      const total = await insertBlankPagesInPlace(path, pages, 1)
+      return `已插入 1 页空白页，共 ${total} 页（尺寸取第 1 页）`
+    })
+
+  const opDuplicate = () =>
+    pageOp('复制选中页', async (path, pages) => {
+      const { total, copied } = await duplicatePagesInPlace(path, pages)
+      return copied ? `已复制 ${copied} 页，共 ${total} 页` : '没有可复制的页'
+    })
+
   // v0.189：页序重排。选中页整体平移一格，边界上不动；未选中时对当前页生效
   const opMove = (delta: number) =>
     pageOp(delta < 0 ? '上移页面' : '下移页面', async (path, pages) => {
@@ -2664,6 +2679,8 @@ function PdfViewer({ tab }: Props) {
                   {btn('⟳ 右转', () => opRotate(90), pageBusy, '顺时针 90°（未选中时对当前页）')}
                   {btn('↑ 上移', () => opMove(-1), pageBusy, '选中页整体前移一位；未选中时对当前页生效')}
                   {btn('↓ 下移', () => opMove(1), pageBusy, '选中页整体后移一位；未选中时对当前页生效')}
+                  {btn('插入空白页', opInsertBlank, pageBusy, '在选中页之后插入一页空白页；未选中时对当前页生效')}
+                  {btn('复制选中页', opDuplicate, pageBusy, '把选中页复制到其后；未选中时复制当前页')}
                   {btn('删除页', opRemove, pageBusy)}
                   {btn('提取为新 PDF', opExtract, pageBusy)}
                   {btn('合并其他 PDF', opMerge, pageBusy)}

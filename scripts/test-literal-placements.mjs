@@ -117,9 +117,20 @@ async function main() {
   // ── ④ 源码级接线 ────────────────────────────────────────────────
   const w = read('../src/lib/docx.ts')
   check('DocMeta 有 literalPlacements 字段', /literalPlacements\?: LiteralPlacement\[\]/.test(w))
-  check('主链挂 withPlacements 且逐笔接上一笔',
-    /const withPlacements = await patchLiteralPlacements\(withFeat, meta\?\.literalPlacements, sess\)/.test(w) &&
-    /patchTcPr\(withPlacements,|: withPlacements/.test(w))
+  // v0.196：链尾又插了 withVml，改成动态链校验（每个输入 = 上一笔输出），
+  // 以后再插新补丁只要接上就不再红。
+  check('主链挂 withPlacements',
+    /const withPlacements = await patchLiteralPlacements\(withFeat, meta\?\.literalPlacements, sess\)/.test(w))
+  const defs = [...w.matchAll(/^  const (with[A-Z]\w*) =/gm)].map((m) => ({ name: m[1], at: m.index }))
+  const from = defs.findIndex((d) => d.name === 'withCols')
+  const to = defs.findIndex((d) => d.name === 'withNumStart')
+  const core = defs.slice(from, to + 1)
+  let chainOk = from >= 0 && to > from
+  for (let i = 1; i < core.length; i++) {
+    const seg = w.slice(core[i].at, i + 1 < core.length ? core[i + 1].at : core[i].at + 700)
+    if (!seg.includes(core[i - 1].name)) chainOk = false
+  }
+  check('核心补丁链逐笔接上一笔（含 withVml）', chainOk && core.some((d) => d.name === 'withVml'))
   check('meta 构造从 document.xml 正则提取',
     /const literalPlacements = literalPlacementsOf\(docXml\)/.test(w) && /out\.literalPlacements = literalPlacements/.test(w))
   check('四种 mode 都在补丁里',

@@ -91,6 +91,53 @@ export async function movePagesInPlace(path: string, pages: number[], delta: num
   return { total, moved: idx(pages).filter((i) => i >= 0 && i < total).length }
 }
 
+/**
+ * 插入空白页 / 复制选中页的落点（v0.196）：选中页整体之后。
+ * 参数是 1-based 页号，返回 0-based 插入位置（正好等于选中页里最大的页号）；
+ * 越界页号过滤掉，一个都不合法就返回 -1 让调用方整笔不写盘。
+ */
+export function insertAfterIndex(total: number, selected: number[]): number {
+  const valid = selected.filter((p) => Number.isInteger(p) && p >= 1 && p <= total)
+  return valid.length ? Math.max(...valid) : -1
+}
+
+/**
+ * 在选中页之后插入 count 枚空白页，尺寸取第 1 页（同一份文档里页面尺寸通常一致）。
+ * 与移动/删除一样只改页树、不复制内容；返回插入后的总页数。
+ */
+export async function insertBlankPagesInPlace(path: string, pages: number[], count = 1) {
+  const { doc } = await loadDoc(path)
+  const total = doc.getPageCount()
+  const at = insertAfterIndex(total, pages)
+  const n = Math.max(0, Math.min(20, Math.floor(count)))
+  if (at < 0 || !n) return total
+  const { width, height } = doc.getPage(0).getSize()
+  for (let i = 0; i < n; i++) doc.insertPage(at + i, [width, height])
+  await saveDoc(doc, path)
+  return doc.getPageCount()
+}
+
+/**
+ * 复制选中页到选中页之后（按升序落位、相对顺序不变）。
+ * `copyPages` 的源另从同一字节载一份，避免「自拷贝」时源与目标共享可变页树；
+ * 标注 / 表单域 / 资源随页对象一起复制。返回复制枚数与新总页数。
+ */
+export async function duplicatePagesInPlace(path: string, pages: number[]) {
+  const { doc, lib } = await loadDoc(path)
+  const total = doc.getPageCount()
+  const at = insertAfterIndex(total, pages)
+  const chosen = idx(pages).filter((i) => i >= 0 && i < total).sort((a, b) => a - b)
+  if (at < 0 || !chosen.length) return { total, copied: 0 }
+  const src = await lib.PDFDocument.load(await readBytes(path), {
+    updateMetadata: false,
+    parseSpeed: PDF_OBJECTS_PER_TICK,
+  })
+  const copied = await doc.copyPages(src, chosen)
+  for (let i = 0; i < copied.length; i++) doc.insertPage(at + i, copied[i])
+  await saveDoc(doc, path)
+  return { total: doc.getPageCount(), copied: copied.length }
+}
+
 /** 删除指定页，返回剩余页数；删空时拒写（PDF 至少要有一页） */
 export async function removePagesInPlace(path: string, pages: number[]) {
   const { doc } = await loadDoc(path)

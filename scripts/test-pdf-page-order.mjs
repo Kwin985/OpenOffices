@@ -76,7 +76,10 @@ async function main() {
   check('没动就不写盘', /if \(order\.every\(\(v, i\) => v === i\)\) return \{ total, moved: 0 \}/.test(lib))
   check('倒序摘除再按新序插回', /for \(let i = total - 1; i >= 0; i--\) doc\.removePage\(i\)/.test(lib)
     && /doc\.insertPage\(i, kept\[order\[i\]\]\)/.test(lib))
-  check('不复制页面（无 copyPages）', !/copyPages/.test(lib.slice(lib.indexOf('export async function movePagesInPlace'), lib.indexOf('删除指定页'))))
+  // v0.196：movePagesInPlace 之后插了「插入空白页 / 复制选中页」两个新操作，
+  // 后者本来就要 copyPages。切片收窄到 movePagesInPlace 函数体，别把新操作算进来。
+  check('movePagesInPlace 不复制页面（无 copyPages）',
+    !/copyPages/.test(lib.slice(lib.indexOf('export async function movePagesInPlace'), lib.indexOf('export function insertAfterIndex'))))
   check('工具条两枚按钮', /btn\('↑ 上移'/.test(ui) && /btn\('↓ 下移'/.test(ui))
   check('opMove 复用 pageOp（未选中对当前页生效）', /const opMove = \(delta: number\) =>\s*pageOp\(/.test(ui))
   check('冒烟钩子也挂 move（两条出口一致）', /move: \(pages: number\[\], delta: number\) => movePagesInPlace/.test(ui))

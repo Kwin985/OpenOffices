@@ -38,10 +38,13 @@ const read = (p) => fs.readFileSync(new URL(p, import.meta.url), 'utf8')
   check('入口：legacyPartText 可选参数', /opts\?: \{[^}]*legacyPartText\?: boolean/.test(w))
   check('入口：对照腿不建缓存表',
     /\.\.\.\(opts\?\.legacyPartText \? \{\} : \{ text: new Map<string, string>\(\) \}\)/.test(w))
-  // 补丁数随轮次增长（v0.184 加了 patchColorLits），别硬编码 13：只要求「读 ≥ 14 且读写配对」
+  // 补丁数随轮次增长，别硬编码数目：写回至少 14 处，且每处写回都有对应的读。
+  // v0.196 起允许「读比写多」——VML 补丁只读 rels 找 image 关系、不改 rels，
+  // 只读部件不该被算成漏写。
   const nRead = (w.match(/await partText\(zip, /g) ?? []).length
   const nWrite = (w.match(/setPart\(zip, /g) ?? []).length
-  check('补丁：读写数目精确配对且不比上一轮少', nRead >= 14 && nWrite === nRead, `读 ${nRead} / 写 ${nWrite}`)
+  check('补丁：写回不少于 14 处且都有对应的读（只读部件允许读多于写）',
+    nWrite >= 14 && nRead >= nWrite, `读 ${nRead} / 写 ${nWrite}`)
   check('补丁：写回全部走 setPart（没有漏接的 zip.file(..., out)）',
     !/^\s*zip\.file\('word\/(?:document|styles|numbering)\.xml', \w+\)/m.test(w))
   check('attachThemePart 的三枚写回没被误改（THEME / Content_Types / rels）',

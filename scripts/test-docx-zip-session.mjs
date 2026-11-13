@@ -68,8 +68,10 @@ const bytes = new Uint8Array(await zip.generateAsync({ type: 'arraybuffer', comp
   const ui = read('../src/components/DocEditor.tsx')
   check('会话导出且 read 带 Map 缓存',
     /export async function openDocxZip/.test(writer) && /const cache = new Map<string, string>\(\)/.test(writer))
+  // v0.196：docxToDocMeta 多了第三个可选参数（A/B 对照腿），签名换成多行；
+  // 按「关键名在场」验，不钉死整串类型字面量。
   check('两个入口的 shared 都是可选参数',
-    /bytes: Uint8Array, shared\?: DocxZipSession/.test(writer)
+    /bytes: Uint8Array,\s*shared\?: DocxZipSession,/.test(writer)
       && /shared\?: \{ zip: unknown; read\(name: string\): Promise<string> \}/.test(reader))
   check('不传 session 时保留旧路径（各自 loadAsync）',
     /else \{\s*const \{ default: JSZip \} = await import\('jszip'\)/.test(writer)
