@@ -4,7 +4,8 @@
 > 每份 docx 独立走完「读手 → HTML → TipTap schema → PM → 写手 → 普查」，量具与
 > 主账本同源，只是换了输入。分母仍只覆盖 `PARTS` 的 7 个部件；各份的「读到的」
 > 不同，所以**单份百分比之间、以及与主账本 88.5% 之间都不可直接比较**。
-> 报告只写文件名，不写路径与日期。
+> 报告只写文件名，不写路径与日期。已逐对诊断过的「口径假红」会在末节单列，
+> 它们判 lost 只是写法不同，不是真丢；名单见 `scripts/lib/known-alias.mjs`。
 
 ## 汇总
 
@@ -17,7 +18,7 @@
 | 合计值变 / 掉了 / 缺件 | 47 / 210 / 3 |
 | 单份保留率中位数 | 100.0% |
 | 最低 / 最高 | 02-tables.docx 28.2% / d10.docx 100.0% |
-| 用时 | 169.4s |
+| 用时 | 169.0s |
 
 合计只是把各份的分子 / 分母分别求和，用来描述规模，**不是统一口径下的覆盖率**；
 各份分母不同，中位数与逐份表比这个合计更能说明问题。
@@ -50,37 +51,42 @@
 
 ## 反复掉 / 值变的对（按出现份数）
 
-| 对 | 掉了的份数 | 值变的份数 |
-|---|---:|---:|
-| `tblLook|firstColumn` | 2 | 0 |
-| `tblLook|firstRow` | 2 | 0 |
-| `tblLook|lastColumn` | 2 | 0 |
-| `tblLook|lastRow` | 2 | 0 |
-| `trHeight|val` | 2 | 0 |
-| `aliases|val` | 1 | 0 |
-| `alpha|val` | 1 | 0 |
-| `alphaOff|val` | 1 | 0 |
-| `anchor|anchorId` | 1 | 0 |
-| `anchor|editId` | 1 | 0 |
-| `appearance|val` | 1 | 0 |
-| `basedOn|val` | 1 | 0 |
-| `blipFill|rotWithShape` | 1 | 0 |
-| `bodyPr|anchor` | 1 | 0 |
-| `bodyPr|anchorCtr` | 1 | 0 |
-| `bodyPr|bIns` | 1 | 0 |
-| `bodyPr|compatLnSpc` | 1 | 0 |
-| `bodyPr|forceAA` | 1 | 0 |
-| `bodyPr|fromWordArt` | 1 | 0 |
-| `bodyPr|horzOverflow` | 1 | 0 |
-| `bodyPr|lIns` | 1 | 0 |
-| `bodyPr|numCol` | 1 | 0 |
-| `bodyPr|rIns` | 1 | 0 |
-| `bodyPr|rot` | 1 | 0 |
-| `bodyPr|rtlCol` | 1 | 0 |
+| 对 | 掉了的份数 | 值变的份数 | 口径 |
+|---|---:|---:|---|
+| `tblLook|firstColumn` | 2 | 0 | **已知口径假红**：w:val 位掩码同义（0x0080）；写出包只发 w:val，语义未丢 |
+| `tblLook|firstRow` | 2 | 0 | **已知口径假红**：w:val 位掩码同义（0x0020）；写出包只发 w:val，语义未丢 |
+| `tblLook|lastColumn` | 2 | 0 | **已知口径假红**：w:val 位掩码同义（0x0100）；写出包只发 w:val，语义未丢 |
+| `tblLook|lastRow` | 2 | 0 | **已知口径假红**：w:val 位掩码同义（0x0040）；写出包只发 w:val，语义未丢 |
+| `trHeight|val` | 2 | 0 | — |
+| `aliases|val` | 1 | 0 | — |
+| `alpha|val` | 1 | 0 | — |
+| `alphaOff|val` | 1 | 0 | — |
+| `anchor|anchorId` | 1 | 0 | — |
+| `anchor|editId` | 1 | 0 | — |
+| `appearance|val` | 1 | 0 | — |
+| `basedOn|val` | 1 | 0 | — |
+| `blipFill|rotWithShape` | 1 | 0 | — |
+| `bodyPr|anchor` | 1 | 0 | — |
+| `bodyPr|anchorCtr` | 1 | 0 | — |
+| `bodyPr|bIns` | 1 | 0 | — |
+| `bodyPr|compatLnSpc` | 1 | 0 | — |
+| `bodyPr|forceAA` | 1 | 0 | — |
+| `bodyPr|fromWordArt` | 1 | 0 | — |
+| `bodyPr|horzOverflow` | 1 | 0 | — |
+| `bodyPr|lIns` | 1 | 0 | — |
+| `bodyPr|numCol` | 1 | 0 | — |
+| `bodyPr|rIns` | 1 | 0 | — |
+| `bodyPr|rot` | 1 | 0 | — |
+| `bodyPr|rtlCol` | 1 | 0 | — |
 
 共 248 个对在至少一份里掉过或值变过；只列前 25。
 各份夹具的属性宇宙本就不同，所以「出现份数」普遍偏低是常态——这张表找的是
 **跨夹具反复掉的同一枚**（如 `tblLook` 四兄弟），不是按份数排优先级。
+
+其中 **4 枚是已逐对诊断过的口径假红**（`tblLook|firstColumn`, `tblLook|firstRow`, `tblLook|lastColumn`, `tblLook|lastRow`）：
+`w:tblLook` 的 `w:val` 位掩码与逐位 ST_OnOff 属性是同一组开关的两种写法，
+写出包只发 `w:val` 不丢语义；为凑数字补写显式属性反而会写出与掩码打架的坏件。
+**跨夹具复现 ≠ 真丢**，剩下那些才值得逐对看「读手 / 模型 / 包槽 / 写手」四处。
 
 ## 跳过明细
 

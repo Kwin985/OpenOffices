@@ -3602,4 +3602,51 @@ D53 记「要先新建载荷槽 + 定 CT_RPr 位次」，本轮复查后把口�
   夹具；③ 长尾若是广而浅的（248 对散在 21 份里），逐对补的 ROI 远低于先把
   输入面铺开；④ 语料非法时要让批次明确 SKIP 并写原因，别把环境因素算成产品红。
 
+## v0.199（跨夹具复现 ≠ 真丢：两族口径假红的逐对诊断）
+
+本轮**读手写手仍一寸未动**，三本账 md5 与 v0.197 起完全一致。改的是量具的
+**分档口径**，并补上 pptx 侧漏掉的一条「外部输入不覆盖主账本」界线。
+
+- **诊断对象**：v0.198 的 21 份对照里，248 个对在至少一份掉过或值变过，
+  其中只有 `tblLook` 四兄弟与 `trHeight|val` 是跨 2 份复现的。按 ⑭ 查了四处：
+  1. **读手**：`docx-fidelity.ts:547-557` 的 `readTlookPayload` 只读
+     `val/noHBand/noVBand` 三键；四枚位属性只在 `:4769-4792` 的 `tblLookOn`
+     里被读一次用于判开关，不落载荷。行高 `:4029-4042` 只在
+     `attrNum(trHeight,'w:val') > 0` 时才写进 `trStyle` 的 `height:`。
+  2. **模型**：`cell-style.ts:1225-1246` 的 `tableRow` 只有 `trpr` / `rowHeight`；
+     `:596-600` 的 `parseTlookPayload` 白名单同样只认三键。TipTap 原生
+     `TableRow`（`@tiptap/extension-table/dist/row/index.js:7-24`）无 `addAttributes`。
+  3. **包槽**：`docx@9.7.1` 的 `ITableLookOptions` 支持六枚位属性，但
+     `createTableLook` 只发显式属性、**不发 `w:val`**；`ITableRowPropertiesOptionsBase`
+     的 `height.value` 与 `rule` 都必填，发不出无 val 的 trHeight。
+  4. **写手**：`docx.ts:5680-5688` 的 `tlookXmlOf` 只发三枚；`:3489-3494` 的
+     `TableRow` 只在 `rh > 0` 时发 height。既有 `patchTrPr` / `patchTblLook`
+     确实能按行 / 表对位贴回字面，但这两族不属于它们的登记范围。
+- **口径裁决**：`w:val` 是 ST_TblLook 位掩码（0x20 firstRow / 0x40 lastRow /
+  0x80 firstColumn / 0x100 lastColumn / 0x200 noHBand / 0x400 noVBand），
+  与六枚 ST_OnOff 显式属性是同一组开关的两种写法，规范规定并存时逐位属性优先。
+  仓库实测更严格（`README:5066-5071`、`:5230`）：只写 `w:val` 而无逐位属性 ⇒
+  四位全关；位属性压过 val。故写出包只发 `w:val` 与显式全 0 落在同一档，
+  **属同义表示、零语义丢失**。`trHeight w:hRule="atLeast"` 缺 `w:val` 在
+  CT_Height 里是合法的「无值结构」（val optional），源里本就没值可丢，
+  补写等于凭空造数。两族都命中既有纪律：㊵ 同义表示不碰、⑬ 结构合法性、
+  「不为凑数字赌坏件」、L3314 `tblpPr|overlap` 的先例。
+- **加一档而非改数字**：新增 `scripts/lib/known-alias.mjs`，只收这 4 枚
+  「已逐对诊断过、有明确依据」的同义对；`roundtrip-corpus.mjs` 报告加「口径」
+  列、统计 `aliasHit`、写明「跨夹具复现 ≠ 真丢」。`trHeight|val` **不进名单**——
+  它要逐份看源值，不能按名字一刀切。名单只用于分档，账本四档数字一分不动。
+  `scripts/test-corpus-alias.mjs` 27 条断言钉住纯函数与两处接线。
+- **补 pptx 侧的界线**：`fidelity-report-pptx.mjs` 的 `--corpus` / `--clist`
+  原先默认 `--out docs`，跑真件会覆盖 `--selftest` 主账本。现在 `EXTERNAL`
+  时默认落 `tmp/pptx-fidelity-corpus`，corpus mode 报告加「不可比 / 不覆盖」
+  说明；`--selftest` 的 md5 `02f53f0b…` / `3861bfee…` 复核不变。
+  外部输入实测（`stress.pptx`）：分母 174 对 / 26502 字面，
+  **按对 17.2% / 字面 47.8%**，对照内置夹具 70.1% / 74.3%（77 对）。
+  70.1% 冻结 55 轮从没换过输入，这是第二个「数字依赖输入集」的证据。
+- **教训**：❶ 换输入后最扎眼的「稳定复现」要先问是不是口径假红，再问是不是
+  bug；❷ 同义表示 / 无值结构要在**量具里分档**，不要靠人每次重查，也不能
+  为了凑数字补写；❸ 「任意输入」出口必须成对配「不覆盖主账本」守卫，
+  漏一侧就等于给主账本开了个后门；❹ 不确定的第三方 API（Univer 缩放）
+  宁可记为未做，也别用 `executeCommand` 赌一个 id。
+
 

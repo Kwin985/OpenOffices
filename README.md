@@ -12036,6 +12036,50 @@ pdf-lib 改动不在读手链）；四条变异腿 59.4 / 52.5 / 99.0 / 96.5、
   28.2% 并存正说明这一点。真件回归仍缺 20–50 份语料（需外部提供）；
   xlsx/ods 属性级账、pptx 账扩宇宙、Calc 视图缩放均未做。
 
+## v0.199（口径假红分档 + pptx 外部语料不覆盖主账本 + 第二次换输入实测）
+
+**接着 v0.198 跑：跨夹具复现 ≠ 真丢**
+
+- 把上一轮报告里唯一跨 2 份反复掉的 5 对逐对诊断了一遍（读手 / 模型 / 包槽 / 写手四处）：
+  - `tblLook|firstRow/lastRow/firstColumn/lastColumn`：`w:tblLook` 的 `w:val` 是
+    ST_TblLook 位掩码（0x20 / 0x40 / 0x80 / 0x100），与六枚显式 ST_OnOff 属性是
+    **同一组开关的两种写法**。读手写手自 v0.147 起刻意只保真
+    `val/noHBand/noVBand`；写出包只发 `w:val` 不丢语义，补写显式属性反而会写出
+    与掩码打架的坏件——**同义表示，按纪律不碰**（与历史 `tblpPr|overlap` 同类）。
+  - `trHeight|val`：`00-base` / `02-tables` 里的 `<w:trHeight w:hRule="atLeast"/>`
+    缺 `w:val` 是 CT_Height 允许的「无值结构」（`val` optional），源里本就没值可丢；
+    `docx` 包的 `height.value` 必填，发不出无 val 的 trHeight。主账本与
+    `stress.docx` 里这一对本来就是 kept。**补写等于凭空造数**。
+  - 结论：248 个掉对里最扎眼的「跨夹具复现」，是量具口径 + 合成件人造形状造成的
+    **假红**。这反过来又印证 v0.198：换输入之前，别把某个百分比当项目水平。
+- 新增 `scripts/lib/known-alias.mjs`：只收已逐对诊断过、有明确依据的 4 枚同义对；
+  `roundtrip-corpus.mjs` 报告加「口径」列与「跨夹具复现 ≠ 真丢」说明。
+  **账本数字一分不动**，名单只用于分档、不参与判定。
+  `scripts/test-corpus-alias.mjs` 27 条断言钉住名单与两处接线。
+
+**补上一个真风险：pptx 账会被外部语料覆盖**
+
+- `fidelity-report-pptx.mjs` 的 `--corpus` / `--clist` 原先默认 `--out docs`——
+  **跑一次真件就会把 `--selftest` 主账本覆盖掉**。这是 v0.198 给往返账加 `--docx`
+  时补过的同一条界线，pptx 侧漏了。现在 `EXTERNAL` 时默认落
+  `tmp/pptx-fidelity-corpus`，corpus mode 报告加「与 fixture mode 不可比、
+  绝不覆盖主账本」说明；`--selftest` 默认路径与 md5 逐字节不变
+  （`02f53f0b…` / `3861bfee…` 复核一致）。
+- 顺手跑了一次外部输入：`tmp/perf/stress.pptx` 作语料，pptx 保真
+  **按对 17.2% / 字面 47.8%**（分母 174 对、26502 字面），而内置夹具是
+  **70.1% / 74.3%**（77 对）。这是第二个「百分比高度依赖输入集」的证据，
+  而 70.1% 已冻结 55 轮从没换过输入。复跑：
+  `pnpm exec vite-node scripts/fidelity-report-pptx.mjs --corpus <dir>`。
+
+**没做的**：Calc 视图缩放查到 Univer facade 只暴露内部 `getZoomRatio()`、
+没有稳定的 `setZoomRatio`，硬接 `executeCommand` 等于赌 API，按纪律不赌，单独立项；
+xlsx/ods 属性级账仍是空白。
+
+**门禁**：干净树 tsc 0 / vite build ✓、**64/64 全绿**（214.5s，新增 1 份）、
+`cargo test --lib` 164 passed；三本账 md5 与 v0.197 起完全一致、变异腿
+59.4 / 52.5 / 99.0 / 96.5、`no-theme` 不动、pptx `no-ga` 42 条全红、
+干净腿复位逐字节相同。
+
 ## 性能（v0.3）
 
 
