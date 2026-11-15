@@ -21,7 +21,11 @@
 // 不做任何旋转变换）。两者的坐标空间因此天然一致，可以直接透传，不用换算。
 // 只有"显示空间的虚线框"要走一遍 fromDisplayRect——那是给人看的，不是给 PDF 看的。
 
-import { rgb, type PDFDocument, type PDFFont } from 'pdf-lib'
+// v0.198：这里只留类型。顶层若静态 import pdf-lib 的运行时值，Vite 会把整个库
+// 钉进主 chunk，并让调用方那两处 `await import('pdf-lib')` 退化成
+// INEFFECTIVE_DYNAMIC_IMPORT。PDFDocument 由调用方动态加载后传进来，本模块只在
+// 真正要改字时取 rgb（同一个模块缓存，零额外下载）。
+import type { PDFDocument, PDFFont } from 'pdf-lib'
 import fontkit from '@pdf-lib/fontkit'
 import { readBytes } from './fs'
 import { fromDisplayRect, type PdfRect, type Rot } from './pdf-geo'
@@ -214,6 +218,7 @@ export async function applyTextEdits(
 ): Promise<TextEditResult> {
   const res: TextEditResult = { applied: 0, fontEmbedded: false, skipped: [] }
   if (!edits.length) return res
+  const { rgb } = await import('pdf-lib')
   const pages = pdoc.getPages()
   // 字体是懒加载的：整批都是纯英文就一个字节都不读
   let cjk: PDFFont | null | undefined

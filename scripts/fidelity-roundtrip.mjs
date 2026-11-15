@@ -45,7 +45,18 @@ const flag = (name, dflt) => {
 
 const REPO = path.resolve(import.meta.dirname, '..')
 const REF = flag('ref', 'HEAD')
-const OUT_DIR = path.resolve(REPO, flag('out', 'docs'))
+// v0.198：默认仍跑内置夹具（主账本逐字节不变）。给 --docx 就换成任意 docx 单件，
+// 输出落到独立目录，绝不覆盖 docs/ 的主账本——真件回归是另一份账，不是替换它。
+const DOCX = flag('docx', '')
+const OUT_DIR = path.resolve(
+  REPO,
+  flag(
+    'out',
+    DOCX
+      ? `tmp/roundtrip-${path.basename(DOCX, path.extname(DOCX)).replace(/[^\w.-]/g, '_')}`
+      : 'docs',
+  ),
+)
 const MOD_DIR = path.resolve(REPO, flag('tmp', 'tmp/roundtrip-mod'))
 const VERBOSE = argv.includes('--verbose')
 
@@ -222,11 +233,17 @@ async function main() {
   const { docExtensions } = await import(url(path.join(REPO, 'src/lib/doc-schema.ts')))
 
   // ---- 1. 源包 ----
-  const srcZip = new JSZip()
-  for (const [p, c] of fixtureParts()) srcZip.file(p, c)
-  const srcBytes = new Uint8Array(
-    await srcZip.generateAsync({ type: 'arraybuffer', compression: 'STORE' }),
-  )
+  let srcBytes
+  if (DOCX) {
+    srcBytes = new Uint8Array(fs.readFileSync(path.resolve(DOCX)))
+    console.log(`ROUNDTRIP|输入 ${path.resolve(DOCX)}（${srcBytes.length} 字节）`)
+  } else {
+    const srcZip = new JSZip()
+    for (const [p, c] of fixtureParts()) srcZip.file(p, c)
+    srcBytes = new Uint8Array(
+      await srcZip.generateAsync({ type: 'arraybuffer', compression: 'STORE' }),
+    )
+  }
   await readParts(srcBytes)
   const src = census(await JSZip.loadAsync(srcBytes), parseXml, PARTS)
 
@@ -328,16 +345,21 @@ async function main() {
       )
   }
 
-  writeLedger({ rows, byBucket, nsTotals, total, keptN, pct, src, out, consulted, runMs, modFiles, fromGit, fid })
+  writeLedger({ rows, byBucket, nsTotals, total, keptN, pct, src, out, consulted, runMs, modFiles, fromGit, fid, inputName: DOCX ? path.basename(DOCX) : '' })
 }
 
 // ---- 6. 写账本 ---------------------------------------------------------------
 
 function writeLedger(d) {
-  const { rows, byBucket, nsTotals, total, keptN, pct, src, out, consulted, runMs, modFiles, fromGit, fid } = d
+  const { rows, byBucket, nsTotals, total, keptN, pct, src, out, consulted, runMs, modFiles, fromGit, fid, inputName } = d
   const L = []
   L.push('# docx 往返账（读 → 模型 → 写）')
   L.push('')
+  if (inputName) {
+    L.push(`> **外部输入**：\`${inputName}\`。这是单件实测，不是主账本；分母仍只覆盖`)
+    L.push('> `PARTS` 那 7 个部件，与主账本「88.5%」不同源、不可直接比较。')
+    L.push('')
+  }
   L.push(`取样 rev \`${REF}\`（${modFiles} 个模块${fromGit ? '，取自 git' : '，取自工作树'}）。`)
   L.push('')
   L.push('账本里**不写日期**：同一 rev、同一份夹具复跑必须逐字节相同，否则 `diff` 出来的')
@@ -473,6 +495,7 @@ function writeLedger(d) {
 
   const json = {
     ref: REF,
+    ...(inputName ? { source: inputName } : {}),
     definition: {
       numerator: 'source-present ∩ probe-consulted',
       buckets: ['kept', 'value', 'lost', 'part'],
