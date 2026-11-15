@@ -3812,4 +3812,29 @@ D53 记「要先新建载荷槽 + 定 CT_RPr 位次」，本轮复查后把口�
   ❸ 纯函数模块 + 行为断言能让 UI 接线不必靠手工点击验证；
   ❹ 复用现成 CSS 类能避免碰 `index.css`（房规里被误抹过的那一份）。
 
+## v0.205（第二个功能轮：账本零改动，与 v0.204 正好成对）
+
+读手写手仍一寸未动。**五本账 md5 与 v0.204 逐字节相同、`docs/` 零 diff**，
+`modules` 仍 81。对照 v0.204 新增 `ppt-find.ts` 时 provenance 80→81，
+这一对正好把「什么时候账本会动」钉死：
+
+- 新增 `src/lib/*.ts` → `modules` 涨 → 三本旧账 provenance 改一行（数字不动）；
+- 只改已有 lib 的内容 / 改组件 / 加 scripts → provenance 完全不动。
+  本轮纯函数 `pickSlideAnim` / `applySlideAnim` / `slideAnimSummary`
+  刻意放在已有的 `ppt.ts`，就是为了验证这条并省掉账本重跑。
+- **决策留痕**：Calc 视图缩放第四次复查后判死——UMD 里只有内部
+  `getZoomRatio` / `getNextWheelZoomRatio` / `setZoomRatio`（docs drawing
+  snapshot 用），facade 与 command id 均未暴露；纯 CSS `zoom` 会让 Univer
+  的 `clientX - rect.left` 坐标链错位（DocEditor 注释里明写要除以 zoom）。
+  理由从「API 不明」升级为「已查实无可靠入口」，不做半坏功能。
+- **动画刷的语义边界**：只搬 7 枚动画字段，**不搬 `animOrder`**——
+  揭示序是按本页正文条数与形状数编出来的键（`l0` / `s2`），刷到内容不同的
+  页会指错节点甚至越界。也不搬 id / 标题 / 正文 / 备注 / 形状 / 背景。
+  `applySlideAnim` 返回逐页换引用的新 Deck，落盘统一走 `edit()` 标脏。
+- **教训**：❶ 不确定就查实并写清判死理由，别把「以后再做」无限顺延；
+  ❷ 纯函数放已有文件是 modules 不涨、provenance 不 DIFF 的最省事做法
+  （v0.197 起反复验证）；❸ 刷子类功能要问「哪些字段依赖本页内容」，
+  照单全搬会写出指向错节点的坏件；❹ 连续两轮功能轮都不动保真数字，
+  说明能力补齐与量具数字是两条独立的线，别混在一个百分比里汇报。
+
 

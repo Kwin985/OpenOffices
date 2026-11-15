@@ -12264,6 +12264,41 @@ pptx `no-ga` 42 条全红、干净腿复位逐字节相同。
 `cargo test --lib` **166 passed / 11 ignored**；变异腿 59.4 / 52.5 / 99.0 / 96.5
 不动、`no-theme` 不动、pptx `no-ga` 42 条全红、干净腿复位逐字节相同。
 
+## v0.205（Impress 动画刷；Calc 缩放查实后明确不做）
+
+**先把挂了四轮的 Calc 缩放判死**
+
+- 复查 `@univerjs/presets` 的 UMD：只有内部 `getZoomRatio` /
+  `getNextWheelZoomRatio` / `setZoomRatio`（后者是 docs drawing snapshot 用），
+  **facade 与 command id 都没暴露**。而 Impress / DocEditor 用的纯 CSS `zoom`
+  不能照搬——DocEditor 注释里明写「clientX 要除以 zoom 折回去」，
+  Univer 内部不会这么算，套上去拖拽与选区坐标会错位。
+  理由从「API 不明」升级为「**已查实无可靠入口**」，不做半坏功能。
+- 于是补同一张 WPS 能力表里的另一个明确缺口：**Impress 动画刷**。
+
+**动画刷**
+
+- 纯函数加在**已有的 `src/lib/ppt.ts`**，不新开 lib：
+  `pickSlideAnim` 取 7 枚动画字段（切页 / 要点动画 / 方向 / 退场 /
+  自动换页 / 点击换页 / 时长），`applySlideAnim` 返回逐页换引用的新 `Deck`，
+  `slideAnimSummary` 给 UI 写摘要。
+  **不搬 `animOrder`**——揭示序按本页正文条数与形状数编键（`l0` / `s2`），
+  刷到内容不同的页会指错节点；也不搬 id / 标题 / 正文 / 备注 / 形状 / 背景。
+- `PptEditor.tsx`：工具栏「动画刷」复制本页设置并高亮，刷子模式下点缩略图
+  = 刷到那一页并跳过去，另给「刷到全部页」，`Esc` 取消；落盘与查找替换
+  一样走 `edit()` 统一标脏。44 条断言（含「不复制 animOrder」与 UI 接线）。
+
+**账本零改动**：因为没新增 `src/lib` 文件，`modules` 仍是 **81**，
+五本账 md5 与 v0.204 逐字节相同、`docs/` 零 diff——正是把纯函数放进已有
+文件想换来的效果（v0.197 的教训）。
+
+**没做的**：真件语料 20–50 份、Calc 视图缩放（已判死）、Impress 内容区
+右键菜单（能力表同行的最后一项）。动画刷没有屏上高亮与真机对撞。
+
+**门禁**：干净树 tsc 0 / vite build ✓、**69/69 全绿**（395.6s，新增 1 份）、
+`cargo test --lib` **166 passed / 11 ignored**；变异腿 59.4 / 52.5 / 99.0 / 96.5
+不动、`no-theme` 不动、pptx `no-ga` 42 条全红、干净腿复位逐字节相同。
+
 ## 性能（v0.3）
 
 
