@@ -13,6 +13,10 @@ mod xlsx_print;
 mod xlsx_rules;
 mod xlsx_style;
 
+// v0.200：只在测试时编译的 xlsx 往返账 dump，不进生产包
+#[cfg(test)]
+mod sheet_dump;
+
 use std::sync::Mutex;
 
 /// 应用可打开的扩展名（须与前端 lib/fs.ts 的 kindOfPath 保持一致）
