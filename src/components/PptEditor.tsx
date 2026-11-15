@@ -1,4 +1,4 @@
-import { memo, useEffect, useRef, useState, type CSSProperties } from 'react'
+import { memo, useEffect, useMemo, useRef, useState, type CSSProperties } from 'react'
 import { createRoot } from 'react-dom/client'
 import { message } from '@tauri-apps/plugin-dialog'
 import { emit, listen } from '@tauri-apps/api/event'
@@ -59,6 +59,7 @@ import { autoDelayMs, autoFailStatus, autoOkTip, createAutoSaveLedger, onFocusBa
 import type { FailureClaim } from '../lib/auto-save'
 import { pptTemplate } from '../lib/templates'
 import { ZOOM_STEPS, clampZoom, fitZoom, nearestZoomStep, stageZoomStyle, zoomByWheel, zoomPct, zoomStep, type FitMode } from '../lib/view-zoom'
+import { PPT_FIND_CAP, pptFind, pptMatchLabel, pptReplaceAll, pptReplaceAt } from '../lib/ppt-find'
 import { RECT_KEY, dragRect, rectFor, rectStyle, type DragMode, type PlaceholderKind } from '../lib/master-rect'
 import StaticSlide from './StaticSlide'
 
@@ -262,6 +263,15 @@ function PptEditor({ tab }: Props) {
   const [editingShape, setEditingShape] = useState<string | null>(null)
   // 图表数据的 CSV 编辑面板：一次只开一枚形状的那一个（形状条很窄，放不下常驻网格）
   const [chartCsvFor, setChartCsvFor] = useState<string | null>(null)
+  // v0.204 查找/替换：命中和替换都在 ppt-find.ts 里算（纯函数、Node 侧可钉），
+  // 这里只管面板状态、跳转与把新 Deck 交给 edit() 统一标脏。
+  const [showFind, setShowFind] = useState(false)
+  const [frQuery, setFrQuery] = useState('')
+  const [frRep, setFrRep] = useState('')
+  const [frCase, setFrCase] = useState(false)
+  const [frIdx, setFrIdx] = useState(0)
+  const frInputRef = useRef<HTMLInputElement>(null)
+  const frHits = useMemo(() => pptFind(deck, frQuery, frCase), [deck, frQuery, frCase])
   const dragRef = useRef<{
     id: string
     mode: 'move' | 'resize'
@@ -325,6 +335,48 @@ function PptEditor({ tab }: Props) {
       if (s) fn(s)
     })
 
+  // v0.204 查找/替换：跳转要把「换页」与「选中形状」分开一拍——下面那个
+  // [cur] effect 会在换页提交后清空 selShape/editingShape，同一次事件里连着
+  // setCur + setSelShape 会被它抹掉，所以形状选中延后一个任务再设。
+  const frGoto = (i: number) => {
+    if (!frHits.length) return
+    const n = ((i % frHits.length) + frHits.length) % frHits.length
+    const h = frHits[n]
+    setFrIdx(n)
+    if (h.slideIdx >= 0) setCur(h.slideIdx)
+    const sid = h.shapeIdx === undefined || h.slideIdx < 0
+      ? null
+      : deck.slides[h.slideIdx]?.shapes?.[h.shapeIdx]?.id
+    if (sid) window.setTimeout(() => setSelShape(sid), 0)
+  }
+  /** 替换结果统一走 edit()：它是唯一会 markDirty 触发自动保存的出口。 */
+  const frApply = (r: { deck: Deck; count: number }) => {
+    if (!r.count) return
+    edit((d) => {
+      d.title = r.deck.title
+      d.slides = r.deck.slides
+    })
+  }
+  const frReplaceOne = () => {
+    if (!frHits.length) return
+    const at = Math.min(frIdx, frHits.length - 1)
+    frApply(pptReplaceAt(deck, frQuery, frRep, frCase, at))
+    setFrIdx(Math.max(0, Math.min(at, frHits.length - 2)))
+  }
+  const frReplaceEvery = () => {
+    if (!frHits.length) return
+    const r = pptReplaceAll(deck, frQuery, frRep, frCase)
+    frApply(r)
+    setFrIdx(0)
+    setStatus(`已替换 ${r.count} 处`)
+  }
+  const frClose = () => {
+    setShowFind(false)
+    setFrQuery('')
+    setFrRep('')
+    setFrIdx(0)
+  }
+
   const slide = deck.slides[cur]
 
   // 逐条揭示 / 翻页：anim 页先揭示下一条，揭示满后若有出场再逐条退去，步数用尽才换页
@@ -363,6 +415,34 @@ function PptEditor({ tab }: Props) {
     el.addEventListener('wheel', onWheel, { passive: false })
     return () => el.removeEventListener('wheel', onWheel)
   }, [loaded])
+
+  // v0.204：编辑态查找/替换快捷键。Ctrl+F / Ctrl+H 开面板，Escape 关闭；
+  // 输入框里打字不抢键（与形状删除那道守卫同一条规矩），F3 跳下一条。
+  useEffect(() => {
+    if (present || !loaded) return
+    const onKey = (e: KeyboardEvent) => {
+      const tag = (document.activeElement?.tagName ?? '').toLowerCase()
+      if ((e.ctrlKey || e.metaKey) && !e.shiftKey && /^[fh]$/i.test(e.key)) {
+        e.preventDefault()
+        setShowFind(true)
+        window.setTimeout(() => frInputRef.current?.focus(), 0)
+        return
+      }
+      if (e.key === 'Escape' && showFind) {
+        e.preventDefault()
+        frClose()
+        return
+      }
+      if (tag === 'input' || tag === 'textarea') return
+      if (showFind && frHits.length && e.key === 'F3') {
+        e.preventDefault()
+        frGoto(frIdx + 1)
+      }
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [present, loaded, showFind, frHits, frIdx, deck])
 
   // 放映按键
   useEffect(() => {
@@ -880,6 +960,13 @@ function PptEditor({ tab }: Props) {
         <button className="tool-btn" onClick={() => save(true)}>另存为…</button>
         <button className="tool-btn" onClick={() => void exportPptx()}>导出 pptx…</button>
         <button className="tool-btn" onClick={() => void exportPdf()} title="每张幻灯片一页横向输出">导出 PDF</button>
+        <button
+          className={`tool-btn${showFind ? ' tool-btn-primary' : ''}`}
+          onClick={() => (showFind ? frClose() : setShowFind(true))}
+          title="查找替换（Ctrl+F / Ctrl+H）"
+        >
+          查找替换
+        </button>
         <span className="tool-sep" />
         <select
           className="tool-select"
@@ -1111,6 +1198,54 @@ function PptEditor({ tab }: Props) {
         )}
         <span className="editor-hint">存档 .opd · 导入/导出 pptx (ECMA-376) · 生成: pptxgenjs (MIT)</span>
       </div>
+
+      {showFind && (
+        <div className="doc-toolbar doc-fr-panel" style={{ flexWrap: 'wrap', gap: 6, padding: '6px 10px' }}>
+          <input
+            ref={frInputRef}
+            className="tb-input"
+            style={{ width: 180 }}
+            placeholder="查找…"
+            value={frQuery}
+            onChange={(e) => { setFrQuery(e.target.value); setFrIdx(0) }}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') { e.preventDefault(); frGoto(e.shiftKey ? frIdx - 1 : frIdx + 1) }
+              if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); frClose() }
+            }}
+          />
+          <input
+            className="tb-input"
+            style={{ width: 180 }}
+            placeholder="替换为…"
+            value={frRep}
+            onChange={(e) => setFrRep(e.target.value)}
+          />
+          <button
+            className={`tool-btn tool-btn-mini${frCase ? ' tool-btn-primary' : ''}`}
+            onClick={() => { setFrCase((v) => !v); setFrIdx(0) }}
+            title="区分大小写"
+          >
+            Aa
+          </button>
+          <span className="editor-status">
+            {frQuery
+              ? (frHits.length
+                  ? `${Math.min(frIdx + 1, frHits.length)}/${frHits.length}${frHits.length >= PPT_FIND_CAP ? '（封顶）' : ''}`
+                  : '无命中')
+              : '输入关键词'}
+          </span>
+          <button className="tool-btn tool-btn-mini" disabled={!frHits.length} onClick={() => frGoto(frIdx - 1)}>↑</button>
+          <button className="tool-btn tool-btn-mini" disabled={!frHits.length} onClick={() => frGoto(frIdx + 1)}>↓</button>
+          <button className="tool-btn tool-btn-mini" disabled={!frHits.length} onClick={frReplaceOne}>替换</button>
+          <button className="tool-btn tool-btn-mini" disabled={!frHits.length} onClick={frReplaceEvery}>全部替换</button>
+          <button className="tool-btn tool-btn-mini" onClick={frClose}>关闭</button>
+          {frHits.length > 0 && frHits[frIdx] && (
+            <span className="editor-hint" style={{ flexBasis: '100%' }}>
+              {pptMatchLabel(frHits[frIdx])} · 「{frHits[frIdx].preview}」
+            </span>
+          )}
+        </div>
+      )}
 
       {showSequence && seqItems.length > 0 && (
         <div className="ppt-seq-panel">
