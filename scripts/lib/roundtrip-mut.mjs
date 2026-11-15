@@ -34,7 +34,8 @@ const CFG = {
     // 那两枚属性不在白名单分母里，删了账本毫无反应，等于变异腿失效。
     pattern: /<table:table-row table:style-name="ro2"[\s\S]*?<\/table:table-row>/,
     testOut: 'tmp/ods-roundtrip-test',
-    expectKept: 12,
+    // v0.202 修好 max_col 漏算 col_widths 后，ODS 二次保存不再有值变，基线 14/14
+    expectKept: 14,
   },
 }
 

@@ -1537,6 +1537,11 @@ fn render_sheet(
         .chain(sheet.charts.iter().map(|c| c.anchor_row))
         .max()
         .unwrap_or(0);
+    // v0.202：col_widths 里那些「暂时没有格子」的列也要渲染出来，否则
+    // build_dim_styles 替它造了列样式，这里却没有 <table:table-column> 引用——
+    // 用户设的列宽既丢了语义，又留下一枚孤儿样式（v0.201 的 ODS 账 2 对值变
+    // 就是这么来的）。列元素会按同宽连续列并入 number-columns-repeated，
+    // 不会因为一个远处的宽度就炸出成百上千个空列。
     let max_col = sheet
         .cells
         .iter()
@@ -1546,6 +1551,7 @@ fn render_sheet(
         .chain(sheet.notes.iter().map(|n| n.c))
         .chain(sheet.links.iter().map(|l| l.c))
         .chain(sheet.charts.iter().map(|c| c.anchor_col))
+        .chain(sheet.col_widths.keys().copied())
         .max()
         .unwrap_or(0);
     let col_style_at = |c: u32| {

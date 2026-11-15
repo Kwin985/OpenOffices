@@ -94,14 +94,16 @@ const md5 = (s) => createHash('md5').update(s).digest('hex')
 // 读手真吃进去的部件；打包细节与整份搬运的侧通道部件都不进分母。
 const PART_RE = F.parts
 
-// 已逐对诊断过的「已知口径」：这些对在二次保存里稳定判成值变/掉了，但源包里
-// 的那枚值根本不承载语义，不是读手丢信息。**只标注，不改四档数字**（v0.199
-// 假红分档的同一条纪律）。
+// 已逐对诊断过的「已知口径」：**只标注，不改四档数字**（v0.199 假红分档的
+// 同一条纪律）。v0.202 判断修正：这两对当年被叫作「源包冗余」并不准确——
+// 根因是 max_col 漏算 col_widths，写手真把列宽语义丢了。修好渲染范围后它们
+// 已不再出现；名单保留作**回归守卫**，但报告只在「本轮账本里确实命中」时才
+// 显示，免得修好了还挂着一句「不能读成 ODS 比 xlsx 差」。
 const CAVEATS = {
   xlsx: {},
   ods: {
-    'style|name': '孤儿列样式 co2：源包为超出实际列范围的 col_widths 生成了没人引用的样式',
-    'table-column-properties|column-width': '同上；2.1167cm 属于那个孤儿样式，不承载实际列宽语义',
+    'style|name': '孤儿列样式 co2：源包为超出实际列范围的 col_widths 生成了没人引用的样式（v0.202 已修）',
+    'table-column-properties|column-width': '同上；2.1167cm 属于那个孤儿样式（v0.202 已修）',
   },
 }
 
@@ -296,12 +298,15 @@ async function main() {
   L.push('## 边界')
   L.push('')
   L.push(`- **只做 ${FORMAT_NAME} 这一侧**：另一格式有独立账本（\`${FORMAT_NAME === 'xlsx' ? 'ods-roundtrip' : 'sheet-roundtrip'}.md\`），两套词表不混。`)
+  // 只列本轮账本里**实际命中**的已知口径；修好之后自动不再出现这句解释。
   const caveats = CAVEATS[FORMAT_NAME] ?? {}
-  if (Object.keys(caveats).length) {
+  const hitCaveats = Object.entries(caveats).filter(([k]) =>
+    rows.some((r) => r.bucket !== 'kept' && r.key === k))
+  if (hitCaveats.length) {
     L.push('- **已知口径**（逐对诊断过，只标注、不改四档数字）：')
-    for (const [k, v] of Object.entries(caveats)) L.push(`  - \`${k}\`：${v}。`)
+    for (const [k, v] of hitCaveats) L.push(`  - \`${k}\`：${v}。`)
     L.push('  这些是源包里不承载语义的冗余写法，写出时自然消失；**所以这份账的百分比')
-    L.push('  不能读成「ODS 比 xlsx 差」**——分母里混进了源包冗余，两本账分母不同源。')
+    L.push('  不能读成「另一格式比这份差」**——分母里混进了源包冗余，两本账分母不同源。')
   }
   L.push('- 不是真件长尾：默认源包由产品自己写出，读手不认的属性根本不会出现在源里。')
   L.push(`  给 \`--src\` 换成真实 ${F.ext} 才能量到「读手吃了多少」。`)
