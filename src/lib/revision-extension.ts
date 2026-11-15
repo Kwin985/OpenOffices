@@ -2,6 +2,7 @@ import { Extension, Mark, mergeAttributes, type Editor } from '@tiptap/core'
 import type { Node as PMNode } from '@tiptap/pm/model'
 import { Plugin, PluginKey, type EditorState, type Transaction } from '@tiptap/pm/state'
 import { ReplaceStep } from '@tiptap/pm/transform'
+import { authorColor, identityName } from './identity'
 
 // 修订标记：docx 的 w:ins（插入）与 w:del（删除）读进来落在这两个 mark 上，
 // 往返用 span[data-rev] 承载。不用原生 <ins>/<del> 标签——StarterKit 的删除线
@@ -33,7 +34,10 @@ function revMark(name: 'revIns' | 'revDel', kind: 'ins' | 'del') {
       return [{ tag: `span[data-rev="${kind}"]` }]
     },
     renderHTML({ HTMLAttributes }) {
-      return ['span', mergeAttributes(HTMLAttributes, { 'data-rev': kind }), 0]
+      const who = String(HTMLAttributes['data-rev-author'] ?? '')
+      const extra: Record<string, string> = { 'data-rev': kind }
+      if (who) extra.style = `color:${authorColor(who)}`
+      return ['span', mergeAttributes(HTMLAttributes, extra), 0]
     },
   })
 }
@@ -121,14 +125,14 @@ interface RevModeState {
 
 export const revModeKey = new PluginKey<RevModeState>('revMode')
 
-/** 本应用署名沿用批注的「我」：往返到 Word 后作者列显示它，谁改的一眼可辨 */
+/** 本应用署名的兜底值：真正用的是 identityName()（用户可在工具栏改名） */
 const LOCAL_AUTHOR = '我'
 
 export function createRevModePlugin(): Plugin<RevModeState> {
   return new Plugin<RevModeState>({
     key: revModeKey,
     state: {
-      init: () => ({ on: false, author: LOCAL_AUTHOR }),
+      init: () => ({ on: false, author: identityName() || LOCAL_AUTHOR }),
       apply(tr, cur) {
         const m = tr.getMeta(revModeKey) as Partial<RevModeState> | undefined
         return m ? { on: m.on ?? cur.on, author: m.author ?? cur.author } : cur
@@ -139,7 +143,11 @@ export function createRevModePlugin(): Plugin<RevModeState> {
       if (!mode?.on) return null
       const markType = newState.schema.marks.revIns
       if (!markType) return null
-      const insMark = markType.create({ author: mode.author, date: new Date().toISOString() })
+      // 留痕那一刻才读身份：改了名之后的修订署新名，之前那些不动
+      const insMark = markType.create({
+        author: identityName() || mode.author || LOCAL_AUTHOR,
+        date: new Date().toISOString(),
+      })
       const tr = newState.tr
       trs.forEach((t, k) => {
         // 开关本身与自己的打标事务不再打标（防套娃）

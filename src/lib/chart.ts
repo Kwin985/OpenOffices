@@ -1,6 +1,7 @@
 // 图表 PNG 渲染：ChartPayload → VChart spec → 离屏画布 → dataURL（VChart 按需动态加载，独立 chunk）
 import type { ISpec } from '@visactor/vchart'
 import type { ChartAxisPayload, ChartPayload } from './fs'
+import type { SlideChartData } from './ppt'
 
 /** 散点图 X 轴是数值轴：cats 存的是 xVal 取出的数，取不到就让 VChart 判为无效（NaN） */
 function numOf(v: unknown): number {
@@ -252,22 +253,25 @@ export function buildVChartSpec(payload: ChartPayload, scale = 2): Record<string
 
 let vchartPromise: Promise<typeof import('@visactor/vchart').default> | null = null
 
-function loadVChart() {
+export function loadVChart() {
   if (!vchartPromise) {
     vchartPromise = import('@visactor/vchart').then((m) => m.default)
   }
   return vchartPromise
 }
 
-export async function renderChartPng(payload: ChartPayload, scale = 2): Promise<string> {
+/** 离屏渲染一份 spec 成 PNG dataURL：表格图表与演示图表共用这一处，省掉两份宿主 boilerplate */
+async function renderSpecToPng(
+  spec: Record<string, unknown>,
+  width: number,
+  height: number,
+): Promise<string> {
   const VChart = await loadVChart()
-  const width = payload.width * scale
-  const height = payload.height * scale
   const host = document.createElement('div')
   host.style.cssText = `position:fixed;left:-100000px;top:0;width:${width}px;height:${height}px;`
   document.body.appendChild(host)
   try {
-    const chart = new VChart(buildVChartSpec(payload, scale) as unknown as ISpec, { dom: host })
+    const chart = new VChart(spec as unknown as ISpec, { dom: host })
     await chart.renderAsync()
     const canvas = host.querySelector('canvas')
     if (!canvas) throw new Error('VChart 未产出 canvas')
@@ -277,4 +281,78 @@ export async function renderChartPng(payload: ChartPayload, scale = 2): Promise<
   } finally {
     host.remove()
   }
+}
+
+export async function renderChartPng(payload: ChartPayload, scale = 2): Promise<string> {
+  return renderSpecToPng(buildVChartSpec(payload, scale), payload.width * scale, payload.height * scale)
+}
+
+/**
+ * 演示图表（v0.127）：数据直给（类目 + 系列），不必绕表格那套 RangeRef 载荷。
+ * 只接五型（柱/条/线/饼/面积）——PowerPoint 的图表类型有七十多种，
+ * 这一片要的是「幻灯片上画得出一张能看的图」，不是把 Excel 图表族搬过来。
+ */
+export function buildSlideChartSpec(
+  d: SlideChartData,
+  width: number,
+  height: number,
+  scale = 2,
+): Record<string, unknown> {
+  const base: Record<string, unknown> = {
+    width: width * scale,
+    height: height * scale,
+    background: 'transparent',
+    animation: false,
+    title: d.title ? { text: d.title, visible: true } : { visible: false },
+  }
+  const num = (v: number | null | undefined) => (typeof v === 'number' && Number.isFinite(v) ? v : 0)
+  if (d.chartType === 'pie') {
+    const s = d.series[0]
+    const values = d.cats.map((c, i) => ({ name: c || `#${i + 1}`, value: num(s?.vals[i]) }))
+    return {
+      ...base,
+      type: 'pie',
+      categoryField: 'name',
+      valueField: 'value',
+      data: [{ id: 'd0', values }],
+      radius: 0.9,
+      label: { visible: true },
+      legends: { visible: false },
+    }
+  }
+  const n = Math.max(d.cats.length, ...d.series.map((s) => s.vals.length), 0)
+  const records: Record<string, string | number>[] = []
+  for (let i = 0; i < n; i++) {
+    d.series.forEach((s, si) => {
+      records.push({
+        cat: String(d.cats[i] ?? `#${i + 1}`),
+        series: s.name || `系列${si + 1}`,
+        val: num(s.vals[i]),
+      })
+    })
+  }
+  const multi = d.series.length > 1
+  const spec: Record<string, unknown> = {
+    ...base,
+    type: d.chartType === 'column' ? 'bar' : d.chartType,
+    data: [{ id: 'd0', values: records }],
+    xField: 'cat',
+    yField: 'val',
+    // 单系列不挂 seriesField：挂了会白出一枚只有一项的图例
+    ...(multi ? { seriesField: 'series' } : {}),
+    stack: !!d.stacked,
+    legends: { visible: multi },
+  }
+  if (d.chartType === 'bar') spec.direction = 'left'
+  return spec
+}
+
+/** 演示图表 → PNG dataURL。宽高进像素：StaticSlide 那头是 1280px 承载 10 英寸 */
+export async function renderSlideChartPng(
+  d: SlideChartData,
+  width: number,
+  height: number,
+  scale = 2,
+): Promise<string> {
+  return renderSpecToPng(buildSlideChartSpec(d, width, height, scale), width * scale, height * scale)
 }

@@ -86,7 +86,7 @@ fn cells_in(rf: &RangeRef) -> Vec<(u32, u32)> {
     out
 }
 
-fn resolve_values(rf: &RangeRef, host: &str, grids: &HashMap<String, Grid>) -> Vec<Value> {
+pub(crate) fn resolve_values(rf: &RangeRef, host: &str, grids: &HashMap<String, Grid>) -> Vec<Value> {
     let sheet = if rf.sheet.is_empty() { host } else { rf.sheet.as_str() };
     let Some(grid) = grids.get(sheet) else {
         return Vec::new();
@@ -97,7 +97,7 @@ fn resolve_values(rf: &RangeRef, host: &str, grids: &HashMap<String, Grid>) -> V
         .collect()
 }
 
-fn num_of(v: &Value) -> f64 {
+pub(crate) fn num_of(v: &Value) -> f64 {
     match v {
         Value::Number(n) => n.as_f64().unwrap_or(0.0),
         Value::String(s) => s.parse().unwrap_or(0.0),

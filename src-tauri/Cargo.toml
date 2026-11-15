@@ -17,6 +17,11 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
 
+# 独立跑起来的中继，只为 Node 侧的协同端到端测试供血（不进安装包）
+[[example]]
+name = "relay"
+path = "examples/relay.rs"
+
 [dependencies]
 tauri = { version = "2", features = [] }
 tauri-plugin-opener = "2"

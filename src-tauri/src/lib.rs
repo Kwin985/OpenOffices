@@ -1,6 +1,9 @@
 mod csv;
 mod pdf;
 mod ods;
+mod ods_cf;
+pub mod ws_relay;
+mod ods_chart;
 mod xlsx;
 mod xlsx_cell_side;
 mod xlsx_chart;
@@ -69,7 +72,10 @@ pub fn run() {
             pdf::export_pdf,
             pdf::file_len,
             pdf::read_range,
-            take_startup_files
+            take_startup_files,
+            ws_relay::ws_relay_start,
+            ws_relay::ws_relay_stop,
+            ws_relay::ws_relay_running
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

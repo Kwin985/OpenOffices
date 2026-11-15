@@ -8,6 +8,8 @@
     "dev": "node scripts/copy-pdfjs-assets.mjs && vite",
     "build": "node scripts/copy-pdfjs-assets.mjs && tsc && vite build",
     "preview": "vite preview",
+    "test": "node scripts/run-tests.mjs",
+    "check:clean": "node scripts/check-clean-tree.mjs",
     "tauri": "tauri",
     "release:updater": "node scripts/updater-release.mjs"
   },

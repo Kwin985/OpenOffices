@@ -603,16 +603,40 @@ pub fn read_ods_styles(path: &str) -> (HashMap<String, SheetFmt>, Option<Default
     }
     // ODF 的三类规则住在 content.xml 里（筛选是表内的 table:database-range，数据验证与
     // 条件格式是 automatic-styles 里的容器），LibreOffice 与 Excel 都照这个写法存。
-    // 我们暂不读它们，但"文件里确实有"这件事必须说得出——文案说的是整份文件，故账记在首表。
+    // 条件格式本轮起真读（见 ods_cf）；剩下两样仍读不了，但"文件里确实有"这件事必须说得出
+    // ——文案说的是整份文件，故账记在首表。
     let mut missed: Vec<String> = Vec::new();
     for (needle, note) in [
         ("<table:database-range", "ODS 里的筛选设置暂未读入（被筛掉的行按隐藏行保留）"),
         ("<table:content-validations", "ODS 里的数据验证暂未读入"),
-        ("<table:conditional-format", "ODS 里的条件格式暂未读入"),
         // 批注（office:annotation）与链接（text:a）本轮起真读，见 read_ods_cell_side
     ] {
         if xml.contains(needle) {
             missed.push(note.to_string());
+        }
+    }
+    // 条件格式：按 target-sheet 归表；属性缺了/写着"."时，单表就归它，
+    // 多表则归首表并说一句"没标明是哪张表"——猜错了比不说更糟
+    if !order.is_empty() {
+        let cfs = crate::ods_cf::read_ods_cond_formats(&xml, &styles);
+        let single = order.len() == 1;
+        for (target, cf) in cfs {
+            let known = !target.is_empty() && out.contains_key(&target);
+            let name = if known {
+                target.clone()
+            } else {
+                if !target.is_empty() {
+                    missed.push(format!(
+                        "ODS 里有条件格式指向找不到的表「{target}」，归到首表了"
+                    ));
+                } else if !single {
+                    missed.push("ODS 里有条件格式没标明属于哪张表，都归到首表了".to_string());
+                }
+                order[0].clone()
+            };
+            if let Some(f) = out.get_mut(&name) {
+                f.rules.cond_formats.push(cf);
+            }
         }
     }
     if !missed.is_empty() {
@@ -1277,7 +1301,7 @@ fn odf_to_xlsx_formula(f: &str) -> String {
 
 
 /// 表名进 ODF 内部地址的写法（§9.2.1）：含空格、点或撇的要用单引号包起，内部的 ' 翻倍
-fn odf_table_ref(name: &str) -> String {
+pub(crate) fn odf_table_ref(name: &str) -> String {
     if name.chars().any(|c| c == ' ' || c == '.' || c == '\'') {
         format!("'{}'", name.replace('\'', "''"))
     } else {
@@ -1390,6 +1414,7 @@ struct OdfNs {
     dc: bool,
     svg: bool,
     xlink: bool,
+    draw: bool,
 }
 
 fn used_namespaces(sheets: &[SheetPayload]) -> OdfNs {
@@ -1404,6 +1429,12 @@ fn used_namespaces(sheets: &[SheetPayload]) -> OdfNs {
             }
         }
         if s.links.iter().any(|l| link_written(s, l)) {
+            ns.xlink = true;
+        }
+        // 图表框：<draw:frame> 自带 svg 尺寸与 xlink:href，三个 ns 一起到齐
+        if !s.charts.is_empty() {
+            ns.draw = true;
+            ns.svg = true;
             ns.xlink = true;
         }
     }
@@ -1478,8 +1509,12 @@ fn written_dups(cells: impl Iterator<Item = (u32, u32)>) -> Vec<((u32, u32), usi
     m.into_iter().filter(|(_, k)| *k > 1).collect()
 }
 
+/// `wb`/`si` 只为一件事：图表框的 `xlink:href` 得与 `write_ods_chart_objects` 编出的
+/// `Object N` 目录同号，所以编号那一套由 ods_chart 统一出，render_sheet 不自己数
 fn render_sheet(
     sheet: &SheetPayload,
+    si: usize,
+    wb: &WorkbookPayload,
     style_names: &HashMap<String, String>,
     col_reg: &HashMap<String, String>,
     row_reg: &HashMap<String, String>,
@@ -1499,6 +1534,7 @@ fn render_sheet(
         .chain(sheet.hidden_rows.iter().copied())
         .chain(sheet.notes.iter().map(|n| n.r))
         .chain(sheet.links.iter().map(|l| l.r))
+        .chain(sheet.charts.iter().map(|c| c.anchor_row))
         .max()
         .unwrap_or(0);
     let max_col = sheet
@@ -1509,6 +1545,7 @@ fn render_sheet(
         .chain(sheet.hidden_cols.iter().copied())
         .chain(sheet.notes.iter().map(|n| n.c))
         .chain(sheet.links.iter().map(|l| l.c))
+        .chain(sheet.charts.iter().map(|c| c.anchor_col))
         .max()
         .unwrap_or(0);
     let col_style_at = |c: u32| {
@@ -1529,6 +1566,19 @@ fn render_sheet(
         ));
         c += n;
     }
+
+    // 图表框：ODF 里图表是锚在某个格上的 <draw:frame>+<draw:object>，真正的图在 Object N 里
+    let frames_at = |r: u32, c: u32| -> String {
+        let mut out = String::new();
+        for (ci, ch) in sheet.charts.iter().enumerate() {
+            if ch.anchor_row != r || ch.anchor_col != c {
+                continue;
+            }
+            let dir = crate::ods_chart::object_dir(wb, si, ci);
+            out.push_str(&crate::ods_chart::frame_xml(ch, &sheet.name, &dir));
+        }
+        out
+    };
 
     let row_style_at = |r: u32| {
         dim_key(sheet.row_heights.get(&r).copied(), hid_r.contains(&r))
@@ -1562,7 +1612,9 @@ fn render_sheet(
                 .cells
                 .iter()
                 .any(|x| x.r == r && (x.v.is_some() || x.f.is_some() || x.s.is_some()))
-            || (0..=max_col).any(|c| side_at(r, c));
+            || (0..=max_col).any(|c| side_at(r, c))
+            // 只挂着一张图表的行：行里没有值也没有侧通道，但不写这一行框就没处落
+            || sheet.charts.iter().any(|ch| ch.anchor_row == r);
         if !row_used {
             gap += 1;
             continue;
@@ -1611,9 +1663,10 @@ fn render_sheet(
                     .map(|n| format!(" table:style-name=\"{n}\""))
                     .unwrap_or_default();
                 row_buf.push_str(&format!(
-                    "<table:table-cell{style} {vt}{fattr} table:number-columns-spanned=\"{col_span}\" table:number-rows-spanned=\"{row_span}\">{}{}</table:table-cell>",
+                    "<table:table-cell{style} {vt}{fattr} table:number-columns-spanned=\"{col_span}\" table:number-rows-spanned=\"{row_span}\">{}{}{}</table:table-cell>",
                     annotation_xml(note_at(r, c)),
-                    text_p_xml(&text, link_at(r, c), &sheet.name)
+                    text_p_xml(&text, link_at(r, c), &sheet.name),
+                    frames_at(r, c)
                 ));
                 c = m.end_column + 1;
                 continue;
@@ -1645,7 +1698,8 @@ fn render_sheet(
             let has_content = cell
                 .map(|x| x.v.is_some() || x.f.is_some() || style_key(x.s.as_ref()).is_some())
                 .unwrap_or(false)
-                || side_at(r, c);
+                || side_at(r, c)
+                || !frames_at(r, c).is_empty();
             if !has_content {
                 pending_empty += 1;
                 c += 1;
@@ -1668,9 +1722,10 @@ fn render_sheet(
                 .map(|n| format!(" table:style-name=\"{n}\""))
                 .unwrap_or_default();
             row_buf.push_str(&format!(
-                "<table:table-cell{style} {vt}{fattr}>{}{}</table:table-cell>",
+                "<table:table-cell{style} {vt}{fattr}>{}{}{}</table:table-cell>",
                 annotation_xml(note_at(r, c)),
-                text_p_xml(&text, link_at(r, c), &sheet.name)
+                text_p_xml(&text, link_at(r, c), &sheet.name),
+                frames_at(r, c)
             ));
             c += 1;
         }
@@ -1741,15 +1796,33 @@ pub fn ods_xml(workbook: &WorkbookPayload) -> (String, String) {
     if ns.xlink {
         root.push_str(" xmlns:xlink=\"http://www.w3.org/1999/xlink\"");
     }
+    if ns.draw {
+        root.push_str(" xmlns:draw=\"urn:oasis:names:tc:opendocument:xmlns:drawing:1.0\"");
+    }
     root.push_str(" office:version=\"1.2\"><office:automatic-styles>");
     let mut content = root;
     content.push_str(&styles_xml);
     content.push_str(&dim_xml);
+    // 条件格式（v0.128）：被引用的自动样式与容器本身都住在 automatic-styles 这一段里。
+    // 样式整册一次写出（同一份样式的几条共一枚，名字重复的 automatic-style 是非法 ODF），
+    // 容器按表分头写，区域带表名前缀
+    let all_cf: Vec<crate::xlsx::CondFormatPayload> = workbook
+        .sheets
+        .iter()
+        .flat_map(|s| s.cond_formats.iter().cloned())
+        .collect();
+    content.push_str(&crate::ods_cf::write_ods_cf_styles(&all_cf));
+    for sheet in &workbook.sheets {
+        content.push_str(&crate::ods_cf::write_ods_cond_formats(
+            &sheet.cond_formats,
+            &sheet.name,
+        ));
+    }
     content.push_str(
         "</office:automatic-styles><office:body><office:spreadsheet>",
     );
-    for sheet in &workbook.sheets {
-        render_sheet(sheet, &style_names, &col_reg, &row_reg, &mut content);
+    for (si, sheet) in workbook.sheets.iter().enumerate() {
+        render_sheet(sheet, si, workbook, &style_names, &col_reg, &row_reg, &mut content);
     }
     content.push_str("</office:spreadsheet></office:body></office:document-content>");
 
@@ -1796,16 +1869,26 @@ fn default_style_xml(df: Option<&DefaultFont>) -> String {
     )
 }
 
-fn manifest_xml() -> String {
-    String::from(
+/// 图表对象要在 manifest 里登记两遍：目录本身（媒体类型是 chart）与它里头的 content.xml。
+/// 只登记后者 LibreOffice 就不认这是个嵌入对象
+fn manifest_xml(objects: &[String]) -> String {
+    let mut s = String::from(
         "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\
          <manifest:manifest \
          xmlns:manifest=\"urn:oasis:names:tc:opendocument:xmlns:manifest:1.0\" manifest:version=\"1.2\">\
          <manifest:file-entry manifest:full-path=\"/\" manifest:media-type=\"application/vnd.oasis.opendocument.spreadsheet\"/>\
          <manifest:file-entry manifest:full-path=\"content.xml\" manifest:media-type=\"text/xml\"/>\
-         <manifest:file-entry manifest:full-path=\"styles.xml\" manifest:media-type=\"text/xml\"/>\
-         </manifest:manifest>",
-    )
+         <manifest:file-entry manifest:full-path=\"styles.xml\" manifest:media-type=\"text/xml\"/>",
+    );
+    for d in objects {
+        s.push_str(&format!(
+            "<manifest:file-entry manifest:full-path=\"{d}/\" manifest:version=\"1.2\" \
+             manifest:media-type=\"application/vnd.oasis.opendocument.chart\"/>\
+             <manifest:file-entry manifest:full-path=\"{d}/content.xml\" manifest:media-type=\"text/xml\"/>"
+        ));
+    }
+    s.push_str("</manifest:manifest>");
+    s
 }
 
 /// 组装 ODS 字节流（mimetype 必须为首条且 STORED 不压缩）
@@ -1818,13 +1901,21 @@ pub fn ods_bytes(workbook: &WorkbookPayload) -> Result<Vec<u8>, Error> {
     zw.start_file("mimetype", stored).map_err(zip_err)?;
     zw.write_all(b"application/vnd.oasis.opendocument.spreadsheet")
         .map_err(io_err)?;
+    // 图表对象：目录编号由 ods_chart 统一出，content.xml 里的 xlink:href 指的也是这一套
+    let objects = crate::ods_chart::write_ods_chart_objects(workbook);
     zw.start_file("META-INF/manifest.xml", deflated)
         .map_err(zip_err)?;
-    zw.write_all(manifest_xml().as_bytes()).map_err(io_err)?;
+    let dirs: Vec<String> = objects.iter().map(|(d, _)| d.clone()).collect();
+    zw.write_all(manifest_xml(&dirs).as_bytes()).map_err(io_err)?;
     zw.start_file("content.xml", deflated).map_err(zip_err)?;
     zw.write_all(content.as_bytes()).map_err(io_err)?;
     zw.start_file("styles.xml", deflated).map_err(zip_err)?;
     zw.write_all(styles.as_bytes()).map_err(io_err)?;
+    for (dir, xml) in &objects {
+        zw.start_file(format!("{dir}/content.xml"), deflated)
+            .map_err(zip_err)?;
+        zw.write_all(xml.as_bytes()).map_err(io_err)?;
+    }
     let out = zw.finish().map_err(zip_err)?;
     Ok(out.into_inner())
 }
@@ -1842,7 +1933,12 @@ pub fn write_ods_sync(path: String, workbook: WorkbookPayload) -> Result<Vec<Str
             return Err(Error(format!("目录不存在: {}", parent.display())));
         }
     }
-    let accounts = ods_side_accounts(&workbook.sheets);
+    let mut accounts = ods_side_accounts(&workbook.sheets);
+    // 图表的账与批注/链接同一条契约：摆不进文件的图要说得出，不能报"已保存"而让文件里少一张
+    accounts.extend(crate::ods_chart::ods_chart_write_accounts(&workbook));
+    // 条件格式的账同一条契约：色阶/数据条/图标集与非表达式判定那几族 ODF 装不下，
+    // 落不出的由写手旁边的记账函数按原因分箱报出（v0.133 补——此前是静默 continue）
+    accounts.extend(crate::ods_cf::ods_cf_write_accounts(&workbook.sheets));
     let bytes = ods_bytes(&workbook)?;
     std::fs::write(&path, bytes).map_err(io_err)?;
     Ok(accounts)
@@ -2474,7 +2570,7 @@ mod tests {
         zw.write_all(b"application/vnd.oasis.opendocument.spreadsheet")
             .unwrap();
         zw.start_file("META-INF/manifest.xml", deflated).unwrap();
-        zw.write_all(manifest_xml().as_bytes()).unwrap();
+        zw.write_all(manifest_xml(&[]).as_bytes()).unwrap();
         zw.start_file("content.xml", deflated).unwrap();
         zw.write_all(content.as_bytes()).unwrap();
         zw.start_file("styles.xml", deflated).unwrap();
@@ -2536,8 +2632,16 @@ mod tests {
         let notes = back.warnings.join("|");
         assert!(notes.contains("筛选"), "筛选账要说得出: {notes}");
         assert!(notes.contains("数据验证"), "数据验证账要说得出: {notes}");
-        assert!(notes.contains("条件格式"), "条件格式账要说得出: {notes}");
-        assert_eq!(notes.matches("ODS 里的").count(), 3, "三类各一条，不重复记");
+        // 条件格式本轮起真读：不该再出现「暂未读入」那句账，而要在载荷里
+        assert!(
+            !notes.contains("条件格式"),
+            "条件格式已真读，不该再记账: {notes}"
+        );
+        let cf = &back.sheets[0].cond_formats;
+        assert_eq!(cf.len(), 1, "一条条件格式要读进载荷: {cf:?}");
+        assert_eq!(cf[0].sub.as_deref(), Some("formula"), "ODF 的判定只有表达式一族");
+        // 三类里条件格式已经真读，剩下两类仍要有账，且不重复记
+        assert_eq!(notes.matches("ODS 里的").count(), 2, "剩两类各一条账，不重复记");
         // 记账不能把值也一并吞掉：规则读不懂，字还得照常出
         let s = &back.sheets[0];
         let at = |r: u32, c: u32| {

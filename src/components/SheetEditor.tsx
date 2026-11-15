@@ -6,6 +6,9 @@ import type { Tab } from '../store'
 import { useApp } from '../store'
 import { createSheetApp } from '../lib/univer'
 import { payloadToWorkbook, workbookToPayload } from '../lib/univer-io'
+import { loadSheetMacros, newSheetMacro, saveSheetMacros, type Macro, type MacroRun } from '../lib/macro'
+import { looksLikeVba, runVbaBook, transpileVba, VBA_BOOK_SAMPLE } from '../lib/vba'
+import { sheetApiOf } from '../lib/sheet-macro'
 import { aggregateNotes, applySheetRules } from '../lib/sheet-rules'
 import { failDialog, failStatus, failText, statusText, statusTip } from '../lib/fail-msg'
 import type { SheetRules } from '../lib/sheet-rules'
@@ -292,6 +295,14 @@ function SheetEditor({ tab }: Props) {  const containerRef = useRef<HTMLDivEleme
   const [breakCol, setBreakCol] = useState('')
   const [hfVariant, setHfVariant] = useState<HfVariant>('odd')
   const [hfFocus, setHfFocus] = useState<HfSlot>('center')
+  // 宏：表格侧只有 VBA 子集（没有 JS 引擎）。内置的两条每次都在（删不掉），
+  // 自己写的那几条存 localStorage（与文档侧分开的键）
+  const [macros, setMacros] = useState<Macro[]>(() => loadSheetMacros())
+  const [macroOpen, setMacroOpen] = useState(false)
+  const [macroSel, setMacroSel] = useState('')
+  const [macroCode, setMacroCode] = useState('')
+  const [macroOut, setMacroOut] = useState<MacroRun | null>(null)
+  const [vbaShow, setVbaShow] = useState(false)
   // sheetId -> 表名，停在"上一次命令之前"的样子：改名那一条要靠它认出旧钥匙是谁
   const sheetNamesRef = useRef(new Map<string, string>())
   const renameTab = useApp((s) => s.renameTab)
@@ -301,6 +312,70 @@ function SheetEditor({ tab }: Props) {  const containerRef = useRef<HTMLDivEleme
   const flash = (msg: string) => {
     setStatus(msg)
     setTimeout(() => setStatus(''), 1800)
+  }
+
+  // —— 宏（表格侧只有 VBA 子集） ——
+  const btn = (label: string, onClick: () => void, active = false, title?: string) => (
+    <button key={label + title} className={`tb-btn${active ? ' tb-active' : ''}`} onClick={onClick} title={title}>
+      {label}
+    </button>
+  )
+  const macroCurrent = macros.find((m) => m.id === macroSel) ?? null
+  const macroOpenOne = (id: string) => {
+    const m = macros.find((x) => x.id === id)
+    if (!m) return
+    setMacroSel(id)
+    setMacroCode(m.code)
+    setMacroOut(null)
+  }
+  const macroAdd = () => {
+    const m = newSheetMacro()
+    if (macroCurrent) m.code = macroCurrent.code
+    const next = [...macros, m]
+    setMacros(next)
+    saveSheetMacros(next)
+    macroOpenOne(m.id)
+  }
+  const macroSave = () => {
+    const next = macros.map((m) => (m.id === macroSel ? { ...m, code: macroCode } : m))
+    setMacros(next)
+    saveSheetMacros(next)
+  }
+  const macroDrop = (id: string) => {
+    const next = macros.filter((m) => m.id !== id)
+    setMacros(next)
+    saveSheetMacros(next)
+    if (macroSel === id) {
+      setMacroSel('')
+      setMacroCode('')
+    }
+  }
+  const macroRun = () => {
+    const api = apiRef.current
+    if (!api || !macroCurrent) return
+    if (!looksLikeVba(macroCode)) {
+      setStatus('表格里的宏只认 VBA（Sub … End Sub）；这段看着不像 VBA')
+      return
+    }
+    const book = sheetApiOf(api)
+    const res = runVbaBook(macroCode, book, setStatus, tab.path)
+    setMacroOut(res)
+    // 宏改了簿子就得标脏：不然这一趟的改动会在切标签时悄悄没了
+    if (res.changed) markDirty(tab.id, true)
+    if (!res.ok) setStatus(`VBA 出错：${res.error ?? '未知原因'}`)
+  }
+  const macroIsVba = looksLikeVba(macroCode)
+  const vbaPreview = macroIsVba && vbaShow ? transpileVba(macroCode) : null
+  /** 一条能跑的 VBA 样例：存成一条真宏，既能直接跑也能照着改 */
+  const macroSampleVba = () => {
+    const m = newSheetMacro('VBA 示例')
+    m.code = VBA_BOOK_SAMPLE
+    const next = [...macros, m]
+    setMacros(next)
+    saveSheetMacros(next)
+    macroOpenOne(m.id)
+    setMacroOut(null)
+    setVbaShow(true)
   }
 
   const insertChartImage = async (api: FUniver, ws: FWorksheet, p: ChartPayload, png?: string) => {
@@ -822,10 +897,11 @@ function SheetEditor({ tab }: Props) {  const containerRef = useRef<HTMLDivEleme
       }
       renameTab(tab.id, baseName(path), path)
       markRecent(path, 'sheet')
-      const hasCharts = payload.sheets.some((s) => s.charts?.length)
-      const hasRules = payload.sheets.some(
-        (s) => s.filter || s.dataValidations?.length || s.condFormats?.length,
-      )
+      // ODS 写侧从 v0.128 起真含图表（ods_chart.rs）与条件格式（ods_cf.rs），
+      // 所以这两族不再整族报丢；图型不支持（surface/bubble 这类）与色阶/数据条/
+      // 图标集、非表达式判定那几箱由 write_ods 自带账回来（ods_chart_write_accounts /
+      // ods_cf_write_accounts），在下面的 writeNotes 里说
+      const hasFilterOrDv = payload.sheets.some((s) => s.filter || s.dataValidations?.length)
       // 页面设置是"这份纸该怎么摆"的那份设置：ODS/CSV 这一版都写不出，说清楚比静默丢强
       const hasPrint = payload.sheets.some((s) => s.print)
       // 格式本身装不下的东西先说，接着一句接写侧带回来的账（规则摆不进 OOXML、批注落在被盖住的格上这类）
@@ -835,8 +911,7 @@ function SheetEditor({ tab }: Props) {  const containerRef = useRef<HTMLDivEleme
           'CSV 只含首个工作表，公式、样式、合并、图表、批注/链接、筛选/数据验证/条件格式与页面设置都不保留',
         )
       if (isOds) {
-        if (hasCharts) lost.push('ODS 暂不含图表')
-        if (hasRules) lost.push('ODS 暂不含筛选、数据验证与条件格式')
+        if (hasFilterOrDv) lost.push('ODS 暂不含筛选与数据验证')
         if (hasPrint) lost.push('ODS 暂不含页面设置（纸张/边距/页眉页脚/分页符），导出的 PDF 仍照它排')
       }
       const notes = [...lost, ...writeNotes]
@@ -1158,6 +1233,13 @@ function SheetEditor({ tab }: Props) {  const containerRef = useRef<HTMLDivEleme
           title="公式引用的名字账本：区域/公式/常量都可以起名，写回随 xlsx 出去"
         >
           定义名称{namesRef.current.length > 0 ? ` (${namesRef.current.length})` : ''}
+        </button>
+        <button
+          className="tool-btn"
+          onClick={() => setMacroOpen((v) => !v)}
+          title="VBA 宏：把这一张表里的 X 全换成 Y、给超过平均的格子标红、给首行上底色……"
+        >
+          宏
         </button>
         {chartCount > 0 && (
           <button className="tool-btn" onClick={refreshCharts}>刷新图表 ({chartCount})</button>
@@ -1535,6 +1617,83 @@ function SheetEditor({ tab }: Props) {  const containerRef = useRef<HTMLDivEleme
           </span>
         )}
         <span className="editor-hint">内核: Univer (Apache-2.0) · xlsx 读写: calamine / rust_xlsxwriter · 图表渲染: VChart (MIT)</span>
+        {macroOpen && (
+          <div className="doc-toolbar doc-macro-bar">
+            <span className="tb-label">宏</span>
+            <select
+              className="tb-select"
+              value={macroSel}
+              onChange={(e) => macroOpenOne(e.target.value)}
+              title="选一条宏。内置那两条删不掉，可以照着改出自己的"
+            >
+              <option value="">（选一条）</option>
+              {macros.map((m) => (
+                <option key={m.id} value={m.id}>
+                  {m.name}
+                  {m.builtin ? '（内置）' : ''}
+                </option>
+              ))}
+            </select>
+            {btn('新建', macroAdd, false, '从选中的那条复制一份出来改')}
+            {btn('VBA 样例', macroSampleVba, false, '填一条能跑的 VBA 宏当起点（Sub/Cells/Range/Interior.Color 都在里面）')}
+            {macroIsVba &&
+              btn(vbaShow ? '藏起转译' : '看转译', () => setVbaShow((v) => !v), vbaShow, '把这段 VBA 转出来的 JS 摊开看')}
+            {btn(
+              '运行 VBA',
+              macroRun,
+              false,
+              macroIsVba
+                ? '先转译成 JS 再跑（转译出错会连行号一起报出来）'
+                : !macroCurrent
+                  ? '先选一条宏'
+                  : '这段看着不像 VBA，表格里只认 VBA 子集',
+            )}
+            {macroCurrent && (
+              <>
+                {btn('保存', macroSave, false, '把文本框里的代码存回这条宏')}
+                {!macroCurrent.builtin &&
+                  btn('删除', () => macroDrop(macroCurrent.id), false, '删掉这条宏')}
+              </>
+            )}
+            {macroSel && (
+              <textarea
+                className="doc-macro-code"
+                spellCheck={false}
+                value={macroCode}
+                onChange={(e) => setMacroCode(e.target.value)}
+                placeholder={
+                  macroIsVba
+                    ? "' VBA 宏：Sub Main() … End Sub。可用的对象模型见「看转译」旁边的提示"
+                    : '// 表格里的宏只认 VBA'
+                }
+              />
+            )}
+            {macroIsVba && (
+              <span className="tb-label doc-macro-vba">
+                认出这是 VBA：会先转译成 JS 再跑。支持 Sub/Function、If/For/Do/Select/With、
+                With、数组、字符串函数，以及 Workbooks/Worksheets/Range/Cells/Interior 这一套对象模型；
+                不支持 GoTo、类模块、多维数组、日期字面量——撞上了会报带行号的错
+              </span>
+            )}
+            {vbaPreview && (
+              <pre className={`doc-macro-pre${vbaPreview.ok ? '' : ' err'}`}>
+                {vbaPreview.ok ? vbaPreview.code : `转译失败：${vbaPreview.error}`}
+              </pre>
+            )}
+            {macroOut && (
+              <div className={`doc-macro-out${macroOut.ok ? '' : ' err'}`}>
+                {macroOut.log.map((l, i) => (
+                  <div key={i}>{l}</div>
+                ))}
+                {!macroOut.ok && <div>出错：{macroOut.error}</div>}
+                {macroOut.ok && !macroOut.log.length && <div>（跑完了，没输出）</div>}
+              </div>
+            )}
+            <span className="tb-label doc-macro-warn">
+              只跑自己写的宏：`new Function` 不是安全边界，来路不明的脚本能碰到这个页面上的东西
+            </span>
+          </div>
+        )}
       </div>
       <div className="sheet-container" ref={containerRef} />
     </div>
