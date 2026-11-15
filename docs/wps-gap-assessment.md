@@ -22,6 +22,9 @@
 1. **主链路能用**：Writer / Calc / Impress / PDF 四组件的「打开 → 编辑 → 保存 →
    导出 PDF」全通；docx / odt / xlsx / ods / pptx / .odoc / .opd 的读写链路齐，
    PDF 查看、标注、页面管理、原地加字也齐。中文用户日常场景是可用的本地替代品。
+   （**v0.197 口径修正**：这句此前只在带未提交改动的工作树上成立——12 个功能
+   模块长期未入库，`git archive HEAD` 导出后 `tsc` 报 18 错；现已整体入库，
+   干净树 tsc 0 错 / vite build ✓。详见文末「v0.197 交付物自洽」。）
 2. **深度差在「写回去」而不是「读进来」**：docx 保真账（读手按名查问过哪些属性对）
    已到 **99.0% 按对 / 98.4% 按字面**（合成语料 701 对，已到顶）；但往返账
    （源包 → HTML → TipTap → 写手 → 再普查）**正文 289/300 = 96.3%、
@@ -557,5 +560,43 @@ pptx 账 `d06e404b…` / `b7e4d706…`。**v0.178 又动了 10 对**（图片壳
   但真件多段 VML / 多枚 image 关系未实测，没做真机 Word 对撞。PDF 两个
   新操作只在内存夹具与源码级断言验证；零正则端到端收益在噪声内，确定
   收益只在纯函数段。
-- **推送状态**：v0.175–v0.187 已由用户推到 `origin/main`；v0.188–v0.196
-  各两笔后本地领先 **18** 笔，仍需在本机 `git push origin main`。
+- **推送状态**：v0.175–v0.196 已全部推到 `origin/main`（2026-11-13 沙箱直推
+  `8d78ce0..a71e6eb`，推后双向 0 差）；v0.197 两笔在本地，尚未推送。
+
+---
+
+## 九、v0.197 交付物自洽（2026-11-15 追加）
+
+这一轮**没有新增任何 WPS 能力**，改的是「仓库里到底有没有这些能力」这件事。
+
+1. **旧口径失效**：本文件此前把拼写、协同、宏/VBA、PDF 原地改字、演示图表都算作
+   「已有」，并给出 A/B 档评分。这些代码当时确实在工作树里，但**不在 git HEAD 中**：
+   `src/lib/spell.ts` 等 12 个 lib（6664 行）、`src-tauri/src/ods_chart.rs` /
+   `ws_relay.rs` / `examples/relay.rs`、`SheetEditor.tsx` 等 7 个预存改动，全部是
+   长期未提交件。干净 clone 上 `tsc --noEmit` 报 **18 错**（8 个 `TS2307` 悬空
+   import + `SpellCheck` 命令缺失 + 隐式 `any` + `renderSlideChartPng` 导出缺失），
+   `cargo` 侧 `xlsx.rs` 也早在调不存在的 `crate::ods_chart::*`。
+   **「tsc 0 / 59 组结构测试全绿」是工作树读数，不是仓库读数。**
+2. **审查后整体接纳**：上述 19 个新文件 + 7 个预存改动一次性入库（`9531293`）。
+   审查中建议删除 `examples/relay.rs` 与 `test-collab.mjs`，判断修正是「不删」：
+   前者只是因未入库而悬空，后者是唯一跑真 WebSocket 中继的端到端验证。
+   唯一不入库的是 `public/dict/en-words.txt`（与 `word-list/words.txt` 逐字节
+   相同的 2.8MB 生成物），改由 `copy-pdfjs-assets.mjs` 同步 + gitignore。
+3. **顺带修的真缺陷**：`spell.ts` 7 组自映射错词（正确词被标红）、`tokensOf`
+   命中后恒前进 2 导致 3/4 字错写重复切片；`test-collab.mjs` 写死 `.exe` 后缀。
+4. **门禁从零到一**：`package.json` 新增 `test`（`scripts/run-tests.mjs`，
+   63 份脚本汇总，0 失败 0 跳过 / 270.6s）与 `check:clean`
+   （`scripts/check-clean-tree.mjs`，`git archive` 导出纯净树后跑 tsc + vite build，
+   两者全绿）。`cargo test --lib` 164 passed / 0 failed / 11 ignored。
+   **没有改动 `release.yml`**：推 `main` 仍不触发 CI，全量门禁走手动入口，
+   与「skip ci」一致。
+5. **账本只动 provenance**：`modules` 68 → 80，四份账本更新；docx 99.0 / 98.4、
+   pptx 70.1 / 74.3、往返 548/619 88.5% 全部一字不动；两次干净腿 md5 一致、
+   四条变异腿 59.4 / 52.5 / 99.0 / 96.5 与 `no-theme` 不动照旧、干净腿复位逐字节相同。
+6. **仍未解决的（诚实边界）**：① JS 宏 `new Function` 无沙箱/超时，可从
+   `api.constructor` 逃逸；② 协同中继无鉴权，虽只 bind `127.0.0.1`，同机任意进程
+   报同名房间即可读写全文；③ PDF 原地改字是内容流追加盖块，字形改变、可能压
+   邻字、长文本右溢；④ 63 份脚本里 89% 含源码级断言，**0 真实文档输入、
+   0 E2E / 浏览器 / 真机 COM 对撞**；⑤ CI 仍不自动跑测试；⑥ `test-collab.mjs`
+   在干净 clone 上缺预构建 relay 时会被 SKIP，不算通过。
+   这六条使「结构测试 63/63 全绿」仍不能等价于「真机 Word/WPS 对撞通过」。

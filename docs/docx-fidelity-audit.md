@@ -3530,4 +3530,43 @@ D53 记「要先新建载荷槽 + 定 CT_RPr 位次」，本轮复查后把口�
   `smartTag`、rPr 四枚、部件级元信息五族与 VML 整片仍只在 docx 链。
 - D32–D55 原账不动（同上）。
 
+## v0.197（仓库自洽：干净树从 18 错到 0，账本只动 provenance）
+
+本轮**一寸读手写手都没动**，所以三本账的数字全部原地不动；改的是「这些数字
+是从哪棵树上量出来的」这件事。
+
+- **起因（实测）**：`git archive HEAD` 导出干净树 + `tsc --noEmit` = exit 2 / 18 错。
+  8 个 `TS2307` 悬空 import 指向 `spell` / `collab` / `macro` / `vba` /
+  `identity` / `pdf-text-edit` / `slide-chart`（`doc-schema.ts:30` 的 `./spell`
+  连量具 schema 一起断），另 10 错是 `SpellCheck` 命令 / 隐式 `any` /
+  `pptx-export.ts:18` 的 `renderSlideChartPng`。根因是 12 个未跟踪 lib
+  （6664 行）+ 7 个预存改动长期不入库，工作树有、clone 没有。
+  **此前每轮写的「tsc 0 / 59 组全绿」是工作树读数，不是仓库读数。**
+- **审查后整体接纳**：12 lib + 3 Rust（`ods_chart` / `ws_relay` / `relay example`）
+  + 4 测试脚本 + 7 预存改动一次性入库（`9531293`）。判断修正两处：审查建议删
+  `examples/relay.rs`（理由「`[[example]]` path 悬空」）——悬空是因为没入库，
+  入库即消失；建议删 `test-collab.mjs`（理由「不 import 产品代码」）——它是唯一
+  跑真 WebSocket 中继的端到端验证，改跨平台路径比删掉划算。唯一不入库的是
+  `public/dict/en-words.txt`：与 `word-list/words.txt` md5 逐字节相同的 2.8MB
+  第三方数据，改由 `copy-pdfjs-assets.mjs` 同步并 gitignore。
+- **顺带修的真缺陷**：`spell.ts` 7 组自映射错词（正确词被标红、改正为原值）、
+  `tokensOf` 命中后恒前进 2 导致 3/4 字错写被重复切片；`test-collab.mjs`
+  写死 `.exe` 后缀。三者都不在 docx 读写链上，账本无感。
+- **`modules` 68 → 80 是这轮唯一进账的变化**：四份账本 provenance 各改一行，
+  docx 保真 99.0 / 98.4、pptx 70.1 / 74.3、往返 548/619 88.5%（掉 66 /
+  值变 5）一字不动。这恰好证明新模块完全不进读手链路——「新增 lib 会让
+  provenance DIFF」这次是**预期**，不是事故。保真账从 `git show HEAD:src/lib/*`
+  取副本，所以必须**先提交代码笔、再跑账本**，否则量到的还是旧 HEAD 的 68。
+- **门禁**：两次干净腿 md5 一致（保真 `b77cb71e…` / `7d3412b8…`、往返
+  `e18c56a3…` / `44f71de3…`）；四条变异腿 59.4 / 52.5 / 99.0 / 96.5，
+  记录对 416 / 392 / 715 / 685，`no-theme` 不动；pptx `no-ga` 全红；
+  干净腿复跑复位后与基线逐字节相同。新增 `scripts/run-tests.mjs`
+  （63/63 全绿）与 `scripts/check-clean-tree.mjs`（干净树 tsc 0 / vite build ✓），
+  `cargo test --lib` 164 passed。
+- **教训**：① 「tsc 0」要问是哪棵树——工作树绿不等于 clone 绿，门禁必须跑在
+  导出树上；② 新增 lib 会改 provenance，跑账本前先确认 HEAD 已是新代码；
+  ③ 与依赖逐字节相同的数据是生成物，不做成版本库里的 2.8MB；
+  ④ 「悬空」先问是不是因为还没入库，别急着删文件；⑤ 63 份脚本没有汇总入口
+  时，全绿只是 63 次手工操作的记忆，不是门禁。
+
 

@@ -11929,6 +11929,66 @@ ODT 文档属性顺延落地，收掉 pptx 导入最后一处摊平数组。
   只在内存夹具与源码级断言验证，没拿带真实标注的文件对撞。零正则的端到端
   收益在噪声内，确定收益只在纯函数段。
 
+## v0.197（仓库自洽：把「工作树假绿」补成「clone 能编译」）
+
+**这一轮不刷百分比，先修交付物本身**
+
+- **起因**：`git archive HEAD` 导出干净树 + `tsc --noEmit` = **exit 2 / 18 错**。
+  8 个 `TS2307` 悬空 import 指向 7 个长期未入库的 lib（`spell` / `collab` /
+  `macro` / `vba` / `identity` / `pdf-text-edit` / `slide-chart`），其中
+  `doc-schema.ts:30` 的 `./spell` 连量具用的产品 schema 一起断；另 10 错是
+  `SpellCheck` 命令缺失、隐式 `any`、`pptx-export.ts:18` 引用 HEAD 版 `chart.ts`
+  里没有的 `renderSlideChartPng`。**「tsc 0 / 59 组全绿」只在带未提交改动的
+  工作树上成立**，`origin/main` 与本地同步，远端同样不可构建。
+- **审查结论：整体接纳，不删功能件**。12 个未跟踪 lib、3 个 Rust 模块
+  （`ods_chart` / `ws_relay` / `examples/relay`）、4 个测试脚本、7 个预存改动
+  是同一条互锁链：HEAD 里的组件早已 import 它们，Rust 侧 `xlsx.rs` 也早在
+  调 `crate::ods_chart::*`。删任一件要么断编译，要么砍掉唯一覆盖。审查意见里
+  建议删 `examples/relay.rs` 与 `test-collab.mjs`，**判断修正**：前者「悬空」是
+  因为还没入库，入库后 `[[example]]` 的 path 就有效；后者是唯一跑真 WebSocket
+  中继的端到端测试，改跨平台路径比删掉划算。
+- **唯一不入库的**：`public/dict/en-words.txt`（2.8MB）与
+  `node_modules/word-list/words.txt` md5 逐字节相同，属可重建的第三方数据。
+  改由 `copy-pdfjs-assets.mjs` 在 dev/build 前同步并加进 `.gitignore`；
+  `spell.ts` 本来就有 fetch 失败退化到内置错词表的兜底。
+
+**审查顺带修掉的两个真缺陷**
+
+- `spell.ts` 错词表里有 7 组自映射（`necessary: 'necessary'`、`出发`、`大事`、
+  `上线`、`渔船`、`衷心感谢`、`坐落`）——正确词会被标红且「改正」无变化，
+  已移除；`tokensOf` 命中后 `k += hit ? (hit ? Math.max(2,0) : 1) : 1` 恒等于
+  前进 2，3/4 字错写会被后续窗口重复切片，改为按实际命中长度推进。
+- `test-collab.mjs` 的 `relay.exe` 写死 Windows 后缀，改为按 `process.platform`
+  拼后缀并支持 `RELAY_BIN` 覆盖。
+
+**门禁从零到一**
+
+- `scripts/run-tests.mjs`：63 份 `test-*.mjs` 汇总跑批（排序逐份跑、失败列尾部
+  输出、需外部预构建产物的自动 SKIP 并写明理由）；`package.json` 加 `test`。
+- `scripts/check-clean-tree.mjs`：从 `git archive` 导出纯净树到项目内 `tmp/`
+  （逐级向上自然找到 `node_modules`，不需要 symlink），再跑 `tsc` / `vite build`；
+  `--index` 可在提交前查暂存区。`package.json` 加 `check:clean`。
+  没有改动 `release.yml`：推 `main` 仍不触发任何 CI，`skip ci` 保持成立，
+  全量门禁走手动入口。
+- 门禁实测：干净树 **tsc 0 错 / vite build ✓**、**63/63 结构测试全绿**
+  （0 失败 0 跳过，270.6s）、`cargo test --lib` **164 passed / 0 failed / 11 ignored**。
+
+**账本：只动 provenance，数字一行没改**
+
+- 入库 12 个 lib 后 `modules` **68 → 80**，四份账本 provenance 随之更新；
+  docx 保真 **99.0% / 98.4%**、pptx **70.1% / 74.3%**、往返
+  **548/619 88.5%**（掉 66 / 值变 5）全部一字不动，证明新模块不在读手链路上。
+- 两次干净腿 md5 一致；四条变异腿 59.4 / 52.5 / 99.0 / 96.5（记录对
+  416 / 392 / 715 / 685）、`no-theme` 不动、pptx `no-ga` 全红；干净腿复跑复位后
+  与基线逐字节相同。
+
+- **诚实边界**：入库不等于加固。JS 宏仍用 `new Function` 且**无沙箱/超时**
+  （只挡了 6 个全局名，可从 `api.constructor` 逃逸）；协同中继**无鉴权**，
+  限于 `127.0.0.1` 回环、同机任意进程报同名房间即可读写全文；PDF 原地改字
+  是往内容流追加盖块 + 新字，字形会变、盖块可能压住邻字、长文本右溢。
+  `test-collab.mjs` 在干净 clone 上无预构建 relay 时会被 SKIP（不是通过）。
+  全量门禁仍无 CI 自动触发、无真实文档回归、无 E2E / 真机 COM 对撞。
+
 ## 性能（v0.3）
 
 
