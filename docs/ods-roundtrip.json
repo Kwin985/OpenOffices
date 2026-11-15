@@ -1,0 +1,203 @@
+{
+ "definition": {
+  "format": "ods",
+  "source": "fixture-second-save",
+  "numerator": "all pairs in whitelisted parts (no reader probe)",
+  "buckets": [
+   "kept",
+   "value",
+   "lost",
+   "part"
+  ],
+  "partsRegex": [
+   "^content\\.xml$",
+   "^styles\\.xml$",
+   "^Object \\d+\\/content\\.xml$"
+  ],
+  "onOffNormalised": true,
+  "bareElementPatched": false
+ },
+ "totals": {
+  "read": 14,
+  "kept": 12,
+  "value": 2,
+  "lost": 0,
+  "part": 0,
+  "srcParts": 2,
+  "outParts": 2
+ },
+ "partTotals": {
+  "content.xml": {
+   "read": 13,
+   "kept": 11,
+   "value": 2,
+   "lost": 0,
+   "part": 0
+  },
+  "styles.xml": {
+   "read": 3,
+   "kept": 2,
+   "value": 1,
+   "lost": 0,
+   "part": 0
+  }
+ },
+ "pairs": {
+  "document-content|version": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "1.2"
+   ],
+   "out": [
+    "1.2"
+   ]
+  },
+  "document-styles|version": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "1.2"
+   ],
+   "out": [
+    "1.2"
+   ]
+  },
+  "style|family": {
+   "bucket": "kept",
+   "n": 5,
+   "src": [
+    "table-cell",
+    "table-column",
+    "table-row"
+   ],
+   "out": [
+    "table-cell",
+    "table-column",
+    "table-row"
+   ]
+  },
+  "style|name": {
+   "bucket": "value",
+   "n": 5,
+   "src": [
+    "co1",
+    "co2",
+    "default",
+    "ro1",
+    "ro2"
+   ],
+   "out": [
+    "co1",
+    "default",
+    "ro1",
+    "ro2"
+   ]
+  },
+  "table-cell|value-type": {
+   "bucket": "kept",
+   "n": 8,
+   "src": [
+    "string"
+   ],
+   "out": [
+    "string"
+   ]
+  },
+  "table-column-properties|break-before": {
+   "bucket": "kept",
+   "n": 2,
+   "src": [
+    "auto"
+   ],
+   "out": [
+    "auto"
+   ]
+  },
+  "table-column-properties|column-width": {
+   "bucket": "value",
+   "n": 2,
+   "src": [
+    "2.1167cm",
+    "3.1750cm"
+   ],
+   "out": [
+    "3.1750cm"
+   ]
+  },
+  "table-column|number-columns-repeated": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "1"
+   ],
+   "out": [
+    "1"
+   ]
+  },
+  "table-column|style-name": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "co1"
+   ],
+   "out": [
+    "co1"
+   ]
+  },
+  "table-row-properties|break-before": {
+   "bucket": "kept",
+   "n": 2,
+   "src": [
+    "auto"
+   ],
+   "out": [
+    "auto"
+   ]
+  },
+  "table-row-properties|row-height": {
+   "bucket": "kept",
+   "n": 2,
+   "src": [
+    "0.6350cm",
+    "0.7938cm"
+   ],
+   "out": [
+    "0.6350cm",
+    "0.7938cm"
+   ]
+  },
+  "table-row-properties|use-optimal-row-height": {
+   "bucket": "kept",
+   "n": 2,
+   "src": [
+    "0"
+   ],
+   "out": [
+    "0"
+   ]
+  },
+  "table-row|style-name": {
+   "bucket": "kept",
+   "n": 2,
+   "src": [
+    "ro1",
+    "ro2"
+   ],
+   "out": [
+    "ro1",
+    "ro2"
+   ]
+  },
+  "table|name": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "账样"
+   ],
+   "out": [
+    "账样"
+   ]
+  }
+ }
+}

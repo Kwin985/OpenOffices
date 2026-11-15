@@ -1,5 +1,6 @@
 {
  "definition": {
+  "format": "xlsx",
   "source": "fixture-second-save",
   "numerator": "all pairs in whitelisted parts (no reader probe)",
   "buckets": [

@@ -12118,6 +12118,46 @@ key 映射翻倍）、20–50 份真件语料、Calc 视图缩放（Univer 无�
 变异腿 59.4 / 52.5 / 99.0 / 96.5 不动、pptx `no-ga` 42 条全红、
 干净腿复位逐字节相同。
 
+## v0.201（ODS 属性级账：泛化同一副骨架，不复制脚本）
+
+**第二处同形状需求出现时该泛化**
+
+- `scripts/sheet-roundtrip.mjs` 加 `--format xlsx|ods`，共用 census、归一化、
+  四档判据与账本模板，只在四处分开：跑哪个 `cargo test`、读哪两个包、
+  哪些部件进分母、账本叫什么。Rust 侧 `sheet_dump.rs` 加
+  `dump_ods_roundtrip`（`write_ods_sync` → `read_xlsx_sync` 按 `.ods` 分流 →
+  再 `write_ods_sync`），支持 `ODS_SRC_ODS` 外部真件；两个格式的外部入口互斥，
+  避免上一次的环境变量串味。
+- ODS 白名单：`content.xml` / `styles.xml` / `Object N/content.xml`；
+  `mimetype` 与 `META-INF/manifest.xml` 是打包细节，不进分母。报告明写
+  **ODF 与 OOXML 是两套词表，两本账不可并排比百分比**。
+
+**第一次出现非 100%，先诊断再下结论**
+
+- ODS 账 **14 对 / 12 kept（85.7%）/ 2 值变 / 0 掉 / 0 缺件**，
+  md5 `d33da8a5…` / `b2aa0910…`。值变的是 `style|name`（少了 `co2`）与
+  `table-column-properties|column-width`（少了 `2.1167cm`）。
+- 逐对 dump 两个包的列定义后确认：源包为**超出实际列范围**的 `col_widths`
+  生成了一个没被任何 `<table:table-column>` 引用的**孤儿样式 `co2`**；
+  读侧只从实际列定义读列宽，写出时它自然消失。**不是读手丢信息，是源包冗余
+  被算进了分母**。按 v0.199 的纪律，报告加「口径」列标注这两对，
+  **四档数字一分不动**，并写明「不能读成 ODS 比 xlsx 差」。
+  写手侧那处冗余输出本身留作下一轮候选，本轮不为凑数字改产品。
+
+**变异腿也泛化**：逻辑抽到 `scripts/lib/roundtrip-mut.mjs`，xlsx 与 ODS
+各一份独立测试，自包含生成 dump、全程只写 `tmp/`、复位后 md5 与基线逐字节
+相同（各 12 条断言）。ODS 锚点特意选带 `ro2` 的整行——那两枚属性确实在分母
+且原本是 `kept`；删 `table-column` 不行，它不在白名单分母里，删了账本毫无反应。
+
+**没做的**：20–50 份真件语料、Calc 视图缩放（Univer 无稳定 `setZoomRatio`）、
+ODS 写手的孤儿样式清理。
+
+**门禁**：干净树 tsc 0 / vite build ✓、**66/66 全绿**（297.9s，新增 1 份）、
+`cargo test --lib` **166 passed / 11 ignored**；xlsx 账因泛化与口径列重生成
+（`0fd13292…` / `0e3e3f42…`）、ODS 新账复跑一致；三本旧账 md5 与 v0.197 起
+完全一致、变异腿 59.4 / 52.5 / 99.0 / 96.5 不动、pptx `no-ga` 42 条全红、
+干净腿复位逐字节相同。
+
 ## 性能（v0.3）
 
 
