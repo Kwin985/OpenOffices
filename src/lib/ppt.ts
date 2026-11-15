@@ -747,3 +747,61 @@ export function parseDeck(text: string): Deck {
   if (master) deck.master = master
   return deck
 }
+
+// ───────────────── 动画刷（v0.205） ─────────────────
+//
+// WPS 的「动画刷」把一页的切页/要点动画设置刷到别的页。这里做成纯函数：
+// 只搬 7 枚动画字段，**不搬 animOrder**——揭示序是按本页正文条数与形状数
+// 编出来的键（'l0' / 's2'），刷到内容不同的页会指向错节点甚至越界。
+// 同理不搬 id / title / body / notes / shapes / bg：那是内容，不是动画。
+//
+// 与 ppt-find.ts 一样返回新 Deck（逐页换引用），好让 memo(StaticSlide) 与
+// 自动保存认出变化；纯函数放本文件而不是新开一个 lib，是为了不让量具的
+// modules 计数与账本 provenance 跟着动（v0.197 的教训）。
+
+export interface SlideAnimFields {
+  transition?: SlideTransition
+  anim?: BulletAnim
+  animDir?: AnimDir
+  exitAnim?: BulletExit
+  autoAdvance?: number
+  advClick?: boolean
+  animDur?: number
+}
+
+/** 取一页的动画设置；七枚字段都显式列出（undefined 也要刷掉目标页的旧值）。 */
+export function pickSlideAnim(s: Slide): SlideAnimFields {
+  return {
+    transition: s.transition,
+    anim: s.anim,
+    animDir: s.animDir,
+    exitAnim: s.exitAnim,
+    autoAdvance: s.autoAdvance,
+    advClick: s.advClick,
+    animDur: s.animDur,
+  }
+}
+
+/** 把一组动画设置刷到指定页；返回新 Deck，原 Deck 一寸不动。 */
+export function applySlideAnim(deck: Deck, anim: SlideAnimFields, targets: number[]): Deck {
+  const set = new Set(targets)
+  return {
+    ...deck,
+    slides: deck.slides.map((s, i) => (set.has(i) ? { ...s, ...anim } : s)),
+  }
+}
+
+/** UI 上给「已复制什么」写的一句话，没有设置时给个明白的提示。 */
+export function slideAnimSummary(a: SlideAnimFields): string {
+  const bits: string[] = []
+  const trans: Record<string, string> = { fade: '淡入', push: '推入', wipe: '擦除', split: '劈开' }
+  const bullet: Record<string, string> = { fade: '淡出', fly: '飞入', wipe: '擦入' }
+  if (a.transition) bits.push(`切页${trans[a.transition] ?? a.transition}`)
+  if (a.anim) bits.push(`要点${bullet[a.anim] ?? a.anim}`)
+  if (a.animDir) bits.push(`方向 ${a.animDir}`)
+  if (a.exitAnim) bits.push('逐条退场')
+  if (a.autoAdvance) bits.push(`自动 ${a.autoAdvance}s`)
+  if (a.advClick === false) bits.push('点击不换页')
+  if (a.animDur) bits.push(`${a.animDur}ms`)
+  return bits.length ? bits.join(' · ') : '这一页没有动画设置（刷过去会清空目标页）'
+}

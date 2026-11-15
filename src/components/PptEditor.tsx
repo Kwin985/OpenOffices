@@ -47,6 +47,10 @@ import {
   setTableSpan,
   tableDims,
   SLIDE_CHART_NAMES,
+  pickSlideAnim,
+  applySlideAnim,
+  slideAnimSummary,
+  type SlideAnimFields,
 } from '../lib/ppt'
 import { chartToCsv, dropSlideChart, parseChartCsv, useSlideChartPng } from '../lib/slide-chart'
 import { deckToPptxBytes } from '../lib/pptx-export'
@@ -272,6 +276,9 @@ function PptEditor({ tab }: Props) {
   const [frIdx, setFrIdx] = useState(0)
   const frInputRef = useRef<HTMLInputElement>(null)
   const frHits = useMemo(() => pptFind(deck, frQuery, frCase), [deck, frQuery, frCase])
+  // v0.205 动画刷：复制本页 7 枚动画字段，再点缩略图刷过去。
+  // 不复制 animOrder（揭示序按本页内容编，刷到内容不同的页会指错节点）。
+  const [animBrush, setAnimBrush] = useState<SlideAnimFields | null>(null)
   const dragRef = useRef<{
     id: string
     mode: 'move' | 'resize'
@@ -377,6 +384,19 @@ function PptEditor({ tab }: Props) {
     setFrIdx(0)
   }
 
+  /** 动画刷落盘：和查找替换一样走 edit()，不裸 setDeck（否则不标脏、不自动保存）。 */
+  const brushApply = (targets: number[]) => {
+    if (!animBrush) return
+    edit((d) => {
+      d.slides = applySlideAnim(d, animBrush, targets).slides
+    })
+  }
+  const brushStart = () => {
+    const s = deck.slides[cur]
+    if (!s) return
+    setAnimBrush(animBrush ? null : pickSlideAnim(s))
+  }
+
   const slide = deck.slides[cur]
 
   // 逐条揭示 / 翻页：anim 页先揭示下一条，揭示满后若有出场再逐条退去，步数用尽才换页
@@ -433,6 +453,11 @@ function PptEditor({ tab }: Props) {
         frClose()
         return
       }
+      if (e.key === 'Escape' && animBrush) {
+        e.preventDefault()
+        setAnimBrush(null)
+        return
+      }
       if (tag === 'input' || tag === 'textarea') return
       if (showFind && frHits.length && e.key === 'F3') {
         e.preventDefault()
@@ -442,7 +467,7 @@ function PptEditor({ tab }: Props) {
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [present, loaded, showFind, frHits, frIdx, deck])
+  }, [present, loaded, showFind, frHits, frIdx, deck, animBrush])
 
   // 放映按键
   useEffect(() => {
@@ -967,6 +992,25 @@ function PptEditor({ tab }: Props) {
         >
           查找替换
         </button>
+        <button
+          className={`tool-btn${animBrush ? ' tool-btn-primary' : ''}`}
+          onClick={brushStart}
+          title="动画刷：复制本页的切页 / 要点动画设置，再点缩略图刷到那一页（Esc 取消）"
+        >
+          动画刷
+        </button>
+        {animBrush && (
+          <button
+            className="tool-btn"
+            onClick={() => {
+              brushApply(deck.slides.map((_, i) => i))
+              setAnimBrush(null)
+            }}
+            title="把复制的动画设置刷到全部页"
+          >
+            刷到全部页
+          </button>
+        )}
         <span className="tool-sep" />
         <select
           className="tool-select"
@@ -1196,6 +1240,11 @@ function PptEditor({ tab }: Props) {
             已自动保存 {autoSavedAt.toLocaleTimeString()}
           </span>
         )}
+        {animBrush && (
+          <span className="editor-hint">
+            动画刷：{slideAnimSummary(animBrush)} · 点缩略图刷到那一页 / Esc 取消
+          </span>
+        )}
         <span className="editor-hint">存档 .opd · 导入/导出 pptx (ECMA-376) · 生成: pptxgenjs (MIT)</span>
       </div>
 
@@ -1353,7 +1402,14 @@ function PptEditor({ tab }: Props) {
             <div
               key={s.id}
               className={`ppt-thumb${i === cur ? ' ppt-thumb-active' : ''}`}
-              onClick={() => setCur(i)}
+              onClick={() => {
+                // 刷子模式：点缩略图是「刷到这一页」，不是单纯切页；刷完顺手跳过去
+                if (animBrush) {
+                  brushApply([i])
+                  setAnimBrush(null)
+                }
+                setCur(i)
+              }}
             >
               <span className="ppt-thumb-no">{i + 1}</span>
               <div className="ppt-thumb-mini">
