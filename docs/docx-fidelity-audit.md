@@ -3788,4 +3788,28 @@ D53 记「要先新建载荷槽 + 定 CT_RPr 位次」，本轮复查后把口�
   再谈读手能力；❸ 新量具第一版就要有「百分比 ≤ 100」这类自洽断言；
   ❹ 生成语料用产品真出口（这里是 `deckToPptxBytes`），别手写 OOXML 造坏件。
 
+## v0.204（功能轮：Impress 查找/替换，账本只动 provenance）
+
+本轮补的是 WPS 评估里点名的 Impress 能力缺口，**读手写手一寸未动**。
+
+- 新增 `src/lib/ppt-find.ts`（纯函数文本槽查找/替换）与 `PptEditor.tsx` 的
+  面板、快捷键、跳页接线；`scripts/test-ppt-find.mjs` 45 条断言。
+  Writer 的 `find-replace.ts` 是 PM Extension，不能复用，所以另起一份。
+- **`modules` 80→81**：三本旧账的 5 份 docs 文件只改
+  `Measured on the committed product ... 81 modules` 这一行，逐对数字一字未动
+  （docx 99.0/98.4、pptx 70.1/74.3、往返 548/619 88.5%）；表格两账的
+  definition 不含 modules 字段，完全没有变化。新增 lib 不在读手链上，
+  与 v0.197 的判断一致。
+- **瞬时状态值得记一笔**：新 lib 暂存但未提交时，`materialize` 从工作树
+  枚举 `src/lib/*.ts` 再 `git show HEAD:<file>` 取副本，会因为
+  `ppt-find.ts` 不在 HEAD 而整批失败——第一次跑 `run-tests` 时
+  `test-pptx-corpus.mjs` 的两份账本都被跳过（0/2）。**提交代码笔后
+  68/68 自动恢复**。这不是产品 bug，是量具「必须先有干净 HEAD」的必然结果。
+- 接线陷阱两条：替换走 `edit()`（唯一标脏出口），不裸 `setDeck`；
+  跳页与形状选中分开一拍（`[cur]` effect 会清空选中）。
+- **教训**：❶ 功能轮也会动账本 provenance，别因为「没碰读手」就跳过复跑；
+  ❷ 门禁里出现「整批 SKIP」先怀疑新文件未入 HEAD，别去改量具；
+  ❸ 纯函数模块 + 行为断言能让 UI 接线不必靠手工点击验证；
+  ❹ 复用现成 CSS 类能避免碰 `index.css`（房规里被误抹过的那一份）。
+
 
