@@ -42,7 +42,14 @@ const has = (name) => argv.includes(`--${name}`)
 
 const REPO = path.resolve(import.meta.dirname, '..')
 const REF = flag('ref', 'HEAD')
-const OUT_DIR = path.resolve(REPO, flag('out', 'docs'))
+// v0.199：这份账的正式宇宙是 --selftest 内置夹具（写 docs 主账本）；--corpus / --clist
+// 是外部真件，属于另一份账，默认必须落到 tmp，绝不能覆盖主账本。
+// 与 v0.198 给往返账加 --docx 时的界线是同一条：别指望跑的人记得带 --out。
+const EXTERNAL = argv.includes('--corpus') || argv.includes('--clist')
+const OUT_DIR = path.resolve(
+  REPO,
+  flag('out', EXTERNAL ? 'tmp/pptx-fidelity-corpus' : 'docs'),
+)
 const MOD_DIR = path.resolve(REPO, flag('tmp', 'tmp/pptx-fidelity-mod'))
 const LIMIT = Number(flag('limit', '0'))
 const MUT = flag('mut', '')
@@ -747,6 +754,12 @@ function renderMd(d) {
       '> the selftest are meaningful. Re-run with `--corpus <dir>` for the real ledger — the numbers below',
     )
     L.push('> are a working ledger of the machinery, not a claim about the population of real files.')
+  } else {
+    L.push('')
+    L.push('> **Corpus mode.** This ledger was produced from external .pptx files rather than the')
+    L.push('> built-in `--selftest` fixture. The universe is whatever those files happen to contain,')
+    L.push('> so these percentages are **not comparable** with the fixture-mode main ledger in `docs/`.')
+    L.push('> External runs land in `tmp/` by default and never overwrite the main ledger.')
   }
   L.push('')
   L.push('## Scope: which parts the denominator counts')

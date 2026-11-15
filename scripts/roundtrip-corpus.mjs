@@ -19,6 +19,7 @@ import { existsSync, mkdirSync, readdirSync, statSync, writeFileSync } from 'nod
 import { spawnSync } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
 import path from 'node:path'
+import { aliasNote, isKnownAlias } from './lib/known-alias.mjs'
 
 const root = fileURLToPath(new URL('..', import.meta.url))
 const cli = path.join(root, 'node_modules/vite-node/dist/cli.mjs')
@@ -154,7 +155,8 @@ L.push('> 复跑：`node scripts/roundtrip-corpus.mjs --corpus <dir> --out <md> 
 L.push('> 每份 docx 独立走完「读手 → HTML → TipTap schema → PM → 写手 → 普查」，量具与')
 L.push('> 主账本同源，只是换了输入。分母仍只覆盖 `PARTS` 的 7 个部件；各份的「读到的」')
 L.push('> 不同，所以**单份百分比之间、以及与主账本 88.5% 之间都不可直接比较**。')
-L.push('> 报告只写文件名，不写路径与日期。')
+L.push('> 报告只写文件名，不写路径与日期。已逐对诊断过的「口径假红」会在末节单列，')
+L.push('> 它们判 lost 只是写法不同，不是真丢；名单见 `scripts/lib/known-alias.mjs`。')
 L.push('')
 L.push('## 汇总')
 L.push('')
@@ -191,17 +193,24 @@ L.push('')
 if (verbose && (lostHits.size || valHits.size)) {
   L.push('## 反复掉 / 值变的对（按出现份数）')
   L.push('')
-  L.push('| 对 | 掉了的份数 | 值变的份数 |')
-  L.push('|---|---:|---:|')
+  L.push('| 对 | 掉了的份数 | 值变的份数 | 口径 |')
+  L.push('|---|---:|---:|---|')
   const keys = [...new Set([...lostHits.keys(), ...valHits.keys()])]
     .sort((a, b) => (lostHits.get(b) ?? 0) - (lostHits.get(a) ?? 0) || a.localeCompare(b))
   for (const k of keys.slice(0, 25)) {
-    L.push(`| \`${k}\` | ${lostHits.get(k) ?? 0} | ${valHits.get(k) ?? 0} |`)
+    const note = aliasNote(k)
+    L.push(`| \`${k}\` | ${lostHits.get(k) ?? 0} | ${valHits.get(k) ?? 0} | ${note ? `**已知口径假红**：${note}` : '—'} |`)
   }
   L.push('')
   L.push(`共 ${keys.length} 个对在至少一份里掉过或值变过；只列前 25。`)
   L.push('各份夹具的属性宇宙本就不同，所以「出现份数」普遍偏低是常态——这张表找的是')
   L.push('**跨夹具反复掉的同一枚**（如 `tblLook` 四兄弟），不是按份数排优先级。')
+  const aliasHit = keys.filter(isKnownAlias)
+  L.push('')
+  L.push(`其中 **${aliasHit.length} 枚是已逐对诊断过的口径假红**${aliasHit.length ? `（\`${aliasHit.join('`, `')}\`）` : ''}：`)
+  L.push('`w:tblLook` 的 `w:val` 位掩码与逐位 ST_OnOff 属性是同一组开关的两种写法，')
+  L.push('写出包只发 `w:val` 不丢语义；为凑数字补写显式属性反而会写出与掩码打架的坏件。')
+  L.push('**跨夹具复现 ≠ 真丢**，剩下那些才值得逐对看「读手 / 模型 / 包槽 / 写手」四处。')
   L.push('')
 }
 const skipped = rows.filter((r) => r.error)
