@@ -1,23 +1,25 @@
-// xlsx 属性级往返账（v0.200）：产品真链路跑出来的两个包，逐对普查。
+// 表格属性级往返账（v0.200 xlsx / v0.201 ODS）：产品真链路跑出来的两个包，逐对普查。
 //
-//   cargo test --lib dump_sheet_roundtrip   →  tmp/sheet-roundtrip/{src,out}.xlsx
+//   cargo test --lib dump_sheet_roundtrip  →  tmp/sheet-roundtrip/{src,out}.xlsx
+//   cargo test --lib dump_ods_roundtrip    →  tmp/sheet-roundtrip/{ods-src,ods-out}.ods
 //        （Rust 侧 sheet_dump.rs：产品写手造源包 → 产品读手读回 → 写手再写一次）
-//   本脚本                                 →  docs/sheet-roundtrip.md / .json
+//   本脚本                                 →  docs/{sheet,ods}-roundtrip.md / .json
 //
 // 跑法：
-//   pnpm exec vite-node scripts/sheet-roundtrip.mjs                 默认夹具
-//   ... --src D:/docs/真实.xlsx --out tmp/sheet-external           外部真件（不覆盖主账本）
-//   ... --no-dump                                                  复用上一次 dump
+//   pnpm exec vite-node scripts/sheet-roundtrip.mjs                       xlsx 默认夹具
+//   ... --format ods                                                     ODS 默认夹具
+//   ... --src <真件> --out tmp/<目录>                                     外部真件（不覆盖主账本）
+//   ... --no-dump                                                        复用上一次 dump
 //
 // 与 docx 往返账的**口径差异必须说清**：那份账的分子是「源包在场 ∩ 读手探针查问过」，
-// 因为 TS 读手有 attr/attrL 两枚漏斗可注入探针。xlsx 读手在 Rust（calamine +
-// quick-xml），没有统一漏斗，所以这份账的分母是**白名单部件里全部属性对**——
-// 是整包普查，不是「读手查问过的」。xlsx_preserve 整份搬运的部件、打包细节部件
-// 都不进分母；否则整份搬运会算成 kept（假绿）。
+// 因为 TS 读手有 attr/attrL 两枚漏斗可注入探针。表格读手在 Rust（calamine +
+// quick-xml），没有统一漏斗，所以分母是**白名单部件里全部属性对**——整包普查，
+// 不是「读手查问过的」。xlsx_preserve 整份搬运的部件、打包细节都不进分母，
+// 否则整份搬运会算成 kept（假绿）。
 //
-// 归一化与 docx 往返账同源（true/1/on、关系 id、Ignorable 拆串、ISO 时刻）。
-// 不套用 docx 的 ST_OnOff 裸元素名单：xlsx 的元素名不同，漏补只会留假红，
-// 不会造假绿——保守方向。
+// xlsx 与 ODS 是**两套词表**（OOXML 的 `c|s` / ODF 的 `table-cell|style-name`），
+// 两本账各自独立、不可并排比百分比。归一化与 docx 往返账同源；不套用 docx 的
+// ST_OnOff 裸元素名单，漏补只会留假红、不会造假绿——保守方向。
 
 import fs from 'node:fs'
 import path from 'node:path'
@@ -35,22 +37,73 @@ const flag = (name, dflt = '') => {
 }
 const SRC = flag('src')
 const NO_DUMP = argv.includes('--no-dump')
-const OUT_DIR = path.resolve(REPO, flag('out', SRC ? 'tmp/sheet-external' : 'docs'))
+const FORMAT_NAME = flag('format', 'xlsx')
+
+// v0.201：第二处同形状需求出现时泛化，不复制一份脚本。两种格式共用
+// census / 归一化 / 四档判据，只在「跑哪个测试、读哪两个包、哪些部件进分母、
+// 账本叫什么」这四处分开。
+const FORMATS = {
+  xlsx: {
+    test: 'dump_sheet_roundtrip',
+    envVar: 'SHEET_SRC_XLSX',
+    src: 'src.xlsx',
+    out: 'out.xlsx',
+    ledger: 'sheet-roundtrip',
+    title: 'xlsx 属性级往返账',
+    ext: '.xlsx',
+    parts: [
+      /^xl\/worksheets\/sheet\d+\.xml$/,
+      /^xl\/styles\.xml$/,
+      /^xl\/workbook\.xml$/,
+      /^xl\/sharedStrings\.xml$/,
+    ],
+    partDesc: '`xl/worksheets/sheetN.xml`、`xl/styles.xml`、`xl/workbook.xml`、`xl/sharedStrings.xml`',
+    packageDesc: '打包细节（Content_Types / _rels / docProps / theme）与 `xlsx_preserve` 整份搬运的侧通道部件',
+    wordTable: 'OOXML（`c|s` 那一套）',
+  },
+  ods: {
+    test: 'dump_ods_roundtrip',
+    envVar: 'ODS_SRC_ODS',
+    src: 'ods-src.ods',
+    out: 'ods-out.ods',
+    ledger: 'ods-roundtrip',
+    title: 'ODS 属性级往返账',
+    ext: '.ods',
+    parts: [
+      /^content\.xml$/,
+      /^styles\.xml$/,
+      /^Object \d+\/content\.xml$/,
+    ],
+    partDesc: '`content.xml`、`styles.xml`、`Object N/content.xml`（图表对象）',
+    packageDesc: '打包细节（`mimetype`、`META-INF/manifest.xml`）',
+    wordTable: 'ODF（`table-cell|style-name` 那一套）',
+  },
+}
+if (!FORMATS[FORMAT_NAME]) {
+  console.error(`SHEET|未知 --format ${FORMAT_NAME}（可用：${Object.keys(FORMATS).join(' / ')}）`)
+  process.exit(2)
+}
+const F = FORMATS[FORMAT_NAME]
+const OUT_DIR = path.resolve(REPO, flag('out', SRC ? `tmp/${F.ledger}-external` : 'docs'))
 const DUMP_DIR = path.join(REPO, 'tmp/sheet-roundtrip')
 
 const url = (p) => `file:///${p.replace(/\\/g, '/')}`
 const local = (n) => (n.includes(':') ? n.slice(n.indexOf(':') + 1) : n)
 const md5 = (s) => createHash('md5').update(s).digest('hex')
 
-// 读手真吃进去的部件。只列 xlsx 这一侧；ODS 两套命名空间第一版不做。
-// 打包细节（Content_Types / _rels / docProps / theme / calcChain）与
-// xlsx_preserve 整份搬运的侧通道部件都不进分母。
-const PART_RE = [
-  /^xl\/worksheets\/sheet\d+\.xml$/,
-  /^xl\/styles\.xml$/,
-  /^xl\/workbook\.xml$/,
-  /^xl\/sharedStrings\.xml$/,
-]
+// 读手真吃进去的部件；打包细节与整份搬运的侧通道部件都不进分母。
+const PART_RE = F.parts
+
+// 已逐对诊断过的「已知口径」：这些对在二次保存里稳定判成值变/掉了，但源包里
+// 的那枚值根本不承载语义，不是读手丢信息。**只标注，不改四档数字**（v0.199
+// 假红分档的同一条纪律）。
+const CAVEATS = {
+  xlsx: {},
+  ods: {
+    'style|name': '孤儿列样式 co2：源包为超出实际列范围的 col_widths 生成了没人引用的样式',
+    'table-column-properties|column-width': '同上；2.1167cm 属于那个孤儿样式，不承载实际列宽语义',
+  },
+}
 
 const BOOL_ON = new Set(['true', 'on'])
 const BOOL_OFF = new Set(['false', 'off'])
@@ -114,11 +167,13 @@ async function censusAsync(zip, parseXml) {
 async function main() {
   if (!NO_DUMP) {
     const env = { ...process.env }
-    if (SRC) env.SHEET_SRC_XLSX = path.resolve(SRC)
-    else delete env.SHEET_SRC_XLSX
+    // 两种格式的外部入口互斥：跑 ods 时别让上一次留下的 SHEET_SRC_XLSX 串进来
+    delete env.SHEET_SRC_XLSX
+    delete env.ODS_SRC_ODS
+    if (SRC) env[F.envVar] = path.resolve(SRC)
     const r = spawnSync(
       'cargo',
-      ['test', '--manifest-path', path.join(REPO, 'src-tauri/Cargo.toml'), '--lib', 'dump_sheet_roundtrip', '--', '--nocapture'],
+      ['test', '--manifest-path', path.join(REPO, 'src-tauri/Cargo.toml'), '--lib', F.test, '--', '--nocapture'],
       { cwd: REPO, encoding: 'utf8', timeout: 600_000, maxBuffer: 16 * 1024 * 1024, env },
     )
     const text = (r.stdout || '') + (r.stderr || '')
@@ -127,10 +182,10 @@ async function main() {
       process.exit(1)
     }
   }
-  const srcPath = path.join(DUMP_DIR, 'src.xlsx')
-  const outPath = path.join(DUMP_DIR, 'out.xlsx')
+  const srcPath = path.join(DUMP_DIR, F.src)
+  const outPath = path.join(DUMP_DIR, F.out)
   if (!fs.existsSync(srcPath) || !fs.existsSync(outPath)) {
-    console.error('SHEET|缺 tmp/sheet-roundtrip/{src,out}.xlsx，先跑一次不带 --no-dump')
+    console.error(`SHEET|缺 tmp/sheet-roundtrip/{${F.src},${F.out}}，先跑一次不带 --no-dump 的 --format ${FORMAT_NAME}`)
     process.exit(1)
   }
 
@@ -170,22 +225,23 @@ async function main() {
   console.log(`SHEET|保留=${keptN}/${total}(${pct}%) 值变=${byBucket.value.length} 掉了=${byBucket.lost.length} 缺件=${byBucket.part.length}`)
 
   const L = []
-  L.push('# xlsx 属性级往返账（产品写出 → 读回 → 再写出）')
+  L.push(`# ${F.title}（产品写出 → 读回 → 再写出）`)
   L.push('')
-  L.push('> 复跑：`pnpm exec vite-node scripts/sheet-roundtrip.mjs`；外部真件加 `--src <.xlsx> --out <tmp目录>`。')
-  L.push('> 源包与写出包都由 `cargo test --lib dump_sheet_roundtrip` 跑产品真出口生成，不是手工拼的 XML。')
+  L.push(`> 复跑：\`pnpm exec vite-node scripts/sheet-roundtrip.mjs --format ${FORMAT_NAME}\`；`)
+  L.push(`> 外部真件加 \`--src <${F.ext}> --out <tmp目录>\`；\`--no-dump\` 可复用上一次 dump。`)
+  L.push(`> 源包与写出包都由 \`cargo test --lib ${F.test}\` 跑产品真出口生成，不是手工拼的 XML。`)
   L.push('')
-  L.push('## 口径（与 docx 往返账不同，别并排比百分比）')
+  L.push('## 口径（与 docx 往返账、与另一格式的账都不可并排比百分比）')
   L.push('')
-  L.push('- 分母是**白名单部件里全部属性对**，不是「读手查问过的」：xlsx 读手在 Rust，')
+  L.push(`- **${F.wordTable}** 是另一套词表，与 ${FORMAT_NAME === 'xlsx' ? 'ODS' : 'xlsx'} 那本账的 key 不同源；两本账各自独立。`)
+  L.push('- 分母是**白名单部件里全部属性对**，不是「读手查问过的」：表格读手在 Rust，')
   L.push('  没有 TS 侧 attr/attrL 那样的统一漏斗可注入探针。这是整包普查。')
-  L.push(`- 进分母的部件：\`xl/worksheets/sheetN.xml\`、\`xl/styles.xml\`、\`xl/workbook.xml\`、\`xl/sharedStrings.xml\`。`)
-  L.push('  打包细节（Content_Types / _rels / docProps / theme）与 `xlsx_preserve` 整份搬运的')
-  L.push('  侧通道部件都不进分母——否则整份搬运会被算成 kept，那是假绿。')
+  L.push(`- 进分母的部件：${F.partDesc}。`)
+  L.push(`  ${F.packageDesc}都不进分母——否则整份搬运会被算成 kept，那是假绿。`)
   L.push('- 默认源包由产品写手自己造，量的是**二次保存稳定性**；给 `--src` 换成外部真件后，')
   L.push('  量的是真件保真。两种输入不混在一个数字里。')
   L.push('- 归一与 docx 往返账同源：`true/1/on` 归一、关系 id 归一、`mc:Ignorable` 拆串、ISO 时刻归一。')
-  L.push('  **不套用 docx 的 ST_OnOff 裸元素名单**（xlsx 元素名不同）；漏补只会留假红，不会造假绿。')
+  L.push('  **不套用 docx 的 ST_OnOff 裸元素名单**（表格元素名不同）；漏补只会留假红，不会造假绿。')
   L.push('- 写出包里额外出现的对（写手自己造的、源里没有的）不进表：那是「写多了」，与这份账问的')
   L.push('  「源里在场的东西还在不在」是两件事。')
   L.push('')
@@ -202,6 +258,7 @@ async function main() {
   L.push(`| 缺件 | ${byBucket.part.length} |`)
   L.push('')
   L.push('分族：只按承载它们的部件分，不套 docx 的 `w:*` 正文 / 图形壳口径。')
+  L.push('一个对若出现在多个部件，会在各部件各计一次，所以分族表的「读到」合计可能大于分母。')
   L.push('')
   const partTotals = {}
   for (const r of rows) {
@@ -223,12 +280,13 @@ async function main() {
     L.push('')
     L.push(desc)
     L.push('')
-    L.push('| 对 | 源里出现 | 源值 | 写出值 |')
-    L.push('|---|---:|---|---|')
+    L.push('| 对 | 源里出现 | 源值 | 写出值 | 口径 |')
+    L.push('|---|---:|---|---|---|')
     for (const r of list.slice(0, 40)) {
-      L.push(`| \`${r.key}\` | ${r.n} | ${r.srcValues.slice(0, 6).join(', ') || '—'} | ${r.outValues.slice(0, 6).join(', ') || '—'} |`)
+      const note = (CAVEATS[FORMAT_NAME] ?? {})[r.key] ?? ''
+      L.push(`| \`${r.key}\` | ${r.n} | ${r.srcValues.slice(0, 6).join(', ') || '—'} | ${r.outValues.slice(0, 6).join(', ') || '—'} | ${note ? `**已知口径**：${note}` : '—'} |`)
     }
-    if (list.length > 40) L.push(`| …共 ${list.length} 条，完整清单见 \`sheet-roundtrip.json\` | | | |`)
+    if (list.length > 40) L.push(`| …共 ${list.length} 条，完整清单见 \`${F.ledger}.json\` | | | | |`)
     L.push('')
   }
   block('掉了', '名字在写出包里一次都没出现。', byBucket.lost)
@@ -237,18 +295,25 @@ async function main() {
   block('保留', '这些是真的往返稳定。', byBucket.kept)
   L.push('## 边界')
   L.push('')
-  L.push('- **第一版只做 xlsx**：ODS 的 content.xml / styles.xml 是另一套命名空间与词表，')
-  L.push('  key 映射翻倍，留到第二版。')
+  L.push(`- **只做 ${FORMAT_NAME} 这一侧**：另一格式有独立账本（\`${FORMAT_NAME === 'xlsx' ? 'ods-roundtrip' : 'sheet-roundtrip'}.md\`），两套词表不混。`)
+  const caveats = CAVEATS[FORMAT_NAME] ?? {}
+  if (Object.keys(caveats).length) {
+    L.push('- **已知口径**（逐对诊断过，只标注、不改四档数字）：')
+    for (const [k, v] of Object.entries(caveats)) L.push(`  - \`${k}\`：${v}。`)
+    L.push('  这些是源包里不承载语义的冗余写法，写出时自然消失；**所以这份账的百分比')
+    L.push('  不能读成「ODS 比 xlsx 差」**——分母里混进了源包冗余，两本账分母不同源。')
+  }
   L.push('- 不是真件长尾：默认源包由产品自己写出，读手不认的属性根本不会出现在源里。')
-  L.push('  给 `--src` 换成真实 .xlsx 才能量到「读手吃了多少」。')
+  L.push(`  给 \`--src\` 换成真实 ${F.ext} 才能量到「读手吃了多少」。`)
   L.push('- 没有读手查问集合，无法区分「读手主动读了」与「整包搬过来」；')
-  L.push('  白名单部件 + 剔除 preserve 通道是当前的保守折中。')
+  L.push('  白名单部件 + 剔除整份搬运通道是当前的保守折中。')
   L.push('- 账本正文不写日期、路径与时间戳：同一 rev、同一夹具复跑逐字节相同。')
   L.push('')
 
   const md = L.join('\n')
   const json = {
     definition: {
+      format: FORMAT_NAME,
       source: SRC ? path.basename(SRC) : 'fixture-second-save',
       numerator: 'all pairs in whitelisted parts (no reader probe)',
       buckets: ['kept', 'value', 'lost', 'part'],
@@ -271,10 +336,10 @@ async function main() {
     ),
   }
   fs.mkdirSync(OUT_DIR, { recursive: true })
-  fs.writeFileSync(path.join(OUT_DIR, 'sheet-roundtrip.md'), md)
+  fs.writeFileSync(path.join(OUT_DIR, `${F.ledger}.md`), md)
   const js = `${JSON.stringify(json, null, 1)}\n`
-  fs.writeFileSync(path.join(OUT_DIR, 'sheet-roundtrip.json'), js)
-  console.log(`SHEET|写盘 ${path.relative(REPO, path.join(OUT_DIR, 'sheet-roundtrip.md')).replace(/\\/g, '/')} 与 .json`)
+  fs.writeFileSync(path.join(OUT_DIR, `${F.ledger}.json`), js)
+  console.log(`SHEET|写盘 ${path.relative(REPO, path.join(OUT_DIR, `${F.ledger}.md`)).replace(/\\/g, '/')} 与 .json`)
   console.log(`SHEET|md5 md=${md5(md)} json=${md5(js)}`)
 }
 
