@@ -12080,6 +12080,44 @@ xlsx/ods 属性级账仍是空白。
 59.4 / 52.5 / 99.0 / 96.5、`no-theme` 不动、pptx `no-ga` 42 条全红、
 干净腿复位逐字节相同。
 
+## v0.200（xlsx 属性级往返账：空白 → 第一版）
+
+**补的是评估里挂了很久的「xlsx/ods 属性级账空白」**
+
+- **为什么不能照搬 docx 账**：docx 往返账的分子靠往 TS 读手的 `attr/attrL`
+  两枚漏斗注入探针，拿到「读手查问过哪些对」。xlsx 读手在 Rust
+  （`calamine` + `quick-xml`），没有统一漏斗，探针分子搬不过来；
+  `xlsx_preserve` 又是**整份搬运部件**，直接普查会把它算成 kept（假绿）。
+- **分工方案**：Rust 只跑产品真出口，Node 只管怎么数。新增
+  `src-tauri/src/sheet_dump.rs`（仅 `#[cfg(test)]` 编译，不进生产包）：
+  人手夹具 → `write_xlsx_sync` 造源包 → `read_xlsx_sync` 读回 →
+  `write_xlsx_sync` 再写一次，把两个包落到 `tmp/sheet-roundtrip/`。
+  `scripts/sheet-roundtrip.mjs` 用 JSZip + 产品 `ooxml.ts` 的 `parseXml`
+  做 census，逐对四档 `kept/value/lost/part`，出
+  `docs/sheet-roundtrip.md` / `.json`。归一化与 docx 账同源。
+- **口径写死在报告里**：分母是**白名单部件里全部属性对**（`sheetN.xml` /
+  `styles.xml` / `workbook.xml` / `sharedStrings.xml`），是整包普查而不是
+  「读手查问过的」；打包细节与 preserve 侧通道部件不进分母。默认源包由产品
+  写手自己造，量的是**二次保存稳定性**；给 `--src <真件>` 才量真件保真，
+  两种输入不混在一个数字里，且外部输入默认落 `tmp/`、不覆盖主账本。
+- **实测 65 对全部 kept（100%）**。这个 100% 是**地板不是成绩**：源包由产品
+  自己写出，读手不认的属性根本不在源里。它的用处是钉住「二次保存不退化的
+  65 对」，等真件进来才有分母可言。
+- **变异腿证明账本有牙**：`scripts/test-sheet-roundtrip.mjs` 把写出包
+  `<cols>` 整段删掉，账本必须报 lost；恢复后回到 65/65 且 md5 与基线
+  逐字节相同。15 条断言，全程只写 `tmp/`，自包含（干净 clone 上缺 dump
+  时自己跑一次 cargo test 生成）。
+
+**没做的**：ODS 侧（`content.xml` / `styles.xml` 是另一套命名空间与词表，
+key 映射翻倍）、20–50 份真件语料、Calc 视图缩放（Univer 无稳定
+`setZoomRatio`，不赌 API）。
+
+**门禁**：干净树 tsc 0 / vite build ✓、**65/65 全绿**（346.6s，新增 1 份）、
+`cargo test --lib` **165 passed / 11 ignored**（新增 dump 测试）；xlsx 新账
+`37ea6e43…` / `61ba3c88…` 复跑一致；三本旧账 md5 与 v0.197 起完全一致、
+变异腿 59.4 / 52.5 / 99.0 / 96.5 不动、pptx `no-ga` 42 条全红、
+干净腿复位逐字节相同。
+
 ## 性能（v0.3）
 
 

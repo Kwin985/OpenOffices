@@ -650,3 +650,35 @@ pptx 账 `d06e404b…` / `b7e4d706…`。**v0.178 又动了 10 对**（图片壳
    xlsx/ods 属性级账仍空白；六条诚实边界一条未动。
 5. **下一优先级不变**：真件语料 20–50 份（需外部提供）> xlsx/ods 属性级账 >
    pptx 账扩宇宙 > Calc 视图缩放；docx 剩余 60 对继续降优先级。
+
+---
+
+## 十二、v0.200 xlsx 属性级账落地（2026-11-15 追加）
+
+**历史口径修正**：本文件第十章第 5 条、第十一章第 4/5 条写的
+「xlsx/ods 属性级账仍空白」是**当时**状态。v0.200 起 **xlsx 第一版已建**，
+`docs/sheet-roundtrip.md` / `.json` 入库；**ODS 仍是空白**（两套命名空间与
+词表，key 映射翻倍，第二版再做）。那三处历史陈述不改，留作当时的记录。
+
+1. **为什么口径与前三本账不同**：xlsx 读手在 Rust（calamine + quick-xml），
+   没有 TS 侧 `attr/attrL` 那样的统一漏斗可注入探针，所以分母不是
+   「读手查问过的」而是**白名单部件里全部属性对**（`sheetN.xml` /
+   `styles.xml` / `workbook.xml` / `sharedStrings.xml`）。整份搬运的
+   `xlsx_preserve` 侧通道部件与打包细节一律剔除，避免整份搬运算成 kept。
+   **这份账的百分比与 docx 88.5% / pptx 70.1% 不可并排比较。**
+2. **产品真出口**：`src-tauri/src/sheet_dump.rs` 仅测试时编译，跑
+   `write_xlsx_sync → read_xlsx_sync → write_xlsx_sync`；
+   `scripts/sheet-roundtrip.mjs` 用 JSZip + 产品解析器做 census。
+   复跑：`pnpm exec vite-node scripts/sheet-roundtrip.mjs`，
+   外部真件加 `--src <.xlsx> --out <tmp目录>`。
+3. **读数**：默认夹具 65 对全部 kept（100% 二次保存稳定），
+   值变 / 掉了 / 缺件均 0，md5 `37ea6e43…` / `61ba3c88…` 复跑一致。
+   **这是地板不是成绩**：源包由产品自己写出，读手不认的属性不在源里。
+   真件进来分母才会撑开——与 docx、pptx 两次换输入的结论一脉相承。
+4. **量具有牙**：`scripts/test-sheet-roundtrip.mjs` 的变异腿删掉写出包
+   `<cols>` 段必须报 lost，复位回到 65/65 且 md5 逐字节相同（15 条断言）。
+   一个新账本若永远 100% 而没有变异腿，等于没量。
+5. **能力面评分不变**：本轮没有新增 WPS 能力，六条诚实边界一条未动，
+   Calc 视图缩放仍因 Univer 无稳定 `setZoomRatio` 记为未做。
+6. **下一优先级**：真件语料 20–50 份（需外部提供）> ODS 侧属性级账 >
+   pptx 账扩宇宙 > Calc 视图缩放；docx 剩余 60 对继续降优先级。

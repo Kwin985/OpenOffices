@@ -1,0 +1,749 @@
+{
+ "definition": {
+  "source": "fixture-second-save",
+  "numerator": "all pairs in whitelisted parts (no reader probe)",
+  "buckets": [
+   "kept",
+   "value",
+   "lost",
+   "part"
+  ],
+  "partsRegex": [
+   "^xl\\/worksheets\\/sheet\\d+\\.xml$",
+   "^xl\\/styles\\.xml$",
+   "^xl\\/workbook\\.xml$",
+   "^xl\\/sharedStrings\\.xml$"
+  ],
+  "onOffNormalised": true,
+  "bareElementPatched": false
+ },
+ "totals": {
+  "read": 65,
+  "kept": 65,
+  "value": 0,
+  "lost": 0,
+  "part": 0,
+  "srcParts": 4,
+  "outParts": 4
+ },
+ "partTotals": {
+  "xl/styles.xml": {
+   "read": 24,
+   "kept": 24,
+   "value": 0,
+   "lost": 0,
+   "part": 0
+  },
+  "xl/worksheets/sheet1.xml": {
+   "read": 25,
+   "kept": 25,
+   "value": 0,
+   "lost": 0,
+   "part": 0
+  },
+  "xl/workbook.xml": {
+   "read": 14,
+   "kept": 14,
+   "value": 0,
+   "lost": 0,
+   "part": 0
+  },
+  "xl/sharedStrings.xml": {
+   "read": 2,
+   "kept": 2,
+   "value": 0,
+   "lost": 0,
+   "part": 0
+  }
+ },
+ "pairs": {
+  "borders|count": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "1"
+   ],
+   "out": [
+    "1"
+   ]
+  },
+  "c|r": {
+   "bucket": "kept",
+   "n": 8,
+   "src": [
+    "a1",
+    "a2",
+    "a3",
+    "a4",
+    "a5",
+    "a6",
+    "a7",
+    "a8"
+   ],
+   "out": [
+    "a1",
+    "a2",
+    "a3",
+    "a4",
+    "a5",
+    "a6",
+    "a7",
+    "a8"
+   ]
+  },
+  "c|t": {
+   "bucket": "kept",
+   "n": 8,
+   "src": [
+    "s"
+   ],
+   "out": [
+    "s"
+   ]
+  },
+  "calcPr|calcId": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "124519"
+   ],
+   "out": [
+    "124519"
+   ]
+  },
+  "calcPr|fullCalcOnLoad": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "1"
+   ],
+   "out": [
+    "1"
+   ]
+  },
+  "cellStyle|builtinId": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "0"
+   ],
+   "out": [
+    "0"
+   ]
+  },
+  "cellStyle|name": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "normal"
+   ],
+   "out": [
+    "normal"
+   ]
+  },
+  "cellStyle|xfId": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "0"
+   ],
+   "out": [
+    "0"
+   ]
+  },
+  "cellStyles|count": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "1"
+   ],
+   "out": [
+    "1"
+   ]
+  },
+  "cellStyleXfs|count": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "1"
+   ],
+   "out": [
+    "1"
+   ]
+  },
+  "cellXfs|count": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "1"
+   ],
+   "out": [
+    "1"
+   ]
+  },
+  "col|customWidth": {
+   "bucket": "kept",
+   "n": 2,
+   "src": [
+    "1"
+   ],
+   "out": [
+    "1"
+   ]
+  },
+  "col|max": {
+   "bucket": "kept",
+   "n": 2,
+   "src": [
+    "1",
+    "2"
+   ],
+   "out": [
+    "1",
+    "2"
+   ]
+  },
+  "col|min": {
+   "bucket": "kept",
+   "n": 2,
+   "src": [
+    "1",
+    "2"
+   ],
+   "out": [
+    "1",
+    "2"
+   ]
+  },
+  "col|width": {
+   "bucket": "kept",
+   "n": 2,
+   "src": [
+    "10.7109375",
+    "16.42578125"
+   ],
+   "out": [
+    "10.7109375",
+    "16.42578125"
+   ]
+  },
+  "color|theme": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "1"
+   ],
+   "out": [
+    "1"
+   ]
+  },
+  "dimension|ref": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "a1:a8"
+   ],
+   "out": [
+    "a1:a8"
+   ]
+  },
+  "dxfs|count": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "0"
+   ],
+   "out": [
+    "0"
+   ]
+  },
+  "family|val": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "2"
+   ],
+   "out": [
+    "2"
+   ]
+  },
+  "fileVersion|appName": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "xl"
+   ],
+   "out": [
+    "xl"
+   ]
+  },
+  "fileVersion|lastEdited": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "4"
+   ],
+   "out": [
+    "4"
+   ]
+  },
+  "fileVersion|lowestEdited": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "4"
+   ],
+   "out": [
+    "4"
+   ]
+  },
+  "fileVersion|rupBuild": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "4505"
+   ],
+   "out": [
+    "4505"
+   ]
+  },
+  "fills|count": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "2"
+   ],
+   "out": [
+    "2"
+   ]
+  },
+  "fonts|count": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "1"
+   ],
+   "out": [
+    "1"
+   ]
+  },
+  "name|val": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "calibri"
+   ],
+   "out": [
+    "calibri"
+   ]
+  },
+  "pageMargins|bottom": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "0.75"
+   ],
+   "out": [
+    "0.75"
+   ]
+  },
+  "pageMargins|footer": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "0.3"
+   ],
+   "out": [
+    "0.3"
+   ]
+  },
+  "pageMargins|header": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "0.3"
+   ],
+   "out": [
+    "0.3"
+   ]
+  },
+  "pageMargins|left": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "0.7"
+   ],
+   "out": [
+    "0.7"
+   ]
+  },
+  "pageMargins|right": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "0.7"
+   ],
+   "out": [
+    "0.7"
+   ]
+  },
+  "pageMargins|top": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "0.75"
+   ],
+   "out": [
+    "0.75"
+   ]
+  },
+  "pageSetup|horizontalDpi": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "200"
+   ],
+   "out": [
+    "200"
+   ]
+  },
+  "pageSetup|orientation": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "landscape"
+   ],
+   "out": [
+    "landscape"
+   ]
+  },
+  "pageSetup|paperSize": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "9"
+   ],
+   "out": [
+    "9"
+   ]
+  },
+  "pageSetup|scale": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "85"
+   ],
+   "out": [
+    "85"
+   ]
+  },
+  "pageSetup|verticalDpi": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "200"
+   ],
+   "out": [
+    "200"
+   ]
+  },
+  "patternFill|patternType": {
+   "bucket": "kept",
+   "n": 2,
+   "src": [
+    "gray125",
+    "none"
+   ],
+   "out": [
+    "gray125",
+    "none"
+   ]
+  },
+  "row|customHeight": {
+   "bucket": "kept",
+   "n": 2,
+   "src": [
+    "1"
+   ],
+   "out": [
+    "1"
+   ]
+  },
+  "row|ht": {
+   "bucket": "kept",
+   "n": 2,
+   "src": [
+    "18",
+    "22.5"
+   ],
+   "out": [
+    "18",
+    "22.5"
+   ]
+  },
+  "row|r": {
+   "bucket": "kept",
+   "n": 8,
+   "src": [
+    "1",
+    "2",
+    "3",
+    "4",
+    "5",
+    "6",
+    "7",
+    "8"
+   ],
+   "out": [
+    "1",
+    "2",
+    "3",
+    "4",
+    "5",
+    "6",
+    "7",
+    "8"
+   ]
+  },
+  "row|spans": {
+   "bucket": "kept",
+   "n": 8,
+   "src": [
+    "1:1"
+   ],
+   "out": [
+    "1:1"
+   ]
+  },
+  "scheme|val": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "minor"
+   ],
+   "out": [
+    "minor"
+   ]
+  },
+  "sheet|id": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "rid#"
+   ],
+   "out": [
+    "rid#"
+   ]
+  },
+  "sheet|name": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "账样"
+   ],
+   "out": [
+    "账样"
+   ]
+  },
+  "sheet|sheetId": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "1"
+   ],
+   "out": [
+    "1"
+   ]
+  },
+  "sheetFormatPr|defaultRowHeight": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "15"
+   ],
+   "out": [
+    "15"
+   ]
+  },
+  "sheetView|tabSelected": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "1"
+   ],
+   "out": [
+    "1"
+   ]
+  },
+  "sheetView|workbookViewId": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "0"
+   ],
+   "out": [
+    "0"
+   ]
+  },
+  "sst|count": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "8"
+   ],
+   "out": [
+    "8"
+   ]
+  },
+  "sst|uniqueCount": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "8"
+   ],
+   "out": [
+    "8"
+   ]
+  },
+  "sz|val": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "11"
+   ],
+   "out": [
+    "11"
+   ]
+  },
+  "tableStyles|count": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "0"
+   ],
+   "out": [
+    "0"
+   ]
+  },
+  "tableStyles|defaultPivotStyle": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "pivotstylelight16"
+   ],
+   "out": [
+    "pivotstylelight16"
+   ]
+  },
+  "tableStyles|defaultTableStyle": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "tablestylemedium9"
+   ],
+   "out": [
+    "tablestylemedium9"
+   ]
+  },
+  "workbookPr|defaultThemeVersion": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "124226"
+   ],
+   "out": [
+    "124226"
+   ]
+  },
+  "workbookView|windowHeight": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "9660"
+   ],
+   "out": [
+    "9660"
+   ]
+  },
+  "workbookView|windowWidth": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "16095"
+   ],
+   "out": [
+    "16095"
+   ]
+  },
+  "workbookView|xWindow": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "240"
+   ],
+   "out": [
+    "240"
+   ]
+  },
+  "workbookView|yWindow": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "15"
+   ],
+   "out": [
+    "15"
+   ]
+  },
+  "xf|borderId": {
+   "bucket": "kept",
+   "n": 2,
+   "src": [
+    "0"
+   ],
+   "out": [
+    "0"
+   ]
+  },
+  "xf|fillId": {
+   "bucket": "kept",
+   "n": 2,
+   "src": [
+    "0"
+   ],
+   "out": [
+    "0"
+   ]
+  },
+  "xf|fontId": {
+   "bucket": "kept",
+   "n": 2,
+   "src": [
+    "0"
+   ],
+   "out": [
+    "0"
+   ]
+  },
+  "xf|numFmtId": {
+   "bucket": "kept",
+   "n": 2,
+   "src": [
+    "0"
+   ],
+   "out": [
+    "0"
+   ]
+  },
+  "xf|xfId": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "0"
+   ],
+   "out": [
+    "0"
+   ]
+  }
+ }
+}

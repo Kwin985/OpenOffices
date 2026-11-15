@@ -3649,4 +3649,43 @@ D53 记「要先新建载荷槽 + 定 CT_RPr 位次」，本轮复查后把口�
   漏一侧就等于给主账本开了个后门；❹ 不确定的第三方 API（Univer 缩放）
   宁可记为未做，也别用 `executeCommand` 赌一个 id。
 
+## v0.200（第四本账：xlsx 属性级往返，第一版）
+
+前三本账都在 docx / pptx 的 TS 链上；xlsx/ods 一直是评估里的空白。
+本轮读手写手仍一寸未动，三本旧账 md5 与 v0.197 起完全一致。
+
+- **分子口径搬不过来**：docx 往返账的 `readPairs = consulted ∩ src.pairs`，
+  `consulted` 来自 `probe.mjs` 往 `ooxml.ts` 的 `attr/attrL` 注入探针。
+  xlsx 读手在 `src-tauri/src/xlsx.rs`（calamine + quick-xml），没有统一漏斗；
+  而 `xlsx_preserve.rs` 会把「读侧不认」的部件**整份搬进产物**，整包普查
+  会把这些算成 kept。所以第一版把分母限定为白名单部件
+  （`sheetN.xml` / `styles.xml` / `workbook.xml` / `sharedStrings.xml`），
+  并在报告里明写「这是整包普查，不是读手查问过的」。**宁可口径窄，
+  也不让整份搬运混成假绿**。
+- **产品真出口**：`src-tauri/src/sheet_dump.rs` 仅 `#[cfg(test)]` 编译，
+  造人手夹具 → `write_xlsx_sync` → `read_xlsx_sync` → `write_xlsx_sync`，
+  两个包落 `tmp/sheet-roundtrip/`。`scripts/sheet-roundtrip.mjs` 用
+  JSZip + 产品 `ooxml.ts` 的 `parseXml` 做 census（归一化与 docx 账同源：
+  true/1/on、关系 id、Ignorable 拆串、ISO 时刻）。**不套用 docx 的
+  ST_OnOff 裸元素名单**——xlsx 元素名不同，漏补只会留假红、不会造假绿。
+- **默认输入是产品自己写出的源包**，量的是二次保存稳定性；`--src` 换外部
+  真件才量真件保真，且外部输入默认落 `tmp/`。两种输入不混在一个数字里
+  （v0.198 起的界线，第四本账一上来就带上）。
+- **账**：65 对全部 `kept`（100%），值变 / 掉了 / 缺件均 0；
+  md/json 为 `37ea6e43…` / `61ba3c88…`，复跑一致。
+  **这个 100% 是地板不是成绩**：源里没有读手不认的属性，它只钉住
+  「二次保存不退化的 65 对」。真件进来分母才会撑开。
+- **变异腿**：`scripts/test-sheet-roundtrip.mjs` 删掉写出包 `<cols>` 整段，
+  账本必须报 `lost > 0`、保留数下降；恢复后回到 65/65 且 md5 与基线
+  逐字节相同；两次干净腿一致。15 条断言，全程只写 `tmp/sheet-roundtrip-test/`，
+  缺 dump 时自己跑 cargo test 生成，不依赖预置的未入库文件。
+- **边界**：第一版只做 xlsx，ODS 两套命名空间留到第二版；
+  没有查问集合，无法区分「读手主动读了」与「整包搬过来」；
+  真实 .xlsx 语料仍需外部提供。
+- **教训**：❶ 换一条格式链建账，先问「分子从哪来」——没有探针漏斗就别
+  假装自己量的是「读手查问过」，把口径写窄并公开；❷ 整份搬运的部件
+  必须从分母剔除，否则 100% 是假绿；❸ 新账第一版就要配变异腿，
+  否则一个永远全绿的账本等于没量；❹ 新账一上来就带「外部输入不覆盖
+  主账本」的界线，别等事后补；❺ 100% 也要写清它是地板不是成绩。
+
 
