@@ -1,6 +1,7 @@
 // 图表 PNG 渲染：ChartPayload → VChart spec → 离屏画布 → dataURL（VChart 按需动态加载，独立 chunk）
 import type { ISpec } from '@visactor/vchart'
 import type { ChartAxisPayload, ChartPayload } from './fs'
+import type { SlideChartData } from './ppt'
 
 /** 散点图 X 轴是数值轴：cats 存的是 xVal 取出的数，取不到就让 VChart 判为无效（NaN） */
 function numOf(v: unknown): number {
@@ -277,4 +278,33 @@ export async function renderChartPng(payload: ChartPayload, scale = 2): Promise<
   } finally {
     host.remove()
   }
+}
+
+/**
+ * 幻灯片图表 → PNG（v0.127 的导出入口，远程主线引用但源码未入库）。
+ * 数据本来就是 SlideChartData，转成最小 ChartPayload 复用现有 VChart 渲染即可，
+ * 不需要新依赖，也不碰未提交的 slide-chart.ts。
+ */
+export async function renderSlideChartPng(
+  chart: SlideChartData,
+  width: number,
+  height: number,
+): Promise<string> {
+  const payload: ChartPayload = {
+    chartType: chart.chartType,
+    grouping: chart.stacked ? 'stacked' : 'standard',
+    title: chart.title ?? '',
+    anchorRow: 0,
+    anchorCol: 0,
+    width: Math.max(64, width),
+    height: Math.max(64, height),
+    series: chart.series.map((s) => ({
+      name: s.name,
+      cat: null,
+      val: { sheet: '', r1: 0, c1: 0, r2: 0, c2: 0 },
+      cats: chart.cats,
+      vals: s.vals.filter((v): v is number => v !== null),
+    })),
+  }
+  return renderChartPng(payload, 1)
 }
