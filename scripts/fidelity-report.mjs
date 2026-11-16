@@ -10,6 +10,11 @@
 //   ... --selftest        用内置夹具证明分子语义（不依赖任何语料）
 //   ... --clean-pass      再跑一遍不带探针的副本，证明观察者不扰动产品
 //   ... --mut no-attrL    变异档：故意漏注入一枚漏斗，覆盖率必须下降
+//   ... --mut no-theme    主题恒解析不出来，覆盖率必须**不动**（查问与解析已解耦）
+//   ... --mut no-themeshade  还原旧写法（shade/tint 不查问），覆盖率必须下降
+//   ... --synth           语料是合成重建件（scripts/gen-docx-fidelity-corpus.mjs 按
+//                         docs/fidelity-universe.json 的冻结计数 1/100 缩放生成）：
+//                         与旧账「按对」可比、「按字面」不可比，报告里播出处节
 //
 // 报告里不许出现任何文件路径或文件名：语料是每个人的本地件，公开的只有聚合数字。
 import { createHash } from 'node:crypto'
@@ -18,6 +23,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import process from 'node:process'
 import JSZip from 'jszip'
+import { injectMut, injectProbe, injectReaderReexport, materialize } from './lib/probe.mjs'
 
 const argv = process.argv.slice(2)
 const flag = (name, dflt) => {
@@ -34,6 +40,7 @@ const LIMIT = Number(flag('limit', '0'))
 const MUT = flag('mut', '')
 const CLIST_FILE = flag('clist', '')
 const CORPUS = flag('corpus', '')
+const SYNTH = has('synth')
 
 // 读手真正吃进去的部件：分母只算这些，别把没打算读的部件算成丢账
 const PARTS = [
@@ -48,43 +55,7 @@ const PARTS = [
 // Word 自己的存档流水号：零渲染语义也不进 UI，按名字规则归到噪音档而不是「丢账」
 const NOISE = /^(rsid[A-Za-z]*|paraId|textId)$/
 
-// ---- 1b. 内置夹具（--selftest）---------------------------------------------
-//
-// 分子语义不依赖任何语料：这一份 document.xml 里每枚属性都是我亲手放的，所以「探针应当看到哪些、
-// 应当看不到哪些」可以事先写死。MUST_SEE 是读手真会按名查问的，MUST_NOT_SEE 是我故意放进去、
-// 而读手（按源码现状）确实一寸都不查的——两边都断言才叫量具，只断一边等于自说自话。
-const W = 'http://schemas.openxmlformats.org/wordprocessingml/2006/main'
-const FIXTURE_STYLES =
-  `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>` +
-  `<w:styles xmlns:w="${W}">` +
-  `<w:style w:type="paragraph" w:default="1" w:styleId="Normal">` +
-  `<w:name w:val="Normal"/><w:pPr><w:spacing w:line="276" w:lineRule="auto" w:before="0" w:after="0"/>` +
-  `<w:ind w:left="0" w:right="0"/></w:pPr>` +
-  `<w:rPr><w:rFonts w:ascii="Calibri" w:eastAsia="等线"/><w:sz w:val="22"/><w:szCs w:val="22"/></w:rPr>` +
-  `</w:style>` +
-  `<w:style w:type="paragraph" w:styleId="ReportHead"><w:name w:val="report head"/>` +
-  `<w:basedOn w:val="Normal"/><w:pPr><w:spacing w:after="120"/><w:ind w:left="420"/></w:pPr>` +
-  `</w:style>` +
-  `</w:styles>`
-
-const FIXTURE_DOC =
-  `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>` +
-  `<w:document xmlns:w="${W}"><w:body>` +
-  `<w:p w:rsidR="00A1" w:rsidRDefault="00A2" w:rsidP="00B3">` +
-  `<w:pPr><w:pStyle w:val="ReportHead"/>` +
-  `<w:spacing w:before="120" w:after="240" w:line="360" w:lineRule="auto" w:beforeAutospacing="0" w:afterAutospacing="0"/>` +
-  `<w:ind w:left="420" w:right="210" w:firstLineChars="200" w:hangingChars="0"/>` +
-  `<w:jc w:val="both"/>` +
-  `<w:pBdr><w:top w:val="single" w:sz="8" w:space="1" w:color="FF0000"/>` +
-  `<w:left w:val="dotted" w:sz="4" w:space="2" w:color="00FF00"/></w:pBdr></w:pPr>` +
-  `<w:r><w:rPr><w:rFonts w:ascii="Times New Roman" w:eastAsia="宋体" w:hint="eastAsia"/>` +
-  `<w:sz w:val="24"/><w:szCs w:val="28"/><w:b w:val="0"/></w:rPr>` +
-  `<w:t xml:space="preserve"> 带空白的正文 </w:t></w:r></w:p>` +
-  `<w:sectPr><w:pgSz w:w="11906" w:h="16838" w:orient="portrait"/>` +
-  `<w:pgMar w:top="1440" w:right="1800" w:bottom="1440" w:left="1800" w:header="851" w:footer="992" w:gutter="0"/></w:sectPr>` +
-  `</w:body></w:document>`
-
-// 读手按名查问过的（源码里 spacing / ind / jc / pStyle / rFonts / sz / b / 顶边 都走 attr 或 attrL）
+import { FIXTURE_DOC, FIXTURE_NUMBERING, FIXTURE_STYLES, FIXTURE_THEME, fixtureParts } from './lib/fixture.mjs'
 const MUST_SEE = [
   'pStyle|val',
   'spacing|before',
@@ -102,19 +73,391 @@ const MUST_SEE = [
   'rFonts|eastAsia',
   'sz|val',
   'b|val',
-]
-// 我放进夹具而读手一寸不查的：hangingChars 在合并里被搬而没人读（段落读侧第一笔账记过同一件事），
-// beforeAutospacing / hint / szCs / 非顶边的 space / t 的 xml:space 在源码里都没有查问处
-const MUST_NOT_SEE = [
+  // v0.138：主题引用、hint、cs、szCs、lang、kern、pos 这一批都在读手里有按名查问处
+  'rFonts|asciiTheme',
+  'rFonts|hAnsiTheme',
+  'rFonts|eastAsiaTheme',
+  'rFonts|hint',
+  'rFonts|cs',
+  'szCs|val',
+  'lang|val',
+  'lang|eastAsia',
+  'kern|val',
+  // v0.151：pos|val 曾在此列——那是 v0.142 起夹具与读手在错误元素名 w:pos 上的互锁
+  // （CT_RPr 无此元素，宇宙里根本没有这对），改成 w:position 的 position|val，见
+  // MUST_SEE 尾部与 D10 审计节
+  // v0.142：主题色（clrScheme 的 srgbClr/sysClr 两分支 + w:color 的 themeColor/Tint/Shade）、
+  // 图案底纹三件套（val/color/fill）、编号的符面与对齐（lvlText/lvlJc）与起始号改写
+  // （lvlOverride/startOverride）。下面每一枚都能在夹具里指出唯一一处 XML。
+  'srgbClr|val',
+  'sysClr|lastClr',
+  'color|themeColor',
+  'color|themeTint',
+  'color|themeShade',
+  'shd|val',
+  'shd|color',
+  'shd|fill',
+  'lvlText|val',
+  'lvlJc|val',
+  'startOverride|val',
+  'lvlOverride|ilvl',
+  // v0.143：ind 的字符档（hangingChars/rightChars）与 pBdr 四边的 space。
+  // hangingChars 在夹具里值是 0（查问发生、不产生 CSS——「0 距离」与「没声明」同路），
+  // 非零分支由合成语料 02-tables/01-body 的实例在普查腿踩
   'ind|hangingChars',
+  'ind|rightChars',
+  'top|space',
+  'right|space',
+  'bottom|space',
+  'left|space',
+  // v0.143 D2-3/D2-4：复杂文字粗斜、小型大写与分页四件套。iCs/bCs 只往返
+  // （CSS 无「只对 cs 字族」的开关），smallCaps 屏上走 font-variant-caps，
+  // 四件套屏上不兑现——七枚都只为存盘不丢
+  'iCs|val',
+  'bCs|val',
+  'smallCaps|val',
+  'pageBreakBefore|val',
+  'keepNext|val',
+  'keepLines|val',
+  'widowControl|val',
+  // v0.144：制表位三枚（档位/缇/前导符）。leader 的 middleDot 是 ST_TabTlc 唯一驼峰值
+  // （小写归一查表映射回规范名）；clear 档无 pos/leader，是「到此清除继承制表位」
+  'tab|val',
+  'tab|pos',
+  'tab|leader',
+  // v0.145：替代文本（docPr 画布级 + pic:cNvPr 图形级，descr 优先 name 兜底）、
+  // 浮动框架十二枚（framePr 的属性带 w: 前缀，与 tblpPr 的无前缀不同）、
+  // 表格浮动十枚（tblpPr 属性**无前缀**，ECMA-376 CT_TblPPr——attrL 按 local name 才命中）、
+  // 编号定义身份（探针键是「元素名|属性名」——multiLevelType 挂在 abstractNum 上）
+  'docPr|descr',
+  'cNvPr|descr',
+  'framePr|x',
+  'framePr|y',
+  'framePr|w',
+  'framePr|h',
+  'framePr|hRule',
+  'framePr|hSpace',
+  'framePr|vSpace',
+  'framePr|hAnchor',
+  'framePr|vAnchor',
+  'framePr|wrap',
+  'framePr|anchorLock',
+  'tblpPr|tblpX',
+  'tblpPr|tblpXSpec',
+  'tblpPr|tblpY',
+  'tblpPr|vertAnchor',
+  'tblpPr|horzAnchor',
+  'tblpPr|topFromText',
+  'tblpPr|leftFromText',
+  'tblpPr|bottomFromText',
+  'tblpPr|rightFromText',
+  'tblpPr|overlap',
+  // v0.150 修正：multiLevelType 从「w:abstractNum 身上的属性」改回**子元素**形态
+  // （OOXML 的 CT_AbstractNum 里它就是一枚 <w:multiLevelType w:val>）——旧夹具与旧
+  // 断言记的是 abstractNum|multiLevelType 那对不存在的属性，新对是 multiLevelType|val
+  // v0.146 D5：潜在样式族 12 对（w:latentStyles 容器六属性 + w:lsdException 六属性）、
+  // 书签三对（bookmarkStart 的 id/name 与 bookmarkEnd 的 id——区间内容包成
+  // span[data-oo-bookmark] 由书签 mark 接住）、复杂文字语言（w:lang 的 bidi 只管
+  // cs 字族）、字符缩放（元素名叫 w、属性叫 val）、样式元数据三枚（uiPriority/link
+  // 是 w:style 的子元素、customStyle 长在 w:style 自己身上）、表级边框 space 的
+  // insideH/insideV 两对（外层四边的 space 键 v0.143 随 pBdr 已上账）
+  'latentStyles|count',
+  'latentStyles|defLockedState',
+  'latentStyles|defUIPriority',
+  'latentStyles|defSemiHidden',
+  'latentStyles|defUnhideWhenUsed',
+  'latentStyles|defQFormat',
+  'lsdException|name',
+  'lsdException|uiPriority',
+  'lsdException|semiHidden',
+  'lsdException|unhideWhenUsed',
+  'lsdException|qFormat',
+  'lsdException|locked',
+  'bookmarkStart|id',
+  'bookmarkStart|name',
+  'bookmarkEnd|id',
+  'lang|bidi',
+  'w|val',
+  'uiPriority|val',
+  'link|val',
+  'style|customStyle',
+  'insideH|space',
+  'insideV|space',
+  // v0.147 D6：段落属性余量九枚（pPr 七枚 onOff + textAlignment 枚举 + w:spacing 上的
+  // 两枚自动段距）、表自身闸门三枚（w:tblPr/w:tblLook 的 val/noHBand/noVBand）、
+  // 节属性九枚（pgSz 的 h 与 orient、pgMar 的 top/bottom/header/footer/gutter、
+  // cols 的 num/space、docGrid 的 type/linePitch）
+  'adjustRightInd|val',
+  'snapToGrid|val',
+  'topLinePunct|val',
+  'bidi|val',
+  'autoSpaceDE|val',
+  'autoSpaceDN|val',
+  'suppressLineNumbers|val',
+  'textAlignment|val',
   'spacing|beforeAutospacing',
   'spacing|afterAutospacing',
-  'rFonts|hint',
-  'szCs|val',
-  'left|space',
-  't|space',
+  'tblLook|val',
+  'tblLook|noHBand',
+  'tblLook|noVBand',
+  'pgSz|h',
   'pgSz|orient',
+  'pgMar|top',
+  'pgMar|bottom',
+  'pgMar|header',
+  'pgMar|footer',
   'pgMar|gutter',
+  'cols|num',
+  'cols|space',
+  'docGrid|type',
+  'docGrid|linePitch',
+  // v0.148 D7：图片容器壳二十二枚——wp:inline/wp:anchor 的四边避让、wp:effectExtent
+  // 四边、wp:docPr 与 pic:cNvPr 的序号与对象名、两枚 locks（graphicFrameLocks /
+  // picLocks 的 noChangeAspect）、a:prstGeom 档位、a:xfrm 的 a:off/a:ext、
+  // wp:simplePos 坐标与 wp:positionH/V 的基准
+  'inline|distT',
+  'inline|distB',
+  'inline|distL',
+  'inline|distR',
+  'effectExtent|l',
+  'effectExtent|t',
+  'effectExtent|r',
+  'effectExtent|b',
+  'docPr|id',
+  'cNvPr|id',
+  'cNvPr|name',
+  'graphicFrameLocks|noChangeAspect',
+  'picLocks|noChangeAspect',
+  'prstGeom|prst',
+  'ext|cx',
+  'ext|cy',
+  'off|x',
+  'off|y',
+  'simplePos|x',
+  'simplePos|y',
+  'positionH|relativeFrom',
+  'positionV|relativeFrom',
+  // v0.149 D8：VML 图片壳十五枚 + wp:anchor 六枚闸门 + DrawingML 两枚
+  // （a:picLocks 的箭头锁、pic:spPr 的黑白模式档位）
+  'shape|id',
+  'shape|spid',
+  'shape|spt',
+  'shape|type',
+  'shape|coordsize',
+  'shape|filled',
+  'shape|stroked',
+  'lock|aspectratio',
+  'lock|ext',
+  'imagedata|title',
+  'fill|on',
+  'fill|focussize',
+  'stroke|on',
+  'stroke|joinstyle',
+  'stroke|weight',
+  'anchor|allowOverlap',
+  'anchor|behindDoc',
+  'anchor|layoutInCell',
+  'anchor|locked',
+  'anchor|relativeHeight',
+  'anchor|simplePos',
+  'picLocks|noChangeArrowheads',
+  'spPr|bwMode',
+  // v0.150 D9：numbering 六枚（含 multiLevelType 的子元素形态修正）、styles 身份两枚、
+  // DrawingML 零星五枚、VML 形状余量五枚、VML 分组五枚、图元几何九枚、
+  // 表边框主题色两枚、文档级标记三枚
+  'nsid|val',
+  'tmpl|val',
+  'multiLevelType|val',
+  'lvl|tentative',
+  'lvl|tplc',
+  'suff|val',
+  'next|val',
+  'rsid|val',
+  'blip|cstate',
+  'ext|uri',
+  'inline|anchorId',
+  'inline|editId',
+  'lumMod|val',
+  'ln|w',
+  'insideH|themeColor',
+  'insideV|themeColor',
+  'shape|path',
+  'shape|fillcolor',
+  'useLocalDpi|val',
+  'attr|name',
+  'attr|val',
+  'group|id',
+  'group|spid',
+  'group|coordorigin',
+  'group|coordsize',
+  'group|style',
+  'gd|fmla',
+  'gd|name',
+  'pt|x',
+  'pt|y',
+  'cxn|ang',
+  'pos|x',
+  'pos|y',
+  'path|w',
+  'path|h',
+  'proofErr|type',
+  'Choice|Requires',
+  'document|Ignorable',
+  // v0.151：形状壳一族（noteShapeMarks 按名查问）+ rPr 的基线升降读名修正
+  'lnRef|idx',
+  'fillRef|idx',
+  'effectRef|idx',
+  'fontRef|idx',
+  'cNvSpPr|txBox',
+  'bodyPr|anchor',
+  'bodyPr|anchorCtr',
+  'bodyPr|bIns',
+  'bodyPr|compatLnSpc',
+  'bodyPr|forceAA',
+  'bodyPr|fromWordArt',
+  'bodyPr|horzOverflow',
+  'bodyPr|lIns',
+  'bodyPr|numCol',
+  'bodyPr|rIns',
+  'bodyPr|rot',
+  'bodyPr|rtlCol',
+  'bodyPr|spcCol',
+  'bodyPr|spcFirstLastPara',
+  'bodyPr|tIns',
+  'bodyPr|upright',
+  'bodyPr|vert',
+  'bodyPr|vertOverflow',
+  'bodyPr|wrap',
+  'position|val',
+  // v0.151：图片壳零头六族（schemeClr 在图片段由 readImgPayload 收、wsp 段由
+  // noteShapeMarks 收——两处都查问，同对只记一次）
+  'schemeClr|val',
+  'lumOff|val',
+  'miter|lim',
+  'stroke|color',
+  'stroke|miterlimit',
+  'path|connectangles',
+  'path|connectlocs',
+  'rect|l',
+  'rect|t',
+  'rect|r',
+  'rect|b',
+  // v0.152：字符/单元格/编号/节级读写族 + DrawingML 色彩零头
+  'caps|val',
+  'bdr|val',
+  'bdr|sz',
+  'bdr|space',
+  'bdr|color',
+  'noWrap|val',
+  'tblStyleRowBandSize|val',
+  'tblStyleColBandSize|val',
+  'abstractNum|restartNumberingAfterBreak',
+  'num|durableId',
+  'numbering|Ignorable',
+  'styles|Ignorable',
+  'headerReference|id',
+  'headerReference|type',
+  'footerReference|id',
+  'footerReference|type',
+  'docGrid|charSpace',
+  'hyperlink|history',
+  'lum|bright',
+  'lum|contrast',
+  'shade|val',
+  'gs|pos',
+  'ln|cap',
+  'ln|cmpd',
+  // v0.153：VML 形状壳余量（w:pict 那一支，只读记账 + 裁剪四边落到 CSS）
+  'roundrect|id', 'roundrect|spid', 'roundrect|spt', 'roundrect|style', 'roundrect|coordsize',
+  'roundrect|arcsize', 'roundrect|fillcolor', 'roundrect|filled', 'roundrect|strokecolor',
+  'roundrect|stroked', 'roundrect|strokeweight', 'roundrect|anchorId',
+  'line|id', 'line|spid', 'line|spt', 'line|style', 'line|coordsize', 'line|from', 'line|to',
+  'line|fillcolor', 'line|filled', 'line|strokecolor', 'line|stroked', 'line|strokeweight',
+  'line|allowincell', 'line|anchorId',
+  'rect|id', 'rect|spid', 'rect|spt', 'rect|style', 'rect|coordsize', 'rect|fillcolor',
+  'rect|filled', 'rect|strokecolor', 'rect|stroked', 'rect|strokeweight', 'rect|allowincell',
+  'shape|adj', 'shape|alt', 'shape|anchorId', 'shape|bullet', 'shape|connectortype',
+  'shape|coordorigin', 'shape|ole', 'shape|preferrelative', 'shape|strokecolor', 'shape|strokeweight',
+  'shapetype|adj', 'shapetype|anchorId', 'shapetype|coordsize', 'shapetype|filled', 'shapetype|id',
+  'shapetype|oned', 'shapetype|path', 'shapetype|preferrelative', 'shapetype|spt', 'shapetype|stroked',
+  'group|anchorId', 'group|editas', 'group|spt',
+  'textbox|inset', 'textbox|style',
+  'path|arrowok', 'path|connecttype', 'path|extrusionok', 'path|fillok', 'path|gradientshapeok',
+  'path|textboxrect',
+  'shadow|algn', 'shadow|blurRad', 'shadow|dir', 'shadow|dist', 'shadow|kx', 'shadow|ky',
+  'shadow|offset', 'shadow|on', 'shadow|opacity', 'shadow|origin', 'shadow|sx', 'shadow|sy',
+  'shadow|val',
+  'fill|color2', 'fill|colors', 'fill|ext', 'fill|focus', 'fill|focusposition', 'fill|id',
+  'fill|opacity', 'fill|opacity2', 'fill|recolor', 'fill|rotate', 'fill|title', 'fill|type',
+  'stroke|dashstyle', 'stroke|endarrow', 'stroke|endcap', 'stroke|startarrow',
+  'imagedata|cropbottom', 'imagedata|cropleft', 'imagedata|cropright', 'imagedata|croptop',
+  'lock|shapetype', 'rot|lat', 'rot|lon', 'rot|rev', 'hiddenLine|w',
+  'fillRect|b', 'fillRect|t', 'fillToRect|b', 'fillToRect|l', 'fillToRect|r', 'fillToRect|t',
+  'lin|ang', 'lin|scaled', 'h|position', 'h|xrange', 'h|yrange',
+  'chExt|cx', 'chExt|cy', 'chOff|x', 'chOff|y', 'f|eqn',
+  'wrap|anchorx', 'wrap|anchory', 'wrap|side', 'wrap|type', 'cxnSpLocks|noChangeShapeType',
+  'object|dxaOrig', 'object|dyaOrig', 'OLEObject|DrawAspect', 'OLEObject|ObjectID', 'OLEObject|ShapeID',
+  // v0.154：图片源裁剪框 / 表间距 / 隐藏文字（三族读写或读侧兑现）
+  'srcRect|t', 'srcRect|r', 'srcRect|b', 'srcRect|l',
+  'tblCellSpacing|w', 'tblCellSpacing|type',
+  'vanish|val',
+  // v0.154：批注族（改由读手走 attr 漏斗读，不再是正则盲区）+ 脚注尾注根 Ignorable
+  'comment|id', 'comment|author', 'comment|date', 'comment|initials',
+  'commentEx|done', 'comments|Ignorable', 'commentsEx|Ignorable', 'commentReference|id',
+  'footnotes|Ignorable', 'endnotes|Ignorable',
+  // v0.154：纯只读记账三族——表条件格式落点开关十三枚、智能标记两枚、表重叠许可与形状锁
+  'cnfStyle|val', 'cnfStyle|firstRow', 'cnfStyle|lastRow', 'cnfStyle|firstColumn', 'cnfStyle|lastColumn',
+  'cnfStyle|oddHBand', 'cnfStyle|evenHBand', 'cnfStyle|oddVBand', 'cnfStyle|evenVBand',
+  'cnfStyle|firstRowFirstColumn', 'cnfStyle|firstRowLastColumn',
+  'cnfStyle|lastRowFirstColumn', 'cnfStyle|lastRowLastColumn',
+  'smartTag|element', 'smartTag|uri',
+  'tblOverlap|val', 'spLocks|noChangeArrowheads', 'spLocks|noEditPoints',
+  // v0.155：能兑现的六族——符号、整篇底色、下划线色、链接提示、着重号/字形档、图形变换
+  'sym|char', 'sym|font',
+  'background|color', 'background|themeColor', 'background|themeShade',
+  'u|color', 'u|themeColor', 'u|themeTint',
+  'hyperlink|tooltip', 'hyperlink|tgtFrame',
+  'em|val', 'ligatures|val', 'numForm|val', 'numSpacing|val', 'cntxtalts|val',
+  'xfrm|rot', 'xfrm|flipH', 'xfrm|flipV',
+  // v0.155：DrawingML 图形余量一整片（全部只读记账，屏上零兑现）
+  'alpha|val', 'alphaOff|val', 'hueOff|val', 'satOff|val', 'tint|val', 'prstClr|val',
+  'scrgbClr|r', 'scrgbClr|g', 'scrgbClr|b',
+  'prstDash|val', 'headEnd|type', 'headEnd|w', 'headEnd|len',
+  'tailEnd|type', 'tailEnd|w', 'tailEnd|len',
+  'outerShdw|algn', 'outerShdw|blurRad', 'outerShdw|dir', 'outerShdw|dist', 'outerShdw|rotWithShape',
+  'glow|rad',
+  'reflection|algn', 'reflection|blurRad', 'reflection|dir', 'reflection|dist', 'reflection|endA',
+  'reflection|endPos', 'reflection|fadeDir', 'reflection|kx', 'reflection|ky', 'reflection|stA',
+  'reflection|stPos', 'reflection|sx', 'reflection|sy',
+  'lightRig|rig', 'lightRig|dir',
+  'props3d|contourW', 'props3d|extrusionH', 'props3d|prstMaterial',
+  'blipFill|rotWithShape', 'gradFill|flip', 'gradFill|rotWithShape',
+  'sizeRelH|relativeFrom', 'sizeRelV|relativeFrom', 'wrapSquare|wrapText',
+  'prstTxWarp|prst', 'path|path',
+  // v0.155：编号/样式/批注/表单域的余量
+  'styleLink|val', 'numPicBullet|numPicBulletId', 'numIdMacAtCleanup|val',
+  'lvlRestart|val', 'lvlPicBulletId|val',
+  'legacy|legacy', 'legacy|legacySpace', 'legacy|legacyIndent',
+  'aliases|val', 'creationId|id',
+  'fldChar|fldLock', 'calcOnExit|val', 'entryMacro|val', 'appearance|val', 'maxLength|val', 'default|val',
+  'ins|id', 'id|val',
+  // v0.155：节余量七枚 + 段落余量五枚 + 行余量三枚 + 字形装饰三枚 + 表边框主题深浅四枚
+  'type|val', 'pgSz|code', 'pgNumType|fmt', 'pgNumType|start',
+  'cols|equalWidth', 'col|w', 'col|space', 'rtlGutter|val', 'formProt|val',
+  'suppressAutoHyphens|val', 'kinsoku|val', 'wordWrap|val', 'overflowPunct|val', 'textDirection|val',
+  'gridAfter|val', 'wAfter|w', 'wAfter|type',
+  'emboss|val', 'imprint|val', 'outline|val',
+  'insideH|themeShade', 'insideH|themeTint', 'insideV|themeShade', 'insideV|themeTint',
+]
+// 我放进夹具而读手一寸不查的：t 的 xml:space 是**裁定不查**——escText 无条件保留空白
+// （连续空格第二个起换 nbsp），强于 preserve 所需，查了也没有第二行代码可写。
+// （v0.143 注：ind|hangingChars 与 left|space 曾在此列——那一轮起 hangingChars 进了
+// paraCss 的负 text-indent 分支、pBdr 四边 space 进了 padding，两枚移入 MUST_SEE。
+// v0.147 注：spacing 两枚自动段距、pgSz|orient 与 pgMar|gutter 也曾在此列——节属性
+// 那一族原是 docxToDocMeta 用正则读的（读是读了、账上是盲区），本轮改由读手走 attr
+// 漏斗读，四枚一并移入 MUST_SEE）
+const MUST_NOT_SEE = [
+  't|space',
 ]
 
 const md5 = (s) => createHash('md5').update(s).digest('hex')
@@ -154,87 +497,6 @@ function corpusList() {
   return LIMIT > 0 ? list.slice(0, LIMIT) : list
 }
 
-// ---- 2. 一次性模块副本 + 探针注入 -------------------------------------------
-
-function materialize(dir) {
-  fs.rmSync(dir, { recursive: true, force: true })
-  fs.mkdirSync(dir, { recursive: true })
-  let files
-  try {
-    files = git(['ls-files', 'src/lib'], true).split(/\r?\n/).filter((s) => /\.(ts|tsx)$/.test(s))
-  } catch {
-    files = []
-  }
-  let fromGit = files.length > 0
-  if (!fromGit) {
-    files = fs
-      .readdirSync(path.join(REPO, 'src/lib'))
-      .filter((f) => /\.(ts|tsx)$/.test(f))
-      .map((f) => `src/lib/${f}`)
-  }
-  for (const f of files) {
-    const rel = f.replace(/^src\/lib\//, '')
-    const bytes = fromGit ? git(['show', `${REF}:${f}`]) : fs.readFileSync(path.join(REPO, f))
-    fs.writeFileSync(path.join(dir, rel), bytes)
-  }
-  return { count: files.length, fromGit }
-}
-
-const RECORDER = `
-// ---- 探针注入块（只写记录，不改任何返回值）----
-const __seen = new Map<string, number>()
-export const __PROBE = {
-  seen: __seen,
-  key(parentName: string, attrName: string): string {
-    const lp = parentName.includes(':') ? parentName.slice(parentName.indexOf(':') + 1) : parentName
-    const la = attrName.includes(':') ? attrName.slice(attrName.indexOf(':') + 1) : attrName
-    return lp + '|' + la
-  },
-  note(parentName: string, attrName: string) {
-    const k = this.key(parentName, attrName)
-    __seen.set(k, (__seen.get(k) ?? 0) + 1)
-  },
-}
-
-`
-
-function injectProbe(file, mut) {
-  let src = fs.readFileSync(file, 'utf8')
-  const inj = [
-    {
-      id: 'attr',
-      skip: mut === 'no-attr',
-      find: 'export function attr(el: XEl | undefined, name: string): string | undefined {\n  return el?.attrs[name]',
-      put: 'export function attr(el: XEl | undefined, name: string): string | undefined {\n  if (el) __PROBE.note(el.name, name)\n  return el?.attrs[name]',
-    },
-    {
-      id: 'attrL',
-      skip: mut === 'no-attrL',
-      find: 'export function attrL(el: XEl | undefined, name: string): string | undefined {\n  if (!el) return undefined',
-      put: 'export function attrL(el: XEl | undefined, name: string): string | undefined {\n  if (!el) return undefined\n  __PROBE.note(el.name, name)',
-    },
-  ]
-  const anchor = "\nimport "
-  // ooxml.ts 自己一枚 import 都没有（迷你解析器不吃依赖），所以 lastIndexOf 落空时按「第一行之后」插
-  const i0 = src.lastIndexOf(anchor)
-  const nl = src.indexOf('\n', i0 < 0 ? 0 : i0 + 1)
-  if (nl < 0) throw new Error('注入中止：找不到 import 尾部')
-  src = src.slice(0, nl + 1) + RECORDER + src.slice(nl + 1)
-  const applied = []
-  for (const x of inj) {
-    if (x.skip) continue
-    const hits = src.split(x.find).length - 1
-    if (hits !== 1) throw new Error(`注入锚点 ${x.id} 命中 ${hits} 次（应为 1）`)
-    src = src.replace(x.find, x.put)
-    applied.push(x.id)
-  }
-  // 注入的那一行绝不能以 ( 或 [ 开头：它前面是 `if (!el) return undefined`，而「换行 + (」在 ASI 下
-  // 是上一行的续写，会被读成 return undefined(__PROBE.note(...)) —— 报 "undefined is not a function"，
-  // 且只在那枚件走到 attrL 时才抛。等价腿（只一边错=0）是抓住它的闸，见 README 的量具坑一节。
-  fs.writeFileSync(file, src, 'utf8')
-  return applied
-}
-
 // ---- 3. 一趟读手 + 一份分母 --------------------------------------------------
 
 function errClass(e) {
@@ -262,11 +524,10 @@ function countAttrsOurParser(parseXml, root) {
   return { pairs, total }
 }
 
-async function runSelftest(reader, probe) {
-  const seen = probe.__PROBE.seen
+async function runSelftest(reader) {
+  const seen = reader.__PROBE.seen
   const zip = new JSZip()
-  zip.file('word/document.xml', FIXTURE_DOC)
-  zip.file('word/styles.xml', FIXTURE_STYLES)
+  for (const [p, c] of fixtureParts()) zip.file(p, c)
   const bytes = new Uint8Array(await zip.generateAsync({ type: 'arraybuffer', compression: 'STORE' }))
   seen.clear()
   const out = await reader.docxToHtmlFidelity(bytes)
@@ -291,14 +552,15 @@ async function runSelftest(reader, probe) {
 
 async function main() {
   const t0 = Date.now()
-  const { count: modFiles, fromGit } = materialize(MOD_DIR)
+  const { count: modFiles, fromGit } = materialize(MOD_DIR, { repo: REPO, ref: REF })
   const applied = injectProbe(path.join(MOD_DIR, 'ooxml.ts'), MUT)
+  applied.push(injectReaderReexport(path.join(MOD_DIR, 'docx-fidelity.ts')))
+  applied.push(...injectMut(path.join(MOD_DIR, 'docx-fidelity.ts'), MUT))
   const reader = await import(`${path.join(MOD_DIR, 'docx-fidelity.ts').replace(/\\/g, '/')}`)
   const { parseXml } = await import(`${path.join(MOD_DIR, 'ooxml.ts').replace(/\\/g, '/')}`)
-  const probe = await import(`${path.join(MOD_DIR, 'ooxml.ts').replace(/\\/g, '/')}`)
-  const seen = probe.__PROBE.seen
+  const seen = reader.__PROBE.seen
 
-  if (has('selftest')) await runSelftest(reader, probe)
+  if (has('selftest')) await runSelftest(reader)
 
   let files = []
   try {
@@ -312,7 +574,7 @@ async function main() {
   let clean = null
   if (has('clean-pass')) {
     const CLEAN_DIR = path.resolve(REPO, 'tmp/fidelity-clean')
-    materialize(CLEAN_DIR)
+    materialize(CLEAN_DIR, { repo: REPO, ref: REF })
     clean = await import(`${path.join(CLEAN_DIR, 'docx-fidelity.ts').replace(/\\/g, '/')}`)
   }
 
@@ -401,9 +663,56 @@ async function main() {
     byElement.set(p, (byElement.get(p) ?? 0) + v)
   }
 
+  // 合成语料腿：与冻结宇宙自比——701 对该不该一对不缺、字面该多接近缩放期望。
+  // 这一块只回答「重建得像不像旧账」，不参与覆盖率计算
+  let synth = null
+  if (SYNTH) {
+    const uniPath = path.join(REPO, 'docs/fidelity-universe.json')
+    const uni = JSON.parse(fs.readFileSync(uniPath, 'utf8'))
+    const want = new Map(uni.pairs.map((p) => [p.pair, Math.max(1, Math.round(p.count / uni.scale))]))
+    const missing = [...want.keys()].filter((k) => !pairs.has(k))
+    const extra = [...pairs.keys()].filter((k) => !want.has(k))
+    const wantSum = sum(Object.fromEntries(want))
+    const gotSum = [...pairs.values()].reduce((a, b) => a + b, 0)
+    synth = {
+      rebuiltBy: 'scripts/gen-docx-fidelity-corpus.mjs',
+      universe: 'docs/fidelity-universe.json',
+      universePairs: uni.pairs.length,
+      universeLiterals: uni.pairs.reduce((a, p) => a + p.count, 0),
+      scale: uni.scale,
+      pairsPresent: uni.pairs.length - missing.length,
+      pairsMissing: missing.length,
+      pairsExtra: extra.length,
+      pairsMissingList: missing.sort().slice(0, 20),
+      scaledLiteralSum: wantSum,
+      // 缩放这一步自己抬了多少：裸 count/100 与「取整 + max(1,·)」之差
+      rawScaledSum: uni.pairs.reduce((a, p) => a + p.count / uni.scale, 0),
+      scaleInflationPct: (wantSum / (uni.pairs.reduce((a, p) => a + p.count / uni.scale, 0)) - 1) * 100,
+      actualLiteralSum: gotSum,
+      literalDriftPct: (gotSum / wantSum - 1) * 100,
+      comparableByPair: true,
+      comparableByOccurrence: false,
+      note:
+        '按对覆盖率与旧账（313 件真件语料）可比；按字面不可比——重建按 count/100 缩放，' +
+        '取整与 max(1,·) 会把稀有对抬起来（见「scaling step itself」那一行），另有少量承重包裹属性（bitmap 链的 r:embed/extent/docPr、numbering 关联的 ' +
+        'abstractNumId 等）在包裹处顺带出现；末行是「实测 vs 缩放期望」，与缩放那行基准不同，别混读',
+    }
+  }
+
   const data = {
     measured: { ref: REF, source: fromGit ? `git:${REF}` : 'worktree', modules: modFiles, injections: applied },
-    corpus: { files: files.length, readable: ok, unreadable: files.length - ok, bytes: bytesTotal, scopeParts: PARTS },
+    corpus: SYNTH
+      ? {
+          files: files.length,
+          readable: ok,
+          unreadable: files.length - ok,
+          bytes: bytesTotal,
+          scopeParts: PARTS,
+          synthetic: true,
+          rebuiltBy: 'scripts/gen-docx-fidelity-corpus.mjs',
+          universe: 'docs/fidelity-universe.json',
+        }
+      : { files: files.length, readable: ok, unreadable: files.length - ok, bytes: bytesTotal, scopeParts: PARTS },
     totals: {
       distinctPairs: pairs.size,
       occurrences: totalOcc,
@@ -428,6 +737,7 @@ async function main() {
     errors: Object.fromEntries(errs),
   }
   if (clean) data.equivalence = { identical: eqSame, differing: eqDiff, bothFailed: eqErrBoth, onlyOneFailed: eqErrOne }
+  if (synth) data.synth = synth
 
   const mdPath = path.join(OUT_DIR, 'fidelity.md')
   const jsonPath = path.join(OUT_DIR, 'fidelity.json')
@@ -496,7 +806,7 @@ function renderMd(d) {
     `Measured on the committed product at \`${d.measured.ref}\` (\`${d.measured.source}\`, ${d.measured.modules} modules,`,
   )
   L.push(
-    `probe injected into ${d.measured.injections.length} accessor${d.measured.injections.length === 1 ? '' : 's'}: ${d.measured.injections.join(', ')}).`,
+    `probe injected at ${d.measured.injections.length} points: ${d.measured.injections.join(', ')}).`,
   )
   L.push('')
   L.push('## Headline')
@@ -514,10 +824,47 @@ function renderMd(d) {
   )
   L.push('')
   L.push(
-    `The corpus held ${n(d.corpus.files)} .docx files (${(d.corpus.bytes / 1048576).toFixed(0)} MiB); ${d.corpus.unreadable} were`,
+    `The corpus held ${n(d.corpus.files)} ${d.synth ? 'synthetic ' : ''}.docx files (${
+      d.corpus.bytes < 1048576 ? `${(d.corpus.bytes / 1024).toFixed(0)} KiB` : `${(d.corpus.bytes / 1048576).toFixed(0)} MiB`
+    }); ${d.corpus.unreadable} were`,
   )
   L.push('unreadable as archives and are reported by failure class only, never by name.')
   L.push('')
+  if (d.synth) {
+    const s = d.synth
+    L.push('## Corpus provenance — this is a synthetic rebuild')
+    L.push('')
+    L.push(
+      'The 313-file real corpus this ledger was first measured on is not in the repository (it is',
+    )
+    L.push(
+      "everyone's local documents). What you are reading was measured on a **synthetic corpus**:",
+    )
+    L.push(
+      `${n(s.universePairs)} element|attribute pairs with their literal counts, frozen from the original`,
+    )
+    L.push(
+      `run into \`${s.universe}\` and rebuilt at 1/${s.scale} scale by \`${s.rebuiltBy}\`.`,
+    )
+    L.push('')
+    L.push('| rebuild check | value |')
+    L.push('|---|---:|')
+    L.push(`| universe pairs present in the corpus | ${n(s.pairsPresent)} / ${n(s.universePairs)} |`)
+    L.push(`| pairs missing / extra | ${n(s.pairsMissing)} / ${n(s.pairsExtra)} |`)
+    L.push(
+      `| literals: scaling step itself (raw ÷ ${s.scale} → rounded, min 1) | ${n(Math.round(s.rawScaledSum))} → ${n(s.scaledLiteralSum)} ` +
+        `(${s.scaleInflationPct >= 0 ? '+' : ''}${s.scaleInflationPct.toFixed(2)}%) |`,
+    )
+    L.push(
+      `| literals: scaled expectation vs actual rebuild | ${n(s.scaledLiteralSum)} vs ${n(s.actualLiteralSum)} ` +
+        `(${s.literalDriftPct >= 0 ? '+' : ''}${s.literalDriftPct.toFixed(2)}%) |`,
+    )
+    L.push('')
+    L.push(
+      `**By-pair coverage is comparable with the original run; by-literal coverage is not.** ${s.note}`,
+    )
+    L.push('')
+  }
   L.push('## Never consulted — largest first')
   L.push('')
   L.push('| `element|attribute` | literals |')
@@ -571,6 +918,13 @@ function renderMd(d) {
   L.push('pnpm exec vite-node scripts/fidelity-report.mjs --corpus /path/to/docx')
   L.push('pnpm exec vite-node scripts/fidelity-report.mjs --corpus /path/to/docx --selftest --clean-pass')
   L.push('python3 scripts/fidelity-census.py        # independent denominator, second parser')
+  L.push('')
+  L.push('# 真件语料不在库时：先按冻结宇宙重建合成语料，再跑同一套腿')
+  L.push('node scripts/gen-docx-fidelity-corpus.mjs')
+  L.push(
+    'pnpm exec vite-node scripts/fidelity-report.mjs --clist tmp/docx-fidelity-corpus/clist.txt --selftest --clean-pass --synth',
+  )
+  L.push('python3 scripts/fidelity-census.py --clist tmp/docx-fidelity-corpus/clist.txt')
   L.push('```')
   L.push('')
   L.push('The report is deterministic: same corpus list and same source revision give byte-identical')
@@ -583,6 +937,8 @@ function renderMd(d) {
   L.push('| `--selftest` | the probe sees exactly the lookups a fixture dictates, including the pairs we deliberately do not read |')
   L.push('| `--clean-pass` | the patched copy and an unpatched copy emit byte-identical HTML for every readable file: the observer does not perturb the product |')
   L.push('| `--mut no-attrL` | coverage drops: the numerator really comes from run-time lookups, not from a name list in the source |')
+  L.push('| `--mut no-theme` | coverage does **not** move: asking for `themeShade`/`themeTint` is decoupled from whether the theme resolves (v0.155) |')
+  L.push('| `--mut no-themeshade` | coverage drops: the shade/tint pairs really enter the numerator through `themeRefCss` |')
   L.push('| `scripts/fidelity-census.py` | a second, different XML parser (Python `xml.etree`) counts the same denominator |')
   if (d.equivalence) {
     L.push('')

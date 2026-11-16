@@ -19,6 +19,8 @@ import {
   revealSteps,
   serializeDeck,
   themeOf,
+  withMaster,
+  stageColors,
   writeAnimOrder,
   LAYOUT_NAMES,
   TRANSITION_NAMES,
@@ -30,12 +32,23 @@ import {
   type BulletAnim,
   type BulletExit,
   type Deck,
+  type MasterRect,
+  type MasterStyle,
   type RevealItem,
   type Slide,
+  type SlideChartType,
   type SlideLayout,
   type SlideShape,
+  type SlideTableData,
   type SlideTransition,
+  newTableShape,
+  newChartShape,
+  resizeTable,
+  setTableSpan,
+  tableDims,
+  SLIDE_CHART_NAMES,
 } from '../lib/ppt'
+import { chartToCsv, dropSlideChart, parseChartCsv, useSlideChartPng } from '../lib/slide-chart'
 import { deckToPptxBytes } from '../lib/pptx-export'
 import { pptxBytesToDeck } from '../lib/pptx-import'
 import { exportPdfWithOverlay } from '../lib/pdfprint'
@@ -45,6 +58,8 @@ import { saveDoneTimer } from '../lib/save-status'
 import { autoDelayMs, autoFailStatus, autoOkTip, createAutoSaveLedger, onFocusBack, staleFailureClaim } from '../lib/auto-save'
 import type { FailureClaim } from '../lib/auto-save'
 import { pptTemplate } from '../lib/templates'
+import { ZOOM_STEPS, clampZoom, fitZoom, nearestZoomStep, stageZoomStyle, zoomByWheel, zoomPct, zoomStep, type FitMode } from '../lib/view-zoom'
+import { RECT_KEY, dragRect, rectFor, rectStyle, type DragMode, type PlaceholderKind } from '../lib/master-rect'
 import StaticSlide from './StaticSlide'
 
 interface Props {
@@ -67,9 +82,136 @@ function revealName(s: Slide, it: RevealItem): string {
   if (it.kind === 'line') return `要点 ${it.idx + 1} · ${cut(bodyLines(s)[it.idx] ?? '', 14)}`
   const sh = revealItemShape(s, it)
   if (!sh) return `形状 ${it.idx + 1}`
-  const tag = sh.kind === 'image' ? '图片' : '文本框'
-  const head = sh.kind === 'image' ? '' : cut((sh.text ?? '').split('\n')[0] ?? '', 12)
+  const tag =
+    sh.kind === 'image' ? '图片'
+      : sh.kind === 'table' ? '表格'
+      : sh.kind === 'chart' ? '图表'
+      : '文本框'
+  const head =
+    sh.kind === 'image' ? ''
+      : sh.kind === 'table' ? cut(sh.table?.rows[0]?.[0] ?? '', 12)
+      : sh.kind === 'chart' ? (sh.chart ? SLIDE_CHART_NAMES[sh.chart.chartType] : '')
+      : cut((sh.text ?? '').split('\n')[0] ?? '', 12)
   return `${tag} ${it.idx + 1}${head ? ` · ${head}` : ''}`
+}
+
+
+/**
+ * 表格里层（v0.127）：放映预览与编辑台共用同一份格线/表头口径，
+ * 免得「编辑时看到的」和「放映时看到的」是两张表。
+ */
+function TableInner({
+  t,
+  fg,
+  accent,
+  sizeEm,
+}: {
+  t: SlideTableData
+  fg: string
+  accent: string
+  sizeEm: string
+}) {
+  const line = t.border === false ? 'none' : '1px solid rgba(128,128,128,0.45)'
+  // v0.140：列宽/行高比例 → CSS 百分比（长度对不上退回等分/自适应）；隔行底纹同 StaticSlide
+  const colW = t.colW && t.colW.length === (t.rows.reduce((m, r) => Math.max(m, r.length), 0)) ? t.colW : undefined
+  const rowH = t.rowH && t.rowH.length === t.rows.length ? t.rowH : undefined
+  const band = t.bandRow ? 'rgba(127,127,127,0.14)' : undefined
+  return (
+    <table
+      style={{
+        width: '100%',
+        height: '100%',
+        borderCollapse: 'collapse',
+        tableLayout: 'fixed',
+        fontSize: sizeEm,
+        color: fg,
+      }}
+    >
+      {colW && (
+        <colgroup>
+          {colW.map((f, ci) => (
+            <col key={ci} style={{ width: `${(f * 100).toFixed(2)}%` }} />
+          ))}
+        </colgroup>
+      )}
+      <tbody>
+        {t.rows.map((row, ri) => (
+          <tr key={ri} style={rowH ? { height: `${(rowH[ri] * 100).toFixed(2)}%` } : undefined}>
+            {row.map((cell, ci) => {
+              const head = t.hasHeader && ri === 0
+              const st: CSSProperties = {
+                border: line,
+                padding: '0.2em 0.4em',
+                textAlign: head ? 'center' : 'left',
+                fontWeight: head ? 600 : undefined,
+                overflow: 'hidden',
+                textOverflow: 'ellipsis',
+              }
+              if (head) {
+                st.background = t.headerFill ?? accent
+                st.color = '#ffffff'
+              } else if (band && ri % 2 === 1) st.background = band
+              return head ? (
+                <th key={ci} style={st}>
+                  {cell}
+                </th>
+              ) : (
+                <td key={ci} style={st}>
+                  {cell}
+                </td>
+              )
+            })}
+          </tr>
+        ))}
+      </tbody>
+    </table>
+  )
+}
+
+/** 表格编辑网格：一格一枚 input。拦掉 pointerdown，免得点格子变成拖形状 */
+function TableGrid({ t, onChange }: { t: SlideTableData; onChange: (rows: string[][]) => void }) {
+  const line = t.border === false ? 'none' : '1px solid rgba(128,128,128,0.45)'
+  return (
+    <div className="ppt-table-grid" onPointerDown={(e) => e.stopPropagation()}>
+      <table
+        style={{
+          width: '100%',
+          borderCollapse: 'collapse',
+          tableLayout: 'fixed',
+          fontSize: `${(t.sizePt ?? 14) / 18}em`,
+        }}
+      >
+        <tbody>
+          {t.rows.map((row, ri) => (
+            <tr key={ri}>
+              {row.map((cell, ci) => (
+                <td key={ci} style={{ border: line, padding: 0 }}>
+                  <input
+                    className="ppt-table-cell"
+                    value={cell}
+                    onChange={(e) => {
+                      const rows = t.rows.map((r) => [...r])
+                      rows[ri][ci] = e.target.value
+                      onChange(rows)
+                    }}
+                  />
+                </td>
+              ))}
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  )
+}
+
+/** 图表预览（编辑台）：图是现渲的 PNG，渲好之前画占位框 */
+function ChartPreview({ sh }: { sh: SlideShape }) {
+  const w = Math.max(64, Math.round(sh.w * 960))
+  const h = Math.max(64, Math.round(sh.h * 540))
+  const png = useSlideChartPng(sh, w, h)
+  if (png) return <img className="ppt-shape-img" src={png} alt="" draggable={false} />
+  return <div className="ppt-shape-chart-hollow" />
 }
 
 function PptEditor({ tab }: Props) {
@@ -81,6 +223,14 @@ function PptEditor({ tab }: Props) {
   const revealedRef = useRef(1)
   const [showNotes, setShowNotes] = useState(false)
   const [showSequence, setShowSequence] = useState(false) // v0.115：播放顺序面板
+  // v0.182：母版配色面板。背景图上传另起一枚 fileRef，别复用写单页 s.image 的那枚
+  const [showMaster, setShowMaster] = useState(false)
+  // v0.186：母版占位框的显隐（标题 / 正文两枚），关着时一次拖拽状态都不建
+  const [showPlaceholders, setShowPlaceholders] = useState(false)
+  const masterBgRef = useRef<HTMLInputElement>(null)
+  // v0.178 视图缩放：与 Writer 同一串档位。只改屏幕上那张舞台，导出/放映读的都是 deck
+  const [zoom, setZoom] = useState(1)
+  const stageWrapRef = useRef<HTMLDivElement>(null)
   const [status, setStatus] = useState<string>(tab.path ? '正在加载…' : '')
   const [loaded, setLoaded] = useState(!tab.path)
   const [autoSavedAt, setAutoSavedAt] = useState<Date | null>(null)
@@ -110,6 +260,8 @@ function PptEditor({ tab }: Props) {
   const stageRef = useRef<HTMLDivElement>(null)
   const [selShape, setSelShape] = useState<string | null>(null)
   const [editingShape, setEditingShape] = useState<string | null>(null)
+  // 图表数据的 CSV 编辑面板：一次只开一枚形状的那一个（形状条很窄，放不下常驻网格）
+  const [chartCsvFor, setChartCsvFor] = useState<string | null>(null)
   const dragRef = useRef<{
     id: string
     mode: 'move' | 'resize'
@@ -158,6 +310,15 @@ function PptEditor({ tab }: Props) {
     markDirty(tab.id, true)
   }
 
+  // v0.182：母版写入的唯一出口。withMaster 换引用（memo(StaticSlide) 才重渲染），
+  // 且不碰 deck.theme / luminance——那两样只在 pptx 导入时算一次，手改背景不重算
+  const patchMaster = (p: Partial<MasterStyle>) =>
+    edit((d) => {
+      d.master = withMaster(d, p).master
+    })
+  const hexOr = (v: string | undefined, fallback: string) =>
+    /^#[0-9a-fA-F]{6}$/.test(v ?? '') ? v! : fallback
+
   const editSlide = (i: number, fn: (s: Slide) => void) =>
     edit((d) => {
       const s = d.slides[i]
@@ -187,6 +348,21 @@ function PptEditor({ tab }: Props) {
     setRevealed(1)
     setPresentIdx((i) => Math.max(i - 1, 0))
   }
+
+  // 视图缩放（v0.178）：Ctrl+滚轮按档位走，监听挂在舞台的滚动容器而非 window
+  // （放映态覆盖层压在它上面，滚轮不会漏进去）。形状拖动仍按舞台自身的
+  // getBoundingClientRect 折算分数——CSS zoom 会等比缩放这个矩形，比例不受影响
+  useEffect(() => {
+    const el = stageWrapRef.current
+    if (!el) return
+    const onWheel = (e: WheelEvent) => {
+      if (!e.ctrlKey) return
+      e.preventDefault()
+      setZoom((z) => zoomByWheel(z, e.deltaY))
+    }
+    el.addEventListener('wheel', onWheel, { passive: false })
+    return () => el.removeEventListener('wheel', onWheel)
+  }, [loaded])
 
   // 放映按键
   useEffect(() => {
@@ -434,6 +610,9 @@ function PptEditor({ tab }: Props) {
 
   const removeSlide = () => {
     if (deck.slides.length <= 1) return
+    const gone = deck.slides[cur]
+    // 页删了，页上图表形状的 PNG 缓存也一并清掉，免得 id 复用时串出上一张图
+    for (const sh of gone?.shapes ?? []) if (sh.kind === 'chart') dropSlideChart(sh.id)
     edit((d) => {
       d.slides.splice(cur, 1)
     })
@@ -480,10 +659,30 @@ function PptEditor({ tab }: Props) {
     setEditingShape(id)
   }
 
+  const addTable = () => {
+    const sh = newTableShape()
+    editSlide(cur, (s) => {
+      s.shapes = [...(s.shapes ?? []), sh]
+    })
+    setSelShape(sh.id)
+    setEditingShape(sh.id)
+  }
+
+  const addChart = () => {
+    const sh = newChartShape()
+    editSlide(cur, (s) => {
+      s.shapes = [...(s.shapes ?? []), sh]
+    })
+    setSelShape(sh.id)
+    setEditingShape(null)
+  }
+
   const removeShape = (sid: string) => {
     editSlide(cur, (s) => {
       s.shapes = (s.shapes ?? []).filter((sh) => sh.id !== sid)
     })
+    dropSlideChart(sid)
+    if (chartCsvFor === sid) setChartCsvFor(null)
     setSelShape(null)
     setEditingShape(null)
   }
@@ -547,6 +746,49 @@ function PptEditor({ tab }: Props) {
     dragRef.current = null
   }
 
+  // v0.186：母版占位框是**第二套**拖拽状态机——它不是 SlideShape，没有 id 可供
+  // patchShape 按 id 更新，落点是 deck.master 的 titleRect / bodyRect 两枚键。
+  // 换算与钳制都在 lib/master-rect.ts，这里只负责把指针位移折成比例再写回。
+  const masterDragRef = useRef<{
+    kind: PlaceholderKind
+    mode: DragMode
+    sx: number
+    sy: number
+    from: MasterRect
+    stage: DOMRect
+  } | null>(null)
+
+  const masterPointerDown = (e: React.PointerEvent, kind: PlaceholderKind, mode: DragMode) => {
+    e.stopPropagation() // 别让舞台的 onPointerDown 把这次拖拽当成「点空白」
+    const stage = stageRef.current
+    if (!stage) return
+    masterDragRef.current = {
+      kind,
+      mode,
+      sx: e.clientX,
+      sy: e.clientY,
+      from: rectFor(deck.master, kind),
+      stage: stage.getBoundingClientRect(),
+    }
+    ;(e.currentTarget as HTMLElement).setPointerCapture(e.pointerId)
+  }
+
+  const masterPointerMove = (e: React.PointerEvent) => {
+    const d = masterDragRef.current
+    if (!d) return
+    const dx = (e.clientX - d.sx) / d.stage.width
+    const dy = (e.clientY - d.sy) / d.stage.height
+    const next = dragRect(d.from, d.mode, dx, dy)
+    const key = RECT_KEY[d.kind]
+    // 复用 v0.182 的母版写入唯一出口：withMaster 换 master 引用，
+    // memo 化的缩略图与放映才会重渲染；不另开一条 edit(d => d.master = …) 路径
+    patchMaster({ [key]: next })
+  }
+
+  const masterPointerUp = () => {
+    masterDragRef.current = null
+  }
+
   // 选中形状时 Del/Backspace 删除（焦点在输入框里时不劫持按键）
   useEffect(() => {
     if (!selShape) return
@@ -591,14 +833,32 @@ function PptEditor({ tab }: Props) {
   const m = deck.master
   const fgColor = m?.bodyColor ?? t.fg
   const accentColor = m?.titleColor ?? t.accent
-  const stageStyle: CSSProperties = m?.bgImage
-    ? {
-        backgroundImage: `url(${m.bgImage})`,
-        backgroundSize: 'cover',
-        backgroundPosition: 'center',
-        color: fgColor,
-      }
-    : { background: slide.bg ?? m?.bg ?? t.bg, color: fgColor }
+  const stageStyle: CSSProperties = {
+    ...(m?.bgImage
+      ? {
+          backgroundImage: `url(${m.bgImage})`,
+          backgroundSize: 'cover',
+          backgroundPosition: 'center',
+          color: fgColor,
+        }
+      : { background: slide.bg ?? m?.bg ?? t.bg, color: fgColor }),
+    // v0.178：屏幕缩放只落在这张 DOM 上。deckToPptxBytes 与离屏 .ppt-print-page
+    // 都不读它，放映用的是另一棵 StaticSlide，所以导出/放映天然 100%
+    ...stageZoomStyle(zoom),
+  }
+
+  // v0.185：自动缩放两档，与 PDF 共用 fitZoom。舞台被 CSS zoom 等比缩放，
+  // 所以 getBoundingClientRect() 要除回当前 zoom 才是**未缩放**的页面尺寸；
+  // 容器扣掉 .ppt-stage-wrap 的 26px padding（CSS 常量，改 CSS 要同步这一处）。
+  // Impress 是档位制下拉，自动值落到最近一档，免得 select 里出现没有的百分比
+  const fitTo = (mode: FitMode) => {
+    const stage = stageRef.current
+    const wrap = stageWrapRef.current
+    if (!stage || !wrap || zoom <= 0) return
+    const r = stage.getBoundingClientRect()
+    const z = fitZoom(r.width / zoom, r.height / zoom, wrap.clientWidth, wrap.clientHeight, mode, 26)
+    setZoom(nearestZoomStep(z))
+  }
 
   // 播放顺序那一列（v0.115）：正文逐条与带动画的形状各一票，次序在这一份数组里
   const seqItems = slide ? revealOrder(slide) : []
@@ -639,6 +899,20 @@ function PptEditor({ tab }: Props) {
         <button className="tool-btn" onClick={removeSlide} title="删除本页">删页</button>
         <button className="tool-btn" onClick={addTextBox} title="在页面上加一个可自由拖动/缩放的文本框（画布层，随 pptx 往返）">
           ＋文本框
+        </button>
+        <button
+          className="tool-btn"
+          onClick={addTable}
+          title="在页面上加一张可拖动/缩放的表格（导出为 PowerPoint 原生表格，对方还能继续编辑）"
+        >
+          ＋表格
+        </button>
+        <button
+          className="tool-btn"
+          onClick={addChart}
+          title="在页面上加一张图表（柱/条/线/饼/面积；导出落图片，数据留在 .opd 里随时可改）"
+        >
+          ＋图表
         </button>
         <span className="tool-sep" />
         <select
@@ -719,6 +993,41 @@ function PptEditor({ tab }: Props) {
             ))}
           </select>
         )}
+        {/* v0.141：入场时长。此前模型有槽而界面没有入口——导入进来的时长原样带回，
+            但用户手改不了；未设 = 导出 500ms（PowerPoint 的默认） */}
+        {slide.anim && (
+          <label className="tool-num" title="逐条入场时长（毫秒；未设 = 500，随 pptx cTn@dur 往返）">
+            入场
+            <input
+              className="tool-num-input"
+              type="number"
+              min={50}
+              max={600000}
+              step={50}
+              value={slide.animDur ?? ''}
+              onChange={(e) =>
+                editSlide(cur, (s) => {
+                  const v = Number(e.target.value)
+                  s.animDur = Number.isFinite(v) && v >= 50 ? Math.min(600000, Math.round(v)) : undefined
+                })
+              }
+            />
+            毫秒
+          </label>
+        )}
+        {/* v0.141：点击换页开关。文件里 advClick="0" 的页以前一改就变回「点击就翻」——
+            现在有开关，缺省（未设）与「开」在文件里同义，关掉才写 0 */}
+        <button
+          className={`tool-btn${slide.advClick === false ? '' : ' tool-btn-primary'}`}
+          onClick={() =>
+            editSlide(cur, (s) => {
+              s.advClick = s.advClick === false ? undefined : false
+            })
+          }
+          title="点击换页：关掉之后这一页只能等自动换页（导出为 advClick=0）"
+        >
+          点击换页{slide.advClick === false ? ' · 关' : ''}
+        </button>
         {/* v0.115：揭示序可调。只有 ≥2 项时才给入口——一项的次序没有可排的东西 */}
         {seqItems.length > 1 && (
           <button
@@ -729,6 +1038,20 @@ function PptEditor({ tab }: Props) {
             播放顺序 {seqItems.length}
           </button>
         )}
+        <button
+          className={`tool-btn${showMaster ? ' tool-btn-primary' : ''}`}
+          onClick={() => setShowMaster((v) => !v)}
+          title="母版背景与配色：整份 deck 生效，随 .opd 与 pptx 往返"
+        >
+          母版配色
+        </button>
+        <button
+          className={`tool-btn${showPlaceholders ? ' tool-btn-primary' : ''}`}
+          onClick={() => setShowPlaceholders((v) => !v)}
+          title="母版占位框：显示标题与正文两枚占位矩形，拖动平移、右下角缩放；改动写回母版，导出 pptx / PDF 与放映跟随"
+        >
+          占位框
+        </button>
         <label className="tool-num" title="放映时到秒自动换页；随 pptx advTm 往返">
           换页
           <input
@@ -758,6 +1081,24 @@ function PptEditor({ tab }: Props) {
         >
           放映
         </button>
+        <span className="tool-sep" />
+        {/* v0.178：七档刻度，与 Writer 的视图缩放同一份定义；只改屏幕，打印/导出/放映按 100% */}
+        <span className="ppt-zoom" title="视图缩放：只改屏幕上的舞台，导出 pptx/PDF 与放映始终按 100%；也可在舞台区按 Ctrl+滚轮">
+          <button className="tool-btn" onClick={() => setZoom((z) => zoomStep(z, -1))} title="缩小一档">−</button>
+          <select
+            className="tool-select"
+            value={String(zoom)}
+            onChange={(e) => setZoom(clampZoom(Number(e.target.value)))}
+          >
+            {ZOOM_STEPS.map((s) => (
+              <option key={s} value={s}>{zoomPct(s)}</option>
+            ))}
+          </select>
+          <button className="tool-btn" onClick={() => setZoom((z) => zoomStep(z, 1))} title="放大一档">＋</button>
+          <button className="tool-btn" onClick={() => setZoom(1)} title="回到 100%">100%</button>
+          <button className="tool-btn" onClick={() => fitTo('width')} title="适合页宽：按幻灯片宽铺满舞台区">↔</button>
+          <button className="tool-btn" onClick={() => fitTo('page')} title="适合整页：幻灯片连高一起装下">⤢</button>
+        </span>
         {status && (
           <span className="editor-status" title={statusTip(status)}>
             {statusText(status)}
@@ -803,6 +1144,74 @@ function PptEditor({ tab }: Props) {
         </div>
       )}
 
+      {/* v0.182：母版配色。复用播放顺序面板的样式与形状，写入统一走 patchMaster */}
+      {showMaster && (
+        <div className="ppt-seq-panel">
+          <span className="ppt-seq-label">母版背景 / 配色</span>
+          <input
+            ref={masterBgRef}
+            type="file"
+            accept="image/*"
+            style={{ display: 'none' }}
+            onChange={(e) => {
+              const f = e.target.files?.[0]
+              e.target.value = ''
+              // 别走 pickImage（那个写单页 s.image）；这里只写 deck.master.bgImage
+              if (f) void fileToDataUri(f).then((uri) => patchMaster({ bgImage: uri }))
+            }}
+          />
+          <label className="ppt-seq-item" title="母版底色；单页背景会盖住它">
+            底色
+            <input
+              type="color"
+              className="ppt-shape-color"
+              value={hexOr(m?.bg, stageColors(deck).bg)}
+              onChange={(e) => patchMaster({ bg: e.target.value })}
+            />
+          </label>
+          <label className="ppt-seq-item" title="标题与强调色">
+            标题色
+            <input
+              type="color"
+              className="ppt-shape-color"
+              value={hexOr(m?.titleColor, stageColors(deck).accent)}
+              onChange={(e) => patchMaster({ titleColor: e.target.value })}
+            />
+          </label>
+          <label className="ppt-seq-item" title="正文文字色">
+            正文色
+            <input
+              type="color"
+              className="ppt-shape-color"
+              value={hexOr(m?.bodyColor, stageColors(deck).fg)}
+              onChange={(e) => patchMaster({ bodyColor: e.target.value })}
+            />
+          </label>
+          <button className="tool-btn tool-btn-mini" onClick={() => masterBgRef.current?.click()}>
+            背景图…
+          </button>
+          <button
+            className="tool-btn tool-btn-mini"
+            disabled={!m?.bgImage}
+            onClick={() => patchMaster({ bgImage: undefined })}
+          >
+            清除背景图
+          </button>
+          <button
+            className="tool-btn tool-btn-mini"
+            title="去掉母版四色，回落到当前主题"
+            onClick={() =>
+              patchMaster({ bg: undefined, bgImage: undefined, titleColor: undefined, bodyColor: undefined })
+            }
+          >
+            恢复主题
+          </button>
+          <span className="ppt-seq-hint">
+            整份 deck 生效；背景图会盖住纯色底色，占位矩形用「占位框」按钮拖动编辑
+          </span>
+        </div>
+      )}
+
       <div className="ppt-body">
         <div className="ppt-sidebar">
           {deck.slides.map((s, i) => (
@@ -819,7 +1228,7 @@ function PptEditor({ tab }: Props) {
           ))}
         </div>
 
-        <div className="ppt-stage-wrap">
+        <div className="ppt-stage-wrap" ref={stageWrapRef}>
           <div
             ref={stageRef}
             className="ppt-stage"
@@ -829,6 +1238,30 @@ function PptEditor({ tab }: Props) {
               setEditingShape(null)
             }}
           >
+            {/* v0.186：母版占位框。百分比定位相对 .ppt-stage 自身，随舞台内联 zoom
+                一起缩放；拖动/缩放都写回 deck.master，导出与放映走的是同一份矩形 */}
+            {showPlaceholders &&
+              (['title', 'body'] as const).map((kind) => (
+                <div
+                  key={kind}
+                  className={`ppt-master-rect ppt-master-rect-${kind}`}
+                  style={{ ...rectStyle(rectFor(deck.master, kind)), zIndex: 50 }}
+                  onPointerDown={(e) => masterPointerDown(e, kind, 'move')}
+                  onPointerMove={masterPointerMove}
+                  onPointerUp={masterPointerUp}
+                  title={`母版${kind === 'title' ? '标题' : '正文'}占位框：拖动平移，右下角手柄缩放`}
+                >
+                  <span className="ppt-master-rect-tag">
+                    {kind === 'title' ? '标题占位' : '正文占位'}
+                  </span>
+                  <span
+                    className="ppt-master-rect-handle"
+                    onPointerDown={(e) => masterPointerDown(e, kind, 'resize')}
+                    onPointerMove={masterPointerMove}
+                    onPointerUp={masterPointerUp}
+                  />
+                </div>
+              ))}
             {slide.layout === 'title' ? (
               <div className="ppt-edit-title-wrap">
                 <textarea
@@ -911,7 +1344,19 @@ function PptEditor({ tab }: Props) {
                 color: sh.color ?? fgColor,
                 fontSize: `${(sh.sizePt ?? 18) / 18}em`,
                 fontWeight: sh.bold ? 700 : undefined,
+                fontStyle: sh.italic ? 'italic' : undefined, // v0.140
+                textDecoration: sh.underline ? 'underline' : undefined, // v0.140
                 textAlign: sh.align,
+                ...(sh.anchor
+                  ? {
+                      display: 'flex',
+                      flexDirection: 'column',
+                      justifyContent:
+                        sh.anchor === 'middle' ? 'center' : sh.anchor === 'bottom' ? 'flex-end' : 'flex-start',
+                    }
+                  : {}), // v0.140
+                ...(sh.wrap === false ? { whiteSpace: 'nowrap' } : {}), // v0.140
+                ...(m?.minorFont ? { fontFamily: m.minorFont } : {}), // v0.140：导入的主题正文字族
               }
               return (
                 <div
@@ -925,6 +1370,22 @@ function PptEditor({ tab }: Props) {
                 >
                   {sh.kind === 'image' ? (
                     <img className="ppt-shape-img" src={sh.image} alt="" draggable={false} />
+                  ) : sh.kind === 'table' && sh.table ? (
+                    editingShape === sh.id ? (
+                      <TableGrid
+                        t={sh.table}
+                        onChange={(rows) => patchShape(sh.id, { table: { ...sh.table!, rows } })}
+                      />
+                    ) : (
+                      <TableInner
+                        t={sh.table}
+                        fg={fgColor}
+                        accent={accentColor}
+                        sizeEm={`${(sh.table.sizePt ?? 14) / 18}em`}
+                      />
+                    )
+                  ) : sh.kind === 'chart' && sh.chart ? (
+                    <ChartPreview sh={sh} />
                   ) : editingShape === sh.id ? (
                     <textarea
                       className="ppt-shape-textedit"
@@ -974,6 +1435,44 @@ function PptEditor({ tab }: Props) {
                               title="粗体"
                             >
                               B
+                            </button>
+                            {/* v0.141：斜体与下划线。读侧 v0.140 才收进来，界面这一轮补入口；
+                                下划线只表达「有线」，双线/点线导入时降级成单线 */}
+                            <button
+                              className={`tool-btn tool-btn-mini ppt-btn-italic${sh.italic ? ' tool-btn-primary' : ''}`}
+                              onClick={() => patchShape(sh.id, { italic: !sh.italic })}
+                              title="斜体（随 pptx rPr@i 往返）"
+                            >
+                              I
+                            </button>
+                            <button
+                              className={`tool-btn tool-btn-mini ppt-btn-underline${sh.underline ? ' tool-btn-primary' : ''}`}
+                              onClick={() => patchShape(sh.id, { underline: !sh.underline })}
+                              title="下划线（随 pptx rPr@u 往返；只表达单线）"
+                            >
+                              U
+                            </button>
+                            <select
+                              className="tool-select"
+                              value={sh.anchor ?? ''}
+                              title="文本在框内的垂直锚点（bodyPr@anchor）"
+                              onChange={(e) =>
+                                patchShape(sh.id, {
+                                  anchor: (e.target.value || undefined) as SlideShape['anchor'],
+                                })
+                              }
+                            >
+                              <option value="">锚点</option>
+                              <option value="top">靠上</option>
+                              <option value="middle">居中</option>
+                              <option value="bottom">靠下</option>
+                            </select>
+                            <button
+                              className={`tool-btn tool-btn-mini${sh.wrap === false ? ' tool-btn-primary' : ''}`}
+                              onClick={() => patchShape(sh.id, { wrap: sh.wrap === false ? undefined : false })}
+                              title="不换行：文本溢出框外也不折行（bodyPr@wrap=none）"
+                            >
+                              不换行
                             </button>
                             <input
                               type="color"
@@ -1029,6 +1528,263 @@ function PptEditor({ tab }: Props) {
                                 ×
                               </button>
                             )}
+                          </>
+                        )}
+                        {sh.kind === 'table' && sh.table && (
+                          <>
+                            <button
+                              className="tool-btn tool-btn-mini"
+                              title="加一行"
+                              onClick={() => {
+                                const d = tableDims(sh.table!)
+                                patchShape(sh.id, { table: resizeTable(sh.table!, d.rows + 1, d.cols) })
+                              }}
+                            >
+                              行＋
+                            </button>
+                            <button
+                              className="tool-btn tool-btn-mini"
+                              title="删一行（至少留 1 行）"
+                              onClick={() => {
+                                const d = tableDims(sh.table!)
+                                patchShape(sh.id, {
+                                  table: resizeTable(sh.table!, Math.max(1, d.rows - 1), d.cols),
+                                })
+                              }}
+                            >
+                              行－
+                            </button>
+                            <button
+                              className="tool-btn tool-btn-mini"
+                              title="加一列"
+                              onClick={() => {
+                                const d = tableDims(sh.table!)
+                                patchShape(sh.id, { table: resizeTable(sh.table!, d.rows, d.cols + 1) })
+                              }}
+                            >
+                              列＋
+                            </button>
+                            <button
+                              className="tool-btn tool-btn-mini"
+                              title="删一列（至少留 1 列）"
+                              onClick={() => {
+                                const d = tableDims(sh.table!)
+                                patchShape(sh.id, {
+                                  table: resizeTable(sh.table!, d.rows, Math.max(1, d.cols - 1)),
+                                })
+                              }}
+                            >
+                              列－
+                            </button>
+                            <button
+                              className={`tool-btn tool-btn-mini${sh.table!.hasHeader ? ' tool-btn-primary' : ''}`}
+                              title="首行当表头（导出时 PowerPoint 认它是表头行）"
+                              onClick={() =>
+                                patchShape(sh.id, {
+                                  table: { ...sh.table!, hasHeader: !sh.table!.hasHeader },
+                                })
+                              }
+                            >
+                              表头
+                            </button>
+                            <button
+                              className={`tool-btn tool-btn-mini${sh.table!.border !== false ? ' tool-btn-primary' : ''}`}
+                              title="显示格线"
+                              onClick={() =>
+                                patchShape(sh.id, {
+                                  table: {
+                                    ...sh.table!,
+                                    border: sh.table!.border === false ? undefined : false,
+                                  },
+                                })
+                              }
+                            >
+                              格线
+                            </button>
+                            <input
+                              className="tool-num-input"
+                              type="number"
+                              min={6}
+                              max={96}
+                              value={sh.table!.sizePt ?? 14}
+                              title="表内字号（磅）"
+                              onChange={(e) =>
+                                patchShape(sh.id, {
+                                  table: {
+                                    ...sh.table!,
+                                    sizePt: Math.min(96, Math.max(6, Number(e.target.value) || 14)),
+                                  },
+                                })
+                              }
+                            />
+                            <input
+                              type="color"
+                              className="ppt-shape-color"
+                              title="表头底色"
+                              value={
+                                /^#[0-9a-fA-F]{6}$/.test(sh.table!.headerFill ?? '')
+                                  ? sh.table!.headerFill!
+                                  : accentColor
+                              }
+                              onChange={(e) =>
+                                patchShape(sh.id, { table: { ...sh.table!, headerFill: e.target.value } })
+                              }
+                            />
+                            {/* v0.141：隔行底纹。pptxgenjs 那一行在它源码里是注释，
+                                所以这一枚只能靠解包注入落盘（见 pptx-export） */}
+                            <button
+                              className={`tool-btn tool-btn-mini${sh.table!.bandRow ? ' tool-btn-primary' : ''}`}
+                              title="隔行底纹（tblPr@bandRow）"
+                              onClick={() =>
+                                patchShape(sh.id, { table: { ...sh.table!, bandRow: !sh.table!.bandRow } })
+                              }
+                            >
+                              隔行
+                            </button>
+                            {/* v0.141：列宽/行高。存的是占比（和为 1），这里按百分数给入口；
+                                列（行）数多的时候不给逐枚入口——属性条会挤成两行还看不清是哪一列 */}
+                            {tableDims(sh.table).cols <= 6 && (
+                              <span className="ppt-bar-group">
+                                <span className="ppt-bar-label">列宽%</span>
+                                {Array.from({ length: tableDims(sh.table).cols }, (_, i) => (
+                                  <input
+                                    key={i}
+                                    className="tool-num-input"
+                                    type="number"
+                                    min={5}
+                                    max={90}
+                                    step={5}
+                                    title={`第 ${i + 1} 列宽度占比`}
+                                    value={Math.round((sh.table!.colW?.[i] ?? 1 / tableDims(sh.table!).cols) * 100)}
+                                    onChange={(e) =>
+                                      patchShape(sh.id, {
+                                        table: setTableSpan(
+                                          sh.table!,
+                                          'col',
+                                          i,
+                                          (Number(e.target.value) || 0) / 100,
+                                        ),
+                                      })
+                                    }
+                                  />
+                                ))}
+                                <button
+                                  className="tool-btn tool-btn-mini"
+                                  title="各列等宽（清掉列宽占比）"
+                                  onClick={() =>
+                                    patchShape(sh.id, {
+                                      table: { ...sh.table!, colW: undefined },
+                                    })
+                                  }
+                                >
+                                  等分
+                                </button>
+                              </span>
+                            )}
+                            {tableDims(sh.table).rows <= 6 && (
+                              <span className="ppt-bar-group">
+                                <span className="ppt-bar-label">行高%</span>
+                                {Array.from({ length: tableDims(sh.table).rows }, (_, i) => (
+                                  <input
+                                    key={i}
+                                    className="tool-num-input"
+                                    type="number"
+                                    min={5}
+                                    max={90}
+                                    step={5}
+                                    title={`第 ${i + 1} 行高度占比`}
+                                    value={Math.round((sh.table!.rowH?.[i] ?? 1 / tableDims(sh.table!).rows) * 100)}
+                                    onChange={(e) =>
+                                      patchShape(sh.id, {
+                                        table: setTableSpan(
+                                          sh.table!,
+                                          'row',
+                                          i,
+                                          (Number(e.target.value) || 0) / 100,
+                                        ),
+                                      })
+                                    }
+                                  />
+                                ))}
+                                <button
+                                  className="tool-btn tool-btn-mini"
+                                  title="各行等高（清掉行高占比，交给 PowerPoint 自适应）"
+                                  onClick={() =>
+                                    patchShape(sh.id, {
+                                      table: { ...sh.table!, rowH: undefined },
+                                    })
+                                  }
+                                >
+                                  等分
+                                </button>
+                              </span>
+                            )}
+                            <button
+                              className={`tool-btn tool-btn-mini${editingShape === sh.id ? ' tool-btn-primary' : ''}`}
+                              title="逐个格子改字（也可以直接双击表格）"
+                              onClick={() => setEditingShape(editingShape === sh.id ? null : sh.id)}
+                            >
+                              {editingShape === sh.id ? '改完' : '改字'}
+                            </button>
+                          </>
+                        )}
+                        {/* v0.141：形状名与替代文本。前者是 PowerPoint 选择窗格/动画目标认人的
+                            名字，后者是屏幕阅读器念的图说——导入都带得回来，此前却无处手改 */}
+                        <span className="ppt-bar-group">
+                          <input
+                            className="ppt-bar-text"
+                            value={sh.name ?? ''}
+                            placeholder="形状名"
+                            title="形状名（cNvPr@name）：PowerPoint 选择窗格与动画目标用它认人"
+                            onChange={(e) => patchShape(sh.id, { name: e.target.value || undefined })}
+                          />
+                          <input
+                            className="ppt-bar-text"
+                            value={sh.alt ?? ''}
+                            placeholder="替代文本"
+                            title="替代文本（cNvPr@descr）：屏幕阅读器念的图说"
+                            onChange={(e) => patchShape(sh.id, { alt: e.target.value || undefined })}
+                          />
+                        </span>
+                        {sh.kind === 'chart' && sh.chart && (
+                          <>
+                            <select
+                              className="tool-select"
+                              value={sh.chart!.chartType}
+                              title="图型"
+                              onChange={(e) =>
+                                patchShape(sh.id, {
+                                  chart: {
+                                    ...sh.chart!,
+                                    chartType: e.target.value as SlideChartType,
+                                  },
+                                })
+                              }
+                            >
+                              {(Object.entries(SLIDE_CHART_NAMES) as [SlideChartType, string][]).map(
+                                ([k, nm]) => (
+                                  <option key={k} value={k}>
+                                    {nm}
+                                  </option>
+                                ),
+                              )}
+                            </select>
+                            <button
+                              className={`tool-btn tool-btn-mini${chartCsvFor === sh.id ? ' tool-btn-primary' : ''}`}
+                              title="改数据（首行系列名，首列类目，逗号分隔）"
+                              onClick={() => setChartCsvFor(chartCsvFor === sh.id ? null : sh.id)}
+                            >
+                              数据
+                            </button>
+                            <button
+                              className={`tool-btn tool-btn-mini${sh.chart!.stacked ? ' tool-btn-primary' : ''}`}
+                              title="堆叠（饼图不认这一档）"
+                              onClick={() =>
+                                patchShape(sh.id, { chart: { ...sh.chart!, stacked: !sh.chart!.stacked } })
+                              }
+                            >
+                              堆叠
+                            </button>
                           </>
                         )}
                         <button
@@ -1097,6 +1853,29 @@ function PptEditor({ tab }: Props) {
                           删除
                         </button>
                       </div>
+                      {chartCsvFor === sh.id && sh.chart && (
+                        <div className="ppt-chart-data" onPointerDown={(e) => e.stopPropagation()}>
+                          <span className="ppt-chart-data-label">
+                            首行系列名 · 首列类目 · 逗号分隔
+                          </span>
+                          <textarea
+                            key={sh.id}
+                            className="ppt-chart-data-csv"
+                            defaultValue={chartToCsv(sh.chart)}
+                            onChange={(e) => {
+                              const { cats, series } = parseChartCsv(e.target.value)
+                              if (!series.length) return
+                              patchShape(sh.id, { chart: { ...sh.chart!, cats, series } })
+                            }}
+                          />
+                          <button
+                            className="tool-btn tool-btn-mini"
+                            onClick={() => setChartCsvFor(null)}
+                          >
+                            收起
+                          </button>
+                        </div>
+                      )}
                     </>
                   )}
                 </div>

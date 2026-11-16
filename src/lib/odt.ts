@@ -9,9 +9,11 @@ import {
   pageNumberParts,
   resolvePage,
   type DocMeta,
+  type DocProps,
   type DocComment,
   type DocxStyleInfo,
   type PageMargin,
+  type PageBorders,
   type PageSetup,
   type PMNode,
 } from './docx'
@@ -33,6 +35,61 @@ const OD_MIME = 'application/vnd.oasis.opendocument.text'
 
 // mm → ODF 长度字面量（cm 两位小数）
 const mm2cm = (mm: number) => `${(mm / 10).toFixed(2)}cm`
+
+/** 页面边框（v0.193）：docx 的 `w:val` 四档 ↔ ODF 的 fo:border 线型 */
+const OOXML_TO_ODF_BORDER: Record<string, string> = {
+  single: 'solid', dotted: 'dotted', dashed: 'dashed', double: 'double',
+}
+const ODF_TO_OOXML_BORDER: Record<string, string> = {
+  solid: 'single', dotted: 'dotted', dashed: 'dashed', double: 'double',
+}
+const ODF_LEN_PT: Record<string, number> = { pt: 1, cm: 28.3465, mm: 2.83465 }
+
+/**
+ * `PageBorders` → `style:page-layout-properties` 上的属性串。
+ * 没设边框就返回空串（默认路径一个属性都不发，别污染没有边框的 .odt）。
+ * `w:sz`（八分之一磅）直接除 8 得 pt，四档线型与 `pageBorderCss` 同一套口径；
+ * `w:space`（磅）写 ODF 的 fo:padding。屏上是 CSS 近似、ODF 是四边同值，
+ * 这两层边界与 docx 链一致。
+ */
+export function odtPageBorderAttrs(b: PageBorders | undefined): string {
+  if (!b) return ''
+  const style = OOXML_TO_ODF_BORDER[b.style] ?? 'solid'
+  const pt = b.size / 8
+  const color = /^[0-9a-fA-F]{6}$/.test(b.color) ? b.color : '000000'
+  return `fo:border="${pt}pt ${style} #${color}"` + (b.space ? ` fo:padding="${b.space}pt"` : '')
+}
+
+/**
+ * ODF 页面边框反解：只认「宽度 + 四档线型 + #rrggbb」这一形，
+ * 认不出就返回 undefined（宁可没有边框，也别给模型造一个错档位）。
+ * 第三方件常写 cm/mm，按 ODF 换算折回 pt；四边分写时只认 top 那一枚。
+ */
+export function parseOdtPageBorderAttrs(a: {
+  border?: string | null
+  borderTop?: string | null
+  padding?: string | null
+  paddingTop?: string | null
+}): PageBorders | undefined {
+  const v = (a.border || a.borderTop || '').trim()
+  const m = /^([\d.]+)(pt|cm|mm)?\s+(solid|dotted|dashed|double)\s+#([0-9a-fA-F]{6})$/.exec(v)
+  if (!m) return undefined
+  const len = Number(m[1]) * (ODF_LEN_PT[m[2] || 'pt'] ?? 1)
+  if (!Number.isFinite(len) || len <= 0) return undefined
+  const out: PageBorders = {
+    style: ODF_TO_OOXML_BORDER[m[3]] ?? 'single',
+    color: m[4],
+    size: Math.max(2, Math.min(96, Math.round(len * 8))),
+  }
+  const pv = (a.padding || a.paddingTop || '').trim()
+  const pm = /^([\d.]+)(pt|cm|mm)?$/.exec(pv)
+  if (pm) {
+    const space = Math.round(Number(pm[1]) * (ODF_LEN_PT[pm[2] || 'pt'] ?? 1))
+    if (Number.isFinite(space) && space > 0 && space <= 31) out.space = space
+  }
+  return out
+}
+
 // CSS px → ODF 长度：缩进写 cm，三位小数以免往返掉精度（32px ≈ 0.847cm）
 const px2cm = (px: number) => `${(px / 37.795).toFixed(3)}cm`
 // CSS px → ODF 长度：段前段后与绝对行距写 pt（px↔pt 是精确换算，cm 第三位小数就会磨掉零点几 px）
@@ -176,6 +233,58 @@ function esc(s: string): string {
     .replace(/</g, '&lt;')
     .replace(/>/g, '&gt;')
     .replace(/"/g, '&quot;')
+}
+
+/**
+ * 文档属性五格 → ODF `meta.xml`（v0.191）。
+ *
+ * docx 侧 v0.188 已做 `DocMeta.docProps` 的读写链，ODT 侧此前**根本不发
+ * meta.xml**——导入别人的 .odt 另存一次，标题/作者/关键词全没。这里走 ODF
+ * 标准的 office:document-meta / office:meta，只发非空格（没话说的件不发空元素）；
+ * keyword 允许重复多枚，本实现只发一枚整体串，见 README 诚实边界。
+ */
+export function odtMetaXml(props?: DocProps): string {
+  const el = (tag: string, v?: string) => (v ? `<${tag}>${esc(v)}</${tag}>` : '')
+  return `<?xml version="1.0" encoding="UTF-8"?>` +
+    `<office:document-meta xmlns:office="urn:oasis:names:tc:opendocument:xmlns:office:1.0" ` +
+    `xmlns:dc="http://purl.org/dc/elements/1.1/" ` +
+    `xmlns:meta="urn:oasis:names:tc:opendocument:xmlns:meta:1.0" office:version="1.2">` +
+    `<office:meta>` +
+    el('dc:title', props?.title) +
+    el('dc:subject', props?.subject) +
+    el('dc:creator', props?.creator) +
+    el('meta:keyword', props?.keywords) +
+    el('dc:description', props?.description) +
+    `</office:meta></office:document-meta>`
+}
+
+/** `meta.xml` → 五格。字符串定位，不按标签名编译动态正则；实体按 esc() 的逆序解 */
+export function parseOdtMetaProps(xml: string): DocProps | undefined {
+  const unesc = (s: string) => s
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&quot;/g, '"')
+    .replace(/&amp;/g, '&')
+  const grab = (tag: string) => {
+    const i = xml.indexOf(`<${tag}`)
+    if (i < 0) return ''
+    const gt = xml.indexOf('>', i)
+    const close = xml.indexOf(`</${tag}>`, gt)
+    if (gt < 0 || close < 0) return ''
+    return unesc(xml.slice(gt + 1, close)).replace(/\s+/g, ' ').trim()
+  }
+  const out: DocProps = {}
+  const title = grab('dc:title')
+  const subject = grab('dc:subject')
+  const creator = grab('dc:creator')
+  const keywords = grab('meta:keyword')
+  const description = grab('dc:description')
+  if (title) out.title = title
+  if (subject) out.subject = subject
+  if (creator) out.creator = creator
+  if (keywords) out.keywords = keywords
+  if (description) out.description = description
+  return Object.keys(out).length ? out : undefined
 }
 
 interface ImageEntry {
@@ -720,8 +829,18 @@ class OdtBuilder {
           }
           inner = `<text:span text:style-name="${name}">${inner}</text:span>`
         }
-        const href = at('link')?.href as string | undefined
-        if (href) inner = `<text:a xlink:type="simple" xlink:href="${esc(href)}">${inner}</text:a>`
+        const link = at('link')
+        const href = link?.href as string | undefined
+        if (href) {
+          // v0.194：ODF 的 <text:a> 有 xlink:title（链接提示）与
+          // office:target-frame-name（目标框架）两枚标准属性，正好对应 docx 的
+          // w:tooltip / w:tgtFrame。PM link mark 自带 title/target 两格，
+          // 此前 ODT 写手只发 href、读手只读 href，另存一次就把这两枚抹掉了。
+          // 只发非空格：没说过的件不写空属性（Office 命名空间已在根声明）。
+          const title = typeof link?.title === 'string' && link.title ? ` xlink:title="${esc(link.title)}"` : ''
+          const target = typeof link?.target === 'string' && link.target ? ` office:target-frame-name="${esc(link.target)}"` : ''
+          inner = `<text:a xlink:type="simple" xlink:href="${esc(href)}"${title}${target}>${inner}</text:a>`
+        }
         out += inner
       } else if (n.type === 'hardBreak') {
         out += '<text:line-break/>'
@@ -953,11 +1072,13 @@ class OdtBuilder {
       .filter((p) => /office|style|text|fo/.test(p))
       .join(' ')
     const pg = resolvePage(this.meta?.page)
+    const borderAttrs = odtPageBorderAttrs(pg.pageBorders)
     const pageProps =
       `<style:page-layout-properties ` +
       `fo:page-width="${mm2cm(pg.w)}" fo:page-height="${mm2cm(pg.h)}" ` +
       `fo:margin-top="${mm2cm(pg.margin.top)}" fo:margin-bottom="${mm2cm(pg.margin.bottom)}" ` +
       `fo:margin-left="${mm2cm(pg.margin.left)}" fo:margin-right="${mm2cm(pg.margin.right)}" ` +
+      (borderAttrs ? `${borderAttrs} ` : '') +
       `style:num-format="1"/>`
     // 多栏：ODF 的栏数写在 page-layout 的 style:columns，栏分隔子元素个数 = 栏数-1（等宽用 rel-width="*"）
     const columns =
@@ -984,7 +1105,8 @@ class OdtBuilder {
     let entries =
       `<manifest:file-entry manifest:full-path="/" manifest:media-type="${OD_MIME}"/>` +
       `<manifest:file-entry manifest:full-path="content.xml" manifest:media-type="text/xml"/>` +
-      `<manifest:file-entry manifest:full-path="styles.xml" manifest:media-type="text/xml"/>`
+      `<manifest:file-entry manifest:full-path="styles.xml" manifest:media-type="text/xml"/>` +
+      `<manifest:file-entry manifest:full-path="meta.xml" manifest:media-type="text/xml"/>`
     for (const e of this.images.values()) {
       entries += `<manifest:file-entry manifest:full-path="${e.file}" manifest:media-type="${e.mime}"/>`
     }
@@ -1013,6 +1135,8 @@ export async function prosemirrorToOdtBytes(json: PMNode, meta?: DocMeta): Promi
   zip.file('META-INF/manifest.xml', parts.manifest)
   zip.file('content.xml', parts.content)
   zip.file('styles.xml', parts.styles)
+  // v0.191：文档属性随 .odt 往返（与 docx 的 DocMeta.docProps 同一份模型）
+  zip.file('meta.xml', odtMetaXml(meta?.docProps))
   for (const e of builder.images.values()) zip.file(e.file, e.bytes)
   return zip.generateAsync({ type: 'uint8array', compression: 'DEFLATE' }) as Promise<Uint8Array>
 }
@@ -1081,7 +1205,9 @@ const LIST_WRAPPERS = new Set(['list-header', 'list-footer'])
 
 /** 后代里首个指定 local name 的元素（不含自身）：draw:frame 与内容之间还隔着一层的情形 */
 function findLocal(el: Element, localName: string): Element | null {
-  for (const d of Array.from(el.getElementsByTagName('*'))) if (d.localName === localName) return d
+  // v0.181：直接遍历 HTMLCollection 早停，不再先 Array.from 物化整棵子树
+  const all = el.getElementsByTagName('*')
+  for (let i = 0; i < all.length; i++) if (all[i].localName === localName) return all[i]
   return null
 }
 
@@ -1261,12 +1387,23 @@ const stripPageTokens = (t: string) =>
     .filter((x) => x && x !== '第' && x !== '页' && x !== '共' && x !== '·' && x !== '-' && x !== '/' && !/^\d+$/.test(x))
     .join(' ')
 
-export async function odtToHtml(bytes: Uint8Array): Promise<{ html: string; meta: DocMeta; warnings: string[] }> {
+export async function odtToHtml(
+  bytes: Uint8Array,
+  opts?: { cacheDesc?: boolean },
+): Promise<{ html: string; meta: DocMeta; warnings: string[] }> {
+  // v0.181：cdoc（content.xml）与 sdoc（styles.xml）此前被
+  // `Array.from(getElementsByTagName('*'))` 各物化 3~5 次，每次新建一整份数组。
+  // 导入期间这两棵树不再变，各物化一次复用即可；其余子树只查一次，不缓存
+  // （给它们挂 WeakMap 是纯亏损）。`cacheDesc: false` 保留改前路径，让 A/B 两腿
+  // 同源、只差这一个参数（v0.180 的纪律，不依赖会过期的手工 git archive 副本）。
+  /** cdoc / sdoc 是 Document，其余子树是 Element——两者都有 getElementsByTagName */
+  const descOf = (el: Element | Document): Element[] => Array.from(el.getElementsByTagName('*'))
   const { default: JSZip } = await import('jszip')
   const zip = await JSZip.loadAsync(bytes)
   const contentText = await zip.file('content.xml')?.async('string')
   if (!contentText) throw new Error('odt 缺少 content.xml')
   const stylesText = (await zip.file('styles.xml')?.async('string')) ?? ''
+  const metaText = (await zip.file('meta.xml')?.async('string')) ?? ''
   const parser = new DOMParser()
   const cdoc = parser.parseFromString(contentText, 'text/xml')
   // 解析失败时 DOMParser 不抛错，只给一棵 parsererror 树：不挡的话整篇是"打开了一份空白文档"，
@@ -1274,6 +1411,11 @@ export async function odtToHtml(bytes: Uint8Array): Promise<{ html: string; meta
   const perr = cdoc.getElementsByTagName('parsererror')[0]
   if (perr) throw new Error(`content.xml 不是合法的 XML：${(perr.textContent ?? '').replace(/\s+/g, ' ').trim().slice(0, 160)}`)
   const sdoc = stylesText ? parser.parseFromString(stylesText, 'text/xml') : null
+
+  // 缓存腿预物化两棵树；对照腿（cacheDesc:false）不预物化，保持与改前逐字同形
+  const cdocAll = opts?.cacheDesc === false ? null : descOf(cdoc)
+  const sdocAll = opts?.cacheDesc === false || !sdoc ? null : descOf(sdoc)
+  const allDescOf = (el: Element | Document, cache?: Element[] | null): Element[] => cache ?? descOf(el)
 
   /** 与 docx 保真导入同一套边界账：同类只记一条，出口写成「文案×N」，显示在状态栏而不是静默丢 */
   const warnCount = new Map<string, number>()
@@ -1286,7 +1428,7 @@ export async function odtToHtml(bytes: Uint8Array): Promise<{ html: string; meta
   const openCids: number[] = []
   const pointCids: number[] = []
   const endNames = new Set(
-    Array.from(cdoc.getElementsByTagName('*'))
+    allDescOf(cdoc, cdocAll)
       .filter((x) => x.localName === 'annotation-end')
       .map((x) => x.getAttribute('office:name') ?? ''),
   )
@@ -1318,7 +1460,7 @@ export async function odtToHtml(bytes: Uint8Array): Promise<{ html: string; meta
   let paraDefaultSize = ''
   for (const d of [cdoc, sdoc]) {
     if (!d) continue
-    for (const el of Array.from(d.getElementsByTagName('*'))) {
+    for (const el of allDescOf(d, d === cdoc ? cdocAll : sdocAll)) {
       if (el.localName === 'style') {
         const name = el.getAttribute('style:name')
         if (name && !styles.has(name)) styles.set(name, el)
@@ -1331,7 +1473,7 @@ export async function odtToHtml(bytes: Uint8Array): Promise<{ html: string; meta
         const name = el.getAttribute('style:name')
         if (!name) continue
         const lv = new Map<number, ListLevel>()
-        for (const x of Array.from(el.getElementsByTagName('*'))) {
+        for (const x of allDescOf(el)) {
           const num = x.localName === 'list-level-style-number'
           if (!num && x.localName !== 'list-level-style-bullet') continue
           // 专字只从这一层自己的直接孩子里取：编号层不吃（真件可达 number 层 0/37 带 text-properties，b45 c2|D），
@@ -1717,7 +1859,7 @@ export async function odtToHtml(bytes: Uint8Array): Promise<{ html: string; meta
   const noteBodies = new Map<string, Element>()
   // 同一趟预扫里收「被独立引用枚配走的那些 id」：老式内联锚要不要自己出正文，取决于本件有没有别处已经在配它
   const refClaimed = new Set<string>()
-  for (const el of Array.from(cdoc.getElementsByTagName('*'))) {
+  for (const el of allDescOf(cdoc, cdocAll)) {
     if (el.localName === 'footnote-reference' || el.localName === 'endnote-reference' || el.localName === 'note-reference') {
       const id = el.getAttribute('text:id')
       if (id) refClaimed.add(id)
@@ -1844,7 +1986,7 @@ export async function odtToHtml(bytes: Uint8Array): Promise<{ html: string; meta
       const root = doc.documentElement
       if (!root || doc.querySelector('parsererror')) continue
       // 只认有呈现标记的那类；剩下是 StarOffice 源码或二进制注释，塞进正文等于凭空造字
-      if (Array.from(root.getElementsByTagName('*')).some((x) => MATH_LEAF.has(x.localName))) return mathmlLinear(root)
+      if (allDescOf(root).some((x) => MATH_LEAF.has(x.localName))) return mathmlLinear(root)
       return ''
     }
     return ''
@@ -1919,20 +2061,30 @@ export async function odtToHtml(bytes: Uint8Array): Promise<{ html: string; meta
           case 'span':
             out += htmlOfStyle(resolveStyle(e.getAttribute('text:style-name')), await renderInline(e))
             break
-          case 'a':
-            out += `<a href="${escapeHtml(e.getAttribute('xlink:href') ?? '')}">${await renderInline(e)}</a>`
+          case 'a': {
+            // v0.194：把 ODF 的 xlink:title / office:target-frame-name 读回 HTML
+            // <a title/target>，TipTap 的 link mark 自带这两格，于是与 docx 链共用；
+            // 用 esc（含引号转义）而不是 escapeHtml（只转 & < >）写新增属性，属性值不会被写坏；
+            // href 仍走原来的 escapeHtml，没设这两枚的件产出与改前逐字相同。
+            const title = e.getAttribute('xlink:title') ?? ''
+            const target = e.getAttribute('office:target-frame-name') ?? ''
+            out += `<a href="${escapeHtml(e.getAttribute('xlink:href') ?? '')}"` +
+              (title ? ` title="${esc(title)}"` : '') +
+              (target ? ` target="${esc(target)}"` : '') +
+              `>${await renderInline(e)}</a>`
             break
+          }
           case 'annotation': {
             // 批注本体：收进 DocComment（作者/日期/正文），正文不摊进段落；区间从此处包 span
             // 不收 e 的孩子——批注的 text:p 是内容不是正文，掉进 default 递归就会整段漏进文档（v0.86 前置实测量到的污染格）
-            const bodyPs = Array.from(e.getElementsByTagName('*')).filter((x) => x.localName === 'p' && x.namespaceURI?.includes('text'))
+            const bodyPs = allDescOf(e).filter((x) => x.localName === 'p' && x.namespaceURI?.includes('text'))
             const text = bodyPs.length
               ? bodyPs.map((p) => (p.textContent ?? '').replace(/\s+/g, ' ').trim()).filter(Boolean).join('\n')
               : (e.textContent ?? '').replace(/\s+/g, ' ').trim()
             const cid = comments.length + 1
             // dc:creator / dc:date 是 annotation 的子元素（ODF 1.2），不是属性——按元素收
             const dcEl = (name: string) =>
-              Array.from(e.getElementsByTagName('*')).find(
+              allDescOf(e).find(
                 (x) => x.localName === name && (x.namespaceURI ?? '').includes('purl.org/dc'),
               )?.textContent?.trim() || undefined
             comments.push({
@@ -1994,7 +2146,7 @@ export async function odtToHtml(bytes: Uint8Array): Promise<{ html: string; meta
    */
   async function frameHtml(e: Element): Promise<string> {
     let imgEl: Element | null = null
-    for (const d of Array.from(e.getElementsByTagName('*'))) {
+    for (const d of allDescOf(e)) {
       if (d.localName === 'image') {
         imgEl = d
         break
@@ -2048,7 +2200,7 @@ export async function odtToHtml(bytes: Uint8Array): Promise<{ html: string; meta
       warn('嵌入对象（draw:object）未导入')
       return ''
     }
-    if (findLocal(e, 'chart') || Array.from(e.getElementsByTagName('*')).some((d) => d.localName === 'chart'))
+    if (findLocal(e, 'chart') || allDescOf(e).some((d) => d.localName === 'chart'))
       warn('图表对象未导入')
     else warn('矢量图形（draw:frame 无位图）未导入')
     return ''
@@ -2211,8 +2363,10 @@ export async function odtToHtml(bytes: Uint8Array): Promise<{ html: string; meta
   const otext = body ? pick(body, 'text') : null
   const html = otext ? `${await renderChildrenBlocks(otext)}${tail()}` : ''
 
-  // —— meta：styles.xml 的 master-page 头脚
+  // —— meta：styles.xml 的 master-page 头脚 + v0.191 的 meta.xml 文档属性
   const meta: DocMeta = {}
+  const docProps = parseOdtMetaProps(metaText)
+  if (docProps) meta.docProps = docProps
   if (comments.length) meta.comments = comments
   // 列表符面的专字（b49）：把「这枚符该用哪一口字体」从 ul 上的一枚属性升格成命名样式清单的第四型（kind='list'），
   // 好让 lib/doc-style-css.ts 出那条 scoped 的 `::marker{font-family}` 规则——行内字族会连带拖走 li 正文（b45/b46 口径）。
@@ -2227,14 +2381,14 @@ export async function odtToHtml(bytes: Uint8Array): Promise<{ html: string; meta
     }))
   }
   if (sdoc) {
-    const master = Array.from(sdoc.getElementsByTagName('*')).find((x) => x.localName === 'master-page')
+    const master = allDescOf(sdoc, sdocAll).find((x) => x.localName === 'master-page')
     const plain = (n: Element | null | undefined) => (n ? (n.textContent ?? '').replace(/\s+/g, ' ').trim() : '')
     const header = master ? pick(master, 'header') : null
     const footer = master ? pick(master, 'footer') : null
     const headText = hfText(header)
     if (headText) meta.headerText = headText
     if (footer) {
-      const kids = Array.from(footer.getElementsByTagName('*'))
+      const kids = allDescOf(footer)
       const hasPage = kids.some((x) => x.localName === 'page-number')
       const hasCount = kids.some((x) => x.localName === 'page-count')
       // 页码格式的判据问的是「数字住在哪些包裹符之间」（第 1 页 / -1- / 1 / 2），那是排版结构而不是正文，
@@ -2258,7 +2412,7 @@ export async function odtToHtml(bytes: Uint8Array): Promise<{ html: string; meta
     // 声明镜像版式的 0 件：`style:extra-page-layout` 与 `fo:break-before="left"` 各 0 枚）。
     const hfVar = (el: Element | null | undefined): string => {
       if (!el) return ''
-      const f = Array.from(el.getElementsByTagName('*'))
+      const f = allDescOf(el)
       if (f.some((x) => x.localName === 'page-number' || x.localName === 'page-count')) return ''
       return hfText(el)
     }
@@ -2270,10 +2424,10 @@ export async function odtToHtml(bytes: Uint8Array): Promise<{ html: string; meta
     // 「这张纸」取哪一枚：ODF 由 master-page 的 style:page-layout-name 指定，而 styles.xml 文档序的第一枚
     // page-layout-properties 常是 <style:default-page-layout> 的孩子（真件 77 枚里 11 枚如此，那一枚六枚长度字面全缺）。
     // 引名查不到才回退旧行为（文档序第一枚）：缺引名的外部件不会因此从有账变没账。
-    const firstPlp = Array.from(sdoc.getElementsByTagName('*')).find((x) => x.localName === 'page-layout-properties')
+    const firstPlp = allDescOf(sdoc, sdocAll).find((x) => x.localName === 'page-layout-properties')
     const plpName = master?.getAttribute('style:page-layout-name')
     const plpEl = plpName
-      ? Array.from(sdoc.getElementsByTagName('*')).find(
+      ? allDescOf(sdoc, sdocAll).find(
           (x) => x.localName === 'page-layout' && x.getAttribute('style:name') === plpName
         )
       : undefined
@@ -2281,6 +2435,15 @@ export async function odtToHtml(bytes: Uint8Array): Promise<{ html: string; meta
     const pw = cm2mm(plp?.getAttribute('fo:page-width') ?? null)
     const ph = cm2mm(plp?.getAttribute('fo:page-height') ?? null)
     const page: PageSetup = {}
+    // v0.193：页面边框（page-layout-properties 的 fo:border / fo:padding）。
+    // 读回来就进 DocMeta.page.pageBorders，DocEditor 的页面设置面板与 docx 写手共用这一格。
+    const pageBorders = parseOdtPageBorderAttrs({
+      border: plp?.getAttribute('fo:border') ?? null,
+      borderTop: plp?.getAttribute('fo:border-top') ?? null,
+      padding: plp?.getAttribute('fo:padding') ?? null,
+      paddingTop: plp?.getAttribute('fo:padding-top') ?? null,
+    })
+    if (pageBorders) page.pageBorders = pageBorders
     if (pw && ph) {
       const near = (a: number, b: number) => Math.abs(a - b) < 1.5
       const size = near(pw, 210) && near(ph, 297) ? 'A4' : near(pw, 215.9) && near(ph, 279.4) ? 'Letter' : 'custom'
@@ -2301,7 +2464,7 @@ export async function odtToHtml(bytes: Uint8Array): Promise<{ html: string; meta
       }
       if (Object.keys(margin).length) page.margin = margin
     }
-    const colsEl = Array.from(sdoc.getElementsByTagName('*')).find((x) => x.localName === 'columns')
+    const colsEl = allDescOf(sdoc, sdocAll).find((x) => x.localName === 'columns')
     const cn = Number(colsEl?.getAttribute('fo:column-count') ?? 1)
     if (cn > 1) {
       page.cols = Math.min(4, cn)

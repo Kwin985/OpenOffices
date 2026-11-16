@@ -1,6 +1,9 @@
 import {
   AlignmentType,
   BorderStyle,
+  type IPageBordersOptions,
+  Bookmark,
+  Column,
   CommentRangeEnd,
   CommentRangeStart,
   CommentReference,
@@ -13,6 +16,7 @@ import {
   Header,
   HeadingLevel,
   HeightRule,
+  NumberFormat,
   type IBorderOptions,
   type ICharacterStyleOptions,
   type IFontAttributesProperties,
@@ -30,6 +34,8 @@ import {
   Packer,
   Paragraph,
   ShadingType,
+  SectionType,
+  SymbolRun,
   Table,
   TableCell,
   TableLayoutType,
@@ -38,9 +44,15 @@ import {
   TextRun,
   VerticalAlignTable,
   WidthType,
+  type   TabStopDefinition,
+  type IFrameOptions,
+  type ITableFloatOptions,
+  HorizontalPositionRelativeFrom,
+  VerticalPositionRelativeFrom,
+  UnderlineType,
 } from 'docx'
 import { xml2js } from 'xml-js'
-import { borderParts, pxToEighths, CELL_EDGES, type CellEdge } from './cell-style'
+import { bdAttr, borderParts, parsePbdrPayload, parseTrPrPayload, pxToEighths, pxToPt, parseBdrPayload, parseCnfPayload, parseFramePayload, parseImgPayload, parsePprPayload, parseShadePayload, parseShdPayload, parseTabsPayload, parseTblbPayload, parseTblpPayload, parseTblPrPayload, parseTlookPayload, CELL_EDGES, CNF_KEYS, EFFECT_ATTRS, effectKey, PPR_IND_KEYS, TBLB_EDGES, TBLB_KEYS, type CellEdge } from './cell-style'
 import { lineToOoxml, type LineRule } from './paragraph-style'
 import { decodeEnt } from './ooxml'
 import { condLookBits } from './table-cond'
@@ -54,6 +66,54 @@ export interface PMNode {
   text?: string
 }
 
+/**
+ * data-u 载荷 `线型;屏上色;字面色;themeColor;themeTint;themeShade` → 包的 underline 槽
+ * + 待补的主题三枚（v0.156，v0.159 扩到六格）。
+ *
+ * 线型与字面色是包的原生槽（IRunOptions.underline.type / .color，dist/index.d.ts:1647），
+ * 实现里 `createUnderline(type, color)` 逐枚写进 w:u 的 w:val 与 w:color（颜色过
+ * hexColorValue 校验）。线型按 OOXML 那十八档的名字对（大小写不敏感），认不得的档
+ * 落 single——宁可写成单线也不要写出一个 Word 认不得的枚举值。
+ *
+ * 主题三枚包外无槽（createUnderline 只认 val/color 两枚属性），返回值里的 `theme`
+ * 是拼好的属性串，由 `patchUTheme` 在打包之后按序补回——与 w:sym 同一条 run 级
+ * 补丁位的机制。第二格「屏上色」不写盘：它是解析主题之后的显示用色，落到 w:color
+ * 会把主题引用钉死成一个字面值（往返账上那笔 ff0000 → b4c7e7 就是这么来的）
+ */
+type ULineType = (typeof UnderlineType)[keyof typeof UnderlineType]
+const U_TYPE = new Map<string, ULineType>(Object.values(UnderlineType).map((v) => [String(v).toLowerCase(), v]))
+
+/**
+ * 主题引用三枚 → 待补的属性串（v0.159 用在 `w:u`、v0.160 用在 `w:color`）。
+ *
+ * 成品是 ` w:themeColor="accent1"` 这种**带前导空格**的串，直接拼进元素开标签的 `>`
+ * 之前。空槽不写——「没写这一枚」与「写了 0」在 OOXML 里是两回事（themeTint="00"
+ * 是「不调亮」，缺这一枚是「不声明」），别替源件补。
+ */
+function themeAttrs(ref: string | undefined, tint: string | undefined, shade: string | undefined): string {
+  return [
+    ref ? ` w:themeColor="${xmlAttr(ref)}"` : '',
+    tint ? ` w:themeTint="${xmlAttr(tint)}"` : '',
+    shade ? ` w:themeShade="${xmlAttr(shade)}"` : '',
+  ].join('')
+}
+
+interface ULoad {
+  value?: { type?: ULineType; color?: string }
+  /** 待补进 `<w:u>` 开标签的属性串（前导空格起头）；没有主题引用时是空串 */
+  theme: string
+}
+function underlineOf(child: PMNode, on: boolean): ULoad {
+  const raw = markAttr(child, 'charExtra', 'u')
+  const [val = '', , lit = '', thc = '', tht = '', ths = ''] = (raw ?? '').split(';')
+  const theme = themeAttrs(thc, tht, ths)
+  if (!raw) return { ...(on ? { value: {} } : {}), theme: '' }
+  const type = U_TYPE.get((val || 'single').toLowerCase()) ?? UnderlineType.SINGLE
+  // 字面走字面：主题在场时源件的 w:color 未必等于解析出来的色，两枚各归各的槽
+  const c = lit && lit.toLowerCase() !== 'auto' ? lit.replace(/^#/, '').toUpperCase() : undefined
+  return { value: { type, ...(c ? { color: c } : {}) }, theme }
+}
+
 // TipTap 3 getJSON 的文本节点是顶层 text；历史结构测试用过 attrs.text，两者都兼容
 function textValue(node: PMNode): string {
   return node.text ?? (node.attrs?.text as string) ?? ''
@@ -63,9 +123,26 @@ function textValue(node: PMNode): string {
 export interface DocComment {
   id: number
   author?: string
+  /** 作者姓名缩写（w:comment/@w:initials，v0.154）：与 author 同属批注身份链，UI 暂不显示 */
+  initials?: string
   date?: string
   text: string
   resolved?: boolean
+}
+
+/**
+ * 批注侧栏筛选（v0.195）：只看未解决 / 按作者。纯函数，空条件不筛；
+ * 作者名按侧栏显示口径归一（没写 author 的显示「我」），筛选与显示不能两套房。
+ */
+export function filterDocComments(
+  comments: DocComment[],
+  opts: { openOnly?: boolean; author?: string } = {},
+): DocComment[] {
+  const { openOnly, author } = opts
+  if (!openOnly && !author) return comments
+  return comments.filter(
+    (c) => (!openOnly || !c.resolved) && (!author || (c.author || '我') === author),
+  )
 }
 
 // 页面设置：mm 存储；size=custom 时用 w/h，margin 缺项回退默认
@@ -76,14 +153,159 @@ export interface PageMargin {
   left: number
 }
 
+/**
+ * 页面边框（v0.190）：四边统一一套值，走 docx 包 `sections[].properties.borders`
+ * 原生槽（包自己发 `<w:pgBorders>`，不手拼 XML）。屏上不画，只随 .odoc / docx 往返。
+ */
+export interface PageBorders {
+  /** OOXML `w:val` 字面，只认 `PAGE_BORDER_STYLES` 里的档位 */
+  style: string
+  /** hex，不带 `#` */
+  color: string
+  /** `w:sz`，八分之一磅（2..96） */
+  size: number
+  /** `w:space`，磅（0..31） */
+  space?: number
+}
+export const PAGE_BORDER_STYLES = ['single', 'dotted', 'dashed', 'double'] as const
+export const DEFAULT_PAGE_BORDERS: PageBorders = { style: 'single', color: '000000', size: 4, space: 1 }
+
+/**
+ * 页面边框 → 屏上纸面的 CSS `border` 值（v0.192）。
+ *
+ * v0.190 做的读写链只随 docx 往返、屏上不画；本轮把纸面也画出来（教训㉓：
+ * 补外壳观感收益高于长尾）。`w:sz` 是八分之一磅，pt→px 按 96/72 折算即 sz/6，
+ * 最小 1px；只认四档线型、脏色回落黑。打印时 `.doc-page` 的内联 border 优先级
+ * 高于 `@media print` 里的 `border:none`，所以打印预览也带着框。
+ */
+export function pageBorderCss(pb?: PageBorders): string | undefined {
+  if (!pb) return undefined
+  const line: Record<string, string> = { single: 'solid', dotted: 'dotted', dashed: 'dashed', double: 'double' }
+  const style = line[pb.style] ?? 'solid'
+  const color = /^[0-9A-Fa-f]{6}$/.test(pb.color) ? `#${pb.color}` : '#000000'
+  const px = Math.max(1, Math.round((Number.isFinite(pb.size) ? pb.size : 4) / 6))
+  return `${px}px ${style} ${color}`
+}
+
 export interface PageSetup {
   size?: 'A4' | 'Letter' | 'custom'
+  /** 页面边框（v0.190）：四边统一；屏上不画，只往返 */
+  pageBorders?: PageBorders
   w?: number
   h?: number
   margin?: Partial<PageMargin>
+  /** 装订线（v0.147，mm）：w:pgMar/@w:gutter。屏上不排页码边，只随页面设置往返 */
+  gutter?: number
+  /** 页眉/页脚距纸边（v0.147，mm）：w:pgMar/@w:header 与 @w:footer，缺省按上下边距取小 */
+  header?: number
+  footer?: number
+  /** 文档网格（v0.147）：w:docGrid 的档位与行间距（linePitch 缇）。屏上不兑现，只往返。
+   *  v0.152 补 charSpace（每字符网格宽度，缇）——与 linePitch 同住 w:docGrid 上的第三枚 */
+  docGrid?: { type?: string; linePitch?: number; charSpace?: number }
+  /** 纸张方向（v0.147）：w:pgSz/@w:orient。缺省按宽高比推（宽>高即横版） */
+  orient?: 'portrait' | 'landscape'
   /** 分栏数（1=不分栏）；与 colGap（mm）一起贯穿视图/打印/docx/odt */
   cols?: number
   colGap?: number
+  /**
+   * 不等宽分栏（v0.182）：`w:cols/@w:equalWidth=0` 与逐枚 `w:col/@w:w|@w:space`。
+   * 缇原值，屏上 CSS columns 只能等宽、不兑现，只用于 docx 往返；包的
+   * `column.children: Column[]` 是原生槽，post-pack 不用动。
+   */
+  colsLayout?: { equalWidth?: boolean; widths?: { w: number; space?: number }[] }
+  /**
+   * 节起法与纸型档位号（v0.183）：`w:type/@w:val` 与 `w:pgSz/@w:code`。
+   * 两枚都是屏上零兑现的元信息，但写好写回能让 Word 记住「这一节是接着排、
+   * 用户选的是 A4 那一格」。包的两个原生槽直接吃这两个值，原样透传不换算。
+   */
+  sectionType?: string
+  paperCode?: string
+  /**
+   * 页码型别与起始值（v0.170）：`w:pgNumType/@w:fmt|@w:start`。屏上没有分页视图，
+   * 页码是域算的，但纸面上「这一节从 iii 开始、用罗马数字」是实打实的设置
+   */
+  pageNum?: { fmt?: string; start?: number }
+}
+
+/**
+ * 节属性原文（v0.147）：body 末尾 `w:sectPr` 的 pgSz/pgMar/cols/docGrid，单位仍是缇
+ * （与 OOXML 同，不做换算——换算是调用方那一头的事）。
+ *
+ * 这一族原本由 `docxToDocMeta` 用正则读（正则不进 attr 漏斗，保真账本上是盲区：
+ * 读是读了，账上没有）。v0.147 起改由读手（docx-fidelity）走 attr 读、随 `DocxImport`
+ * 出来，调用方折成 `PageSetup` 合并进 meta——同一份数只有一个读数出处
+ */
+export interface DocxSection {
+  w?: number
+  h?: number
+  orient?: 'portrait' | 'landscape'
+  margin?: { top?: number; right?: number; bottom?: number; left?: number; header?: number; footer?: number; gutter?: number }
+  cols?: number
+  colGap?: number
+  /** v0.182：不等宽分栏逐栏表（缇原值），与 PageSetup.colsLayout 同形，只往返不屏现 */
+  colsLayout?: { equalWidth?: boolean; widths?: { w: number; space?: number }[] }
+  docGrid?: { type?: string; linePitch?: number; charSpace?: number }
+  /** v0.183：节起法 `w:type/@w:val` 与纸型档位号 `w:pgSz/@w:code`，原值直传只往返 */
+  sectionType?: string
+  paperCode?: string
+  /** 页码型别与起始值（v0.170）：`w:pgNumType` 的两枚属性，原样带回 `PageSetup.pageNum` */
+  pageNum?: { fmt?: string; start?: number }
+}
+
+/**
+ * 节属性原文（缇）→ PageSetup（mm）。与 `docxToDocMeta` 里那条正则腿同口径（尺寸档
+ * 判定、分栏缺省回落、一位小数），两腿读的是同一份数——那条腿留给不跑读手的导入路径
+ */
+export function pageSetupOf(s: DocxSection): PageSetup {
+  // 缇 → 毫米留两位（v0.158）：一位小数是**不可逆**的——1800 缇 = 31.7499…（浮点上差一点
+  // 到不了 31.75），一位小数截成 31.7，回算只剩 1797；851 缇（15.0105）截成 15.0 回算 850。
+  // 两位小数把往返误差压到 0.3 缇以内，取整后都能回到原值。毫米是 UI 上那一栏的单位，
+  // 多一位只让显示多一位，语义不变
+  const rmm = (v?: number) => (v === undefined ? undefined : Math.round(v * 100) / 100)
+  const mm = (t?: number) => (t === undefined || !(t > 0) ? undefined : rmm(t / MM_TWIPS))
+  const page: PageSetup = {}
+  if (s.pageNum) page.pageNum = { ...s.pageNum }
+  // v0.183：两枚都是字面值（不是尺寸），不做 mm / 缇换算
+  if (s.sectionType) page.sectionType = s.sectionType
+  if (s.paperCode) page.paperCode = s.paperCode
+  const pw = mm(s.w)
+  const ph = mm(s.h)
+  if (pw && ph) {
+    const near = (a: number, b: number) => Math.abs(a - b) < 1
+    const size = near(pw, 210) && near(ph, 297) ? 'A4' : near(pw, 215.9) && near(ph, 279.4) ? 'Letter' : 'custom'
+    const margin: Partial<PageMargin> = {}
+    const tm = mm(s.margin?.top)
+    const rm = mm(s.margin?.right)
+    const bm = mm(s.margin?.bottom)
+    const lm = mm(s.margin?.left)
+    if (tm !== undefined) margin.top = tm
+    if (rm !== undefined) margin.right = rm
+    if (bm !== undefined) margin.bottom = bm
+    if (lm !== undefined) margin.left = lm
+    page.size = size
+    if (size === 'custom') {
+      page.w = rmm(pw)
+      page.h = rmm(ph)
+    }
+    if (Object.keys(margin).length) page.margin = margin
+  }
+  // 方向：Word 的 orient 与宽高比一般同向，两样都说话时以 orient 为准（它是显式声明）
+  if (s.orient) page.orient = s.orient
+  const g = mm(s.margin?.gutter)
+  if (g !== undefined) page.gutter = g
+  const hd = mm(s.margin?.header)
+  if (hd !== undefined) page.header = hd
+  const ft = mm(s.margin?.footer)
+  if (ft !== undefined) page.footer = ft
+  if (s.cols && s.cols > 1) {
+    page.cols = Math.min(4, s.cols)
+    const gap = mm(s.colGap)
+    if (gap && Math.abs(gap - DEFAULT_COL_GAP) > 0.6) page.colGap = gap
+  }
+  // v0.182：逐栏表是缇原值，不做 mm 换算（换算误差会写成源件没说过的话）
+  if (s.colsLayout) page.colsLayout = s.colsLayout
+  if (s.docGrid && Object.keys(s.docGrid).length) page.docGrid = s.docGrid
+  return page
 }
 
 /** 页码呈现格式：仅影响页脚里的页码域写法（默认 cn=第 N 页，与 v0.30~v0.32 文件兼容） */
@@ -125,18 +347,90 @@ export const DEFAULT_COL_GAP = 8
 export const MM_PX = 96 / 25.4
 const MM_TWIPS = 1440 / 25.4
 
+/**
+ * 从一枚 sectPr 子元素串上取数值属性（v0.196 零动态正则）。
+ * 按属性名找第一枚**纯数字**值——与改前 `new RegExp('w:'+attr+'="(\\d+)"')` 的
+ * 「非数字不算匹配、继续往后找」严格等价；返回毫米（缇 ÷ MM_TWIPS）。
+ */
+/** v0.196 A/B 对照腿：改前「每次 new RegExp」的解析，产品路径不用（只给基准/测试调） */
+export function legacyTwipsAttrOf(xml: string | undefined, attr: string): number | undefined {
+  const v = Number(xml?.match(new RegExp(`w:${attr}="(\\d+)"`))?.[1])
+  return Number.isFinite(v) && v > 0 ? v / MM_TWIPS : undefined
+}
+
+/** v0.196 A/B 对照腿：改前「五格各编译一枚动态正则」的 core.xml 解析 */
+export function legacyParseCoreProps(xml: string): DocProps {
+  const out: DocProps = {}
+  if (!xml.trim()) return out
+  for (const [key, tag] of Object.entries(CORE_FIELDS) as [keyof DocProps, string][]) {
+    const m = new RegExp(`<${tag}[^>]*>([\\s\\S]*?)</${tag}>`).exec(xml)
+    if (!m) continue
+    const v = decodeCoreText(m[1]).trim()
+    if (v) out[key] = v
+  }
+  return out
+}
+
+export function twipsAttrOf(xml: string | undefined, attr: string): number | undefined {
+  if (!xml) return undefined
+  const needle = `w:${attr}="`
+  let at = xml.indexOf(needle)
+  while (at >= 0) {
+    const from = at + needle.length
+    const stop = xml.indexOf('"', from)
+    if (stop < 0) break
+    const raw = xml.slice(from, stop)
+    if (/^\d+$/.test(raw)) {
+      const v = Number(raw)
+      return Number.isFinite(v) && v > 0 ? v / MM_TWIPS : undefined
+    }
+    at = xml.indexOf(needle, stop + 1)
+  }
+  return undefined
+}
+
 export function resolvePage(p?: PageSetup): {
   w: number
   h: number
   margin: PageMargin
   cols: number
   colGap: number
+  /** 装订线（mm，v0.147）；没写是 undefined——与「装订线 0」不同，后者不占版心 */
+  gutter?: number
+  /** 页眉/页脚距纸边（mm，v0.147）；没写时写侧按上下边距取小 */
+  header?: number
+  footer?: number
+  orient?: 'portrait' | 'landscape'
+  docGrid?: { type?: string; linePitch?: number; charSpace?: number }
+  /** v0.183：节起法与纸型档位号，原值透传给包的原生槽 */
+  sectionType?: string
+  paperCode?: string
+  pageNum?: { fmt?: string; start?: number }
+  colsLayout?: { equalWidth?: boolean; widths?: { w: number; space?: number }[] }
+  /** v0.190：页面边框，原值透传给包的 borders 原生槽 */
+  pageBorders?: PageBorders
 } {
   const preset = p?.size === 'Letter' ? PAGE_SIZES_MM.Letter : PAGE_SIZES_MM.A4
   const w = p?.size === 'custom' && p.w ? p.w : preset[0]
   const h = p?.size === 'custom' && p.h ? p.h : preset[1]
   const cols = Math.min(4, Math.max(1, Math.round(p?.cols ?? 1)))
-  return { w, h, margin: { ...DEFAULT_PAGE_MARGIN, ...p?.margin }, cols, colGap: p?.colGap ?? DEFAULT_COL_GAP }
+  return {
+    w,
+    h,
+    margin: { ...DEFAULT_PAGE_MARGIN, ...p?.margin },
+    cols,
+    colGap: p?.colGap ?? DEFAULT_COL_GAP,
+    ...(p?.gutter !== undefined ? { gutter: p.gutter } : {}),
+    ...(p?.header !== undefined ? { header: p.header } : {}),
+    ...(p?.footer !== undefined ? { footer: p.footer } : {}),
+    ...(p?.orient ? { orient: p.orient } : {}),
+    ...(p?.docGrid ? { docGrid: p.docGrid } : {}),
+    ...(p?.pageNum ? { pageNum: p.pageNum } : {}),
+    ...(p?.colsLayout ? { colsLayout: p.colsLayout } : {}),
+    ...(p?.sectionType ? { sectionType: p.sectionType } : {}),
+    ...(p?.paperCode ? { paperCode: p.paperCode } : {}),
+    ...(p?.pageBorders ? { pageBorders: p.pageBorders } : {}),
+  }
 }
 
 type ResolvedPage = ReturnType<typeof resolvePage>
@@ -238,8 +532,35 @@ export interface DocxStyleInfo {
   kind?: 'paragraph' | 'character' | 'table' | 'list'
   /** 标题级别（1..9，outlineLvl+1），非标题没有 */
   level?: number
+  /**
+   * 样式元数据三枚（v0.146）：uiPriority 是 Word 样式库里的排序档位（w:uiPriority/@w:val），
+   * link 指着配对的反向样式（段落↔字符，w:link/@w:val），customStyle 是「用户自建」标记
+   * （w:style/@w:customStyle，onOff——false 是显式关，与没写不同结果）。屏上不兑现，只往返
+   */
+  uiPriority?: number
+  link?: string
+  customStyle?: boolean
+  /**
+   * 样式身份两枚（v0.150）：`w:next/@w:val` 是「回车后接着用哪个样式」（Word 里
+   * 「样式→后续段落样式」那一项），`w:rsid/@w:val` 是这份样式定义最后被谁改过（
+   * 修订会话号）。两枚都不改屏上排版；rsid 是流水号、屏上零语义，但它在真件里的
+   * 字面量不小，且丢了会让 Word 的「合并文档」对不上账，所以照收照写
+   */
+  next?: string
+  rsid?: string
+  /**
+   * 样式的别名（v0.155）：`w:aliases/@w:val`，逗号分隔的「也叫什么」。Word 的中文名
+   * 常挂在这里（样式 id 是英文、面板上显示中文）。屏上不兑现、随补丁往返：丢了只剩英文名
+   */
+  aliases?: string
   run: {
     font?: string
+    /**
+     * 主题字体引用名（v0.161）：`w:asciiTheme` / `w:eastAsiaTheme` / `w:hAnsiTheme` /
+     * `w:cstheme` 四枚的原值。与 `font`（解析后的具名字体）**同时写回**——只写解析值
+     * 等于把「跟着主题走」改成「钉死某套字体」，换主题时文档不再跟着变。
+     */
+    fontTheme?: { ascii?: string; eastAsia?: string; hAnsi?: string; cs?: string }
     sizePx?: number
     bold?: boolean
     italic?: boolean
@@ -251,6 +572,14 @@ export interface DocxStyleInfo {
     align?: string
     marginLeftPx?: number
     marginRightPx?: number
+    /**
+     * 本层样式 pPr 上**显式写过** `w:ind/@w:left="0"` / `w:right="0"`（v0.185）。
+     * Word 里显式 0 是「压掉上一层样式链继承来的缩进」，与「没写」语义不同；
+     * 屏上两者都是零缩进，所以 marginLeftPx/marginRightPx 一律不设。这一对布尔
+     * 只往返、不上屏，写手按 styleId 在 styles.xml 里把那枚显式 0 补回来。
+     */
+    indLeftZero?: boolean
+    indRightZero?: boolean
     textIndentPx?: number
     lineHeight?: number
     lineRule?: 'auto' | 'exact' | 'atLeast'
@@ -285,7 +614,422 @@ export interface DocxStyleInfo {
      * 落到哪一格按位置算（见 doc-style-css 的 condRules）。空对象等于没开票：不写它那枚 `w:tblStylePr`。
      */
     cond?: Partial<Record<TableCondType, TableCond>>
+    /**
+     * 条件层闸门原文（v0.147）：表样式 `w:tblPr/w:tblLook` 的三枚——`val` 是 Word 存的
+     * 那份四位闸门原值（十六进制串），`noHBand`/`noVBand` 是隔行/隔列带不套的 onOff。
+     * 有它就照抄，没有才由 cond 反推（condLookBits）——反推出来的与原文不一定同
+     */
+    look?: { val?: string; noHBand?: boolean; noVBand?: boolean }
   }
+}
+
+/**
+ * 潜在样式的一条（v0.146）：w:latentStyles/w:lsdException。onOff 三枚（semiHidden/
+ * unhideWhenUsed/qFormat/locked）存布尔三态——false 是显式「关」，与没写（undefined）
+ * 在 Word 里不同结果（显式关压过容器的 def* 缺省），往返必须分得开
+ */
+export interface DocxLsdException {
+  name?: string
+  uiPriority?: number
+  semiHidden?: boolean
+  unhideWhenUsed?: boolean
+  qFormat?: boolean
+  locked?: boolean
+}
+
+/**
+ * 潜在样式容器（v0.146）：w:latentStyles 自己那六枚 + 全部 lsdException。
+ * Word 样式库的门面账（哪些内建样式露面、排第几档），与正文排版无关，屏上不兑现。
+ * docx 包没有这一族的槽，导出走打包后补丁（patchLatentStyles，与 w:tblLook 同路数）
+ */
+/**
+ * 文档背景（v0.155）：与读手侧 DocBackground 同构（写手不反向依赖 docx-fidelity，
+ * 故在此另立一份——与 DocxLatentStyles 同一格）
+ */
+export interface DocBackground {
+  /** 解析出来的 CSS 色；没有主题槽时它就是回写的字面值（去掉 # 转大写） */
+  css?: string
+  /** 字面色原文（v0.157）：主题槽在场时 Word 按主题算，这枚是兜底值，跟着一起写回 */
+  color?: string
+  themeColor?: string
+  themeShade?: string
+  themeTint?: string
+}
+
+export interface DocxLatentStyles {
+  count?: number
+  defLockedState?: boolean
+  defUIPriority?: number
+  defSemiHidden?: boolean
+  defUnhideWhenUsed?: boolean
+  defQFormat?: boolean
+  exceptions: DocxLsdException[]
+}
+
+/**
+ * 编号定义一层的账（v0.150）：`w:numbering/w:abstractNum/w:lvl` 上的三枚。
+ * `tentative` 是「这一层还在草拟」（Word 用它标记模板里没定稿的层，onOff），
+ * `tplc` 是模板层号（十六进制串，与模板里的层对位），`suff` 是编号与正文之间
+ * 夹的那一段（tab/space/nothing，`w:suff/@w:val`）。
+ * 三枚都不改屏上编号——屏上那串是 ListRegistry 按段重建的，与定义层不是同一棵树
+ */
+export interface DocxLvlMeta {
+  tentative?: boolean
+  tplc?: string
+  suff?: string
+  /**
+   * 这一层自己的档位（v0.158）：`w:numFmt/@w:val` 与 `w:lvlText/@w:val`，逐层单存一份。
+   * 从前这两枚只以合并串的形式活在 `fp` 里（`0:bullet|·;1:lowerLetter|%2.`），写手拿不到
+   * 「第 1 层是 lowerLetter」这种信息，重建编号时只能把三层全拍成同一个符面——于是内容
+   * 指纹对不上，`patchNumberingXml` 认不出这条定义，**整族元数据（suff/lvlRestart/
+   * styleLink/nsid/tmpl）跟着一起贴不回去**。存成字段后写手能照原样逐层重建。
+   */
+  fmt?: string
+  text?: string
+  /**
+   * 这一层是否随上一级重新起号（v0.155）：`w:lvlRestart/@w:val`，0 表示永不重起。
+   * 屏上零兑现（编号串由 ListRegistry 按段重建），随 numbering.xml 补丁往返
+   */
+  restart?: number
+  /**
+   * 图片项目符号的编号（v0.155）：`w:lvlPicBulletId/@w:val`，指着 numbering 根上
+   * `w:numPicBullet/@w:numPicBulletId`。**只回写这一枚引用**——图片本体在
+   * numPicBullet 里（我们不发图片项目符号），引用留着不指空是给 Word 看的
+   */
+  picBulletId?: number
+  /**
+   * Word 2003 老式编号缩进补偿（v0.183）：`w:legacy/@w:legacy|@w:legacySpace|
+   * @w:legacyIndent` 三枚原值。屏上零兑现，随 numbering.xml 的 insertKid 往返；
+   * 三枚都是字面值（onOff 也按原值存），不做归一，免得把源件没说过的话写回去。
+   */
+  legacy?: { legacy?: string; space?: string; indent?: string }
+  /**
+   * 编号符面对齐（v0.184）：`w:lvlJc/@w:val` 的源件字面值。屏上那一半早已由
+   * `LvlDef.lvlJc` → `markerAlignOf` 走 `listLevels` 兑现，但那是「按段重建」的链；
+   * numbering.xml 补丁链此前没带这一枚，包又恒发 `w:lvlJc=start`，于是源件里
+   * `center` 那一层被冲掉。升成带值载荷后按 ilvl 改值（不是插元素）。
+   */
+  lvlJc?: string
+}
+
+/**
+ * 编号定义一份的身份（v0.150）：`nsid` 是定义自身的流水号（Word 靠它认「这两份
+ * 定义是同一份」，合并文档时对账用），`tmpl` 指着模板编号，`multiLevelType` 说
+ * 这份定义是不是设计成多级联动（hybridMultilevel/multilevel/singleLevel）。
+ * 与 DocxLvlMeta 同一条纪律：只往返，屏上不兑现
+ */
+export interface DocxAbstractNumMeta {
+  nsid?: string
+  tmpl?: string
+  multiLevelType?: string
+  /**
+   * 分页后重新编号总闸（v0.152）：`w:abstractNum/@w:restartNumberingAfterBreak`——
+   * 与上面三枚子元素相反，这一枚是开标签上的**属性**（onOff）。写侧由
+   * patchOneAbstractNum 按 local name 设回开标签（包常写 w15: 同名属性，前缀不认）
+   */
+  rna?: boolean
+  /**
+   * 这份定义挂在哪条样式上（v0.155）：`w:abstractNum/w:styleLink/@w:val`。它是 styles.xml
+   * 里 `w:link` 的反向（那边「样式链到编号」，这边「编号链回样式」）。屏上不兑现，
+   * 随补丁往返——CT_AbstractNum 的序排在 styleLink 之前的是 tmpl/name，之后是 numStyleLink
+   */
+  styleLink?: string
+  /**
+   * 内容指纹（v0.150）：按 ilvl 序的 `numFmt|lvlText` 序列。包的编号 id 是自己发的
+   * （与原文未必同号），贴回时就靠这份指纹把「原文那一条定义」在包里认出来——
+   * 认不出来的不贴（宁缺毋滥），见 patchNumberingXml
+   */
+  fp: string
+  /** ilvl（字符串键，JSON 落地后没有数字键）→ 那一层的三枚 */
+  levels: Record<string, DocxLvlMeta>
+}
+
+/**
+ * 编号定义表（v0.150）：按 `w:abstractNum` 在 numbering.xml 里的出现序排的一份数组。
+ * 出包后由 patchNumberingXml 按同一个序贴回去——包的编号 id 与原文未必同号，
+ * 所以这里刻意不存 numId/abstractNumId，只存序（与段落余量那笔同一路数）
+ */
+export interface DocxNumbering {
+  defs: DocxAbstractNumMeta[]
+  /**
+   * `w:num` 出现序 → 这一串的起始号（`w:lvlOverride/w:startOverride/@w:val`）。
+   * v0.187：包对每个重建出来的 num 恒发 `startOverride=1`，源件说的「从第 3 号起」
+   * 就丢了。与 defs 同一条纪律——只存序不存号（包的 numId 会重排），
+   * `patchNumOverrides` 按 `<w:num>` 出现序前缀贴回；undefined = 这一串没说过起始号。
+   */
+  starts?: (number | undefined)[]
+}
+
+/**
+ * 文档属性（v0.188）：`docProps/core.xml` 里那五格，随 meta 持久化。
+ * 此前 `new Document` 把 creator/title 硬编码成 OpenOffices，导入别人的文档
+ * 另存一次就把原作者与标题冲掉了——这是坏件，不只是功能缺失。
+ */
+export interface DocProps {
+  title?: string
+  subject?: string
+  creator?: string
+  keywords?: string
+  description?: string
+}
+
+/** 源件没写 core.xml、或手造新文档时的回落值（与历史行为逐字一致） */
+export const DEFAULT_DOC_PROPS: DocProps = {
+  creator: 'OpenOffices',
+  title: 'OpenOffices 文档',
+}
+
+const CORE_FIELDS: Record<keyof DocProps, string> = {
+  title: 'dc:title',
+  subject: 'dc:subject',
+  creator: 'dc:creator',
+  keywords: 'cp:keywords',
+  description: 'dc:description',
+}
+
+const decodeCoreText = (s: string): string =>
+  s
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&quot;/g, '"')
+    .replace(/&apos;/g, "'")
+    .replace(/&#x([0-9a-f]+);/gi, (_all, h: string) => String.fromCodePoint(Number.parseInt(h, 16)))
+    .replace(/&#(\d+);/g, (_all, d: string) => String.fromCodePoint(Number(d)))
+    .replace(/&amp;/g, '&')
+
+/**
+ * core.xml → 五格。**正则读**（这一部件不在保真账的漏斗里，也不该进）；
+ * 空串不落字段，于是 `docPropsOf` 能干净地用缺省值补位。
+ */
+export function parseCoreProps(xml: string): DocProps {
+  const out: DocProps = {}
+  if (!xml.trim()) return out
+  for (const [key, tag] of Object.entries(CORE_FIELDS) as [keyof DocProps, string][]) {
+    // v0.196：五格各编译一枚动态正则 → 字符串定位。与改前的「取第一枚匹配、
+    // 内容为空就跳过这一格」逐字等价（不继续找同 tag 的第二枚）。
+    const open = `<${tag}`
+    const at = xml.indexOf(open)
+    if (at < 0) continue
+    const g = xml.indexOf('>', at + open.length)
+    if (g < 0) continue
+    const close = xml.indexOf(`</${tag}>`, g + 1)
+    if (close < 0) continue
+    const v = decodeCoreText(xml.slice(g + 1, close)).trim()
+    if (v) out[key] = v
+  }
+  return out
+}
+
+/** 写手取用：源件说过的话优先，没说的用缺省；用户后来改过的也在 meta 里，别冲掉 */
+export function docPropsOf(meta: DocMeta | undefined): DocProps {
+  return { ...DEFAULT_DOC_PROPS, ...(meta?.docProps ?? {}) }
+}
+
+/**
+ * 整片字面包裹壳（v0.190 泛化）：读手把「壳 + 一枚结果 run」展平成结果文字时，
+ * 模型与 docx 包都没有那个壳的槽，写手侧就从源包留下壳的**字面原件**，按结果
+ * 文字认领写出包里那枚 run、前后贴回去。
+ *
+ * 目前两类同形状：Word 表单域（v0.189，五枚 run）与 `w:smartTag`（v0.190，
+ * 一对开闭标签）。`marker` 是逐片幂等标记——写出包已有它就别叠第二层壳。
+ */
+export interface LiteralWrapper {
+  marker: string
+  /** 贴在结果 run 之前 */
+  before: string
+  /** 贴在结果 run 之后 */
+  after: string
+  /** 用来认领结果 run 的文字 */
+  text: string
+}
+
+/**
+ * 部件级字面元信息（v0.193）：包不会自己发的两种同形状残片。
+ *
+ * ① `byId` —— 开标签上的属性，按**身份属性**认领（如 `w:num` 的 `w:numId`、
+ *    `w:style` 的 `w:styleId`）；身份令牌按名字对位、认不出就跳过，绝不用出现序
+ *    （写出包的 `w:num` 常常比源件多，按序会贴错人）。只补缺、不覆盖。
+ * ② `roots` —— 部件根容器闭标签前的自闭合元信息片（`w:numPicBullet`、
+ *    `w:numIdMacAtCleanup`、`w15:creationId`），按**源包出现序**逐片贴回，
+ *    逐片判幂等（写出包已有同字面就不叠第二枚）。
+ *
+ * 两处都是写手侧从源包正则读（不进保真账、读手零改动、零新增查问），
+ * 与 `revIds` / `docPrShells` / `literalWrappers` 同源；差别只是这一次落在
+ * **多个部件**而不是 document.xml。
+ */
+/**
+ * 源包字面片按锚点贴回（v0.195）。四类同形状的残片都是「包不会自己发、
+ * 读手只读记账」，写手侧从源包留下一枚自闭合元素 / 一枚根属性，按定位串贴回：
+ *   `before`/`after` —— 插在锚点串之前 / 之后；
+ *   `beforeParagraph`/`afterParagraph` —— 找锚点前最近的一枚 `<w:p` 开标签 /
+ *   锚点后第一枚 `</w:p>`，在段落边界外插（body 直子壳与裸元素）。
+ * `anchor` 是候选锚点表（按序取第一枚命中的），`guard` 逐片判幂等。
+ *
+ * 位次口径：sectPr 的 `w:formProt`/`w:rtlGutter` 在夹具里被写在 pgNumType
+ * 与 pgMar 之间（CT_SectPr 序里非法）；本轮按**标准序**贴回——formProt 放
+ * cols 之后、rtlGutter 放 docGrid 之前，不复刻结构非法坏件。
+ */
+export interface LiteralPlacement {
+  part: string
+  anchor: string[]
+  mode: 'before' | 'after' | 'beforeParagraph' | 'afterParagraph'
+  literal: string
+  guard: string
+  last?: boolean
+}
+
+/** 从源包提取要贴回的字面片；源件没说过的枚一律不生成指令 */
+export function literalPlacementsOf(docXml: string): LiteralPlacement[] {
+  const out: LiteralPlacement[] = []
+  const DOC = 'word/document.xml'
+  const sect = /<w:sectPr\b[^>]*>[\s\S]*?<\/w:sectPr>/.exec(docXml)?.[0] ?? ''
+  const fp = /<w:formProt\b[^>]*\/>/.exec(sect)?.[0]
+  if (fp) {
+    out.push({
+      part: DOC, anchor: ['</w:cols>', '<w:pgNumType', '</w:pgSz>'], mode: 'after',
+      literal: fp, guard: '<w:formProt', last: true,
+    })
+  }
+  const rg = /<w:rtlGutter\b[^>]*\/>/.exec(sect)?.[0]
+  if (rg) {
+    out.push({
+      part: DOC, anchor: ['<w:docGrid', '</w:cols>'], mode: 'before',
+      literal: rg, guard: '<w:rtlGutter',
+    })
+  }
+  // w:proofErr 是 body 直子裸元素：用「它前面最后一段的结果文字」认领写出包里的段落
+  const pe = /<w:proofErr\b[^>]*\/>/.exec(docXml)
+  if (pe) {
+    const before = docXml.slice(0, pe.index)
+    const texts = [...before.matchAll(/<w:t(?:\s[^>]*)?>([\s\S]*?)<\/w:t>/g)].map((m) => m[1])
+    const text = texts[texts.length - 1]
+    if (text) {
+      out.push({
+        part: DOC, anchor: [`>${text}</w:t>`], mode: 'afterParagraph',
+        literal: pe[0], guard: '<w:proofErr',
+      })
+    }
+  }
+  // w:sdt 内容控件壳包一整个段落：按结果文字认领，开壳插在 <w:p> 前、闭壳插在 </w:p> 后。
+  // 两条指令 guard 分开（前者看开标签、后者看闭标签），第二条才不会被幂等守卫误跳过。
+  const sdt = /<w:sdt\b[^>]*>([\s\S]*?)<\/w:sdt>/.exec(docXml)?.[0]
+  if (sdt) {
+    const text = /<w:t(?:\s[^>]*)?>([\s\S]*?)<\/w:t>/.exec(sdt)?.[1]
+    const open = /<w:sdt\b[^>]*>[\s\S]*?<w:sdtContent\b[^>]*>/.exec(sdt)?.[0]
+    if (text && open) {
+      out.push({
+        part: DOC, anchor: [`>${text}</w:t>`], mode: 'beforeParagraph',
+        literal: open, guard: '<w:sdt',
+      })
+      out.push({
+        part: DOC, anchor: [`>${text}</w:t>`], mode: 'afterParagraph',
+        literal: '</w:sdtContent></w:sdt>', guard: '</w:sdt>',
+      })
+    }
+  }
+  return out
+}
+
+/**
+ * VML 老式形状整段字面（v0.196）。
+ *
+ * **判断修正**：D55 记的「模型无槽、写手发不出 `w:pict`」只说明「不能靠包的
+ * 原生槽重建」，不等于「搬不回来」。读手把 `<w:pict>` / `<w:object>` 展平成一行
+ * 占位文字，写手侧从源包按段落边界留下**整段字面**，再贴回写出包即可——与
+ * v0.189 表单域、v0.190 smartTag、v0.195 字面片同源，不需要模型槽。
+ *
+ * 两条硬守卫（缺一不贴，宁缺毋滥）：
+ * ① 写出包根必须已声明 `xmlns:v` / `xmlns:o` / `xmlns:w10`（docx 包默认带），
+ *    否则贴回去就是未声明前缀的坏件；
+ * ② 源段里的 `r:id` 指向源包的 image 关系，写出包的同号 rId 指向完全不同的
+ *    部件（实测源 `rId1`=image、写出包 `rId1`=styles.xml），必须按**关系类型**
+ *    重映射到写出包的 image rId；写出包没有 image 关系就跳过这一段。
+ */
+export interface VmlShape {
+  /** 源包里含 `<w:pict>` / `<w:object>` 的整段 `<w:p>…</w:p>` 字面 */
+  literal: string
+  /** 段内指向源包 image 关系的 `r:id` 值（可能多枚） */
+  imageRIds: string[]
+}
+
+/** 从源包按段落边界提取 VML/嵌入对象整段；源件没说过的一律不生成指令 */
+export function vmlShapesOf(docXml: string, relsText: string): VmlShape[] {
+  const imageRIds = new Set<string>()
+  for (const m of relsText.matchAll(/<Relationship\b[^>]*>/g)) {
+    const tag = m[0]
+    if (!/Type="[^"]*\/image"/.test(tag)) continue
+    const id = /Id="([^"]+)"/.exec(tag)?.[1]
+    if (id) imageRIds.add(id)
+  }
+  const out: VmlShape[] = []
+  for (const m of docXml.matchAll(/<w:p(?:\s[^>]*)?>[\s\S]*?<\/w:p>/g)) {
+    const p = m[0]
+    if (!/<w:pict\b|<w:object\b/.test(p)) continue
+    // 非贪婪 <w:p> 会截断 VML 文字框里内嵌的段落；半截片没有闭标签，跳过而不是贴坏件
+    if (!/<\/w:pict>|<\/w:object>/.test(p)) continue
+    const rids = new Set<string>()
+    for (const r of p.matchAll(/\br:id="([^"]+)"/g)) if (imageRIds.has(r[1])) rids.add(r[1])
+    out.push({ literal: p, imageRIds: [...rids] })
+  }
+  return out
+}
+
+/** 从写出包的 rels 里找第一枚 image 关系 id（按关系类型认，不按同号） */
+function outImageRId(relsText: string): string {
+  for (const m of relsText.matchAll(/<Relationship\b[^>]*>/g)) {
+    if (!/Type="[^"]*\/image"/.test(m[0])) continue
+    const id = /Id="([^"]+)"/.exec(m[0])?.[1]
+    if (id) return id
+  }
+  return ''
+}
+
+export interface MetaExtras {
+  byId?: {
+    part: string
+    tag: string
+    idAttr: string
+    items: { id: string; attrs: Record<string, string> }[]
+  }[]
+  roots?: { part: string; close: string; literals: string[] }[]
+}
+
+/**
+ * rPr 字符特性字面片（v0.194）：`w:ligatures` / `w:numForm` / `w:numSpacing` /
+ * `w:cntxtalts` / `w:outline` 五枚。读手 v0.155 起只把它们变成屏上的
+ * `font-variant-*` CSS，**没进 HTML/PM 载荷**；docx 包的 `.d.ts` 里也没有
+ * IRunOptions 的对应槽（v0.190 复查过 outline 的命中全是图形/段落描边）。
+ * 于是写手侧从源包留下这几枚元素的字面，按**结果文字**认领写出包里那一枚
+ * run，把壳贴回它的 `<w:rPr>`（用户改过文字就认不出，宁可不贴）。
+ *
+ * 位次口径（CT_RPrBase）：`w:outline` 是标准元素，排在 `shadow`/`emboss`/
+ * `imprint` 之前；另外四枚是 Word 2010+ 的 OpenType 扩展，Word 自己放在
+ * rPr 末尾。夹具写的是无前缀 `w:` 字面，按源件原样搬回、不做命名空间改写。
+ */
+export interface RPrFeature {
+  /** 结果文字，用来认领写出包里那一枚 run */
+  text: string
+  /** 源件 rPr 里那几枚元素的字面（按源序） */
+  extras: string[]
+}
+
+const RPR_FEATURE_TAGS = 'ligatures|numForm|numSpacing|cntxtalts|outline'
+
+/** 从源包 document.xml 提取含目标特性的 run；只收自闭合的这几枚，别把 rPr 整块搬走 */
+export function rPrFeaturesOf(docXml: string): RPrFeature[] {
+  const out: RPrFeature[] = []
+  const featureRe = new RegExp(`<w:(?:${RPR_FEATURE_TAGS})\\b[^>]*?\\/>`, 'g')
+  for (const m of docXml.matchAll(/<w:r(?:\s[^>]*)?>([\s\S]*?)<\/w:r>/g)) {
+    const run = m[0]
+    const rp = /<w:rPr(?:\s[^>]*)?>([\s\S]*?)<\/w:rPr>/.exec(run)
+    if (!rp) continue
+    const extras = [...rp[1].matchAll(featureRe)].map((x) => x[0])
+    if (!extras.length) continue
+    const t = /<w:t(?:\s[^>]*)?>([\s\S]*?)<\/w:t>/.exec(run)
+    if (!t?.[1]) continue
+    out.push({ text: t[1], extras })
+  }
+  return out
 }
 
 // 页眉页脚设置 + 批注列表 + 页面设置：随 .odoc meta 存储，导出写入 OOXML
@@ -302,9 +1046,74 @@ export interface DocMeta {
   footerPageNumber?: boolean
   pageNumberFormat?: PageNumberFormat
   comments?: DocComment[]
+  /**
+   * 修订壳 `w:id` 原值（v0.187）：按 `<w:ins>/<w:del>` 在源包里的出现序。
+   * 由 `docxToDocMeta` 从 document.xml 正则提取——那一条是**正则读的部件**，
+   * 不进保真账；读手在 w:ins/w:del 分支里也已查问过 w:id，零新增查问对。
+   * 写手 `revId` 恒从 1 起，`patchRevIds` 按出现序把源值改回去。
+   */
+  revIds?: string[]
+  /**
+   * 源包 `<wp:docPr>` 的 id / name 原值（v0.188），按出现序。
+   * 读手把 WPS 形状 / 艺术字展平成文字后没有为它们生成 `data-img` 载荷，
+   * 包于是发出 `id="1" name=""` 的空壳。与 revIds 同款——写手侧从源包
+   * 正则提取（不进保真账），`patchDocPr` 按 `<wp:docPr>` 出现序改回去。
+   */
+  docPrShells?: { id: string; name: string }[]
+  /**
+   * 整片字面包裹壳（v0.189 表单域 / v0.190 智能标记），按**源包出现序**。
+   * 写手侧从源包正则取（不进保真账、零新增查问），`patchLiteralWrappers`
+   * 按结果文字对位贴回；用户改过结果文字就认不出，宁可不贴。
+   */
+  literalWrappers?: LiteralWrapper[]
+  /**
+   * 部件级字面元信息（v0.193）：`docxToDocMeta` 从 numbering.xml / styles.xml /
+   * commentsExtended.xml 正则提取，`patchMetaExtras` 按身份键或根容器贴回写出包。
+   */
+  metaExtras?: MetaExtras
+  /**
+   * rPr 字符特性字面片（v0.194）：按结果文字认领 run，`patchRPrFeatures`
+   * 按 CT_RPr 序贴回；写手侧正则读、读手零改动。
+   */
+  rPrFeatures?: RPrFeature[]
+  /**
+   * 源包字面片贴回指令（v0.195）：sectPr 两枚 / comments 根属性 / proofErr，
+   * 由 `docxToDocMeta` 正则提取，`patchLiteralPlacements` 按锚点贴回。
+   */
+  literalPlacements?: LiteralPlacement[]
+  /**
+   * VML 老式形状整段字面（v0.196）：`vmlShapesOf` 从源包 document.xml + rels 提取，
+   * `patchVmlShapes` 重映射 image rId 后按占位段贴回；写手侧正则读、读手零改动。
+   */
+  vmlShapes?: VmlShape[]
+  /** 文档属性（v0.188）：由 `docxToDocMeta` 从 docProps/core.xml 读出，编辑器可改 */
+  docProps?: DocProps
   page?: PageSetup
   /** 文档带进来的段落样式清单（v0.102）：随 meta 持久化，导出时重建样式表 */
   styles?: DocxStyleInfo[]
+  /**
+   * 潜在样式（v0.146）：w:latentStyles 容器与全部 lsdException——Word 样式库的门面账。
+   * 屏上不兑现，只随 meta 持久化、导出时补丁回 styles.xml；ODT 没有这一族，odt 导入不设置
+   */
+  latentStyles?: DocxLatentStyles
+  /**
+   * 编号定义账（v0.150）：nsid/tmpl/multiLevelType 与逐层的 tentative/tplc/suff。
+   * 屏上不兑现，随 meta 持久化、导出时补丁回 numbering.xml；ODT 没有这一族，odt 导入不设置
+   */
+  numbering?: DocxNumbering
+  /**
+   * 文档背景（v0.155）：`w:document/w:background` 三枚——整篇的底色（Word「页面颜色」）。
+   * 屏上兑现在外层容器的 background-color；导出是包的原生槽 IDocumentBackgroundOptions，
+   * 四枚属性一一对应，所以这一族**真双向**（与 numbering/latentStyles 那两族不同：
+   * 它们要 post-pack 补丁，这一族不用）
+   */
+  background?: DocBackground
+  /**
+   * 主题件原文（v0.164）：`word/theme/theme1.xml` 整份。写手发出去的主题引用
+   * （`w:themeColor`/`w:themeFill`/`w:asciiTheme` 这一族）指着它，缺了就只能由 Word
+   * 拿默认主题顶上——所以导出时原样带回去（见 attachThemePart）
+   */
+  themeXml?: string
 }
 
 export async function docxToHtml(bytes: Uint8Array): Promise<string> {
@@ -314,12 +1123,180 @@ export async function docxToHtml(bytes: Uint8Array): Promise<string> {
   return result.value
 }
 
-// mammoth 不读页眉页脚：直接解 zip 里 sectPr 引用的 header/footer XML，抽文本与 PAGE 页码域
-export async function docxToDocMeta(bytes: Uint8Array): Promise<DocMeta> {
+/**
+ * 打开一份 .docx 的**共享 zip 会话**（v0.180）。
+ *
+ * 此前 `docxToDocMeta` 与 `docxToHtmlFidelity` 各自 `JSZip.loadAsync(bytes)` 一遍，
+ * `word/document.xml`、`word/theme/theme1.xml`、`word/_rels/document.xml.rels`
+ * 三份部件各解压 + 转 UTF-8 两次。现在调用方先建一枚会话：zip 实例共享、
+ * 部件文本按名缓存，两个入口都从同一处读。
+ *
+ * 会话是**可选参数**：不传就走原来的「各自解包」路径。这样 A/B 两腿同源、
+ * 只差这一个参数，判据可长期复现（v0.179 的教训：手工 git archive 副本会过期）。
+ */
+export interface DocxZipSession {
+  /** 同一个 zip 实例，供读手 f.load 直读图片字节；调用方只透传、不解类型 */
+  zip: unknown
+  /** 带缓存的部件文本读取；缺件一律返回空串，与原 read 闭包同义 */
+  read(name: string): Promise<string>
+}
+
+interface ZipView {
+  file(name: string): { async(kind: 'string'): Promise<string>; async(kind: 'arraybuffer'): Promise<ArrayBuffer> } | null
+}
+
+export async function openDocxZip(bytes: Uint8Array): Promise<DocxZipSession> {
   const { default: JSZip } = await import('jszip')
   const zip = await JSZip.loadAsync(bytes)
-  const docXml = (await zip.file('word/document.xml')?.async('string')) ?? ''
-  const relsText = (await zip.file('word/_rels/document.xml.rels')?.async('string')) ?? ''
+  const cache = new Map<string, string>()
+  const read = async (name: string): Promise<string> => {
+    const hit = cache.get(name)
+    if (hit !== undefined) return hit
+    const text = (await zip.file(name)?.async('string')) ?? ''
+    cache.set(name, text)
+    return text
+  }
+  return { zip, read }
+}
+
+// mammoth 不读页眉页脚：直接解 zip 里 sectPr 引用的 header/footer XML，抽文本与 PAGE 页码域
+/**
+ * 整片字面包裹壳提取（v0.189 表单域 / v0.190 泛化 + 智能标记）。
+ *
+ * 两类壳同形状：读手把「壳 + 一枚结果 run」展平成结果文字，模型与 docx 包都
+ * 没有那个壳的槽。写手侧从源包按字面留下壳的前后两片，按结果文字对位贴回
+ * （用户改过结果文字就认不出，宁可不贴）。① 表单域是五枚 run：`begin`(带
+ * ffData) / `instrText` / `separate` / 结果文字 / `end`；② `w:smartTag` 是
+ * 一对开闭标签包住一枚结果 run。
+ * 边界限定在单个 `<w:p>…</w:p>` 内，绝不跨段吞 run；段落切法沿用夹具通用口径
+ * （非贪婪 `<w:p>` 会截断 wps 文本框内嵌段落，但那些段落不含壳，会被跳过）。
+ * 泛化点（教训⑪）：第二处同形状需求出现时才抽共用通道，`marker` 让每片各判
+ * 各的幂等，避免「包发过普通域就整笔不贴」这种跨类误伤。
+ */
+export function literalWrappersOf(docXml: string): LiteralWrapper[] {
+  const out: (LiteralWrapper & { at: number })[] = []
+  // `<w:r>` 与带属性的 `<w:r w:rsidR=…>` 都认，且不会把 `<w:rPr>` 误当 run 开标签
+  const runStart = (s: string, at: number) => Math.max(s.lastIndexOf('<w:r>', at), s.lastIndexOf('<w:r ', at))
+  for (const pm of docXml.matchAll(/<w:p(?:\s[^>]*)?>[\s\S]*?<\/w:p>/g)) {
+    const p = pm[0]
+    const ff = p.indexOf('<w:ffData>')
+    if (ff < 0) continue
+    const sepAt = p.indexOf('w:fldCharType="separate"', ff)
+    const sepRunEnd = sepAt < 0 ? -1 : p.indexOf('</w:r>', sepAt)
+    const tAt = sepRunEnd < 0 ? -1 : p.indexOf('<w:t', sepRunEnd)
+    const tClose = tAt < 0 ? -1 : p.indexOf('</w:t>', tAt)
+    const endAt = tClose < 0 ? -1 : p.indexOf('w:fldCharType="end"', tClose)
+    if (sepAt < 0 || tAt < 0 || tClose < 0 || endAt < 0) continue
+    const text = p.slice(p.indexOf('>', tAt) + 1, tClose)
+    const beginRunStart = runStart(p, ff)
+    const resultRunStart = runStart(p, tAt)
+    const endRunStart = runStart(p, endAt)
+    const endRunEnd = p.indexOf('</w:r>', endAt)
+    if (!text || beginRunStart < 0 || resultRunStart < 0 || endRunStart < 0 || endRunEnd < 0) continue
+    const before = p.slice(beginRunStart, resultRunStart)
+    const after = p.slice(endRunStart, endRunEnd + '</w:r>'.length)
+    // 三态守卫：拿到的真是 begin→separate 与 end 两片，不是误配到别的域
+    if (!before.includes('<w:ffData>') || !after.includes('fldCharType="end"')) continue
+    // marker 取 `<w:ffData>` 而不是 `<w:fldChar`：包自己发的**普通域**没有 ffData，
+    // 不该因为「文档里有别处一个域」就把这张表单的壳整笔跳过（v0.190 口径收窄）
+    out.push({ at: pm.index ?? 0, marker: '<w:ffData>', before, after, text })
+  }
+  // ② 智能标记（v0.190）：`<w:smartTag w:element=… w:uri=…>` 包住一枚结果 run，
+  // 读手下钻照旧、两枚属性只读记账。壳是纯元数据（Word 2003 的「认出这是地址」），
+  // 屏上不兑现，但导入另存不该把它抹掉——同一条通道，marker 用开标签名逐片判幂等。
+  for (const pm of docXml.matchAll(/<w:p(?:\s[^>]*)?>[\s\S]*?<\/w:p>/g)) {
+    const p = pm[0]
+    const open = /<w:smartTag\b[^>]*>/.exec(p)
+    if (!open) continue
+    const close = p.lastIndexOf('</w:smartTag>')
+    if (close < open.index + open[0].length) continue
+    const inner = p.slice(open.index + open[0].length, close)
+    const t = /<w:t[^>]*>([^<]*)<\/w:t>/.exec(inner)
+    if (!t?.[1]) continue
+    out.push({ at: pm.index ?? 0, marker: '<w:smartTag', before: open[0], after: '</w:smartTag>', text: t[1] })
+  }
+  // 两类壳按**源包出现序**排好，补丁才能用单调 cursor 一次走完（不回头找 run）
+  return out.sort((a, b) => a.at - b.at).map(({ marker, before, after, text }) => ({ marker, before, after, text }))
+}
+
+/** 在开标签里按属性名取字面值；只认前导空白后的 `name="…"`，避免把 `x-w:val` 当 `w:val` */
+function attrLitOf(tag: string, name: string): string | undefined {
+  const needle = `${name}="`
+  let at = tag.indexOf(needle)
+  while (at >= 0) {
+    if (at > 0 && tag[at - 1] <= ' ') {
+      const end = tag.indexOf('"', at + needle.length)
+      if (end > 0) return tag.slice(at + needle.length, end)
+    }
+    at = tag.indexOf(needle, at + needle.length)
+  }
+  return undefined
+}
+
+/**
+ * 按身份键提取开标签上要补的属性（v0.193）。返回 `{id, attrs}`，**只收源件真的
+ * 说过的属性**；没说过的连空串都不落，写手也就不会凭空造一枚属性。
+ */
+export function identityAttrsOf(
+  xml: string,
+  tag: string,
+  idAttr: string,
+  wanted: string[],
+): { id: string; attrs: Record<string, string> }[] {
+  const out: { id: string; attrs: Record<string, string> }[] = []
+  for (const m of xml.matchAll(new RegExp(`<${tag}(?=[\\s/>])[^>]*>`, 'g'))) {
+    const id = attrLitOf(m[0], idAttr)
+    if (!id) continue
+    const attrs: Record<string, string> = {}
+    for (const k of wanted) {
+      const v = attrLitOf(m[0], k)
+      if (v) attrs[k] = v
+    }
+    if (Object.keys(attrs).length) out.push({ id, attrs })
+  }
+  return out
+}
+
+/**
+ * 提取根级自闭合元信息片的字面（v0.193）：按**源包出现序**，不按调用方给的 tag 顺序。
+ * 只认自闭合——有内容的容器片另说，别把开标签当成一整片贴回去。
+ */
+export function rootExtrasOf(xml: string, tags: string[]): string[] {
+  const hits: { at: number; s: string }[] = []
+  for (const tag of tags) {
+    for (const m of xml.matchAll(new RegExp(`<${tag}(?=[\\s/>])[^>]*?\\/>`, 'g'))) {
+      hits.push({ at: m.index ?? 0, s: m[0] })
+    }
+  }
+  hits.sort((a, b) => a.at - b.at)
+  return hits.map((h) => h.s)
+}
+
+export async function docxToDocMeta(
+  bytes: Uint8Array,
+  shared?: DocxZipSession,
+  opts?: { legacyMetaRegex?: boolean },
+): Promise<DocMeta> {
+  let zip: ZipView
+  if (shared) {
+    zip = shared.zip as ZipView
+  } else {
+    const { default: JSZip } = await import('jszip')
+    zip = (await JSZip.loadAsync(bytes)) as unknown as ZipView
+  }
+  const readText = shared?.read ?? (async (p: string) => (await zip.file(p)?.async('string')) ?? '')
+  const docXml = await readText('word/document.xml')
+  // v0.187：修订壳的 w:id 原值，按出现序。这是**写手侧 meta**里的一条，不改读手、
+  // 不进 PM 模型（revision mark 只有 author/date，且那份文件是预存改动不能碰）。
+  // 正则读的部件不进保真账，读手也早查问过 w:id，所以零新增查问对。
+  const revIds = [...docXml.matchAll(/<w:(?:ins|del)\b[^>]*\bw:id="([^"]*)"/g)].map((m) => m[1])
+  // v0.188：画布级对象序号与对象名，按 `<wp:docPr>` 出现序。两枚属性顺序不固定，
+  // 各自按名取（读不到就空串占位，保持对位）；空串在补丁里一律不回写。
+  const docPrShells = [...docXml.matchAll(/<wp:docPr\b([^>]*)>/g)].map((m) => ({
+    id: /\bid="([^"]*)"/.exec(m[1])?.[1] ?? '',
+    name: /\bname="([^"]*)"/.exec(m[1])?.[1] ?? '',
+  }))
+  const relsText = await readText('word/_rels/document.xml.rels')
   const relFor = (rid: string) =>
     relsText.match(new RegExp(`Id="${rid}"[^>]*Target="([^"]+)"`))?.[1] ??
     relsText.match(new RegExp(`Target="([^"]+)"[^>]*Id="${rid}"`))?.[1]
@@ -368,45 +1345,105 @@ export async function docxToDocMeta(bytes: Uint8Array): Promise<DocMeta> {
   const pgSz = docXml.match(/<w:pgSz[^>]*>/)?.[0]
   const pgMar = docXml.match(/<w:pgMar[^>]*>/)?.[0]
   const colsEl = docXml.match(/<w:cols[^>]*>/)?.[0]
-  const tw = (xml: string | undefined, attr: string) => {
-    const v = Number(xml?.match(new RegExp(`w:${attr}="(\\d+)"`))?.[1])
-    return Number.isFinite(v) && v > 0 ? v / MM_TWIPS : undefined
-  }
+  const pgNumEl = docXml.match(/<w:pgNumType[^>]*>/)?.[0]
+  const tw = opts?.legacyMetaRegex ? legacyTwipsAttrOf : twipsAttrOf
   const pw = tw(pgSz, 'w')
   const ph = tw(pgSz, 'h')
   const mt = tw(pgMar, 'top')
   const mr = tw(pgMar, 'right')
   const mb = tw(pgMar, 'bottom')
   const ml = tw(pgMar, 'left')
-  const r1 = (v?: number) => (v === undefined ? undefined : Math.round(v * 10) / 10)
+  // 与 pageSetupOf 那一处同一把尺子（v0.158）：两位小数，缇 → 毫米 → 缇 能回到原值
+  const rmm = (v?: number) => (v === undefined ? undefined : Math.round(v * 100) / 100)
   const page: PageSetup = {}
   if (pw && ph) {
     const near = (a: number, b: number) => Math.abs(a - b) < 1
     const size = near(pw, 210) && near(ph, 297) ? 'A4' : near(pw, 215.9) && near(ph, 279.4) ? 'Letter' : 'custom'
     const margin: Partial<PageMargin> = {}
-    const tm = r1(mt)
-    const rm = r1(mr)
-    const bm = r1(mb)
-    const lm = r1(ml)
+    const tm = rmm(mt)
+    const rm = rmm(mr)
+    const bm = rmm(mb)
+    const lm = rmm(ml)
     if (tm !== undefined) margin.top = tm
     if (rm !== undefined) margin.right = rm
     if (bm !== undefined) margin.bottom = bm
     if (lm !== undefined) margin.left = lm
     page.size = size
     if (size === 'custom') {
-      page.w = r1(pw)
-      page.h = r1(ph)
+      page.w = rmm(pw)
+      page.h = rmm(ph)
     }
     if (Object.keys(margin).length) page.margin = margin
+  }
+  // 页码型别（v0.170）：与 pgSz/pgMar 同路——回退导入也把它带进 page
+  if (pgNumEl) {
+    const fmt = pgNumEl.match(/w:fmt="([A-Za-z]+)"/)?.[1]
+    const st = Number(pgNumEl.match(/w:start="(\d+)"/)?.[1])
+    const pageNum: NonNullable<PageSetup['pageNum']> = {}
+    if (fmt) pageNum.fmt = fmt
+    if (Number.isFinite(st) && st >= 0) pageNum.start = st
+    if (Object.keys(pageNum).length) page.pageNum = pageNum
   }
   // 分栏：w:num>1 才算多栏；栏间距缺省时回退默认而不写进 meta
   const num = Number(colsEl?.match(/w:num="(\d+)"/)?.[1])
   if (num > 1) {
     page.cols = Math.min(4, num)
     const gap = tw(colsEl, 'space')
-    if (gap && Math.abs(gap - DEFAULT_COL_GAP) > 0.6) page.colGap = r1(gap)
+    if (gap && Math.abs(gap - DEFAULT_COL_GAP) > 0.6) page.colGap = rmm(gap)
   }
+  // v0.190：页面边框走写手侧正则读（不进保真账、读手零改动），放进 page 一起持久化
+  const pageBorders = pageBordersOf(docXml)
+  if (pageBorders) page.pageBorders = pageBorders
   if (Object.keys(page).length) out.page = page
+  // 主题件（v0.164）：整份原样带走，导出时原样放回（见 attachThemePart）。
+  // v0.180：走共享会话的 read（读手那份 theme1.xml 也走同一处），省掉第二次解压；
+  // 缺件时返回空串，与原来 `if (themeFile)` 的门逐字同义
+  const themeXml = await readText('word/theme/theme1.xml')
+  if (themeXml.trim()) out.themeXml = themeXml
+  // v0.188：文档属性。源件没这个部件就留空，写手用 DEFAULT_DOC_PROPS 回落。
+  const coreXml = await readText('docProps/core.xml')
+  if (coreXml.trim()) out.docProps = opts?.legacyMetaRegex ? legacyParseCoreProps(coreXml) : parseCoreProps(coreXml)
+  if (revIds.length) out.revIds = revIds
+  if (docPrShells.length) out.docPrShells = docPrShells
+  // v0.189/190：整片字面包裹壳（表单域 + 智能标记），与上面几笔同源
+  // （写手侧从源包正则读，不进保真账）
+  const literalWrappers = literalWrappersOf(docXml)
+  if (literalWrappers.length) out.literalWrappers = literalWrappers
+  // v0.193：部件级字面元信息。两处「按身份键补属性」+ 两处「根容器前插字面片」，
+  // 共用 `patchMetaExtras` 一条通道；三个部件都由这里正则读，不进保真账。
+  const numberingXml = await readText('word/numbering.xml')
+  const stylesXml = await readText('word/styles.xml')
+  const extXml = await readText('word/commentsExtended.xml')
+  const byId: NonNullable<MetaExtras['byId']> = []
+  const numItems = identityAttrsOf(numberingXml, 'w:num', 'w:numId', ['w:durableId'])
+  if (numItems.length) {
+    byId.push({ part: 'word/numbering.xml', tag: 'w:num', idAttr: 'w:numId', items: numItems })
+  }
+  const styleItems = identityAttrsOf(stylesXml, 'w:style', 'w:styleId', ['w:default'])
+  if (styleItems.length) {
+    byId.push({ part: 'word/styles.xml', tag: 'w:style', idAttr: 'w:styleId', items: styleItems })
+  }
+  const roots: NonNullable<MetaExtras['roots']> = []
+  const numRoots = rootExtrasOf(numberingXml, ['w:numPicBullet', 'w:numIdMacAtCleanup'])
+  if (numRoots.length) {
+    roots.push({ part: 'word/numbering.xml', close: '</w:numbering>', literals: numRoots })
+  }
+  const extRoots = rootExtrasOf(extXml, ['w15:creationId'])
+  if (extRoots.length) {
+    roots.push({ part: 'word/commentsExtended.xml', close: '</w15:commentsEx>', literals: extRoots })
+  }
+  if (byId.length || roots.length) {
+    out.metaExtras = { ...(byId.length ? { byId } : {}), ...(roots.length ? { roots } : {}) }
+  }
+  // v0.194：rPr 字符特性五枚（读手只兑现成屏上 CSS、没进模型），同样写手侧正则读
+  const rPrFeatures = rPrFeaturesOf(docXml)
+  if (rPrFeatures.length) out.rPrFeatures = rPrFeatures
+  // v0.195：正文长尾——sectPr 两枚 / proofErr / w:sdt 壳，写手侧从 document.xml 正则读
+  const literalPlacements = literalPlacementsOf(docXml)
+  if (literalPlacements.length) out.literalPlacements = literalPlacements
+  // v0.196：VML 老式形状与嵌入对象整段字面（relsText 上面已经读过，零新增部件读）
+  const vmlShapes = vmlShapesOf(docXml, relsText)
+  if (vmlShapes.length) out.vmlShapes = vmlShapes
   return out
 }
 
@@ -447,6 +1484,42 @@ export function commentRowsOf(commentsXml: string, extXml: string): DocComment[]
   return out
 }
 
+/**
+ * v0.176：一次扫完 `document.xml`，收齐每个批注的锚文本。
+ *
+ * 此前 `anchorOf(id)` 对每个批注各跑一次全文正则、一次 `docXml.slice(bodyStart)`
+ * 大串复制、一次全文 `indexOf` —— O(批注数 × 全文)。这里一趟 `matchAll` 收齐
+ * 所有 Start/End，再按 id 配对，是 O(全文 + 各锚点片段)。
+ *
+ * 等价纪律（结构测试逐例对撞旧算法）：① 每个 id 只认第一对 Start/End；
+ * ② 仍取「Start 之后第一个同 id End」；③ `indexOf('</w:p>', start) < endAt`
+ * 这条跨段判据原样保留（含 indexOf 返回 -1 时 -1 < endAt 为真的边界）；
+ * ④ joinT 由调用方传入，与旧路径同一份实现。
+ */
+function commentAnchorsOf(docXml: string, joinT: (xml: string) => string): Map<number, string> {
+  const out = new Map<number, string>()
+  const opens = new Map<number, number>()
+  const seen = new Set<number>()
+  const re = /<w:commentRange(Start|End)[^>]*w:id="(\d+)"[^>]*>/g
+  for (const m of docXml.matchAll(re)) {
+    const id = Number(m[2])
+    if (seen.has(id)) continue
+    const at = m.index ?? 0
+    if (m[1] === 'Start') {
+      if (!opens.has(id)) opens.set(id, at + m[0].length)
+      continue
+    }
+    const bodyStart = opens.get(id)
+    if (bodyStart === undefined) continue
+    opens.delete(id)
+    seen.add(id)
+    if (docXml.indexOf('</w:p>', bodyStart) < at) continue
+    const text = decodeEnt(joinT(docXml.slice(bodyStart, at)))
+    if (text) out.set(id, text)
+  }
+  return out
+}
+
 // mammoth 会丢弃批注：兜底路径直读 word/comments.xml 取内容/作者，document.xml 里 commentRangeStart/End
 // 取锚文本，在 HTML 中把锚文本包成 <span data-oo-comment>，由 Comment mark 还原。
 // （保真导入路径按区间原位包 span，不走这里，只用 commentRowsOf）
@@ -468,33 +1541,39 @@ export async function docxToCommentHtml(
       .map((m) => m.replace(/<[^>]+>/g, ''))
       .join('')
   const esc = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
-  // 锚文本限定在单段落内；跨段批注不重锚（侧栏仍显示，标记为未定位）
-  const anchorOf = (id: number): string | undefined => {
-    const startRe = new RegExp(`<w:commentRangeStart[^>]*w:id="${id}"[^>]*>`)
-    const sm = startRe.exec(docXml)
-    if (!sm) return undefined
-    const bodyStart = sm.index + sm[0].length
-    const endRe = new RegExp(`<w:commentRangeEnd[^>]*w:id="${id}"[^>]*>`)
-    const em = endRe.exec(docXml.slice(bodyStart))
-    if (!em) return undefined
-    const endIdx = bodyStart + em.index
-    if (docXml.indexOf('</w:p>', bodyStart) < endIdx) return undefined
-    const text = decodeEnt(joinT(docXml.slice(bodyStart, endIdx)))
-    return text || undefined
-  }
+  const anchors = commentAnchorsOf(docXml, joinT)
   const comments = commentRowsOf(commentsXml, extXml)
-  let outHtml = html
+  // v0.177：一次规划 + 分段构建，替掉「每枚批注把整串 outHtml 复制两遍」的
+  // O(批注数 × HTML) 循环。每枚批注在**原始 html** 里认领自己那一处：
+  // 同一锚文本的第 n 枚批注认领第 n 次出现（旧写法每次在累积串里从头找，
+  // 第二枚会命中刚插进去的 span，把两枚批注套成嵌套——这里顺手修掉，
+  // 单独立账，见 test-comment-anchor.mjs 第 9 条）。逆序批注也各自从头找，
+  // 不按 id 顺序推进游标，免得把文档里排在前面的锚点漏掉。
+  const used = new Map<string, number>()
+  const marks: { at: number; id: number; needle: string }[] = []
   for (const comment of comments) {
-    const anchor = anchorOf(comment.id)
+    const anchor = anchors.get(comment.id)
     if (!anchor) continue
     const needle = esc(anchor)
-    const idx = outHtml.indexOf(needle)
-    if (idx < 0) continue
-    outHtml =
-      outHtml.slice(0, idx) +
-      `<span data-oo-comment="${comment.id}">${needle}</span>` +
-      outHtml.slice(idx + needle.length)
+    const nth = used.get(needle) ?? 0
+    let at = -1
+    for (let k = 0; k <= nth; k++) {
+      at = html.indexOf(needle, at + 1)
+      if (at < 0) break
+    }
+    if (at < 0) continue
+    used.set(needle, nth + 1)
+    marks.push({ at, id: comment.id, needle })
   }
+  marks.sort((a, b) => a.at - b.at || a.id - b.id)
+  let outHtml = ''
+  let cursor = 0
+  for (const m of marks) {
+    if (m.at < cursor) continue // 锚文本重叠时后一枚让步，不造交叉 span
+    outHtml += html.slice(cursor, m.at) + `<span data-oo-comment="${m.id}">${m.needle}</span>`
+    cursor = m.at + m.needle.length
+  }
+  outHtml += html.slice(cursor)
   return { html: outHtml, comments }
 }
 
@@ -578,6 +1657,7 @@ function openComment(out: ParagraphChildLike[], cs: CommentTrack, cid: number) {
 
 type ParagraphChildLike =
   | TextRun
+  | SymbolRun
   | InsertedTextRun
   | DeletedTextRun
   | ExternalHyperlink
@@ -586,6 +1666,7 @@ type ParagraphChildLike =
   | CommentReference
   | FootnoteReferenceRun
   | EndnoteReferenceRun
+  | Bookmark
 
 function markAttr(node: PMNode, mark: string, attr: string): string | undefined {
   const m = node.marks?.find((x) => x.type === mark)
@@ -593,15 +1674,15 @@ function markAttr(node: PMNode, mark: string, attr: string): string | undefined 
   return typeof v === 'string' ? v : undefined
 }
 
-function inlineToChildren(node: PMNode, inherited: Inherited = {}, cs?: CommentTrack, dt?: DocTrack): ParagraphChildLike[] {
+/** 段内一个孩子 → 它的 run 们（书签分组在外层 inlineToChildren 做，这里只管格式） */
+function childToRuns(child: PMNode, inherited: Inherited, cs?: CommentTrack, dt?: DocTrack): ParagraphChildLike[] {
   const out: ParagraphChildLike[] = []
-  for (const child of node.content ?? []) {
-    if (child.type === 'text') {
-      if (cs) {
-        const cid = commentCidOf(child)
-        if (cid === null) closeComment(out, cs)
-        else openComment(out, cs, cid)
-      }
+  if (child.type === 'text') {
+    if (cs) {
+      const cid = commentCidOf(child)
+      if (cid === null) closeComment(out, cs)
+      else openComment(out, cs, cid)
+    }
       const text = textValue(child)
       const bold = inherited.bold || hasMark(child, 'bold')
       const italic = inherited.italic || hasMark(child, 'italic')
@@ -622,27 +1703,87 @@ function inlineToChildren(node: PMNode, inherited: Inherited = {}, cs?: CommentT
       // 字符串绕开门会被 signedTwipsMeasureValue 涂成 w:val="00"，而 Word 16.0 另存时把那枚 00 整枚丢弃
       // （同批夹具里字符串写的 w:val="200" 原样保留），所以 0 这一档只能记账不能上纸。
       const lsTw = letterSpacingToTwips(ts('letterSpacing'))
+      // 复杂文字与语言（v0.138）：cs/hint 走库的 font 对象，szCs/lang/pos/kern 四枚在库里
+      // 实现着但类型面没暴露，由 withCharExtra 按库外槽并进去（见 lib/char-extra.ts 头注）
+      const cx = (a: string) => markAttr(child, 'charExtra', a)
+      const csFont = cx('cs')
+      const hintVal = cx('hint')
+      const baseFont = docFont(ts('fontFamily')) ?? (mono ? 'Consolas' : undefined)
+      const font = csFont || hintVal ? fontWithCsHint(baseFont, csFont, hintVal) : baseFont
+      // 下划线（v0.156 线型/色，v0.159 主题三枚）：包只有 {type,color} 两枚原生槽，
+      // 主题三枚登记进 dt.uThemes 等打包后补。**每个发出 w:u 的 run 都要登记一格**
+      // （无主题时是空串）——补丁按 `<w:u>` 出现序对位，靠条数闸门兜底
+      const uLoad = underlineOf(child, underline)
+      if (uLoad.value) dt?.uThemes.push(uLoad.theme)
+      // 文字色的主题三枚（v0.160）：登记规则与 w:u 同款——**每个会发出 w:color 的 run
+      // 都要占一格**（无主题时是空串），补丁按元素出现序对位、靠条数闸门兜底。
+      // 只在真有 color 时登记：包发 w:color 的前提就是我们传了 color，两者必须一一对应。
+      // 有主题却没有字面色（源件只写 themeColor）时无处附着——那笔账如实挂在
+      // 「字面色与主题三枚一起丢」上，不去动闸门
+      const ctheme = cx('ctheme')
+      if (color) {
+        // v0.184：载荷扩成 5 格 ref;tint;shade;lit;base。lit 是源件 w:val 原值，
+        // base 是导入那一刻的屏上解析色；只有屏上色没被用户改过才回填旧字面值。
+        const [thc = '', tht = '', ths = '', lit = '', base = ''] = (ctheme ?? '').split(';')
+        dt?.colorThemes.push(themeAttrs(thc, tht, ths))
+        const stillOriginal = !!lit && (!base || color.toLowerCase() === base.toLowerCase())
+        dt?.colorLits.push(stillOriginal ? ` w:val="${xmlAttr(lit)}"` : '')
+      }
       const runOpts = {
         text,
         bold,
         italics: italic,
         strike,
-        font: docFont(ts('fontFamily')) ?? (mono ? 'Consolas' : undefined),
+        font,
         ...(Number.isFinite(fsPx) && fsPx > 0 ? { size: Math.round(fsPx * 1.5) } : {}),
         ...(lsTw !== null && lsTw !== 0 ? { characterSpacing: lsTw } : {}),
         ...(color ? { color } : {}),
         ...(highlight ? { shading: { type: 'clear' as const, fill: highlight } } : {}),
-        ...(underline ? { underline: {} } : {}),
+        // v0.156：线型与颜色一起走 data-u 载荷（此前只有「有下划线」这一比特上纸）；
+        // v0.159：主题三枚已在上面登记进 dt.uThemes，这里只落原生槽
+        ...(uLoad.value ? { underline: uLoad.value } : {}),
         ...(rstyle ? { style: rstyle } : {}),
         ...vertAlignOf(child),
       }
+      // 符号（v0.159）：data-sym 载荷 `char;font` → 包的原生 SymbolRun（发 <w:sym>）。
+      // 只在「一个 run 一个字符」时发——载荷只能表达一枚码点，多字符会丢字；char 与
+      // font 缺一也不发（SymbolRun 的 symbolfont 缺省是 Wingdings，猜一个字体比写错更坏）。
+      // 带超链接或修订壳的符号不走这里（那两支的 children 类型不收 SymbolRun，且罕见），
+      // 退化为普通文字：字还在，w:sym 这枚元素丢——如实记在这条边界上
+      const symLoad = cx('sym')
+      const revShell = dt && (hasMark(child, 'revDel') || hasMark(child, 'revIns'))
+      if (symLoad && !href && !revShell) {
+        const [symChar = '', symFont = ''] = symLoad.split(';')
+        if (symChar && symFont && [...text].length === 1) {
+          // w:sym 自带字体，rFonts 在这里没有意义（run 里没有普通文字），剥掉更干净
+          const { font: _f, text: _t, ...rest } = runOpts
+          out.push(
+            new SymbolRun({
+              char: symChar.toUpperCase(),
+              symbolfont: symFont,
+              ...(withCharExtra(rest, child, dt) as Record<string, unknown>),
+            }),
+          )
+          return out
+        }
+      }
       if (href) {
+        // v0.191：模型里的 title/target 就是源件 w:tooltip/w:tgtFrame 的屏上替身，
+        // 登记一格供 post-pack 回填（从模型取，用户改过就写回新值）。`_blank` 是
+        // TipTap 在没写 target 时补的默认值，与「源件显式写 _blank」同形，认不出来
+        // 就不凭空补——宁缺毋滥，也不给没写过的链接造一枚属性。
+        const tip = markAttr(child, 'link', 'title')
+        const frame = markAttr(child, 'link', 'target')
+        dt?.linkExtras.push({
+          ...(tip ? { tip } : {}),
+          ...(frame && frame !== '_blank' ? { frame } : {}),
+        })
         // 超链接里的文字不包修订壳（docx 库的链接子元素类型不收 Inserted/DeletedTextRun）：
         // 链接文字带修订是罕见写法，内容保住、标记丢失，这层边界在 README 里如实记着
         out.push(
           new ExternalHyperlink({
             link: href,
-            children: [new TextRun({ ...runOpts, style: 'Hyperlink' })],
+            children: [new TextRun(withCharExtra({ ...runOpts, style: 'Hyperlink' }, child, dt))],
           }),
         )
       } else if (dt && (hasMark(child, 'revDel') || hasMark(child, 'revIns'))) {
@@ -654,33 +1795,15 @@ function inlineToChildren(node: PMNode, inherited: Inherited = {}, cs?: CommentT
         const author = markAttr(child, markName, 'author') || '未知'
         const date = markAttr(child, markName, 'date') || new Date().toISOString()
         const revOpts = { ...runOpts, id: dt.revId++, author, date }
-        out.push(isDel ? new DeletedTextRun(revOpts) : new InsertedTextRun(revOpts))
+        out.push(isDel ? new DeletedTextRun(withCharExtra(revOpts, child, dt)) : new InsertedTextRun(withCharExtra(revOpts, child, dt)))
       } else {
-        out.push(new TextRun(runOpts))
+        out.push(new TextRun(withCharExtra(runOpts, child, dt)))
       }
     } else if (child.type === 'hardBreak') {
       out.push(new TextRun({ text: '', break: 1 }))
     } else if (child.type === 'image') {
-      const src = (child.attrs?.src as string) ?? ''
-      const bytes = src.startsWith('data:') ? dataUriToBytes(src) : null
-      if (bytes) {
-        out.push(
-          new TextRun({
-            children: [
-              new ImageRun({
-                type: imageType(src),
-                data: bytes,
-                transformation: {
-                  width: Number(child.attrs?.width) || 320,
-                  height: Number(child.attrs?.height) || 240,
-                },
-              }),
-            ],
-          }),
-        )
-      } else if (src) {
-        out.push(new TextRun({ text: `[图片: ${src}]`, italics: true }))
-      }
+      const run = imageRunOf(child, dt)
+      if (run) out.push(run)
     } else if (child.type === 'note') {
       const kind: NoteKind = child.attrs?.kind === 'endnote' ? 'endnote' : 'footnote'
       const text = typeof child.attrs?.text === 'string' ? child.attrs.text : ''
@@ -695,6 +1818,132 @@ function inlineToChildren(node: PMNode, inherited: Inherited = {}, cs?: CommentT
     } else {
       out.push(...inlineToChildren(child, inherited, cs, dt))
     }
+  return out
+}
+
+/**
+ * 行内内容 → 段落孩子（v0.146 起重排为先转后组：书签区间在段内按名字分组）。
+ * 书签（w:bookmarkStart/End）在 PM 里是文字上的 mark，而 docx 要的是包住一串孩子的
+ * Bookmark 组件。mark 模型不记区间端点，这里按「同名 mark 的首个孩子到最后一个孩子」
+ * 切一段，中间无标记的内容（硬换行等）算在区间里——往返能保住名字与覆盖范围这两个
+ * 事实。同段同名两组（病态件）会并成一组；w:id 由 docx 库自动重排（Word 自己复制
+ * 书签时也重排）
+ */
+/**
+ * 图片节点 → 一枚 TextRun（内含 ImageRun）。行内与**块级**两个调用点共用（v0.157）。
+ *
+ * 为什么提出来：schema 里 Image 是 **block** 节点（`@tiptap/extension-image` 的 `inline`
+ * 缺省 false），读手又把 `<img>` 发在块层——于是真实链路里每张图都成了顶层节点，走的是
+ * blocksOf 末尾那条兜底 `para(node, …)`，而 image 节点没有 content，整张图就被写成了一枚
+ * 空段落：屏上看得见，另存一次就没了。此前只有行内那一支，逐族探针又都是按行内构造的 PM，
+ * 两头对着演，谁也没碰到真实的形状。往返账第一次跑就撞上了：PM 里 5 张图，写出包 0 个
+ * `w:drawing`。
+ */
+/** 位置基准：载荷里存的是源件的 relativeFrom 字面，认不出的落回 page（不猜别的档） */
+function relFrom<T extends Record<string, string>>(table: T, raw: string | undefined, fallback: T[keyof T]): T[keyof T] {
+  return (Object.values(table).find((v) => v === raw) as T[keyof T] | undefined) ?? fallback
+}
+
+function imageRunOf(child: PMNode, dt?: DocTrack): TextRun | null {
+  const src = (child.attrs?.src as string) ?? ''
+  const bytes = src.startsWith('data:') ? dataUriToBytes(src) : null
+  if (!bytes) return src ? new TextRun({ text: `[图片: ${src}]`, italics: true }) : null
+  // 替代文本（v0.145）：PM 的 alt 属性 → ImageRun 的 altText.description（docx 包
+  // DocPropertiesOptions 原生槽）。读手那一侧 alt 以 docPr/cNvPr 的 descr 优先、
+  // name 兜底（见 docx-fidelity 的 bitmap）；name 本身不进模型，对象名丢了无害
+  const alt = typeof child.attrs?.alt === 'string' ? child.attrs.alt : ''
+  // 容器壳（v0.148）：一枚 ImageRun 正对一个 `<w:drawing>`，登记顺序即出现序。
+  // 只有真发得出位图的这一支才登记（另一支退化成 `[图片: src]` 字面，没有壳）
+  const shell = typeof child.attrs?.img === 'string' ? child.attrs.img : ''
+  dt?.imgExtras.push(shell)
+  // v0.177：源件是浮动图（wp:anchor）时给 ImageRun 传 floating——包有原生槽
+  // （翻 .d.ts 的 CoreImageOptions 才发现，此前注释一直写「包没有 wp:anchor 的槽」）。
+  // 传了它包才发 <wp:anchor> 而不是 <wp:inline>；十枚 anchor 属性的**原值**
+  // 仍由 patchImgXml 按载荷回填（包发出的是默认值/退化值，不能当源件说过的话）。
+  const kv = parseImgPayload(shell)
+  const floating = kv.anKind === 'anchor'
+    ? {
+        horizontalPosition: {
+          relative: relFrom(HorizontalPositionRelativeFrom, kv.posH, HorizontalPositionRelativeFrom.PAGE),
+          offset: 0,
+        },
+        verticalPosition: {
+          relative: relFrom(VerticalPositionRelativeFrom, kv.posV, VerticalPositionRelativeFrom.PAGE),
+          offset: 0,
+        },
+        allowOverlap: kv.anOver === '1',
+        behindDocument: kv.anBehind === '1',
+        lockAnchor: kv.anLocked === '1',
+        layoutInCell: kv.anCell === '1',
+        ...(kv.anRelH !== undefined && Number.isFinite(Number(kv.anRelH)) ? { zIndex: Number(kv.anRelH) } : {}),
+        margins: {
+          top: Number(kv.distT) || 0,
+          bottom: Number(kv.distB) || 0,
+          left: Number(kv.distL) || 0,
+          right: Number(kv.distR) || 0,
+        },
+      }
+    : undefined
+  // v0.179：a:ln 描边线。翻 .d.ts 的 CoreImageOptions 才发现 outline 是原生槽
+  // （读手注释一直写「包发不出 a:ln」）。只在源件说过线宽时传一枚最小壳——
+  // 包的 ShapeProperties 见到 outline 才 push <a:ln>；cap/cmpd 的枚举键是
+  // 'FLAT'/'SINGLE' 而源件字面是 'flat'/'sng'，直接传给包会写错值，所以这里
+  // 只负责发壳，三枚属性一律由 patchImgXml 按载荷原值回填（与 v0.178 同款）
+  const outline = kv.lnW !== undefined
+    ? { type: 'noFill' as const, width: Number(kv.lnW) || 0 }
+    : undefined
+  return new TextRun({
+    children: [
+      new ImageRun({
+        type: imageType(src),
+        data: bytes,
+        transformation: {
+          width: Number(child.attrs?.width) || 320,
+          height: Number(child.attrs?.height) || 240,
+        },
+        ...(alt ? { altText: { name: alt, description: alt } } : {}),
+        ...(floating ? { floating } : {}),
+        ...(outline ? { outline } : {}),
+      }),
+    ],
+  })
+}
+
+function inlineToChildren(node: PMNode, inherited: Inherited = {}, cs?: CommentTrack, dt?: DocTrack): ParagraphChildLike[] {
+  const kids = node.content ?? []
+  const spanStart = new Map<number, { name: string; last: number }>()
+  const open = new Map<string, [number, number]>()
+  const bmIds = new Map<string, string>()
+  kids.forEach((c, i) => {
+    if (c.type !== 'text') return
+    const raw = markAttr(c, 'bookmark', 'name')
+    if (!raw) return
+    // v0.186：载荷是「书签名;源件 w:id」两格，按**最后一个**分号拆——书签名里
+    // 万一有分号也不会被截断。旧模型只有名字、没有分号，就不凭空造 id。
+    const cut = raw.lastIndexOf(';')
+    const nm = cut >= 0 ? raw.slice(0, cut) : raw
+    if (!nm) return
+    if (cut >= 0 && !bmIds.has(nm)) bmIds.set(nm, raw.slice(cut + 1))
+    const cur = open.get(nm)
+    if (cur) cur[1] = i
+    else open.set(nm, [i, i])
+  })
+  for (const [name, [first, last]] of open) {
+    spanStart.set(first, { name, last })
+    // Bookmark 组件只收书签名（它把 id 恒写成 1），数字令牌另走 post-pack 按名对位
+    const bmId = bmIds.get(name)
+    if (bmId) dt?.bookmarkIds.set(name, bmId)
+  }
+  const out: ParagraphChildLike[] = []
+  for (let i = 0; i < kids.length; i++) {
+    const sp = spanStart.get(i)
+    if (sp) {
+      const inner = kids.slice(i, sp.last + 1).flatMap((c) => childToRuns(c, inherited, cs, dt))
+      out.push(new Bookmark({ id: sp.name, children: inner }))
+      i = sp.last
+      continue
+    }
+    out.push(...childToRuns(kids[i], inherited, cs, dt))
   }
   return out
 }
@@ -792,6 +2041,11 @@ function styleDefOf(info: DocxStyleInfo): IParagraphStyleOptions | ICharacterSty
       id: info.id,
       name: info.name,
       ...(info.basedOn ? { basedOn: info.basedOn } : {}),
+      // 样式元数据（v0.146）：link/uiPriority 是包的原生槽（实测发射 w:link/w:uiPriority）；
+      // customStyle 包丢（StyleForParagraph 只把 type/styleId 交给 StyleAttributes），
+      // 由 patchStylesXml 补在开标签上
+      ...(info.link ? { link: info.link } : {}),
+      ...(info.uiPriority !== undefined ? { uiPriority: info.uiPriority } : {}),
       run,
     }
   }
@@ -817,6 +2071,8 @@ function styleDefOf(info: DocxStyleInfo): IParagraphStyleOptions | ICharacterSty
     id: info.id,
     name: info.name,
     ...(info.basedOn ? { basedOn: info.basedOn } : {}),
+    ...(info.link ? { link: info.link } : {}),
+    ...(info.uiPriority !== undefined ? { uiPriority: info.uiPriority } : {}),
     run,
     paragraph,
   }
@@ -888,8 +2144,14 @@ function bordersXml(borders: Partial<Record<CellEdge, string>> | undefined): str
 function tableStyleXml(s: DocxStyleInfo): string | undefined {
   const t = s.table
   if (!t) return undefined
-  let head = `<w:style w:type="table" w:styleId="${xmlAttr(s.id)}"><w:name w:val="${xmlAttr(s.name)}"/>`
+  // 样式元数据（v0.146）：customStyle 是 w:style 开标签上的属性（onOff），
+  // uiPriority/link 是按 CT_Style 序排在 basedOn 之后、rPr 之前的两枚子元素
+  let head =
+    `<w:style w:type="table"${s.customStyle !== undefined ? ` w:customStyle="${s.customStyle ? '1' : '0'}"` : ''}` +
+    ` w:styleId="${xmlAttr(s.id)}"><w:name w:val="${xmlAttr(s.name)}"/>`
   if (s.basedOn) head += `<w:basedOn w:val="${xmlAttr(s.basedOn)}"/>`
+  if (s.link) head += `<w:link w:val="${xmlAttr(s.link)}"/>`
+  if (s.uiPriority !== undefined) head += `<w:uiPriority w:val="${s.uiPriority}"/>`
   let rPr = ''
   const font = docFont(s.run.font)
   if (font) {
@@ -1038,27 +2300,135 @@ function spacingVals(
 }
 
 function spacingOf(node: PMNode): ISpacingProperties | undefined {
-  return spacingVals(
+  const base = spacingVals(
     ownedPx(node.attrs?.lineHeight) ?? null,
     (typeof node.attrs?.lineRule === 'string' ? node.attrs.lineRule : null) as LineRule | null,
     ownedPx(node.attrs?.spaceBefore),
     ownedPx(node.attrs?.spaceAfter),
   )
+  // 两枚「自动段距」（v0.147）：w:spacing/@w:beforeAutospacing 与 @w:afterAutospacing，
+  // 随 data-ppr 载荷来回。包里是布尔槽而 OOXML 是 onOff——包写出的字面是 "true"/"false"
+  // （xsd:boolean 的两种写法都在 ST_OnOff 的值域里，Word 认），语义等价但字面不必同源
+  const ppr = parsePprPayload(typeof node.attrs?.ppr === 'string' ? node.attrs.ppr : null)
+  const flag = (k: string): boolean | undefined => (ppr[k] === '1' ? true : ppr[k] === '0' ? false : undefined)
+  const beforeAuto = flag('beforeAutoSpace')
+  const afterAuto = flag('afterAutoSpace')
+  if (!base && beforeAuto === undefined && afterAuto === undefined) return undefined
+  return {
+    ...(base ?? {}),
+    ...(beforeAuto !== undefined ? { beforeAutoSpacing: beforeAuto } : {}),
+    ...(afterAuto !== undefined ? { afterAutoSpacing: afterAuto } : {}),
+  }
 }
 
 /** 段落的直接格式（命名样式 / 行距段距 / 底纹 / 四边）一次拼好，供 new Paragraph 的参数展开。
  *  pstyle 由调用方决定给不给：heading 的样式标签由 HeadingLevel 承担（库会给 heading 和 style
  *  各写一枚 w:pStyle，并存会出两枚）；bullet 项库无条件补 ListParagraph 标签，同样不能并存 */
-function paraFormatOf(node: PMNode, pstyle?: string | null) {
+function paraFormatOf(node: PMNode, pstyle?: string | null, dt?: DocTrack) {
   const sp = spacingOf(node)
-  const sh = shadingOf(node.attrs?.background)
-  const bd = bordersOf(node.attrs)
+  const sh = shadingOf(node.attrs)
+  // 底纹的存盘原件（v0.164）：**只在真发得出 `<w:shd>` 时登记**——补丁按出现序对位，
+  // 多登记一条就把后面所有段落的那一枚都贴偏（少登记同样错位）
+  if (sh) dt?.shdExtras.push(shdExtraOf(node.attrs))
+  // 第一段那种「between 落成下边框」的情形：下边框不发，改发 `<w:between>`
+  const bd = bordersOf(node.attrs, betweenAsBottom(node.attrs))
+  // 边框的存盘原件（v0.165）：同一条纪律——发不出 `<w:pBdr>` 就不登记
+  if (bd) dt?.paraBdrs.push(bdrExtraOf(node.attrs))
+  // 分页四件套（v0.143）：data-* 三态 → docx 包原生槽。'0' 显式传 false
+  // （widowControl 的「关」是真值），null 不传（落回 Word 默认的开）
+  const flag = (a: string): boolean | undefined => {
+    const v = node.attrs?.[a]
+    return v === '1' ? true : v === '0' ? false : undefined
+  }
+  const keepNext = flag('keepNext')
+  const keepLines = flag('keepLines')
+  const pageBreakBefore = flag('pageBreakBefore')
+  const widowControl = flag('widowControl')
+  // 制表位表（v0.144）：data-tabs 载荷 → tabStops。type/position/leader 直接透传
+  // （包的 createTabStopItem 不做单位换算，position 即缇）；leader 的 heavy 档在包的
+  // LeaderType 里没有——库外槽照样落成 w:leader="heavy"，TS 那侧断言绕过
+  const tabs = tabsOf(node.attrs?.tabs)
+  // 浮动框架（v0.145）：data-frame 载荷 → 包 frame 槽。xAlign/yAlign 优先（alignment
+  // 形态）、否则 absolute——Word 语义里 x 与 xAlign 互斥，同存是脏数据（alignment 优先
+  // 时 x/y 被弃，Word 自己也是这个取舍）；width/height/anchor 包里是必填，源文件缺
+  // w/h 时给 0（Word 对 0 宽框架的解释是自动宽，与「没写」不等但比丢整条框架好）
+  const frame = frameOf(node.attrs?.frame)
   return {
     ...(pstyle ? { style: pstyle } : {}),
     ...(sp ? { spacing: sp } : {}),
     ...(sh ? { shading: sh } : {}),
     ...(bd ? { border: bd } : {}),
+    ...(tabs ? { tabStops: tabs } : {}),
+    ...(frame ? { frame } : {}),
+    ...(keepNext !== undefined ? { keepNext } : {}),
+    ...(keepLines !== undefined ? { keepLines } : {}),
+    ...(pageBreakBefore !== undefined ? { pageBreakBefore } : {}),
+    ...(widowControl !== undefined ? { widowControl } : {}),
   }
+}
+
+/** data-frame 载荷 → docx 包 frame 选项（IFrameOptions 两形态）；无有效键返回 undefined */
+function frameOf(raw: unknown): IFrameOptions | undefined {
+  const kv = parseFramePayload(typeof raw === 'string' ? raw : null)
+  const num = (k: string): number | undefined => (kv[k] !== undefined ? Number(kv[k]) : undefined)
+  const has = (...ks: string[]) => ks.some((k) => kv[k] !== undefined)
+  if (!has('x', 'y', 'xAlign', 'yAlign', 'w', 'h', 'wrap', 'anchorLock', 'hRule', 'hAnchor', 'vAnchor', 'hSpace', 'vSpace')) return undefined
+  // 纯 absolute 形态要有 x/y 至少一枚；只有对齐/尺寸而无 x/y 时走 absolute 补 0
+  if (kv.x === undefined && kv.y === undefined && !has('xAlign', 'yAlign')) return undefined
+  const alignment = has('xAlign', 'yAlign')
+  const opts: Record<string, unknown> = alignment
+    ? { type: 'alignment', alignment: { x: kv.xAlign ?? 'left', y: kv.yAlign ?? 'top' } }
+    : { type: 'absolute', position: { x: num('x') ?? 0, y: num('y') ?? 0 } }
+  // 必填槽：包里 width/height/anchor 缺了会写出畸形 framePr，源文件没有就给中性值
+  opts.width = num('w') ?? 0
+  opts.height = num('h') ?? 0
+  opts.anchor = { horizontal: kv.hAnchor ?? 'page', vertical: kv.vAnchor ?? 'text' }
+  if (has('hSpace', 'vSpace')) opts.space = { horizontal: num('hSpace') ?? 0, vertical: num('vSpace') ?? 0 }
+  if (kv.hRule) opts.rule = kv.hRule
+  if (kv.wrap) opts.wrap = kv.wrap
+  if (kv.anchorLock !== undefined) opts.anchorLock = kv.anchorLock === '1' || kv.anchorLock === 'true' || kv.anchorLock === 'on'
+  if (kv.dropCap) opts.dropCap = kv.dropCap
+  if (kv.lines !== undefined) opts.lines = Number(kv.lines)
+  // 载荷里的字符串键（xAlign/hAnchor/wrap…）是 OOXML 原值，与包枚举字面一致，直接透传
+  return opts as unknown as IFrameOptions
+}
+
+/** data-tabs 载荷 → docx 包 TabStopDefinition[]（空数组当没有，不写 w:tabs 元素） */
+function tabsOf(raw: unknown): TabStopDefinition[] | undefined {
+  const specs = parseTabsPayload(typeof raw === 'string' ? raw : null)
+  if (!specs.length) return undefined
+  // type/position 直接透传（包的 createTabStopItem 不做单位换算，position 即缇）；
+  // leader 的 heavy 档不在包的 LeaderType 里——与 withCharExtra 的库外槽同款断言
+  return specs.map((t) => ({
+    type: t.val,
+    position: t.pos ?? 0,
+    ...(t.leader ? { leader: t.leader } : {}),
+  })) as unknown as TabStopDefinition[]
+}
+
+/**
+ * data-tblp 载荷 → docx 包 ITableFloatOptions（v0.145）。键名一一对应：
+ * tblpX→absoluteHorizontalPosition、tblpXSpec→relativeHorizontalPosition、
+ * horzAnchor→horizontalAnchor、vertAnchor→verticalAnchor（原值透传——包里类型面是
+ * TableAnchorType 而 OOXML 值域含 top/bottom/center 等，BuilderElement 不校验）、
+ * tblpY→absoluteVerticalPosition、四 FromText 同名、overlap→overlap。
+ * 空载荷返回 undefined（不写 w:tblpPr）。
+ */
+function tblpFloatOf(raw: unknown): ITableFloatOptions | undefined {
+  const kv = parseTblpPayload(typeof raw === 'string' ? raw : null)
+  if (!Object.keys(kv).length) return undefined
+  const n = (k: string): number | undefined => (kv[k] !== undefined ? Number(kv[k]) : undefined)
+  const opts: Record<string, unknown> = {}
+  if (kv.horzAnchor) opts.horizontalAnchor = kv.horzAnchor
+  if (kv.tblpXSpec) opts.relativeHorizontalPosition = kv.tblpXSpec
+  if (n('tblpX') !== undefined) opts.absoluteHorizontalPosition = n('tblpX')
+  if (kv.vertAnchor) opts.verticalAnchor = kv.vertAnchor
+  if (n('tblpY') !== undefined) opts.absoluteVerticalPosition = n('tblpY')
+  for (const k of ['topFromText', 'leftFromText', 'bottomFromText', 'rightFromText'] as const) {
+    if (n(k) !== undefined) opts[k] = n(k)
+  }
+  if (kv.overlap) opts.overlap = kv.overlap
+  return opts as unknown as ITableFloatOptions
 }
 
 /** CSS 线型词 → OOXML 线型（导入时已归一到这几个词） */
@@ -1087,21 +2457,207 @@ function cellBorder(v: unknown): IBorderOptions | undefined {
   return { style: OOXML_BORDER[p.style] ?? BorderStyle.SINGLE, size: pxToEighths(p.px), color: p.hex.slice(1) }
 }
 
-/** 四边 → w:tcBorders（表格）或 w:pBdr（段落）；两者同形，一条都没有就不写这个元素 */
-function bordersOf(attrs: Record<string, unknown> | undefined) {
+/**
+ * 边框间距（v0.143）：`w:space`（磅）。段落侧住 pad*（pBdr 是段落的唯一来源），
+ * 单元格侧住 bdSpace*（tcMar 与 tcBorders@space 在 Word 里叠加，回写要各走各的）——
+ * 两种来源不会同节点并存（段落没有 tcMar、单元格的 pad 归 tcMar），取到即用。
+ */
+/**
+ * 「这一段的下边框其实是 between 的替身」（v0.167）。
+ *
+ * 读手把 `w:between` 画成了本段的下边框（`betweenCss`），于是模型里的 `bdBottom`
+ * 多出一条源件根本没有的 `w:bottom`。判据是 payload 的 `screen`：屏上那条下边框的色
+ * 与它一致 = 它就是 between 的替身 → 下边框不发、改发 `w:between`；对不上说明用户
+ * 换过色，那时 between 作废、下边框照发（用户的改动优先）。
+ */
+function betweenAsBottom(attrs: Record<string, unknown> | undefined): boolean {
+  const p = parsePbdrPayload(typeof attrs?.pbdr === 'string' ? attrs.pbdr : null)
+  if (p.hidden === '1') return false
+  if (!p.val && !p.color && !p.themeColor) return false
+  const cur = borderParts(attrs?.bdBottom as string | undefined)
+  return !!cur && cur.hex.replace('#', '').toLowerCase() === (p.screen ?? '').toLowerCase()
+}
+
+function borderSpacePt(attrs: Record<string, unknown> | undefined, edge: 'top' | 'right' | 'bottom' | 'left'): number | undefined {
+  const pad = attrs?.[`pad${edge[0].toUpperCase()}${edge.slice(1)}`]
+  const bd = attrs?.[`bdSpace${edge[0].toUpperCase()}${edge.slice(1)}`]
+  const px = typeof bd === 'number' ? bd : typeof pad === 'number' ? pad : undefined
+  if (typeof px !== 'number' || !Number.isFinite(px) || px <= 0) return undefined
+  return pxToPt(px)
+}
+
+/**
+ * 四边 → w:tcBorders（表格）或 w:pBdr（段落）；两者同形，一条都没有就不写这个元素。
+ * `noBottom` 是段落那一路的第五边让位（见 betweenAsBottom）：那一条下边框的真相是
+ * `w:between`，发了 `w:bottom` 就会在 Word 里多画一根线
+ */
+function bordersOf(attrs: Record<string, unknown> | undefined, noBottom = false) {
+  const withSpace = (edge: 'top' | 'right' | 'bottom' | 'left', v: IBorderOptions | undefined) => {
+    const sp = borderSpacePt(attrs, edge)
+    // 只有真画出了边才带 space——边都没有，间距无处附着
+    return v && sp !== undefined ? { ...v, space: sp } : v
+  }
   const b = {
-    top: cellBorder(attrs?.bdTop),
-    bottom: cellBorder(attrs?.bdBottom),
-    left: cellBorder(attrs?.bdLeft),
-    right: cellBorder(attrs?.bdRight),
+    top: withSpace('top', cellBorder(attrs?.bdTop)),
+    bottom: noBottom ? undefined : withSpace('bottom', cellBorder(attrs?.bdBottom)),
+    left: withSpace('left', cellBorder(attrs?.bdLeft)),
+    right: withSpace('right', cellBorder(attrs?.bdRight)),
   }
   return Object.values(b).some(Boolean) ? b : undefined
 }
 
-/** 底纹 → w:shd；Word 的 fill 是不带 # 的十六进制 */
-function shadingOf(v: unknown) {
-  const hex = typeof v === 'string' ? v : ''
+/**
+ * 边框的存盘原件（v0.165）：`data-bdr` 载荷 → 每条边要**合并**进 `<w:top>` 的属性串，
+ * 段间用 `;` 连、边名与属性串用 `|` 分。空串 = 这一块不补。
+ *
+ * 判据与 data-shd 的 `bg` 同一条：`screen` 是导入那一刻的屏上色，当前 `bd*` 的色与它
+ * 对不上就说明用户在编辑器里改过色——主题引用那时必须让位，否则 Word 按主题解析，
+ * 用户换的颜色在屏上、在纸上都看不见。线型与粗细改了不影响颜色，照补。
+ */
+function padTouched(attrs: Record<string, unknown> | undefined, edge: string): boolean {
+  const cap = edge[0].toUpperCase() + edge.slice(1)
+  // 段落落在 pad*、逐格落在 bdSpace*（v0.143 的两条通道）
+  for (const a of [`pad${cap}`, `bdSpace${cap}`]) {
+    const v = attrs?.[a]
+    if (typeof v === 'number' && v > 0) return true
+  }
+  return false
+}
+
+function bdrExtraOf(attrs: Record<string, unknown> | undefined): string {
+  const out: string[] = []
+  for (const o of parseBdrPayload(typeof attrs?.bdr === 'string' ? attrs.bdr : null)) {
+    const cur = borderParts(attrs?.[bdAttr(o.edge)] as string | undefined)
+    if (!cur || cur.hex.replace('#', '').toLowerCase() !== (o.screen ?? '').toLowerCase()) continue
+    const add = [
+      o.color ? `w:color="${o.color}"` : '',
+      o.themeColor ? `w:themeColor="${o.themeColor}"` : '',
+      o.themeTint ? `w:themeTint="${o.themeTint}"` : '',
+      o.themeShade ? `w:themeShade="${o.themeShade}"` : '',
+      // 显式 `w:space="0"`（v0.168）：包按 padding 发，0 与「没写」在 CSS 里同形，
+      // 只有载荷记得住；用户把内边距调大了就以用户为准（见 padTouched）
+      o.space === '0' && !padTouched(attrs, o.edge) ? 'w:space="0"' : '',
+    ]
+      .filter(Boolean)
+      .join(' ')
+    if (add) out.push(`${o.edge}|${add}`)
+  }
+  // 第五边（v0.167）与第六条边（v0.168）：与四边同一块、同一个数组——它们都插在
+  // `<w:pBdr>` 里，对位靠的就是这一块的出现序
+  const bt = betweenExtraOf(attrs)
+  if (bt) out.push(`between|${bt}`)
+  const bar = barExtraOf(attrs)
+  if (bar) out.push(`bar|${bar}`)
+  return out.join(';')
+}
+
+/**
+ * 段落第六条边（v0.168）：`data-pbar` 载荷 → 要写进 `<w:pBdr>` 的属性串。
+ * 屏上没有替身、界面上也改不了它——没有判据，有就插一枚。
+ */
+function barExtraOf(attrs: Record<string, unknown> | undefined): string {
+  const p = parsePbdrPayload(typeof attrs?.pbar === 'string' ? attrs.pbar : null)
+  if (!p.val && !p.color && !p.themeColor) return ''
+  return [
+    p.val ? `w:val="${p.val}"` : '',
+    p.sz ? `w:sz="${p.sz}"` : '',
+    p.space !== undefined ? `w:space="${p.space}"` : '',
+    p.color ? `w:color="${p.color}"` : '',
+    p.themeColor ? `w:themeColor="${p.themeColor}"` : '',
+    p.themeTint ? `w:themeTint="${p.themeTint}"` : '',
+    p.themeShade ? `w:themeShade="${p.themeShade}"` : '',
+  ]
+    .filter(Boolean)
+    .join(' ')
+}
+
+/**
+ * 表行余量（v0.172）：`data-trpr` 载荷 → 要贴进 `<w:trPr>` 的两枚元素。
+ *
+ * `w:gridAfter` 与 `w:wAfter` 包都没有槽（`TableRow` 的选项里也没有），只能打包后补。
+ * 两枚在 CT_TrPr 的序里排在 `cantSplit`/`trHeight`/`tblHeader` 之前——插错位置 Word 会
+ * 判损坏件，所以补丁里按锚点插而不是直接追加。
+ */
+function trPrExtraOf(attrs: Record<string, unknown> | undefined): string {
+  const p = parseTrPrPayload(typeof attrs?.trpr === 'string' ? attrs.trpr : null)
+  return (
+    (p.gridAfter !== undefined ? `<w:gridAfter w:val="${p.gridAfter}"/>` : '') +
+    // w:type 缺省是 dxa；只有 w 给了才发这一枚（w 是必填）
+    (p.wAfterW !== undefined ? `<w:wAfter w:w="${p.wAfterW}"${p.wAfterType ? ` w:type="${p.wAfterType}"` : ''}/>` : '')
+  )
+}
+
+/**
+ * 段落第五边（v0.167）：`data-pbdr` 载荷 → 要写进 `<w:pBdr>` 的属性串。
+ * 空串 = 这一块不补。
+ *
+ * 两个方向：
+ * - `hidden=1`（本段没轮到画）：屏上没有替身，原样带回；
+ * - 画了：屏上的替身是本段的**下边框**。用户改过色、或把下边框删了，between 跟着走
+ *   ——删了就一起删，别留一枚屏上不存在的旧线，等哪天去掉下边框它才冒出来。
+ */
+function betweenExtraOf(attrs: Record<string, unknown> | undefined): string {
+  const p = parsePbdrPayload(typeof attrs?.pbdr === 'string' ? attrs.pbdr : null)
+  if (!p.val && !p.color && !p.themeColor) return ''
+  if (p.hidden !== '1' && !betweenAsBottom(attrs)) return ''
+  return [
+    p.val ? `w:val="${p.val}"` : '',
+    p.sz ? `w:sz="${p.sz}"` : '',
+    p.space !== undefined ? `w:space="${p.space}"` : '',
+    p.color ? `w:color="${p.color}"` : '',
+    p.themeColor ? `w:themeColor="${p.themeColor}"` : '',
+    p.themeTint ? `w:themeTint="${p.themeTint}"` : '',
+    p.themeShade ? `w:themeShade="${p.themeShade}"` : '',
+  ]
+    .filter(Boolean)
+    .join(' ')
+}
+
+/**
+ * 底纹 → w:shd。图案族（data-shade 三件套，v0.142）优先：type 是图案档位、
+ * fill 是背景、color 是前景——Word 的图案底纹三件套就是这么分工的；
+ * 纯色只有 fill。Word 的 fill/color 都不带 #。
+ * 图案名不在规范档位表里（第三方怪件）按纯色写：色不丢、档位丢（读侧 warn 已记）。
+ */
+function shadingOf(attrs: Record<string, unknown> | undefined) {
+  const spec = parseShadePayload(typeof attrs?.shade === 'string' ? attrs.shade : null)
+  // 载荷里的档位名是全小写（读侧归一过），docx 包的规范名是驼峰（horzStripe）——过一遍映射
+  const canonical = spec ? SHADING_TYPES[spec.pattern] : undefined
+  if (spec && canonical) {
+    return { type: canonical, fill: spec.bg.replace('#', ''), color: spec.fg.replace('#', '') }
+  }
+  const hex = typeof attrs?.background === 'string' ? attrs.background : ''
   return hex ? { type: ShadingType.CLEAR, fill: hex.replace('#', '').toLowerCase() } : undefined
+}
+
+/** OOXML 图案档位表：小写（读侧载荷的口径）→ docx 包的规范名（horzStripe 这一族是驼峰） */
+const SHADING_TYPES: Record<string, (typeof ShadingType)[keyof typeof ShadingType]> = Object.fromEntries(
+  (Object.values(ShadingType) as string[]).map((v) => [v.toLowerCase(), v as (typeof ShadingType)[keyof typeof ShadingType]]),
+)
+
+/**
+ * 底纹的存盘原件（v0.164）：data-shd 载荷 → 要**合进** `<w:shd>` 的属性串。
+ * 空串 = 这一枚底纹不补（补丁按出现序对位，空串占位）。
+ *
+ * 两道闸门：
+ * 1. **用户改过底纹色就整笔作废。** 载荷里的 `bg` 是导入那一刻的屏上色；当前
+ *    `background` 与它对不上，说明用户在编辑器里换了颜色。主题引用那时必须让位——
+ *    否则 Word 按主题解析，用户的改色在屏上、在纸上都看不见。
+ * 2. `background` 为空 = 包里根本不会发 `<w:shd>`（`shadingOf` 返回 undefined），
+ *    没有开标签可合，补也白补。
+ */
+function shdExtraOf(attrs: Record<string, unknown> | undefined): string {
+  const p = parseShdPayload(typeof attrs?.shd === 'string' ? attrs.shd : null)
+  if (!p.themeFill) return ''
+  const bg = typeof attrs?.background === 'string' ? attrs.background.replace('#', '').toLowerCase() : ''
+  if (!bg) return ''
+  if (p.bg && p.bg.toLowerCase() !== bg) return ''
+  return (
+    (p.fill ? ` w:fill="${xmlAttr(p.fill)}"` : '') +
+    ` w:themeFill="${xmlAttr(p.themeFill)}"` +
+    (p.themeFillTint ? ` w:themeFillTint="${xmlAttr(p.themeFillTint)}"` : '') +
+    (p.themeFillShade ? ` w:themeFillShade="${xmlAttr(p.themeFillShade)}"` : '')
+  )
 }
 
 /** 上下标：Word 把 vertAlign 记在 rPr，与粗斜体同级，所以是两个互斥的 run 属性 */
@@ -1130,7 +2686,202 @@ export function docFont(family: string | undefined): string | IFontAttributesPro
   return { ascii: latin, hAnsi: latin, eastAsia: cjk, cs: cjk }
 }
 
+/**
+ * 把 charExtra mark 带来的 cs / hint 并进字体对象（v0.138）。
+ * 显式 cs 压过 docFont 的推测（那个把中文字族当 cs 只是"没别的线索时的默认"）；
+ * 单名字体先拆成 ascii/hAnsi 两槽再并——库对字符串只写 ascii/hAnsi，并不上 cs/hint。
+ */
+function fontWithCsHint(
+  base: string | IFontAttributesProperties | undefined,
+  cs?: string,
+  hint?: string,
+): IFontAttributesProperties {
+  const merged: IFontAttributesProperties =
+    typeof base === 'string' ? { ascii: base, hAnsi: base } : { ...(base ?? {}) }
+  // 库的类型是 readonly，按不可变合并重建（显式 cs 压过 docFont 的推测）
+  // 导入侧按小写存 hint（'eastasia'），而 ST_Hint 的字面是 eastAsia——写回前归一回位，
+  // 免得严格校验的读手（Word 自己）对大小写挑刺
+  const canon = hint ? (hint.toLowerCase() === 'eastasia' ? 'eastAsia' : 'default') : undefined
+  return { ...merged, ...(cs ? { cs } : {}), ...(canon ? { hint: canon } : {}) }
+}
+
+/**
+ * charExtra mark 的四枚库外槽（v0.138）：szCs / lang / pos / kern。
+ *
+ * 它们在 docx 库的 RunProperties 里逐枚实现着（options.sizeComplexScript → w:szCs、
+ * options.language → w:lang、options.position → w:position、options.kern → w:kern），
+ * 只是 IRunStylePropertiesOptions 的类型面没列这几枚——传进去要靠这一个断言。
+ * 判据是库的 dist（node_modules/docx/dist/index.cjs 的 RunProperties 构造器），不是猜的。
+ */
+/**
+ * 库外槽并回 options（见 lib/char-extra.ts 头注）。
+ * `dt` 是打包后补丁的登记册——**必须传**：发 smallCaps 的路径有五条，而 caps 那一枚
+ * 要按 `<w:smallCaps>` 出现序补（v0.161），漏登记一条就整体错位。
+ */
+function withCharExtra<T extends object>(opts: T, child: PMNode, dt?: DocTrack): T {
+  const mark = child.marks?.find((x) => x.type === 'charExtra')
+  // 数值槽不能走 markAttr——那个只返字符串，szcs/pos/kern 三枚在模型里是 number
+  const num = (a: string): number | undefined => {
+    const v = mark?.attrs?.[a]
+    if (typeof v === 'number') return Number.isFinite(v) ? v : undefined
+    if (typeof v === 'string' && v.trim()) {
+      const n = Number(v)
+      return Number.isFinite(n) ? n : undefined
+    }
+    return undefined
+  }
+  const str = (a: string) => markAttr(child, 'charExtra', a)
+  const szcs = num('szcs')
+  const lang = str('lang')
+  const langEa = str('langEa')
+  // v0.146：复杂文字语言（w:lang/@w:bidi）与字符缩放（w:w/@w:val）。两枚都是库里
+  // 实现着、类型面也暴露了的原生槽（IRunOptions.language.bidirectional / IRunOptions.scale），
+  // 不走库外断言
+  const langBidi = str('langBidi')
+  const scale = num('scale')
+  const pos = num('pos')
+  const kern = num('kern')
+  // v0.156：着重号与浮雕/阴文三枚。emphasisMark 在库里实现着
+  // （`if (options.emphasisMark) push(createEmphasisMark(options.emphasisMark.type))`，
+  // 值原样写进 w:em/@w:val），但**类型面只列了 dot 一档**（EmphasisMarkType 只有一个
+  // 成员），circle/comma/underDot 三档得按库外槽传——与 szCs/pos 同款断言，不是猜测。
+  // emboss/imprint 两枚是类型面全暴露的原生槽（dist/index.d.ts:1670-1671），实现是
+  // `if (options.emboss !== void 0) push(new OnOffElement("w:emboss", …))`，直接传
+  const emVal = str('em')
+  const emboss = str('emboss')
+  const imprint = str('imprint')
+  // v0.143：复杂文字粗斜与小型大写。库里实现着（boldComplexScript / **italicsComplexScript**
+  // ——斜体那枚是复数 italics，类型面 dist/index.d.ts:1644 与实现一致，写单数 italic 不报错
+  // 但静默不输出 / smallCaps），TS 类型面同样没暴露这几枚——与 szcs/lang 同走库外槽。
+  // 另注意 boldComplexScript/italicsComplexScript 在库里是「跟随 b/i 的三态」：
+  // 不显式传就吃 options.bold/italics，所以这里必须显式传 true（本函数从不管粗斜体本身）
+  const ics = str('ics')
+  const bcs = str('bcs')
+  const sc = str('smallcaps')
+  // v0.152：全大写与字符边框。两枚都是**类型面全暴露**的原生槽（IRunOptions.allCaps
+  // 与 IRunOptions.border，dist/index.d.ts:1660 与 :1674）——库里实现着、类型也写着，
+  // 不走库外断言（与上面 szcs/lang 那一族不同）
+  const caps = str('caps')
+  // v0.154：隐藏文字。同样是**类型面全暴露**的原生槽（IRunOptions.vanish，
+  // dist/index.d.ts:1679），包里实现着、类型也写着——与 allCaps 同路数，不走库外断言
+  const vanish = str('vanish')
+  const bdr = str('bdr')
+  const extra: Record<string, unknown> = {}
+  if (szcs !== undefined && szcs > 0) extra.sizeComplexScript = szcs
+  if (lang || langEa || langBidi)
+    extra.language = { value: lang || undefined, eastAsia: langEa || undefined, bidirectional: langBidi || undefined }
+  if (scale !== undefined && scale > 0) extra.scale = scale
+  if (pos !== undefined && pos !== 0) extra.position = pos
+  if (kern !== undefined && kern > 0) extra.kern = kern
+  if (ics) extra.italicsComplexScript = true
+  if (bcs) extra.boldComplexScript = true
+  if (sc) extra.smallCaps = true
+  if (caps) extra.allCaps = true
+  if (vanish) extra.vanish = true
+  if (emVal) extra.emphasisMark = { type: emVal }
+  if (emboss) extra.emboss = true
+  if (imprint) extra.imprint = true
+  // 字符边框（v0.152）：w:bdr 四枚 → 包的 IRunOptions.border。val 是线型枚举、
+  // sz 是八分之一磅、space 是磅、color 是 hex；缺的枚不给（包自己有默认）。
+  // **type 面是 BorderStyle 枚举**（SINGLE/DOTTED/…），而 OOXML 的 val 是小写串
+  // （single/dotted/…）——BuilderElement 透传不校验，但枚举映射更稳：
+  // 只映射 CSS_BORDER_STYLE 认得的档，认不得的按 single
+  if (bdr) {
+    const [val = '', sz = '', space = '', color = ''] = bdr.split(';')
+    const style = BDR_LINE[(val || 'single').toLowerCase()] ?? BorderStyle.SINGLE
+    extra.border = {
+      style,
+      ...(/^\d+$/.test(sz) && Number(sz) > 0 ? { size: Number(sz) } : {}),
+      // space 收 0：显式 0 与缺省同结果，但源件写了就原样往返（sz 不行——零宽边框
+      // 不是合法档，缺了按包的默认走）
+      ...(/^\d+$/.test(space) ? { space: Number(space) } : {}),
+      ...(color && color.toLowerCase() !== 'auto' ? { color: color.replace(/^#/, '').toUpperCase() } : {}),
+    }
+    // 主题三枚（v0.166）：包外无槽，按 `<w:bdr>` 出现序补回。**只要发了这个元素就登记**
+    // （与 caps 同一条纪律），空串占位
+    dt?.bdrExtras.push(bdrRunExtraOf(bdr))
+  }
+  // 全大写与小型大写同时要时，包只发 smallCaps（else-if），caps 那一枚由补丁位补。
+  // **只要发了 smallCaps 就登记一格**（不管这枚 run 要不要 caps）——闸门对的是
+  // document.xml 里 `<w:smallCaps>` 的枚数，登记半截等于整笔错位
+  if (sc) dt?.capsExtras.push(caps ? '<w:caps/>' : '')
+  return Object.keys(extra).length ? ({ ...opts, ...extra } as unknown as T) : opts
+}
+
+/** w:bdr/@w:val → 包的 BorderStyle（OOXML 十六档里包有同名枚举的这几档；
+ * dashLargeGap 一族包里没有对应成员，落到默认 single） */
+const BDR_LINE: Record<string, (typeof BorderStyle)[keyof typeof BorderStyle]> = {
+  single: BorderStyle.SINGLE,
+  dotted: BorderStyle.DOTTED,
+  dashed: BorderStyle.DASHED,
+  double: BorderStyle.DOUBLE,
+  dotdash: BorderStyle.DOT_DASH,
+  dashsmallgap: BorderStyle.DASH_SMALL_GAP,
+}
+
+/**
+ * 页面边框读侧（v0.190）：从源包 `document.xml` 正则读 `<w:pgBorders>` 的第一枚边，
+ * 组成「四边统一」的一套值。走 `docxToDocMeta`（正则读的部件不进保真账），读手
+ * `sectionOf` 一行没动，零新增查问。只认 `PAGE_BORDER_STYLES` 四档、脏值各自回落；
+ * 整片认不出就返回 undefined，宁可少一枚，不赌坏件。
+ */
+export function pageBordersOf(docXml: string): PageBorders | undefined {
+  const block = /<w:pgBorders\b[^>]*>([\s\S]*?)<\/w:pgBorders>/.exec(docXml)
+  if (!block) return undefined
+  const edge = /<w:(?:top|left|bottom|right)\b([^>]*)\/>/.exec(block[1])
+  if (!edge) return undefined
+  // 字符串定位，不按属性名编译动态正则（与 v0.187 的 hasAttrNamed 同款纪律）
+  const a = (k: string) => {
+    const needle = `w:${k}="`
+    const i = edge[1].indexOf(needle)
+    if (i < 0) return undefined
+    const j = edge[1].indexOf('"', i + needle.length)
+    return j < 0 ? undefined : edge[1].slice(i + needle.length, j)
+  }
+  const style = (a('val') ?? '').toLowerCase()
+  if (!(PAGE_BORDER_STYLES as readonly string[]).includes(style)) return undefined
+  const color = (a('color') ?? '').replace(/^#/, '').toUpperCase()
+  const size = Number(a('sz'))
+  const space = Number(a('space'))
+  return {
+    style,
+    color: /^[0-9A-F]{6}$/.test(color) ? color : DEFAULT_PAGE_BORDERS.color,
+    size: Number.isFinite(size) && size >= 2 && size <= 96 ? Math.round(size) : DEFAULT_PAGE_BORDERS.size,
+    ...(Number.isFinite(space) && space >= 0 && space <= 31 ? { space: Math.round(space) } : {}),
+  }
+}
+
+/**
+ * 字符边框的主题三枚（v0.166）：`data-rbdr` 载荷 → 追加进 `<w:bdr>` 的属性串。
+ * 空串 = 这一枚不补（补丁按 `<w:bdr>` 出现序对位，空串占位）。
+ *
+ * 与段落/逐格那一族同形、不同槽：那个是「按边分格」的 `data-bdr`，这个是定序七格
+ * `val;sz;space;color;themeColor;themeTint;themeShade`。** `w:color` 不从载荷补**——
+ * 写手本来就按字面色发，包也发得出来，只有主题三枚是包外槽。
+ */
+function bdrRunExtraOf(raw: string): string {
+  const slots = raw.split(';')
+  const [ref = '', tint = '', shade = ''] = slots.slice(4, 7)
+  const okRef = /^[A-Za-z0-9]+$/.test(ref) ? ref : ''
+  const okTint = /^[0-9A-Fa-f]{2}$/.test(tint) ? tint : ''
+  const okShade = /^[0-9A-Fa-f]{2}$/.test(shade) ? shade : ''
+  if (!okRef && !okTint && !okShade) return ''
+  return (
+    (okRef ? ` w:themeColor="${okRef}"` : '') +
+    (okTint ? ` w:themeTint="${okTint}"` : '') +
+    (okShade ? ` w:themeShade="${okShade}"` : '')
+  )
+}
+
 interface DocTrack {
+  /**
+   * 超链接壳的两枚属性（v0.191）：与写出包里每个 `<w:hyperlink>` 一一对应、同序。
+   * 读手 v0.155 早已把 `w:tooltip`/`w:tgtFrame` 兑现成 HTML `<a title/target>`，
+   * TipTap 的 link mark 也自带这两格，但 `ExternalHyperlink` 只收 `link`——
+   * 典型的「模型已有载荷、写手没接」。这里从**模型**登记（不是源包正则），
+   * 用户改过 title/target 能写回新值；`patchHyperlinkAttrs` 按出现序补回壳。
+   */
+  linkExtras: { tip?: string; frame?: string }[]
   used: Set<number>
   ranges: Set<number>
   skipped: Set<number>
@@ -1139,6 +2890,124 @@ interface DocTrack {
   seq: Record<NoteKind, number>
   /** 修订壳的 w:id 计数：Word 只要求文档内不重复，跟批注 id 不同名字空间，从 1 起即可 */
   revId: number
+  /**
+   * 段落属性余量（v0.147）：与 `section.children` 里每个 Paragraph 一一对应、同序。
+   * 包里没有这一族的槽（只有 autoSpaceDN 一枚，且它把 onOff 写成裸元素带不出 w:val），
+   * 导出走打包后补丁——补丁按出现序贴回 `<w:pPr>`，所以这条数组必须与段落同序同长
+   */
+  pprExtras: string[]
+  /**
+   * 表自身的条件层闸门（v0.147）：与 `section.children` 里每个 Table 一一对应、同序。
+   * 表上那一枚压过样式推出来的那一枚，同样走打包后补丁按出现序贴回 `<w:tblPr>`
+   */
+  tblLooks: string[]
+  /**
+   * 表级条件格式尺寸（v0.152）：与 tblLooks 同序同长——同一枚 `<w:tblPr>` 上要补的
+   * 两枚 bandSize 元素（包里没有槽），与 tblLook 共用一次解压/重压
+   */
+  tblPrs: string[]
+  /**
+   * 表级单元格间距（v0.154）：与 tblPrs 同序同长（同一枚 `<w:tblPr>` 的第二笔补丁）。
+   * 之所以不与 tblPrs 合并成一串：两族在 CT_TblPrBase 的序里**分居 tblW 两侧**
+   * （bandSize 在前、tblCellSpacing 在后），必须各自找自己的插入锚点
+   */
+  cellSps: string[]
+  /**
+   * 单元格不换行（v0.152）：与 document.xml 里每个 `<w:tc>` 一一对应、同序（含嵌套
+   * 表内的格——两族各自按自己的元素出现序对位，互不干扰）。包里没有 noWrap 的槽，
+   * 走打包后补丁按 `<w:tc>` 出现序插 `<w:noWrap/>`（计数闸门同 pprExtras）
+   */
+  cellExtras: string[]
+  /**
+   * 图片容器壳（v0.148）：与 document.xml 里每个 `<w:drawing>` 一一对应、同序。
+   * 包把整层壳都发出来了，只是值全部硬编码（dist*=0、effectExtent 四边=0、两枚
+   * locks 恒 1、pic:cNvPr 的 name 是空串），所以也走打包后补丁——按出现序逐块改值
+   */
+  imgExtras: string[]
+  /**
+   * 下划线主题三枚（v0.159）：与 document.xml 里每个 `<w:u>` 一一对应、同序。
+   * 包只有 `{type,color}` 两枚槽（createUnderline 只写 w:val 与 w:color），
+   * `w:themeColor / w:themeTint / w:themeShade` 包外无槽，只能按出现序补回去
+   * （计数闸门同 pprExtras：条数对不上就整笔放弃）
+   */
+  uThemes: string[]
+  /**
+   * 文字色主题三枚（v0.160）：与 document.xml 里每个 `<w:color>` 一一对应、同序。
+   * 与 uThemes 同一条机制债的另一半（包发 w:color 时只写 w:val），两族各按自己的
+   * 元素出现序对位，互不干扰
+   */
+  colorThemes: string[]
+  /**
+   * 文字色字面值原件（v0.184）：与 `<w:color>` 一一对应、同序。包发 w:val 时写的是
+   * 主题解析后的屏上色，源件那枚字面值（如 FF0000）得按出现序**改值**补回。
+   * 与 colorThemes 同一次登记，条数闸门共用；空串 = 用户改过色或源件没写字面值，不动。
+   */
+  colorLits: string[]
+  /**
+   * 书签源件 `w:id`（v0.186）：书签名 → 数字令牌。docx 库的 `Bookmark` 组件把每枚
+   * 书签的 `w:id` 恒写成 1（传进去的 id 是书签名，不是数字令牌），Word 里几枚书签
+   * 同号就分不开。读手已查问过 `w:id` 却没进模型，这里按名字收一份，
+   * `patchBookmarkIds` 按 Start/End 出现序栈式对位改回去。
+   */
+  bookmarkIds: Map<string, string>
+  /**
+   * 表条件格式的落点开关（v0.162）：与 `section.children` 里每个 Table 一一对应、同序。
+   * `w:cnfStyle` 十三枚在包里没有槽（包只发它认得的表属性），走打包后补丁按
+   * `<w:tblPr>` 出现序插。与 tblLooks/tblPrs/cellSps 同住一处，但**插入锚点不同**——
+   * cnfStyle 在 CT_TblPrBase 里紧跟 tblStyle，排在其它三族之前
+   */
+  cnfStyles: string[]
+  /**
+   * 表级边框六边原值（v0.163）：与 `section.children` 里每个 Table 一一对应、同序。
+   * 包恒发 `<w:tblBorders>` 但值是硬编码默认（single/4/auto 六枚），且六个槽里装不下
+   * 主题三枚——所以走打包后补丁**整片替换内容**（不是插元素、也不是补属性）。
+   * 与前四族同住 `<w:tblPr>`、同序登记，但动作不同：那四族是「插一枚新元素」，
+   * 这一族是「换掉一片已有元素的孩子」
+   */
+  tblBorders: string[]
+  /**
+   * 被包吞掉的那一枚全大写（v0.161）：与 document.xml 里每个 `<w:smallCaps>` 一一对应、
+   * 同序。包的 RunProperties 里 `smallCaps` 与 `allCaps` 是 **else-if**（dist/index.mjs:
+   * 10538-10539：先 smallCaps，有了就再不看 allCaps）——一个 run 同时要两枚时，库只发
+   * smallCaps，`<w:caps/>` 整个消失。补丁按 `<w:smallCaps>` 出现序在它**前面**插
+   * `<w:caps/>`（CT_RPrBase 里 caps 排在 smallCaps 之前）。
+   *
+   * 登记在 withCharExtra 内部而不是 childToRuns 里：发 smallCaps 的路径有五条
+   * （普通 run / 超链接 / 修订插入 / 修订删除 / 符号），少登记一条就整体错位
+   */
+  capsExtras: string[]
+  /**
+   * 底纹的存盘原件（v0.164）：与 document.xml 里每个 `<w:shd>` 一一对应、同序。
+   * 包只会发 `{val,color,fill}` 三枚（createShading），主题引用三枚在包外；而且它写的
+   * `w:fill` 是**解析后的屏上色**，源件的字面 fill 已经没人记得。补丁按出现序把这
+   * 几枚**合进**已有开标签（同名属性改值、缺的追加），而不是再插一枚元素——
+   * `w:shd` 在 CT_PPrBase / CT_TcPrBase 里都是单枚
+   */
+  shdExtras: string[]
+  /**
+   * 段落边框的存盘原件（v0.165）：与 document.xml 里每个 `<w:pBdr>` 一一对应、同序。
+   * 包会发四条边、也会发 `w:color`——但写的是**解析后的屏上色**，源件那枚字面色与
+   * `w:themeColor/themeTint/themeShade` 三枚在包外。补丁按块贴：块内按边名找元素，
+   * 同名属性改值、缺的追加（同 shdExtras 的动作；点分的是「哪一块」，不是「第几遍」）
+   */
+  paraBdrs: string[]
+  /**
+   * 逐格边框的存盘原件（v0.165）：与 document.xml 里每个 `<w:tcBorders>` 一一对应、
+   * 同序。**只在真发得出这个块时登记**（`bordersOf` 有值），与 tblBorders 的区别是
+   * 它按格走，所以对位靠「哪些格带边框」这一条，而不是按格数硬套
+   */
+  cellBdrs: string[]
+  /**
+   * 字符边框的主题三枚（v0.166）：与 document.xml 里每个 `<w:bdr>` 一一对应、同序。
+   * 与 capsExtras 同一条登记纪律——**只要发了这个元素就登记**（空串占位），
+   * 因为 `<w:bdr>` 只出现在 run 的 rPr 里，全部由 withCharExtra 那一处发出
+   */
+  bdrExtras: string[]
+  /**
+   * 表行余量（v0.172）：与 document.xml 里每个 `<w:tr>` 一一对应、同序（含嵌套表）。
+   * `w:gridAfter` 与 `w:wAfter` 包没有槽，按行贴回 `<w:trPr>`（没有 trPr 就现开一枚）
+   */
+  rowPrs: string[]
 }
 
 type NoteKind = 'footnote' | 'endnote'
@@ -1151,12 +3020,31 @@ type NoteRecordOption = {
 
 function newDocTrack(): DocTrack {
   return {
+    linkExtras: [],
     used: new Set(),
     ranges: new Set(),
     skipped: new Set(),
     notes: { footnote: new Map(), endnote: new Map() },
     seq: { footnote: 0, endnote: 0 },
     revId: 1,
+    pprExtras: [],
+    tblLooks: [],
+    tblPrs: [],
+    cellSps: [],
+    cellExtras: [],
+    imgExtras: [],
+    cnfStyles: [],
+    tblBorders: [],
+    capsExtras: [],
+    shdExtras: [],
+    paraBdrs: [],
+    cellBdrs: [],
+    bdrExtras: [],
+    rowPrs: [],
+    uThemes: [],
+    colorThemes: [],
+    colorLits: [],
+    bookmarkIds: new Map(),
   }
 }
 
@@ -1171,6 +3059,149 @@ const ORDERED_LEVELS = [0, 1, 2].map((level) => ({
   alignment: AlignmentType.START,
   style: { paragraph: { indent: { left: 720 * (level + 1), hanging: 360 } } },
 }))
+
+/**
+ * 一条列表串的编号档位（v0.142）：子弹档 marker 是符面字符，有序档是 LevelFormat；
+ * align 是 w:lvlJc 的符面对齐，start 是起始号（w:start / w:startOverride）。
+ */
+interface ListKind {
+  ordered: boolean
+  marker: string
+  align: 'left' | 'center' | 'right'
+  start: number
+}
+
+/** HTML `<ol type>` → LevelFormat（读侧 OL_TYPE 的反向表；StarterKit 只认 1/a/A/i/I） */
+const OL_FMT: Record<string, (typeof LevelFormat)[keyof typeof LevelFormat]> = {
+  '1': LevelFormat.DECIMAL,
+  a: LevelFormat.LOWER_LETTER,
+  A: LevelFormat.UPPER_LETTER,
+  i: LevelFormat.LOWER_ROMAN,
+  I: LevelFormat.UPPER_ROMAN,
+}
+
+/** 模型上的 markerAlign 属性 → 三档；null/不认识按 left（Word 的默认） */
+function markerAlignOf(v: unknown): 'left' | 'center' | 'right' {
+  return v === 'center' || v === 'right' ? v : 'left'
+}
+
+/**
+ * 一条编号定义的三层（v0.142）：符面/格式照 kind 走，缩进沿用 ORDERED_LEVELS 那把尺子
+ * （720×(层+1) 左缩进 + 360 悬挂——Word 默认编号层的形状）。
+ * 起始号落在**使用层**（startLevel）：段落的 w:numPr 指哪一层，Word 就从那一层的
+ * w:start 起算——落在第 0 层而段落引用第 1 层的话，Word 整条读不到起始值。
+ */
+/** 一层的档位类型：`format` 是包里那 63 档枚举，不是裸字符串 */
+type LvlFormat = (typeof LevelFormat)[keyof typeof LevelFormat]
+
+/**
+ * OOXML 的 `w:numFmt` 取值 → 包里的 `LevelFormat`：63 档一一对应，值就是同一串
+ * （decimal / lowerLetter / chicago / …）。认不出的档位（自定义格式串）不硬猜。
+ */
+const NUM_FMT = new Map<string, LvlFormat>(Object.values(LevelFormat).map((v) => [String(v), v]))
+
+/**
+ * 源文档那份编号定义的逐层档位（v0.158）。有一层认不出（不在那 63 档里），或者层号
+ * 跳着来（没法按 ilvl 对位），就整条不认——宁可按段的档位重建，也不写一枚 Word 打不
+ * 开的 numFmt。与 patchNumberingXml 同一条纪律：认不出就不贴。
+ */
+function defLvlsOf(def?: DocxAbstractNumMeta): { level: number; format: LvlFormat; text: string }[] | null {
+  if (!def) return null
+  const out: { level: number; format: LvlFormat; text: string }[] = []
+  for (const k of Object.keys(def.levels)) {
+    const lv = def.levels[k]
+    const format = lv.fmt ? NUM_FMT.get(lv.fmt) : undefined
+    if (!format) return null
+    out.push({ level: Number(k), format, text: lv.text ?? '' })
+  }
+  if (!out.length) return null
+  out.sort((a, b) => a.level - b.level)
+  for (let i = 0; i < out.length; i++) if (out[i].level !== i) return null
+  return out
+}
+
+function listLevels(kind: ListKind, startLevel = 0, def?: DocxAbstractNumMeta) {
+  const align =
+    kind.align === 'center' ? AlignmentType.CENTER : kind.align === 'right' ? AlignmentType.END : AlignmentType.START
+  const one = (level: number, format: LvlFormat, text: string) => ({
+    level,
+    format,
+    text,
+    alignment: align,
+    ...(kind.ordered && kind.start !== 1 && level === startLevel ? { start: kind.start } : {}),
+    style: { paragraph: { indent: { left: 720 * (level + 1), hanging: 360 } } },
+  })
+  // 按段档位造一层：有序档的 `text` 是 `%N.`（N = 层 + 1），符面档三层共用同一个字符
+  const synth = (level: number) =>
+    kind.ordered
+      ? one(level, kind.marker as LvlFormat, `%${level + 1}.`)
+      : one(level, LevelFormat.BULLET, kind.marker)
+  const src = defLvlsOf(def)
+  if (!src) return [0, 1, 2].map(synth)
+  // 源有几层就写几层，不足三层用按段档位补齐：段落引用的层号被截到 2，写少了那一段
+  // 在 Word 里没有档位可用。多出来的尾层不影响对位——patchNumberingXml 比的是前缀
+  const n = Math.max(3, src.length)
+  return Array.from({ length: n }, (_, level) => (src[level] ? one(level, src[level].format, src[level].text) : synth(level)))
+}
+
+/**
+ * 导出用的编号注册表：把文档里每串列表的档位收成一条 numbering config。
+ * 默认档不进表——子弹（•、左对齐）走包自带的 `bullet`，无型别有序（左对齐、起始 1）
+ * 走既有的 ORDERED_REF，这两种情形导出的字节与 v0.142 之前一致；
+ * 只有「档位与默认不同」的列表才生成独立 reference（符面字符、罗马数字、居中对齐…）。
+ */
+class ListRegistry {
+  private refs = new Map<string, { ref: string; kind: ListKind; level: number; def?: DocxAbstractNumMeta }>()
+  /** 源文档的编号定义（v0.158）：按「第 0 层的档位」认领，一份定义只许一串列表用 */
+  private defs: DocxAbstractNumMeta[]
+  private claimed = new Set<number>()
+
+  constructor(defs: DocxAbstractNumMeta[] = []) {
+    this.defs = defs
+  }
+
+  /**
+   * 认领一份源定义：**只比第 0 层**的 `numFmt|lvlText`——更深那几层本来就是写手拍平
+   * 拍没了的东西，拿它们当判据等于永远认不出。第 0 层是屏上那一串真正用的档位，
+   * 读手把它带进了模型（`<ol type>` / `<ul data-marker>`），两边对得上。
+   *
+   * 认不出就返回 undefined（退回到按段重建），绝不去够第二份——两份定义都挂着同一个
+   * 第 0 层时，第二串列表不该抢走第一串的那份（patchNumberingXml 也是一份定义只贴一枚）。
+   */
+  private claim(kind: ListKind): DocxAbstractNumMeta | undefined {
+    const fmt = kind.ordered ? String(kind.marker) : String(LevelFormat.BULLET)
+    const text = kind.ordered ? '%1.' : kind.marker
+    for (let i = 0; i < this.defs.length; i++) {
+      if (this.claimed.has(i)) continue
+      const lv = this.defs[i].levels['0']
+      if (!lv || lv.fmt !== fmt || (lv.text ?? '') !== text) continue
+      this.claimed.add(i)
+      return this.defs[i]
+    }
+    return undefined
+  }
+
+  /**
+   * 取这一串列表的 reference。level 是段落将引用的层（= 嵌套深度，已截到 2）：
+   * 有序档的起始号要落在这一层上，所以层号进键——同一个罗马数字串出现在两层时
+   * 各有一条定义，互不抢对方的 start。子弹档没有起始号，层号不进键，全篇复用。
+   */
+  refOf(kind: ListKind, level: number): string {
+    const key = JSON.stringify([kind.ordered, kind.marker, kind.align, kind.ordered ? [kind.start, level] : 0])
+    const hit = this.refs.get(key)
+    if (hit) return hit.ref
+    const ref = `oof-list-${this.refs.size}`
+    this.refs.set(key, { ref, kind, level, def: this.claim(kind) })
+    return ref
+  }
+
+  config(): { reference: string; levels: ReturnType<typeof listLevels> }[] {
+    return [...this.refs.values()].map(({ ref, kind, level, def }) => ({
+      reference: ref,
+      levels: listLevels(kind, level, def),
+    }))
+  }
+}
 
 /** 行内的单元格（TipTap 用 tableHeader 表示表头行那一格的类型） */
 function cellsOf(row: PMNode): PMNode[] {
@@ -1284,41 +3315,71 @@ function blocksOf(
   depth = 0,
   dt: DocTrack = newDocTrack(),
   contentTwips = CONTENT_TWIPS_FALLBACK,
+  /** 编号注册表（v0.142）：整篇文档共用一份，递归与格内都传同一枚 */
+  lists: ListRegistry = new ListRegistry(),
 ): (Paragraph | Table | TableOfContents)[] {
   const out: (Paragraph | Table | TableOfContents)[] = []
+  /**
+   * 造段落的同时登记它的属性余量（v0.147）：顺序即 document.xml 里 `<w:p>` 的出现序，
+   * 打包后补丁按这个序贴回去。非段落型（代码块/分页/水平线）按空串登记占住位置
+   */
+  const para = (node: PMNode | undefined, opts: ConstructorParameters<typeof Paragraph>[0]) => {
+    dt.pprExtras.push(pprExtraXml(node))
+    return new Paragraph(opts)
+  }
   for (const node of nodes) {
     if (node.type === 'bulletList' || node.type === 'orderedList') {
       const ordered = node.type === 'orderedList'
+      const attrs = (node.attrs ?? {}) as Record<string, unknown>
+      const align = markerAlignOf(attrs.markerAlign)
+      // 默认档不进注册表（字节与 v0.142 之前一致）：子弹（•/左对齐）走包自带 bullet，
+      // 无型别有序（左对齐、起始 1）走 ORDERED_REF；其余档位各生成一条编号定义
+      let numbering: { numbering: { reference: string; level: number } } | { bullet: { level: number } }
+      if (ordered) {
+        const type = typeof attrs.type === 'string' ? attrs.type : null
+        const startRaw = Number(attrs.start)
+        const start = Number.isFinite(startRaw) && startRaw > 0 ? Math.round(startRaw) : 1
+        const lvl = Math.min(2, depth)
+        const ref =
+          !type && align === 'left' && start === 1
+            ? ORDERED_REF
+            : lists.refOf({ ordered: true, marker: OL_FMT[type ?? '1'] ?? LevelFormat.DECIMAL, align, start }, lvl)
+        numbering = { numbering: { reference: ref, level: lvl } }
+      } else {
+        const ch = typeof attrs.bulletChar === 'string' && attrs.bulletChar ? attrs.bulletChar : '•'
+        const ref = ch === '•' && align === 'left' ? null : lists.refOf({ ordered: false, marker: ch, align, start: 1 }, Math.min(2, depth))
+        numbering = ref ? { numbering: { reference: ref, level: Math.min(2, depth) } } : { bullet: { level: depth } }
+      }
       for (const item of node.content ?? []) {
         const blocks = (item.content ?? []).filter((b) => b.type !== 'bulletList' && b.type !== 'orderedList')
         const nested = (item.content ?? []).filter((b) => b.type === 'bulletList' || b.type === 'orderedList')
         const main: PMNode = blocks[0] ?? { type: 'paragraph', content: [] }
         out.push(
-          new Paragraph({
+          para(main, {
             children: inlineBlockChildren(main, dt),
             // 有序项必须走真编号：写成「1. 」字面文本时 Word 里既不续号也不重排，
             // 读回来更会把它当成普通段落（编号从此消失）。
-            ...(ordered ? { numbering: { reference: ORDERED_REF, level: Math.min(2, depth) } } : { bullet: { level: depth } }),
+            ...numbering,
             indent: indentOf(main),
             // 有序项库见 style 会跳过 ListParagraph 标签，命名样式可并存；子弹项库无条件
             // 补 ListParagraph（两枚 pStyle 撞车），样式标签只好丢（挂账）
-            ...paraFormatOf(main, ordered ? pstyleOf(main) : undefined),
+            ...paraFormatOf(main, ordered ? pstyleOf(main) : undefined, dt),
           }),
         )
-        out.push(...blocksOf(blocks.slice(1), depth, dt, contentTwips))
-        out.push(...blocksOf(nested, depth + 1, dt, contentTwips))
+        out.push(...blocksOf(blocks.slice(1), depth, dt, contentTwips, lists))
+        out.push(...blocksOf(nested, depth + 1, dt, contentTwips, lists))
       }
       continue
     }
     if (node.type === 'heading') {
       const level = Number(node.attrs?.level ?? 1)
       out.push(
-        new Paragraph({
+        para(node, {
           children: inlineBlockChildren(node, dt),
           outlineLevel: Math.max(0, Math.min(8, level - 1)),
           indent: indentOf(node),
           alignment: alignOf(node),
-          ...paraFormatOf(node),
+          ...paraFormatOf(node, undefined, dt),
           heading:
             level === 1 ? HeadingLevel.HEADING_1
             : level === 2 ? HeadingLevel.HEADING_2
@@ -1331,7 +3392,7 @@ function blocksOf(
     if (node.type === 'codeBlock') {
       const lines = textOf(node).split('\n')
       out.push(
-        new Paragraph({
+        para(node, {
           children: lines.flatMap((l, i) => [
             ...(i > 0 ? [new TextRun({ text: '', break: 1 })] : []),
             new TextRun({ text: l, font: 'Consolas' }),
@@ -1343,16 +3404,16 @@ function blocksOf(
       continue
     }
     if (node.type === 'horizontalRule') {
-      out.push(new Paragraph({ children: [], thematicBreak: true }))
+      out.push(para(undefined, { children: [], thematicBreak: true }))
       continue
     }
     if (node.type === 'pageBreak') {
-      out.push(new Paragraph({ children: [new PageBreak()] }))
+      out.push(para(undefined, { children: [new PageBreak()] }))
       continue
     }
     if (node.type === 'blockquote') {
       out.push(
-        new Paragraph({
+        para(node, {
           children: inlineBlockChildren(node, dt),
           indent: indentOf(node, 480),
           border: { left: { style: BorderStyle.SINGLE, size: 12, color: '9CA3AF', space: 8 } },
@@ -1385,6 +3446,25 @@ function blocksOf(
         Math.max(1, Math.round(px * PX_TWIP)),
       )
       const totalTw = gridTw.reduce((s, w) => s + w, 0)
+      // 表格浮动（v0.145）：data-tblp 载荷 → ITableFloatOptions，键名一一对应
+      // （tblpX→absoluteHorizontalPosition、tblpXSpec→relativeHorizontalPosition、
+      // horzAnchor→horizontalAnchor、四 FromText 同名、overlap→overlap 子元素）。
+      // 包里 verticalAnchor 类型面是 TableAnchorType（margin/page/text），而 OOXML 的
+      // vertAnchor 值域含 top/bottom/center/inside/outside——BuilderElement 透传不校验，
+      // 原值落；类型面按库外槽断言绕过
+      const tblp = tblpFloatOf(node.attrs?.tblp)
+      // 表自身的闸门（v0.147）：与段落余量同理，按出现序登记，打包后贴回 <w:tblPr>
+      dt.tblLooks.push(tlookXmlOf(node.attrs?.tlook))
+      // 表级条件格式尺寸（v0.152）：两枚 bandSize 与 tblLook 同住 tblPr、同序登记，
+      // 共用 patchTblLook 那一次解压/重压
+      dt.tblPrs.push(tblPrXmlOf(node.attrs?.tblPr))
+      // 单元格间距（v0.154）：同一张表的第二笔 tblPr 补丁，插入锚点与 bandSize 不同
+      // （序里排在 tblW 之后），所以单列一条登记，共用那一次解压/重压
+      dt.cellSps.push(tblCellSpacingXmlOf(node.attrs?.tblPr))
+      // 表条件格式落点十三枚（v0.162）：第三笔 tblPr 补丁，锚点又不同（紧跟 tblStyle）
+      dt.cnfStyles.push(cnfXmlOf(node.attrs?.cnf))
+      // 表级边框六边原值（v0.163）：整片替换，与上面四族同序登记
+      dt.tblBorders.push(tblBordersXmlOf(node.attrs?.tblb))
       out.push(
         new Table({
           // 表样式引用（v0.114）：表身上这枚 data-tstyle 就是 w:tblStyle，
@@ -1398,6 +3478,7 @@ function blocksOf(
           ...(num(node.attrs?.marginLeft) > 0
             ? { indent: { size: Math.round(num(node.attrs?.marginLeft) * PX_TWIP), type: WidthType.DXA } }
             : {}),
+          ...(tblp ? { float: tblp } : {}),
           rows: rows.map((r, ri) => {
               // 逐格的 w:tcW 吃掉它跨的那几枚网格列；网格游标按 shape 给的真格子起始列走，
               // 被上面竖跨压掉的那几枚列不能省（不省就会把整行往左错一枚，键进去的账落错格子）
@@ -1406,6 +3487,9 @@ function blocksOf(
               // 行高（v0.97 起）：导入侧按 atLeast 读入（exact 的裁剪档 CSS 表达不了），
               // 导出同档回写，往返稳定在 atLeast
               const rh = num(r.attrs?.rowHeight)
+              // 行余量（v0.172）：一行一格，登记序 = <w:tr> 出现序（含嵌套表的行——
+              // 外层行先 push，XML 里外层 <w:tr> 也先出现）
+              dt.rowPrs.push(trPrExtraOf(r.attrs))
               return new TableRow({
                 // 表头行由行级 w:trPr/w:tblHeader 记账（TipTap 用 th 单元格类型表示）。
                 // 只在命中时给属性：写成 tableHeader:false 会落 <w:tblHeader w:val="false"/>，
@@ -1413,6 +3497,10 @@ function blocksOf(
                 ...(r.content ?? []).some((c) => c.type === 'tableHeader') ? { tableHeader: true } : {},
                 ...(rh > 0 ? { height: { value: Math.round(rh * PX_TWIP), rule: HeightRule.ATLEAST } } : {}),
                 children: (r.content ?? []).map((cell) => {
+                  // 单元格不换行（v0.152）：登记必须赶在本格内容之前——嵌套表的内层格
+                  // 在 blocksOf 里先入账，而 XML 里外层 <w:tc>（连它的 tcPr）排在
+                  // 内层表前面。数组序 = <w:tc> 出现序，补丁按这个序对位
+                  dt.cellExtras.push(noWrapXmlOf(cell.attrs?.noWrap))
                   // TipTap 合并语义 colspan/rowspan → gridSpan + vMerge（docx 库内部展开 restart/continue）
                   const cs = colspanOf(cell)
                   const rs = rowspanOf(cell)
@@ -1421,7 +3509,14 @@ function blocksOf(
                   const cellTw = isCell ? gridTw.slice(start, start + cs).reduce((s, w) => s + w, 0) : 0
                   if (isCell) gc = start + cs
                   const borders = bordersOf(cell.attrs)
-                  const bg = shadingOf(cell.attrs?.background)
+                  // 边框的存盘原件（v0.165）：只在真发得出 `<w:tcBorders>` 时登记。
+                  // 这一条必须在格内段落之前——XML 里 `<w:tcPr>` 排在格的 `<w:p>` 前面，
+                  // 而 pBdr 那本账是另一条线，两族各自按自己的元素出现序对位
+                  if (borders) dt.cellBdrs.push(bdrExtraOf(cell.attrs))
+                  const bg = shadingOf(cell.attrs)
+                  // 底纹的存盘原件（v0.164）：与下面的 tcPr 那一枚同序——格底纹在
+                  // `<w:tcPr>` 里，排在格内段落的 `<w:shd>` 之前，所以必须**先**登记
+                  if (bg) dt.shdExtras.push(shdExtraOf(cell.attrs))
                   const va = cell.attrs?.vAlign
                   // 格边距（v0.97 起）：pad* 属性（px，0 是真值）→ 逐边 w:tcMar（缇）；
                   // 只在有声明时给 margins，不给默认值——Word 读侧对缺省边自己有表级账
@@ -1439,7 +3534,7 @@ function blocksOf(
                   }
                   // 一格多段要一段一个 w:p：早先图省事把所有子节点并成一个段落，
                   // 于是格内的第二行起既没有换行也没有自己的缩进/对齐（读回来整格糊成一行）
-                  const cellBlocks = blocksOf(cell.content ?? [], 0, dt, contentTwips)
+                  const cellBlocks = blocksOf(cell.content ?? [], 0, dt, contentTwips, lists)
                   return new TableCell({
                     ...(gridPx && isCell && cellTw > 0 ? { width: { size: cellTw, type: WidthType.DXA } } : {}),
                     ...(cs > 1 ? { columnSpan: cs } : {}),
@@ -1450,8 +3545,9 @@ function blocksOf(
                     ...(va === 'top' || va === 'middle' || va === 'bottom'
                       ? { verticalAlign: va === 'middle' ? VerticalAlignTable.CENTER : va === 'top' ? VerticalAlignTable.TOP : VerticalAlignTable.BOTTOM }
                       : {}),
-                    // OOXML 要求 w:tc 里至少一个 w:p（空否则会成损坏件）
-                    children: cellBlocks.length ? cellBlocks : [new Paragraph({ children: [] })],
+                    // OOXML 要求 w:tc 里至少一个 w:p（空否则会成损坏件）。
+                    // 补的这一枚也要占住余量数组的位置（顺序必须与段落出现序一致）
+                    children: cellBlocks.length ? cellBlocks : [para(undefined, { children: [] })],
                   })
                 }),
               })
@@ -1461,54 +3557,235 @@ function blocksOf(
       )
       continue
     }
+    if (node.type === 'image') {
+      // 块级图片（v0.157）：见 imageRunOf 的注释。一段一图，与 Word 存「独占一段的图」
+      // 同形；对齐读的是 align 属性（读手把居中的块图记在 align 上，不是 textAlign）
+      const run = imageRunOf(node, dt)
+      out.push(
+        para(node, {
+          children: run ? [run] : [],
+          ...(node.attrs?.align === 'center' ? { alignment: AlignmentType.CENTER } : {}),
+        }),
+      )
+      continue
+    }
     out.push(
-      new Paragraph({
+      para(node, {
         children: inlineBlockChildren(node, dt),
         alignment: alignOf(node),
         indent: indentOf(node),
-        ...paraFormatOf(node, pstyleOf(node)),
+        ...paraFormatOf(node, pstyleOf(node), dt),
       }),
     )
   }
   return out
 }
 
-export async function prosemirrorToDocxBytes(json: PMNode, meta?: DocMeta): Promise<Uint8Array> {
+/**
+ * post-pack 会话（v0.178）：一次解包、共享 zip、一次打包。
+ *
+ * 此前十余个补丁各自 `loadAsync(bytes)` → 改一枚部件 → `generateAsync()` 重压整包，
+ * 写一份带图文档要解包/压包十余遍（实测占端到端 20.5%）。现在主链建一枚会话，
+ * 所有补丁在同一 zip 实例上读写：写回后下一枚补丁读到的是刚改过的文本
+ * （JSZip 的 file(name, data) 会替换条目，等价于原来「打包→解包」那一趟），
+ * 末尾只 generate 一次。补丁仍保留 `sess` 缺省的独立路径，供 A/B 对照腿与调用方直用。
+ */
+async function loadZipOf(bytes: Uint8Array) {
+  const { default: JSZip } = await import('jszip')
+  return JSZip.loadAsync(bytes)
+}
+
+interface PackSession {
+  zip: Awaited<ReturnType<typeof loadZipOf>>
+  touched: boolean
+  /**
+   * v0.183：部件名 → 当前文本。`legacyPartText` 对照腿不建这份表，每次真解压。
+   * 与 v0.178 的共享 zip 是同一条链的第二层：那次省了「整包解包 + 重压」，
+   * 这次省的是「同一份 document.xml 被十余个补丁各解压一次」。
+   */
+  text?: Map<string, string>
+}
+
+/**
+ * 读一枚部件：共享会话里查表，否则真解压。
+ * `zip !== sess.zip` 的独立路径（A/B 对照腿各自解包 / 调用方直用补丁）
+ * 一律不走缓存，避免跨 zip 实例串味——这条守卫让对照腿仍是逐字改前路径。
+ */
+async function partText(
+  zip: PackSession['zip'],
+  name: string,
+  sess?: PackSession,
+): Promise<string> {
+  const cache = sess?.text
+  const shared = !!cache && zip === sess!.zip
+  if (shared && cache!.has(name)) return cache!.get(name)!
+  const t = (await zip.file(name)?.async('string')) ?? ''
+  if (shared) cache!.set(name, t)
+  return t
+}
+
+/** 写回一枚部件：zip 与缓存同步更新，下一枚补丁读到的就是刚写下的文本 */
+function setPart(zip: PackSession['zip'], name: string, text: string, sess?: PackSession): void {
+  zip.file(name, text)
+  if (sess?.text && zip === sess.zip) sess.text.set(name, text)
+}
+
+/** 补丁落地：有会话就只标脏（末尾统一打包），没有会话就照旧各自重压 */
+async function finishPatch(
+  bytes: Uint8Array,
+  zip: PackSession['zip'],
+  sess?: PackSession,
+): Promise<Uint8Array> {
+  if (sess) {
+    sess.touched = true
+    return bytes
+  }
+  const buf = (await zip.generateAsync({ type: 'arraybuffer' })) as ArrayBuffer
+  return new Uint8Array(buf)
+}
+
+export async function prosemirrorToDocxBytes(
+  json: PMNode,
+  meta?: DocMeta,
+  opts?: { legacyPartText?: boolean; legacyRetag?: boolean; legacyAttrScan?: boolean; legacyBlockScan?: boolean; legacyEdgeScan?: boolean; legacyElemScan?: boolean },
+): Promise<Uint8Array> {
+  // v0.186–v0.192：只给同进程 A/B 对照腿用（入口设一次），产品路径恒为 false
+  legacyRetag = !!opts?.legacyRetag
+  legacyAttrScan = !!opts?.legacyAttrScan
+  legacyBlockScan = !!opts?.legacyBlockScan
+  legacyEdgeScan = !!opts?.legacyEdgeScan
+  legacyElemScan = !!opts?.legacyElemScan
   const dt = newDocTrack()
+  // 编号注册表（v0.142）：blocksOf 一路往里传，收齐全篇的自定义档位后进 Document.numbering。
+  // 带上源文档的编号定义（v0.158）：重建一串列表时能照原样逐层发，而不是三层拍成一个符面
+  const lists = new ListRegistry(meta?.numbering?.defs ?? [])
   const pg = resolvePage(meta?.page)
   const twips = (mm: number) => Math.round(mm * MM_TWIPS)
   // 版心宽度：与界面上的精确列宽同一个算法（contentTwipsOf），没有宽度账的表按它等分写真网格
   const contentTw = contentTwipsOf(pg)
+  // v0.190：页面边框四边统一一套值（读侧只认源件第一枚边，不假装还原四边各异的件）
+  const pb = pg.pageBorders
+  const pageBorderOption = pb
+    ? {
+        style: BDR_LINE[pb.style] ?? BorderStyle.SINGLE,
+        color: pb.color,
+        size: pb.size,
+        ...(pb.space !== undefined ? { space: pb.space } : {}),
+      }
+    : undefined
   const section: {
     children: (Paragraph | Table | TableOfContents)[]
     properties?: {
-      page: { size: { width: number; height: number; orientation?: 'landscape' | 'portrait' }; margin: Record<string, number> }
-      column?: { count: number; space: number; equalWidth: true; separate: false }
+      page: {
+        /** v0.183：w:pgSz/@w:code 纸型档位号（包的原生槽，屏上不兑现） */
+        size: { width: number; height: number; orientation?: 'landscape' | 'portrait'; code?: number }
+        margin: Record<string, number>
+        /** 页码型别与起始值（v0.170）：包的 sections[].properties.page.pageNumbers 原生槽 */
+        pageNumbers?: { start?: number; formatType?: (typeof NumberFormat)[keyof typeof NumberFormat] }
+        /** v0.190：页面边框。**挂在 page 下**（ISectionPropertiesOptionsBase.page.borders），
+         * 放 properties 顶层会被包静默忽略；键名是 pageBorderTop 一族，不是 OOXML 的 top */
+        borders?: IPageBordersOptions
+      }
+      /** v0.183：节起法 w:type（nextPage/continuous/evenPage…），包的原生槽 */
+      type?: (typeof SectionType)[keyof typeof SectionType]
+      column?: {
+        count: number
+        space: number
+        equalWidth: boolean
+        /** 不等宽分支刻意不传：包会把 false 序列化成 w:sep="false"（非法的 ST_OnOff） */
+        separate?: boolean
+        /** v0.182：不等宽分栏时逐枚 w:col（包的 Column 原生槽） */
+        children?: Column[]
+      }
     }
     headers?: { default: Header }
     footers?: { default: Footer }
-  } = { children: blocksOf(json.content ?? [], 0, dt, contentTw) }
+  } = { children: blocksOf(json.content ?? [], 0, dt, contentTw, lists) }
   {
     // docx 库按"竖版宽高 + orientation"理解 size（landscape 时自行交换写盘），故传排序后的尺寸
+    // 方向（v0.147）：宽高比与显式 orient 两样都可能说话，显式那一枚为准
+    const landscape = pg.orient === 'landscape' || (pg.orient !== 'portrait' && pg.w > pg.h)
     section.properties = {
       page: {
         size: {
           width: twips(Math.min(pg.w, pg.h)),
           height: twips(Math.max(pg.w, pg.h)),
-          ...(pg.w > pg.h ? { orientation: 'landscape' as const } : {}),
+          ...(landscape ? { orientation: 'landscape' as const } : {}),
+          // v0.183：纸型档位号原值透传；非数值的脏值不写（宁可少一枚，不赌坏件）
+          ...(pg.paperCode !== undefined && Number.isFinite(Number(pg.paperCode))
+            ? { code: Number(pg.paperCode) }
+            : {}),
         },
         margin: {
           top: twips(pg.margin.top),
           bottom: twips(pg.margin.bottom),
           left: twips(pg.margin.left),
           right: twips(pg.margin.right),
-          header: twips(Math.min(pg.margin.top, 12.7)),
-          footer: twips(Math.min(pg.margin.bottom, 12.7)),
+          // 页眉/页脚距纸边（v0.147）：源文件说了就照抄，没说才按上下边距取小
+          header: twips(pg.header ?? Math.min(pg.margin.top, 12.7)),
+          footer: twips(pg.footer ?? Math.min(pg.margin.bottom, 12.7)),
+          // 装订线（v0.147）：说了才写（0 是真值——Word 里「装订线 0」与没写同源，仍写）
+          ...(pg.gutter !== undefined ? { gutter: twips(pg.gutter) } : {}),
         },
+        // 页码型别与起始值（v0.170）：包有原生槽（w:pgNumType），只是我们的模型此前没带。
+        // start 是「这一节从第几页开始编号」，fmt 是「用阿拉伯数字还是罗马数字」
+        ...(pg.pageNum
+          ? {
+              pageNumbers: {
+                ...(pg.pageNum.start !== undefined ? { start: pg.pageNum.start } : {}),
+                ...(pg.pageNum.fmt
+                  ? { formatType: pg.pageNum.fmt as (typeof NumberFormat)[keyof typeof NumberFormat] }
+                  : {}),
+              },
+            }
+          : {}),
+        // v0.190：页面边框。包没传 borders 时根本不发 `<w:pgBorders>`，所以走
+        // 原生槽而不是 post-pack 手拼 XML（纪律⑦：包不发就走包）。四边统一一套值；
+        // **挂在 page 下**——放 properties 顶层会被包静默忽略。
+        ...(pageBorderOption
+          ? {
+              borders: {
+                pageBorderTop: pageBorderOption,
+                pageBorderBottom: pageBorderOption,
+                pageBorderLeft: pageBorderOption,
+                pageBorderRight: pageBorderOption,
+              },
+            }
+          : {}),
       },
+      // 文档网格（v0.147）：档位与行间距（linePitch 缇）。屏上不兑现，只往返。
+      // 包的 GridType 只认四档枚举，源文件里偶见的自造档照样透传（BuilderElement 不校验）
+      // v0.152：charSpace（每字符网格宽度，缇）——与 linePitch 同住 w:docGrid 上的第三枚
+      ...(pg.docGrid?.type || pg.docGrid?.linePitch !== undefined || pg.docGrid?.charSpace !== undefined
+        ? {
+            grid: {
+              ...(pg.docGrid?.type ? { type: pg.docGrid.type } : {}),
+              ...(pg.docGrid?.linePitch !== undefined ? { linePitch: pg.docGrid.linePitch } : {}),
+              ...(pg.docGrid?.charSpace !== undefined ? { charSpace: pg.docGrid.charSpace } : {}),
+            } as { type?: string; linePitch?: number; charSpace?: number },
+          }
+        : {}),
       // 单栏不写 w:cols（Word 默认即单栏，写出来反而让 diff 变噪）
+      // v0.182：带逐栏表时走 `equalWidth:false + children`（包的原生槽），
+      // 缇原值直接交给 Column，不做 mm 换算；没带表就照旧等宽 N 栏
       ...(pg.cols > 1
-        ? { column: { count: pg.cols, space: twips(pg.colGap), equalWidth: true as const, separate: false } }
+        ? {
+            column: pg.colsLayout?.widths?.length
+              ? {
+                  count: pg.colsLayout.widths.length,
+                  space: twips(pg.colGap),
+                  equalWidth: false,
+                  children: pg.colsLayout.widths.map(
+                    (c) => new Column({ width: c.w, ...(c.space !== undefined ? { space: c.space } : {}) }),
+                  ),
+                }
+              : { count: pg.cols, space: twips(pg.colGap), equalWidth: true as const, separate: false },
+          }
+        : {}),
+      // v0.183：节起法（w:type）。只发包认的五档枚举，源文件偶见的自造档不写
+      // （BuilderElement 不校验，但 Word 会判坏件）；schema 序由包负责，post-pack 不动
+      ...(pg.sectionType && (Object.values(SectionType) as string[]).includes(pg.sectionType)
+        ? { type: pg.sectionType as (typeof SectionType)[keyof typeof SectionType] }
         : {}),
     }
   }
@@ -1581,10 +3858,34 @@ export async function prosemirrorToDocxBytes(json: PMNode, meta?: DocMeta): Prom
     }
     return kind === 'footnote' ? { footnotes: rec } : { endnotes: rec }
   }
+  // v0.188：五格文档属性走包原生槽（docx 包自己转义，不手拼 core.xml）。
+  // 源件说过的优先、没说的回落到历史缺省；用户在属性面板改过的也在 meta 里。
+  const coreProps = docPropsOf(meta)
   const doc = new Document({
-    creator: 'OpenOffices',
-    title: 'OpenOffices 文档',
+    creator: coreProps.creator,
+    title: coreProps.title,
+    ...(coreProps.subject ? { subject: coreProps.subject } : {}),
+    ...(coreProps.keywords ? { keywords: coreProps.keywords } : {}),
+    ...(coreProps.description ? { description: coreProps.description } : {}),
     features: { updateFields: true },
+    // 文档背景（v0.155）：整篇底色。有主题槽就按主题回（与源件同一种引用方式），
+    // 没有主题槽才发解析出来的字面 hex——反过来会把「跟着主题变」写成「钉死一个色」
+    ...(meta?.background
+      ? {
+          background: {
+            ...(meta.background.themeColor ? { themeColor: meta.background.themeColor } : {}),
+            ...(meta.background.themeShade ? { themeShade: meta.background.themeShade } : {}),
+            ...(meta.background.themeTint ? { themeTint: meta.background.themeTint } : {}),
+            // v0.157：字面色与主题槽并存（主题槽在场时 Word 按主题算，字面值是兜底）。
+            // 此前只在没有 themeColor 时才写字面色，于是"两枚都有"的件一往返就少一枚
+            ...(meta.background.color
+              ? { color: meta.background.color.replace(/^#/, '').toUpperCase() }
+              : !meta.background.themeColor && meta.background.css
+                ? { color: meta.background.css.replace(/^#/, '').toUpperCase() }
+                : {}),
+          },
+        }
+      : {}),
     ...noteParts('footnote'),
     ...noteParts('endnote'),
     ...(anchored.length
@@ -1595,6 +3896,10 @@ export async function prosemirrorToDocxBytes(json: PMNode, meta?: DocMeta): Prom
               return {
                 id: c.id,
                 author: c.author || 'OpenOffices',
+                // v0.192：批注身份链第四枚。`DocComment.initials` 与读手 v0.154 的
+                // 解析早就有，包 `ICommentOptions.initials` 也是原生槽，只差写手这一行——
+                // 此前导入别人的 docx 另存一次，作者姓名缩写就没了
+                ...(c.initials ? { initials: c.initials } : {}),
                 date: Number.isNaN(d.getTime()) ? new Date() : d,
                 ...(anyResolved ? { parentId: -1 } : {}),
                 ...(c.resolved ? { resolved: true } : {}),
@@ -1604,7 +3909,7 @@ export async function prosemirrorToDocxBytes(json: PMNode, meta?: DocMeta): Prom
           },
         }
       : {}),
-    numbering: { config: [{ reference: ORDERED_REF, levels: ORDERED_LEVELS }] },
+    numbering: { config: [{ reference: ORDERED_REF, levels: ORDERED_LEVELS }, ...lists.config()] },
     // 文档带进来的样式表（v0.102）：快照重建，Normal/内置 id 之外的定义都落回去，
     // 段落上的 w:pStyle 才有处可指——样式表不再在导出这一步被洗掉
     styles: { ...paragraphStylesOf(meta), ...characterStylesOf(meta), ...tableStylesOf(meta) },
@@ -1624,7 +3929,1076 @@ export async function prosemirrorToDocxBytes(json: PMNode, meta?: DocMeta): Prom
     const look = tblLookOf(s)
     if (look) looks.set(s.id, look)
   }
-  return looks.size ? patchTblLook(out, looks) : out
+  // 潜在样式与 customStyle（v0.146）：两样包都没有槽（latentStyles 整族没有 API，
+  // customStyle 被 StyleForParagraph 丢掉——它只把 type/styleId 交给 StyleAttributes），
+  // 与 w:tblLook 同路数打包后回头补；表样式的 customStyle 走 tableStyleXml 原始 XML，
+  // 这里只补段落/字符两桶。
+  // v0.150：同一路数再带上样式身份两枚——next（后续段落样式）与 rsid（修订会话号），
+  // 一样是包不发的槽，按 styleId 逐枚补
+  const props = new Map<string, StyleExtraProps>()
+  for (const s of meta?.styles ?? []) {
+    const p: StyleExtraProps = {}
+    if (s.customStyle !== undefined && s.kind !== 'table') p.custom = s.customStyle ? '1' : '0'
+    if (s.next) p.next = s.next
+    if (s.rsid) p.rsid = s.rsid
+    if (s.aliases) p.aliases = s.aliases
+    // v0.161：主题字体引用名。只有**这一枚样式自己写过**才补——包会把 Normal 的字体
+    // 沿 basedOn 链摊到子样式上（写出包里 Report/ReportHead/ReportChar 各有 rFonts 而
+    // 源里没有），摊出来的那些不该凭空戴上引用名
+    if (s.run?.fontTheme) p.fontTheme = s.run.fontTheme
+    // v0.185：显式 0 只在这一层自己写过时补；用户后来改过缩进的段落是直接格式，
+    // 写手在 document.xml 段落 pPr 上发的 w:ind 会压过样式那枚，守卫天然成立
+    if (s.para?.indLeftZero || s.para?.indRightZero) {
+      p.indZeros = {
+        ...(s.para.indLeftZero ? { left: true } : {}),
+        ...(s.para.indRightZero ? { right: true } : {}),
+      }
+    }
+    if (Object.keys(p).length) props.set(s.id, p)
+  }
+  const latent = meta?.latentStyles
+  // 编号定义账（v0.150）：按 w:abstractNum 出现序贴回 numbering.xml
+  const numDefs = meta?.numbering?.defs ?? []
+  // v0.178：整条 post-pack 链共用一枚解包会话，末尾只 generate 一次。
+  // 各补丁仍取「上一步的 bytes」作参数，但有会话时那个值只是占位——真正的数据在
+  // sess.zip 里，串行顺序与原来「打包→解包」的链逐字同义
+  const sess: PackSession = {
+    zip: await loadZipOf(out),
+    touched: false,
+    ...(opts?.legacyPartText ? {} : { text: new Map<string, string>() }),
+  }
+  // v0.182：不等宽分栏的 w:cols/@equalWidth 回填成 onOff 字面（包发 "false"）
+  const withCols = await patchColsOnOff(out, sess)
+  // 段落属性余量（v0.147）：按出现序贴回各自的 <w:pPr>，与上面两笔同一路数
+  const withPara = await patchParaProps(withCols, dt.pprExtras, sess)
+  // 下划线主题三枚（v0.159）：按 <w:u> 出现序补属性——包只有 {type,color} 两枚槽
+  const withU = await patchElemAttrs(withPara, 'u', dt.uThemes, sess)
+  // 文字色主题三枚（v0.160）：按 <w:color> 出现序补——包只写 w:val 一枚
+  const withColor = await patchElemAttrs(withU, 'color', dt.colorThemes, sess)
+  // v0.184：字面 w:val 原值按同一出现序**改值**回填（包写的是主题解析后的屏上色）；
+  // 与上面那笔共用 colorThemes/colorLits 的一一对应闸门，顺序不能反
+  const withColorLit = await patchColorLits(withColor, dt.colorLits, sess)
+  // 被包吞掉的全大写（v0.161）：按 <w:smallCaps> 出现序在它前面插 <w:caps/>
+  const withCaps = await patchBeforeElem(withColorLit, 'smallCaps', dt.capsExtras, sess)
+  // 图片容器壳（v0.148）：按 <w:drawing> 出现序逐块改值（包发得出壳，只是值硬编码）
+  const withImg = await patchImgXml(withCaps, dt.imgExtras, sess)
+  // v0.186：书签 w:id 原值（包恒发 1）。按 Start/End 出现序栈式对位；与前后几笔
+  // 都改 document.xml 的不同元素，共用 PackSession 的文本缓存，不另解一次 zip
+  const withBm = await patchBookmarkIds(withImg, dt.bookmarkIds, sess)
+  // v0.187：修订壳 w:id 原值（源包出现序前缀对位），与书签补丁同一条改值纪律
+  const withRev = await patchRevIds(withBm, meta?.revIds ?? [], sess)
+  // v0.188：画布级 docPr 的 id/name（源包出现序前缀对位），与上面几笔共用会话
+  const withDocPr = await patchDocPr(withRev, meta?.docPrShells, sess)
+  // v0.189/190：整片字面包裹壳（表单域 + 智能标记，按结果文字对位），共用会话
+  const withLit = await patchLiteralWrappers(withDocPr, meta?.literalWrappers, sess)
+  // v0.191：超链接壳的 tooltip / tgtFrame（从模型登记、按 hyperlink 出现序对位）
+  const withLink = await patchHyperlinkAttrs(withLit, dt.linkExtras, sess)
+  // v0.193：部件级字面元信息（numbering / styles / commentsExtended），与上面几笔共用会话
+  const withMeta = await patchMetaExtras(withLink, meta?.metaExtras, sess)
+  // v0.194：rPr 字符特性（按结果文字认领 run，按 CT_RPr 序插回），与上面几笔共用会话
+  const withFeat = await patchRPrFeatures(withMeta, meta?.rPrFeatures, sess)
+  // v0.195：正文长尾四枚字面片（sectPr / comments 根 / proofErr），共用会话
+  const withPlacements = await patchLiteralPlacements(withFeat, meta?.literalPlacements, sess)
+  // v0.196：VML 老式形状整段字面（rId 按关系类型重映射），与上面几笔共用会话
+  const withVml = await patchVmlShapes(withPlacements, meta?.vmlShapes, sess)
+  // 表闸门三样都要补：样式推出来的（looks）与表自己带的（dt.tblLooks），
+  // v0.152 起再加表级条件格式尺寸两枚（dt.tblPrs，与 tblLook 同住 tblPr）
+  const needTbl =
+    looks.size ||
+    dt.tblLooks.some((x) => x) ||
+    dt.tblPrs.some((x) => x) ||
+    dt.cellSps.some((x) => x) ||
+    dt.cnfStyles.some((x) => x) ||
+    dt.tblBorders.some((x) => x)
+  // 单元格不换行（v0.152）：包里没有 noWrap 的槽，按 <w:tc> 出现序插 <w:noWrap/>
+  const withCell = dt.cellExtras.some((x) => x) ? await patchTcPr(withVml, dt.cellExtras, sess) : withVml
+  // 底纹的存盘原件（v0.164）：按 <w:shd> 出现序**合并**属性（包只发 val/color/fill 三枚，
+  // 且 fill 写的是解析后的屏上色——源件的字面色与主题三枚都要改回来/补上去）
+  const withShd = await patchShdAttrs(withCell, dt.shdExtras, sess)
+  // 边框的存盘原件（v0.165）：按块合并属性（pBdr 与 tcBorders 两族，块级标签各自对位）
+  const withBdr = await patchBorderBlocks(
+    await patchBorderBlocks(withShd, 'w:pBdr', dt.paraBdrs, sess),
+    'w:tcBorders',
+    dt.cellBdrs,
+    sess,
+  )
+  // 字符边框的主题三枚（v0.166）：<w:bdr> 在 document.xml 里只长在 run 的 rPr 上，
+  // 没有同名歧义——所以这一族回到最简单的元素级追加（patchElemAttrs）
+  const withRunBdr = await patchElemAttrs(withBdr, 'bdr', dt.bdrExtras, sess)
+  // 表行余量（v0.172）：按 <w:tr> 出现序贴 gridAfter/wAfter
+  const withRow = await patchTrPr(withRunBdr, dt.rowPrs, sess)
+  const withStyles = props.size || latent
+    ? await patchStylesXml(withRow, latent, props, sess)
+    : withRow
+  const withNum = numDefs.length ? await patchNumberingXml(withStyles, numDefs, sess) : withStyles
+  // v0.187：w:startOverride 原值，按 w:num 出现序前缀对位（与上面那条补丁共用会话）
+  const withNumStart = await patchNumOverrides(withNum, meta?.numbering?.starts, sess)
+  const packed = needTbl
+    ? await patchTblLook(withNumStart, looks, dt.tblLooks, dt.tblPrs, dt.cellSps, dt.cnfStyles, dt.tblBorders, sess)
+    : withNumStart
+  // 包对 w:pgNumType 是「无条件 push」（SectionProperties 里那行没有 if）——没话说时也发
+  // 一枚空元素。源件没写过就不该凭空多这一枚（账本看不见，Word 的文件结构看得见）
+  const withPgNum = pg.pageNum ? packed : await dropEmptyPgNum(packed, sess)
+  await attachThemePart(withPgNum, meta?.themeXml, sess)
+  // v0.178：链上所有改动都落在 sess.zip 里；没改动就原样放回 Packer 的字节，
+  // 有改动才 generate 一次。两腿逐部件字符串必须完全一致（scripts/bench-docx-pack.mjs）
+  if (!sess.touched) return out
+  const buf = (await sess.zip.generateAsync({ type: 'arraybuffer' })) as ArrayBuffer
+  return new Uint8Array(buf)
+}
+
+/**
+ * styles.xml 的补丁（v0.146，v0.150 扩）：潜在样式容器 + 段落/字符样式的三笔——
+ * `w:customStyle`（属性）、`w:next` 与 `w:rsid`（子元素）。
+ *
+ * latentStyles 按 CT_Stylesheet 的序插在 `</w:docDefaults>` 之后、首个 `<w:style ` 之前
+ * （docDefaults → latentStyles → style*，乱序会被 Word 判损坏件）；customStyle 是
+ * `w:style` 开标签上的 onOff 属性，按 styleId 找到哪枚补哪枚。两笔共用一次解压/重压。
+ *
+ * next/rsid 按 CT_Style 的序列插：next 排在 name/aliases/basedOn 之后、link 之前，
+ * rsid 排在 personal* 之后、pPr 之前（乱序同样会被 Word 判损坏件）。两枚都只有
+ * 「子元素不在场」时才插——在场说明别的工具已经写过，按 styleId 对位即可
+ */
+/** 逐枚样式要补的余量：都是包不给槽、只能打包后按 styleId 补回去的东西 */
+interface StyleExtraProps {
+  custom?: string
+  next?: string
+  rsid?: string
+  aliases?: string
+  /**
+   * 主题字体引用名（v0.161）：写手发的是解析后的具名字体（`w:ascii="Calibri"`），
+   * 源件说的是「跟着 minorHAnsi 走」。两者一起写才与源等价——Word 认引用优先
+   */
+  fontTheme?: { ascii?: string; eastAsia?: string; hAnsi?: string; cs?: string }
+  /**
+   * 显式零缩进（v0.185）：包对内建样式（Normal）根本不发 `<w:ind>`，更不会发
+   * 「显式 0」。按 styleId 在这一枚样式自己的 `<w:pPr>` 里按 schema 序补回。
+   */
+  indZeros?: { left?: boolean; right?: boolean }
+}
+
+async function patchStylesXml(
+  bytes: Uint8Array,
+  latent: DocxLatentStyles | undefined,
+  props: Map<string, StyleExtraProps>,
+  sess?: PackSession,
+): Promise<Uint8Array> {
+  const zip = sess ? sess.zip : await loadZipOf(bytes)
+  const file = zip.file('word/styles.xml')
+  if (!file) return bytes
+  let xml = await partText(zip, 'word/styles.xml', sess)
+  let touched = false
+  if (props.size) {
+    xml = xml.replace(/<w:style\b[^>]*>[\s\S]*?<\/w:style>/g, (all) => {
+      const id = /w:styleId="([^"]+)"/.exec(all)?.[1]
+      const p = id ? props.get(id) : undefined
+      if (!p) return all
+      touched = true
+      let out = all
+      if (p.custom !== undefined) {
+        out = out.replace(/^<w:style\b[^>]*>/, (tag) => tag.replace(/>$/, ` w:customStyle="${p.custom}">`))
+      }
+      // aliases（v0.155）：CT_Style 序上紧跟 name（name → **aliases** → basedOn → next）
+      if (p.aliases !== undefined && !/<w:aliases\b/.test(out)) {
+        out = insertStyleKid(out, `<w:aliases w:val="${xmlAttr(p.aliases)}"/>`, ['name'])
+      }
+      // next：CT_Style 序上跟在 name/aliases/basedOn 之后、link 之前
+      if (p.next !== undefined && !/<w:next\b/.test(out)) {
+        out = insertStyleKid(out, `<w:next w:val="${xmlAttr(p.next)}"/>`, ['name', 'aliases', 'basedOn'])
+      }
+      // rsid：序上在 personal* 之后、pPr 之前
+      if (p.rsid !== undefined && !/<w:rsid\b/.test(out)) {
+        out = insertStyleKid(out, `<w:rsid w:val="${xmlAttr(p.rsid)}"/>`, [
+          'name', 'aliases', 'basedOn', 'next', 'link', 'autoRedefine', 'hidden', 'uiPriority',
+          'semiHidden', 'unhideWhenUsed', 'qFormat', 'locked', 'personal', 'personalCompose', 'personalReply',
+        ])
+      }
+      // 主题字体引用（v0.161）：补进已有那枚 `<w:rFonts>` 的开标签（属性无序，不必讲次位）。
+      // 没有 rFonts 就不现开——源件没写具名字体时也确实不会写引用名，凭空造一枚等于
+      // 把「继承上一层的字体」改成「钉在这一层」
+      if (p.fontTheme) {
+        const ft = p.fontTheme
+        const add =
+          (ft.ascii ? ` w:asciiTheme="${xmlAttr(ft.ascii)}"` : '') +
+          (ft.eastAsia ? ` w:eastAsiaTheme="${xmlAttr(ft.eastAsia)}"` : '') +
+          (ft.hAnsi ? ` w:hAnsiTheme="${xmlAttr(ft.hAnsi)}"` : '') +
+          (ft.cs ? ` w:cstheme="${xmlAttr(ft.cs)}"` : '')
+        if (add && /<w:rFonts\b/.test(out)) {
+          out = out.replace(/<w:rFonts[^>]*>/, (tag) => (tag.endsWith('/>') ? tag.slice(0, -2) + add + '/>' : tag.slice(0, -1) + add + '>'))
+        }
+      }
+      // v0.185：显式零缩进。放在最后是因为前面几笔都可能动到这枚 <w:style> 块，
+      // 但谁都不会动 pPr 里的 w:ind，位次互不干扰
+      if (p.indZeros) out = patchStyleIndZeros(out, p.indZeros)
+      return out
+    })
+  }
+  if (latent) {
+    // 已有 latentStyles 的件（理论上是别的工具后处理过的）不重复插
+    if (!xml.includes('<w:latentStyles')) {
+      const at = xml.indexOf('<w:style ')
+      if (at >= 0) {
+        xml = xml.slice(0, at) + latentStylesXml(latent) + xml.slice(at)
+        touched = true
+      }
+    }
+  }
+  if (!touched) return bytes
+  setPart(zip, 'word/styles.xml', xml, sess)
+  return finishPatch(bytes, zip, sess)
+}
+
+/**
+ * 一枚 `<w:style>` 块 → 补回本层显式写过的零缩进（v0.185）。
+ *
+ * `w:ind` 在 CT_PPrBase 里是单枚、位次 32（spacing 之后、jc/outlineLvl/rPr 之前）。
+ * 包对内建样式不发 `w:ind`，也不发「显式 0」——而 Word 里 `w:left="0"` 是压掉上一层
+ * 样式链继承的声明，缺了它段落会莫名继承父样式的缩进。
+ *
+ * 两条纪律：① 没有 `<w:pPr>` 就不凭空造（v0.161 主题字体同款）；② 已有的
+ * `<w:ind>` 只补**缺的**同名属性，包或用户写过的那个值一律不覆盖。
+ */
+export function patchStyleIndZeros(block: string, z: { left?: boolean; right?: boolean }): string {
+  const want = [
+    ...(z.left ? [' w:left="0"'] : []),
+    ...(z.right ? [' w:right="0"'] : []),
+  ]
+  if (!want.length) return block
+  const open = /<w:pPr\b[^>]*>/.exec(block)
+  if (!open) return block
+  // 自闭合 `<w:pPr/>`：没有内容可插，整枚换成有内容形态
+  if (open[0].endsWith('/>')) {
+    const tag = open[0].slice(0, -2).trimEnd() + '>'
+    return block.replace(open[0], () => `${tag}<w:ind${want.join('')}/></w:pPr>`)
+  }
+  const pPr = /<w:pPr\b[^>]*>([\s\S]*?)<\/w:pPr>/.exec(block)
+  if (!pPr) return block
+  const inner = pPr[1]
+  const ind = /<w:ind\b[^>]*\/?>/.exec(inner)
+  let next: string
+  if (ind) {
+    // 同名属性已在场 = 包或用户已经写过；不追加、不覆盖（追加会造出第二枚 w:left）
+    const add = want
+      .filter((a) => legacyAttrScan
+        ? !new RegExp(`\\s${a.trim().split('=')[0]}=`).test(ind[0])
+        : !hasAttrNamed(ind[0], a.trim().split('=')[0]))
+      .join('')
+    if (!add) return block
+    const cut = ind[0].endsWith('/>') ? ind[0].length - 2 : ind[0].length - 1
+    const tag = ind[0].slice(0, cut) + add + ind[0].slice(cut)
+    next = inner.replace(ind[0], () => tag)
+  } else {
+    // 按 CT_PPrBase 序：找第一枚位次比 ind 更靠后的在场子元素，插在它前面
+    const AFTER_IND = [
+      'contextualSpacing', 'mirrorIndents', 'suppressOverlap', 'jc', 'textDirection',
+      'textAlignment', 'textboxTightWrap', 'outlineLvl', 'divId', 'cnfStyle',
+      'rPr', 'sectPr', 'pPrChange',
+    ]
+    let at = -1
+    for (const k of AFTER_IND) {
+      const i = inner.indexOf(`<w:${k}`)
+      if (i >= 0 && (at < 0 || i < at)) at = i
+    }
+    const frag = `<w:ind${want.join('')}/>`
+    next = at >= 0 ? inner.slice(0, at) + frag + inner.slice(at) : inner + frag
+  }
+  return block.replace(pPr[0], () => open[0] + next + '</w:pPr>')
+}
+
+/**
+ * 书签 `w:id` 原值回填（v0.186）。
+ *
+ * docx 库的 `Bookmark` 组件把每枚书签的 `w:id` 恒写成 1（我们传给它的 `id` 是
+ * 书签名而不是数字令牌），源件里 7/9/9 三个令牌到写出包就全成了 1——Word 里
+ * 几枚书签同号就分不开，这是真坏件，不只是账本上一笔值变。
+ *
+ * 按**书签名**对位而不是按出现序：读手把跨段书签拆成每段一枚同名 span，
+ * 写出发出的两枚 Start/End 都该回到同一个源 id，Word 才认得出是一枚跨段书签。
+ * Start 改自身并压栈目标 id，End 弹栈改同一个值，嵌套/多枚都不会串位。
+ * 没有映射（用户新建的书签）与病态件（孤立 End）一律不动，绝不凭空造令牌。
+ */
+export async function patchBookmarkIds(
+  bytes: Uint8Array,
+  ids: Map<string, string>,
+  sess?: PackSession,
+): Promise<Uint8Array> {
+  if (!ids.size) return bytes
+  const zip = sess ? sess.zip : await loadZipOf(bytes)
+  const file = zip.file('word/document.xml')
+  if (!file) return bytes
+  const xml = await partText(zip, 'word/document.xml', sess)
+  const stack: (string | undefined)[] = []
+  let out = ''
+  let cursor = 0
+  let touched = false
+  for (const m of xml.matchAll(/<w:bookmark(Start|End)\b[^>]*>/g)) {
+    const at = m.index ?? 0
+    const tag = m[0]
+    const isStart = m[1] === 'Start'
+    const name = isStart ? /\sw:name="([^"]*)"/.exec(tag)?.[1] : undefined
+    const want = isStart ? (name ? ids.get(name) : undefined) : stack.pop()
+    if (isStart) stack.push(want)
+    if (!want) continue
+    // 同名改值，不追加第二枚 w:id（与 patchColorLits 同一条纪律）
+    const next = tag.replace(/\sw:id="[^"]*"/, () => ` w:id="${xmlAttr(want)}"`)
+    if (next === tag) continue
+    out += xml.slice(cursor, at) + next
+    cursor = at + tag.length
+    touched = true
+  }
+  if (!touched) return bytes
+  out += xml.slice(cursor)
+  setPart(zip, 'word/document.xml', out, sess)
+  return finishPatch(bytes, zip, sess)
+}
+
+/**
+ * 修订壳 `w:id` 原值回填（v0.187）。
+ *
+ * 写手给 `InsertedTextRun`/`DeletedTextRun` 的 id 是 `dt.revId++`（从 1 起），
+ * 源件那枚「这条改动」的唯一号就此丢了（`ins|id` 挂值变）。读手在 w:ins/w:del
+ * 分支里**已经查问过** `w:id`，只是按「重编不该由我们决定」留成只读记账；
+ * 本轮由 `docxToDocMeta` 从源包按出现序把原值带进 meta（正则读、不进保真账），
+ * 这里按 `<w:ins>/<w:del>` 出现序前缀对位**同名改值**，不追加第二枚 `w:id`。
+ * 写出包比源包多出来的修订（跨段拆开）保持包自己的号，绝不凭空造令牌。
+ */
+export async function patchRevIds(
+  bytes: Uint8Array,
+  ids: string[],
+  sess?: PackSession,
+): Promise<Uint8Array> {
+  if (!ids.length) return bytes
+  const zip = sess ? sess.zip : await loadZipOf(bytes)
+  const file = zip.file('word/document.xml')
+  if (!file) return bytes
+  const xml = await partText(zip, 'word/document.xml', sess)
+  let i = 0
+  let out = ''
+  let cursor = 0
+  let touched = false
+  for (const m of xml.matchAll(/<w:(?:ins|del)\b[^>]*>/g)) {
+    const at = m.index ?? 0
+    const tag = m[0]
+    const want = ids[i++]
+    if (!want) continue
+    const next = tag.replace(/\sw:id="[^"]*"/, () => ` w:id="${xmlAttr(want)}"`)
+    if (next === tag) continue
+    out += xml.slice(cursor, at) + next
+    cursor = at + tag.length
+    touched = true
+  }
+  if (!touched) return bytes
+  out += xml.slice(cursor)
+  setPart(zip, 'word/document.xml', out, sess)
+  return finishPatch(bytes, zip, sess)
+}
+
+/**
+ * 画布级对象序号 / 对象名回填（v0.188）。
+ *
+ * 源包里 5 枚 `<wp:docPr>` 各有自己的 id 与 name，但 WPS 形状与艺术字被读手
+ * 展平成文字后没生成 `data-img` 载荷，包就为那两枚发出 `id="1" name=""` 的空壳
+ * （选择窗格与定位里要用的对象名没了）。与 `patchRevIds` 同款：写手侧从源包
+ * 按出现序正则提取，post-pack 前缀对位；复用 `tagWithAttrs` 做同名改值 / 缺则追加，
+ * 绝不追加第二枚同名属性。源里没写过的留空占位，不凭空造名字。
+ */
+export async function patchDocPr(
+  bytes: Uint8Array,
+  shells: { id: string; name: string }[] | undefined,
+  sess?: PackSession,
+): Promise<Uint8Array> {
+  if (!shells?.length) return bytes
+  const zip = sess ? sess.zip : await loadZipOf(bytes)
+  const file = zip.file('word/document.xml')
+  if (!file) return bytes
+  const xml = await partText(zip, 'word/document.xml', sess)
+  let i = 0
+  let out = ''
+  let cursor = 0
+  let touched = false
+  for (const m of xml.matchAll(/<wp:docPr\b[^>]*>/g)) {
+    const at = m.index ?? 0
+    const tag = m[0]
+    const want = shells[i++]
+    if (!want) continue
+    const kv: Record<string, string> = {}
+    if (want.id) kv.id = want.id
+    if (want.name) kv.name = want.name
+    if (!Object.keys(kv).length) continue
+    const next = tagWithAttrs(tag, kv)
+    if (next === tag) continue
+    out += xml.slice(cursor, at) + next
+    cursor = at + tag.length
+    touched = true
+  }
+  if (!touched) return bytes
+  out += xml.slice(cursor)
+  setPart(zip, 'word/document.xml', out, sess)
+  return finishPatch(bytes, zip, sess)
+}
+
+/**
+ * 超链接壳的 `w:tooltip` / `w:tgtFrame` 回填（v0.191）。
+ *
+ * 这不是「包没有槽」——读手 v0.155 早把两枚属性兑现成 HTML `<a title/target>`，
+ * TipTap 的 link mark 也自带这两格，只是 `ExternalHyperlink` 只收 `link`。
+ * 所以从**模型**登记（不是源包正则），用户改过 title/target 就写回新值：
+ * 屏上替身能认回，是这轮与前几轮「写手侧字面搬回」最大的不同。
+ * 按 `<w:hyperlink>` 出现序对位，复用 `tagWithAttrs` 做同名改值 / 缺则追加，
+ * 绝不追加第二枚同名属性；两枚都没写过的链接整枚跳过，不凭空造属性。
+ */
+/**
+ * 部件级字面元信息回填（v0.193）。
+ *
+ * `byId`：按身份属性（`w:numId` / `w:styleId`）认领开标签，只补**缺**的属性、
+ * 已有同名属性一律不动（用户或包自己写过的算新事实，别拿源件盖回去）；
+ * 身份认不出就跳过，绝不退回落「出现序」——写出包的 `w:num` 常比源件多。
+ * `roots`：在部件根容器闭标签前按源包出现序插自闭合字面片，逐片判幂等。
+ *
+ * 与 `patchDocPr` 同源（写手侧从源包正则读，不进保真账、读手零改动），
+ * 差别是这次跨多个部件，所以一个补丁里共用同一只 zip / 同一份文本缓存，
+ * 末尾只标一次脏。
+ */
+/** 一枚字面片属于哪枚元素；幂等按**元素名**判，不按整串字面（值变了也算已有） */
+function featureTagOf(x: string): string {
+  return /^<w:([A-Za-z]+)/.exec(x)?.[1] ?? ''
+}
+
+/**
+ * rPr 字符特性回填（v0.194）。
+ *
+ * 按**结果文字**认领写出包里那一枚 `<w:r>`，只动它的 `<w:rPr>` 内容：
+ * ① 只补缺、不覆盖（写出包已有同名元素就跳过这一枚）；
+ * ② `w:outline` 按 CT_RPrBase 序插在第一枚 `emboss`/`imprint`/`shadow`/
+ *    `noProof` 之前，另外四枚扩展插在 `</w:rPr>` 前（Word 自己就放末尾）；
+ * ③ 结果文字被用户改过就认不出，宁可不贴；插入区间按 cursor 单调前进。
+ *
+ * 与 `patchLiteralWrappers` 同源（写手侧从源包正则读、不进保真账、
+ * 读手零改动、零新增查问），差别只是这次的落点在 run 的 rPr 而不是 run 前后。
+ */
+/**
+ * 字面片贴回（v0.195）。逐片独立判幂等、独立找锚点，认同不出就跳过；
+ * 同一部件多片靠 `setPart` 同步缓存串起来，末尾只标一次脏。
+ * 与 `patchMetaExtras` / `patchRPrFeatures` 同源（写手侧源包正则读、读手零改动）。
+ */
+export async function patchLiteralPlacements(
+  bytes: Uint8Array,
+  items: LiteralPlacement[] | undefined,
+  sess?: PackSession,
+): Promise<Uint8Array> {
+  if (!items?.length) return bytes
+  const zip = sess ? sess.zip : await loadZipOf(bytes)
+  // 同一部件的多片合成一趟：一次读、按序应用（片与片之间有定位依赖）、一次写。
+  // 无会话时这也把「每条指令各自解压一遍」收成一次。
+  const byPart = new Map<string, LiteralPlacement[]>()
+  for (const it of items) {
+    if (!it.literal || !it.guard || !it.anchor.length) continue
+    const list = byPart.get(it.part) ?? []
+    list.push(it)
+    byPart.set(it.part, list)
+  }
+  let touched = false
+  for (const [part, list] of byPart) {
+    let xml = await partText(zip, part, sess)
+    if (!xml) continue
+    let changed = false
+    for (const it of list) {
+      if (xml.includes(it.guard)) continue
+      let at = -1
+      let hit = ''
+      for (const a of it.anchor) {
+        const i = it.last ? xml.lastIndexOf(a) : xml.indexOf(a)
+        if (i >= 0) { at = i; hit = a; break }
+      }
+      if (at < 0) continue
+      let next = ''
+      if (it.mode === 'before') {
+        next = xml.slice(0, at) + it.literal + xml.slice(at)
+      } else if (it.mode === 'after') {
+        const end = at + hit.length
+        next = xml.slice(0, end) + it.literal + xml.slice(end)
+      } else if (it.mode === 'afterParagraph') {
+        const p = xml.indexOf('</w:p>', at)
+        if (p < 0) continue
+        const end = p + '</w:p>'.length
+        next = xml.slice(0, end) + it.literal + xml.slice(end)
+      } else {
+        // beforeParagraph：往回找最近的一枚段落开标签，插在它之前
+        const p = Math.max(xml.lastIndexOf('<w:p>', at), xml.lastIndexOf('<w:p ', at))
+        if (p < 0 || p > at) continue
+        next = xml.slice(0, p) + it.literal + xml.slice(p)
+      }
+      xml = next
+      changed = true
+    }
+    if (!changed) continue
+    setPart(zip, part, xml, sess)
+    touched = true
+  }
+  if (!touched) return bytes
+  return finishPatch(bytes, zip, sess)
+}
+
+/**
+ * VML 老式形状整段回填（v0.196）。
+ *
+ * 读手把 `<w:pict>` / `<w:object>` 展平成一行可见占位文字
+ * （`〔嵌入对象…，内容未提取〕`），写出包里三段 VML 全没了。这里用那行占位文字
+ * 认领段落，**替换**成源件的三段字面（按源包出现序），于是写出包的结构回到源件
+ * 同形——占位段本来就是读手为 `w:object` 做的替身，替身认回来才不留多余空行。
+ *
+ * 三道守卫：① 已有 `w:pict`/`w:object` 整笔不动（幂等，不叠第二套）；
+ * ② 根上没声明 v/o/w10 三个前缀就跳过（贴回去会是坏 XML）；
+ * ③ 带 image `r:id` 的段必须能重映射到写出包的 image 关系，映射不到就跳过这一段。
+ * 锚点认不出（用户删了嵌入对象、或真件压根没有 object 占位段）也整笔不贴。
+ *
+ * 写手侧正则读的部件不进保真账；读手零改动、零新增查问对。
+ */
+export async function patchVmlShapes(
+  bytes: Uint8Array,
+  items: VmlShape[] | undefined,
+  sess?: PackSession,
+): Promise<Uint8Array> {
+  if (!items?.length) return bytes
+  const zip = sess ? sess.zip : await loadZipOf(bytes)
+  const xml = await partText(zip, 'word/document.xml', sess)
+  if (!xml || xml.includes('<w:pict') || xml.includes('<w:object')) return bytes
+  const root = /<w:document\b[^>]*>/.exec(xml)?.[0] ?? ''
+  if (!root.includes('xmlns:v=') || !root.includes('xmlns:o=') || !root.includes('xmlns:w10=')) return bytes
+  const at = xml.indexOf('内容未提取〕')
+  if (at < 0) return bytes
+  const pStart = Math.max(xml.lastIndexOf('<w:p>', at), xml.lastIndexOf('<w:p ', at))
+  const pEnd = xml.indexOf('</w:p>', at)
+  if (pStart < 0 || pStart > at || pEnd < 0) return bytes
+  // 只在真的需要重映射时才读 rels（无会话路径少一次解压）
+  const needRid = items.some((it) => it.imageRIds.length)
+  const targetRId = needRid ? outImageRId(await partText(zip, 'word/_rels/document.xml.rels', sess)) : ''
+  const pieces: string[] = []
+  for (const it of items) {
+    if (!it.literal) continue
+    if (it.imageRIds.length && !targetRId) continue
+    let s = it.literal
+    for (const rid of it.imageRIds) s = s.split(`r:id="${rid}"`).join(`r:id="${targetRId}"`)
+    pieces.push(s)
+  }
+  if (!pieces.length) return bytes
+  const out = xml.slice(0, pStart) + pieces.join('') + xml.slice(pEnd + '</w:p>'.length)
+  setPart(zip, 'word/document.xml', out, sess)
+  return finishPatch(bytes, zip, sess)
+}
+
+export async function patchRPrFeatures(
+  bytes: Uint8Array,
+  items: RPrFeature[] | undefined,
+  sess?: PackSession,
+): Promise<Uint8Array> {
+  if (!items?.length) return bytes
+  const zip = sess ? sess.zip : await loadZipOf(bytes)
+  const file = zip.file('word/document.xml')
+  if (!file) return bytes
+  const xml = await partText(zip, 'word/document.xml', sess)
+  let out = ''
+  let cursor = 0
+  let touched = false
+  for (const it of items) {
+    if (!it.text || !it.extras.length) continue
+    const t = xml.indexOf(`>${it.text}</w:t>`, cursor)
+    if (t < 0) continue
+    // `<w:r>` 与带属性的 `<w:r w:rsidR=…>` 都认，但别把 `<w:rPr>` 当成 run 开标签
+    const rAt = Math.max(xml.lastIndexOf('<w:r>', t), xml.lastIndexOf('<w:r ', t))
+    if (rAt < cursor) continue
+    const rpOpen = xml.indexOf('<w:rPr', rAt)
+    const rpClose = rpOpen < 0 ? -1 : xml.indexOf('</w:rPr>', rpOpen)
+    if (rpOpen < 0 || rpClose < 0 || rpOpen > t || rpClose > t) continue
+    const tagEnd = xml.indexOf('>', rpOpen)
+    if (tagEnd < 0 || tagEnd >= rpClose) continue
+    const body = xml.slice(tagEnd + 1, rpClose)
+    const std: string[] = []
+    const ext: string[] = []
+    for (const x of it.extras) {
+      const tag = featureTagOf(x)
+      if (!tag || body.includes(`<w:${tag}`)) continue
+      ;(tag === 'outline' ? std : ext).push(x)
+    }
+    if (!std.length && !ext.length) continue
+    let next = body
+    if (std.length) {
+      let at = -1
+      for (const anchor of ['<w:emboss', '<w:imprint', '<w:shadow', '<w:noProof']) {
+        const i = next.indexOf(anchor)
+        if (i >= 0) { at = i; break }
+      }
+      next = at >= 0 ? next.slice(0, at) + std.join('') + next.slice(at) : next + std.join('')
+    }
+    next += ext.join('')
+    out += xml.slice(cursor, tagEnd + 1) + next
+    cursor = rpClose
+    touched = true
+  }
+  if (!touched) return bytes
+  out += xml.slice(cursor)
+  setPart(zip, 'word/document.xml', out, sess)
+  return finishPatch(bytes, zip, sess)
+}
+
+export async function patchMetaExtras(
+  bytes: Uint8Array,
+  extras: MetaExtras | undefined,
+  sess?: PackSession,
+): Promise<Uint8Array> {
+  if (!extras?.byId?.length && !extras?.roots?.length) return bytes
+  const zip = sess ? sess.zip : await loadZipOf(bytes)
+  let touched = false
+  for (const b of extras.byId ?? []) {
+    if (!b.items.length) continue
+    const xml = await partText(zip, b.part, sess)
+    if (!xml) continue
+    const items = new Map(b.items.map((x) => [x.id, x.attrs]))
+    let out = ''
+    let cursor = 0
+    let changed = false
+    for (const m of xml.matchAll(new RegExp(`<${b.tag}(?=[\\s/>])[^>]*>`, 'g'))) {
+      const at = m.index ?? 0
+      const tag = m[0]
+      const id = attrLitOf(tag, b.idAttr)
+      const kv = id ? items.get(id) : undefined
+      if (!kv) continue
+      const need: Record<string, string> = {}
+      for (const [k, v] of Object.entries(kv)) {
+        if (v && !hasAttrNamed(tag, k)) need[k] = v
+      }
+      if (!Object.keys(need).length) continue
+      const close = tag.endsWith('/>') ? '/>' : '>'
+      const body = tag.slice(0, -close.length)
+      const next = body + Object.entries(need).map(([k, v]) => ` ${k}="${v}"`).join('') + close
+      out += xml.slice(cursor, at) + next
+      cursor = at + tag.length
+      changed = true
+    }
+    if (!changed) continue
+    out += xml.slice(cursor)
+    setPart(zip, b.part, out, sess)
+    touched = true
+  }
+  for (const r of extras.roots ?? []) {
+    const xml = await partText(zip, r.part, sess)
+    if (!xml) continue
+    const at = xml.lastIndexOf(r.close)
+    if (at < 0) continue
+    // 逐片幂等：写出包已经有这枚字面就不叠第二遍（与 literalWrappers 的 marker 同纪律）
+    const add = r.literals.filter((l) => l && !xml.includes(l)).join('')
+    if (!add) continue
+    setPart(zip, r.part, xml.slice(0, at) + add + xml.slice(at), sess)
+    touched = true
+  }
+  if (!touched) return bytes
+  return finishPatch(bytes, zip, sess)
+}
+
+export async function patchHyperlinkAttrs(
+  bytes: Uint8Array,
+  extras: { tip?: string; frame?: string }[] | undefined,
+  sess?: PackSession,
+): Promise<Uint8Array> {
+  if (!extras?.some((x) => x.tip || x.frame)) return bytes
+  const zip = sess ? sess.zip : await loadZipOf(bytes)
+  const file = zip.file('word/document.xml')
+  if (!file) return bytes
+  const xml = await partText(zip, 'word/document.xml', sess)
+  let i = 0
+  let out = ''
+  let cursor = 0
+  let touched = false
+  for (const m of xml.matchAll(/<w:hyperlink\b[^>]*>/g)) {
+    const at = m.index ?? 0
+    const want = extras[i++]
+    if (!want || (!want.tip && !want.frame)) continue
+    const kv: Record<string, string> = {}
+    if (want.tip) kv['w:tooltip'] = xmlAttr(want.tip)
+    if (want.frame) kv['w:tgtFrame'] = xmlAttr(want.frame)
+    const next = tagWithAttrs(m[0], kv)
+    if (next === m[0]) continue
+    out += xml.slice(cursor, at) + next
+    cursor = at + m[0].length
+    touched = true
+  }
+  if (!touched) return bytes
+  out += xml.slice(cursor)
+  setPart(zip, 'word/document.xml', out, sess)
+  return finishPatch(bytes, zip, sess)
+}
+
+/**
+ * 整片字面包裹壳回填（v0.189 表单域 / v0.190 泛化 + 智能标记）。
+ *
+ * 写手侧 `literalWrappersOf` 从源包留下壳的前后两片字面，这里按**结果文字**
+ * 找回写出包里那枚 run，前后贴回去。四道守卫：① **逐片**按 `marker` 判幂等
+ * （v0.190 把 v0.189 的全局 `<w:fldChar` 闸门收窄成各片自己的标记，包发的
+ * 普通域不再误伤表单域、已有的 smartTag 也不影响表单域）；② 结果文字被用户
+ * 改过就认不出，宁缺毋滥跳过（不凭空造壳）；③ 片自身四格齐全才贴；
+ * ④ 插入区间按 cursor 单调前进，不重叠（两类壳已按源包出现序排好）。
+ * 正则读的部件不进保真账，读手早查问过 fldChar / ffData / smartTag 全族，
+ * 零新增查问对。
+ */
+export async function patchLiteralWrappers(
+  bytes: Uint8Array,
+  fields: LiteralWrapper[] | undefined,
+  sess?: PackSession,
+): Promise<Uint8Array> {
+  if (!fields?.length) return bytes
+  const zip = sess ? sess.zip : await loadZipOf(bytes)
+  const file = zip.file('word/document.xml')
+  if (!file) return bytes
+  const xml = await partText(zip, 'word/document.xml', sess)
+  let out = ''
+  let cursor = 0
+  let touched = false
+  for (const f of fields) {
+    if (!f.text || !f.marker || !f.before || !f.after || xml.includes(f.marker)) continue
+    const needle = `>${f.text}</w:t>`
+    let from = cursor
+    let runStart = -1
+    let runEnd = -1
+    while (true) {
+      const t = xml.indexOf(needle, from)
+      if (t < 0) break
+      from = t + needle.length
+      const tAt = xml.lastIndexOf('<w:t', t)
+      if (tAt < 0 || tAt > t) continue
+      const st = Math.max(xml.lastIndexOf('<w:r>', tAt), xml.lastIndexOf('<w:r ', tAt))
+      const en = xml.indexOf('</w:r>', t)
+      if (st < cursor || en < 0 || en < t) continue
+      runStart = st
+      runEnd = en + '</w:r>'.length
+      break
+    }
+    if (runStart < 0) continue
+    out += xml.slice(cursor, runStart) + f.before + xml.slice(runStart, runEnd) + f.after
+    cursor = runEnd
+    touched = true
+  }
+  if (!touched) return bytes
+  out += xml.slice(cursor)
+  setPart(zip, 'word/document.xml', out, sess)
+  return finishPatch(bytes, zip, sess)
+}
+
+/**
+ * `w:startOverride` 原值回填（v0.187）。
+ *
+ * 包对每个重建出来的 `<w:num>` 恒发 `<w:startOverride w:val="1"/>`，源件说的
+ * 「这一串从第 3 号起」就丢了。`DocxNumbering.starts` 按 `w:num` 出现序存原值，
+ * 与 `patchNumberingXml` 同一条「只存序不存号、前缀对位」的纪律——包的 numId
+ * 会重排，按号认会贴错。只对源里说过的那几串改值，认不出的整块不动。
+ */
+export async function patchNumOverrides(
+  bytes: Uint8Array,
+  starts: (number | undefined)[] | undefined,
+  sess?: PackSession,
+): Promise<Uint8Array> {
+  if (!starts?.some((x) => x !== undefined)) return bytes
+  const zip = sess ? sess.zip : await loadZipOf(bytes)
+  const file = zip.file('word/numbering.xml')
+  if (!file) return bytes
+  const xml = await partText(zip, 'word/numbering.xml', sess)
+  // v0.189：改前会把全部 <w:num> 物化成数组，而真正要看的只有 starts.length 枚。
+  // 惰性腿边走边拼、够数就停；`legacyBlockScan:true` 复刻改前路径供 A/B。
+  const re = /<w:num\b[^>]*>[\s\S]*?<\/w:num>/g
+  const blocks: Iterable<RegExpMatchArray> = legacyBlockScan ? [...xml.matchAll(re)] : xml.matchAll(re)
+  let out = ''
+  let cursor = 0
+  let touched = false
+  let i = 0
+  for (const m of blocks) {
+    if (i >= starts.length) break
+    const want = starts[i++]
+    if (want === undefined) continue
+    const at = m.index ?? 0
+    const next = m[0].replace(
+      /(<w:startOverride\b[^>]*?\sw:val=")[^"]*(")/,
+      (_all, head: string, tail: string) => `${head}${xmlAttr(String(want))}${tail}`,
+    )
+    if (next === m[0]) continue
+    out += xml.slice(cursor, at) + next
+    cursor = at + m[0].length
+    touched = true
+  }
+  if (!touched) return bytes
+  out += xml.slice(cursor)
+  setPart(zip, 'word/numbering.xml', out, sess)
+  return finishPatch(bytes, zip, sess)
+}
+
+/** `DocxLatentStyles` → `<w:latentStyles>` 整块 XML（含全部 lsdException）；没话说的件给空容器 */
+function latentStylesXml(ls: DocxLatentStyles): string {
+  const bit = (v: boolean | undefined) => (v === undefined ? undefined : v ? '1' : '0')
+  const parts: string[] = []
+  if (ls.count !== undefined) parts.push(`w:count="${ls.count}"`)
+  if (ls.defUIPriority !== undefined) parts.push(`w:defUIPriority="${ls.defUIPriority}"`)
+  for (const [k, v] of [
+    ['w:defLockedState', ls.defLockedState],
+    ['w:defSemiHidden', ls.defSemiHidden],
+    ['w:defUnhideWhenUsed', ls.defUnhideWhenUsed],
+    ['w:defQFormat', ls.defQFormat],
+  ] as [string, boolean | undefined][]) {
+    const b = bit(v)
+    if (b !== undefined) parts.push(`${k}="${b}"`)
+  }
+  let inner = ''
+  for (const e of ls.exceptions) {
+    inner +=
+      `<w:lsdException` +
+      (e.name !== undefined ? ` w:name="${xmlAttr(e.name)}"` : '') +
+      (e.uiPriority !== undefined ? ` w:uiPriority="${e.uiPriority}"` : '') +
+      (bit(e.semiHidden) !== undefined ? ` w:semiHidden="${bit(e.semiHidden)}"` : '') +
+      (bit(e.unhideWhenUsed) !== undefined ? ` w:unhideWhenUsed="${bit(e.unhideWhenUsed)}"` : '') +
+      (bit(e.qFormat) !== undefined ? ` w:qFormat="${bit(e.qFormat)}"` : '') +
+      (bit(e.locked) !== undefined ? ` w:locked="${bit(e.locked)}"` : '') +
+      `/>`
+  }
+  return `<w:latentStyles${parts.length ? ` ${parts.join(' ')}` : ''}>${inner}</w:latentStyles>`
+}
+
+/**
+ * 一枚 `<w:kid …>` 元素（含自闭合那种）结束的下标；-1 = 块里没有这枚。
+ * 名字不认前缀（w:/w15: 都算），属性值里不会有 '>'，所以从开标签往后找第一个就够。
+ */
+function kidEnd(block: string, kid: string): number {
+  const re = new RegExp(`<[\\w:]*${kid}\\b`)
+  const m = re.exec(block)
+  if (!m) return -1
+  const gt = block.indexOf('>', m.index)
+  return gt < 0 ? -1 : gt + 1
+}
+
+/**
+ * 在 `<w:style>` 块里插一枚子元素：插在 after 列表里**最靠后那枚**的元素之后
+ * （列表按 CT_Style 的 schema 序给），一枚前置子元素都没有时插在开标签之后。
+ * next/rsid 两枚的插入位次靠它落到 schema 序上——乱序写会被 Word 判损坏件。
+ * 包写的子元素常是自闭合（`<w:name w:val="a"/>`），所以锚点认元素结束而不是闭标签。
+ */
+function insertStyleKid(block: string, frag: string, after: string[]): string {
+  let at = -1
+  for (const k of after) {
+    const i = kidEnd(block, k)
+    if (i >= 0) at = Math.max(at, i)
+  }
+  if (at < 0) {
+    const m = /^<w:style\b[^>]*>/.exec(block)
+    if (!m) return block
+    at = m[0].length
+  }
+  return block.slice(0, at) + frag + block.slice(at)
+}
+
+/** 块内第一个出现的 `<w:kid…` 的下标（-1 = 一枚都没有） */
+function firstIndexOf(block: string, kids: string[]): number {
+  let at = -1
+  for (const k of kids) {
+    const i = block.indexOf(`<w:${k}`)
+    if (i >= 0 && (at < 0 || i < at)) at = i
+  }
+  return at
+}
+
+/** 在开标签上设一枚属性：先试替换同名（**按 local name**——包里 tentative 写成 w15:tentative，
+ * 前缀与我们的 w: 不同，照全名匹配会补出第二枚），无则追加。调用方给的 tag 可能不含结尾
+ * '>'（lvl 那枚是切片出来的），所以追加走「有 > 替换、没有就尾接」两条路 */
+function setTagAttr(tag: string, name: string, value: string): string {
+  const bare = name.includes(':') ? name.slice(name.indexOf(':') + 1) : name
+  const frag = ` ${name}="${value}"`
+  const re = new RegExp(`\\s[\\w:]*${bare}="[^"]*"`)
+  if (re.test(tag)) return tag.replace(re, frag)
+  return tag.endsWith('>') ? tag.replace(/>$/, frag) : tag + frag
+}
+
+/** `setTagAttr` 的**保前缀**变体：按 local name 找到那枚就换值不换前缀（w15: 还是 w15:），
+ * 找不到才按调用方给的名追加。用于 restartNumberingAfterBreak——OOXML 里它定义在 w15
+ * 命名空间，Word 与 docx 库发的都是 w15:，替换成 w: 会写出不在 schema 上的属性 */
+function setTagAttrKeepPrefix(tag: string, name: string, value: string): string {
+  const bare = name.includes(':') ? name.slice(name.indexOf(':') + 1) : name
+  const re = new RegExp(`\\s([\\w:]*?)${bare}="[^"]*"`)
+  const m = re.exec(tag)
+  if (m) return tag.replace(re, ` ${m[1]}${bare}="${value}"`)
+  const frag = ` ${name}="${value}"`
+  return tag.endsWith('>') ? tag.replace(/>$/, frag) : tag + frag
+}
+
+/**
+ * 编号定义账（v0.150）：nsid/tmpl/multiLevelType 与逐层 tentative/tplc/suff 贴回
+ * numbering.xml。包的编号 id 是自己发的（ListRegistry 按段引用重建，numId/abstractNumId
+ * 与原文未必同号），所以对位走**内容指纹**：每条 def 带一份层的 `numFmt|lvlText` 序列
+ * （读手顺手记下），包里逐枚 abstractNum 抽同一份指纹，按 defs 顺序一对一配。指纹
+ * 对不上就跳过那一条（宁可不补，也绝不补到别的定义上）——默认的两枚 bullet/ordered
+ * 定义两边内容不同（包写 ●/○/■，Word 写自己的），本来就不该乱贴。
+ *
+ * 插入位次都按 schema 序：三枚身份属性排在 name/styleLink/numStyleLink/lvl 之前
+ * （nsid → multiLevelType → tmpl）；suff 排在 lvlText 之前。乱序写会被 Word 判损坏件。
+ */
+async function patchNumberingXml(bytes: Uint8Array, defs: DocxAbstractNumMeta[], sess?: PackSession): Promise<Uint8Array> {
+  const zip = sess ? sess.zip : await loadZipOf(bytes)
+  const file = zip.file('word/numbering.xml')
+  if (!file) return bytes
+  const xml = await partText(zip, 'word/numbering.xml', sess)
+  const blocks = xml.match(/<w:abstractNum\b[^>]*>[\s\S]*?<\/w:abstractNum>/g)
+  if (!blocks || !blocks.length) return bytes
+  // 包内每枚的层序列（按 ilvl 序的 `numFmt|lvlText`）→ 块下标
+  const fps = blocks.map(numLvlSeqOf)
+  const used = new Set<number>()
+  // defs 顺序 → 命中的块下标（-1 = 没配上）
+  const pick: number[] = []
+  for (const d of defs) {
+    // 包的定义层数常比原文多（内置九层 vs 原文两层），所以比的是「原文每一层在包的开头
+    // 都对得上」——前缀匹配而不是全等
+    const want = d.fp.split(';').filter(Boolean)
+    let at = -1
+    for (let i = 0; i < fps.length; i++) {
+      if (used.has(i)) continue
+      const got = fps[i]
+      if (got.length < want.length) continue
+      if (want.every((w, j) => w === got[j])) { at = i; break }
+    }
+    if (at >= 0) used.add(at)
+    pick.push(at)
+  }
+  if (pick.every((x) => x < 0)) return bytes
+  let out = ''
+  let cursor = 0
+  let touched = false
+  for (let i = 0; i < blocks.length; i++) {
+    const at = xml.indexOf(blocks[i], cursor)
+    if (at < 0) return bytes
+    const di = pick.indexOf(i)
+    const patched = di >= 0 ? patchOneAbstractNum(blocks[i], defs[di]) : blocks[i]
+    if (patched !== blocks[i]) touched = true
+    out += xml.slice(cursor, at) + patched
+    cursor = at + blocks[i].length
+  }
+  out += xml.slice(cursor)
+  if (!touched) return bytes
+  setPart(zip, 'word/numbering.xml', out, sess)
+  return finishPatch(bytes, zip, sess)
+}
+
+/** 一枚 `<w:abstractNum>` 块 → 层序列：按 ilvl 序的 `ilvl:numFmt|lvlText` */
+function numLvlSeqOf(block: string): string[] {
+  const lvls = [...block.matchAll(/<w:lvl\b[^>]*\b[\w:]*ilvl="(\d+)"[^>]*>([\s\S]*?)<\/w:lvl>/g)]
+  return lvls.map((m) => {
+    const fmt = /<w:numFmt\b[^>]*\sw:val="([^"]*)"/.exec(m[2])?.[1] ?? ''
+    const text = /<w:lvlText\b[^>]*\sw:val="([^"]*)"/.exec(m[2])?.[1] ?? ''
+    return `${m[1]}:${fmt}|${text}`
+  })
+}
+
+function patchOneAbstractNum(block: string, d: DocxAbstractNumMeta): string {
+  let out = block
+  // 分页后重新编号总闸（v0.152）：开标签上的属性（与下面三枚子元素正相反的一枚）。
+  // **保留原前缀**——OOXML 里 restartNumberingAfterBreak 定义在 w15 命名空间
+  // （CT_AbstractNum 的扩展属性），Word 与 docx 库发的都是 w15:，照 w: 全名替换会
+  // 写出一枚不在 schema 上的属性（判损坏件风险）。包里对所有定义恒发这一枚，
+  // 故实际走的都是「按 local name 认出来、换值不换前缀」这条路径
+  if (d.rna !== undefined) {
+    const openEnd = out.indexOf('>')
+    if (openEnd > 0) {
+      out =
+        setTagAttrKeepPrefix(out.slice(0, openEnd), 'w15:restartNumberingAfterBreak', d.rna ? '1' : '0') +
+        out.slice(openEnd)
+    }
+  }
+  // 三枚身份属性：CT_AbstractNum 序 nsid → multiLevelType → tmpl → name → …
+  // 前缀一律不认（w: 只是最常见那个，w15: 同族也放过）。插入锚点取「schema 序里排
+  // 在自己之后的第一个在场元素」——包可能自带 multiLevelType（docx 库对所有定义都发），
+  // 那时 nsid 要插到它前面而不是后面，否则整块乱序会被 Word 判损坏件
+  const ORDER = ['nsid', 'multiLevelType', 'tmpl', 'name', 'styleLink', 'numStyleLink', 'lvl']
+  for (const [el, v] of [
+    ['nsid', d.nsid],
+    ['multiLevelType', d.multiLevelType],
+    ['tmpl', d.tmpl],
+    ['styleLink', d.styleLink],
+  ] as [string, string | undefined][]) {
+    if (v === undefined) continue
+    if (new RegExp(`<[\\w:]*${el}\\b`).test(out)) {
+      out = out.replace(new RegExp(`(<[\\w:]*${el}\\b[^>]*?\\sw:val=")[^"]*(")`), `$1${xmlAttr(v)}$2`)
+    } else {
+      const anchor = firstIndexOf(out, ORDER.slice(ORDER.indexOf(el) + 1))
+      const frag = `<w:${el} w:val="${xmlAttr(v)}"/>`
+      out =
+        anchor >= 0
+          ? out.slice(0, anchor) + frag + out.slice(anchor)
+          : out.replace('</w:abstractNum>', `${frag}</w:abstractNum>`)
+    }
+  }
+  // 逐层三枚：tentative/tplc 是 `<w:lvl>` 开标签上的属性，suff 是子元素
+  for (const [ilvl, m] of Object.entries(d.levels)) {
+    const at = out.search(new RegExp(`<w:lvl\\b[^>]*\\b[\\w:]*ilvl="${ilvl}"[^>]*>`))
+    if (at < 0) continue
+    const end = out.indexOf('</w:lvl>', at)
+    if (end < 0) continue
+    const closeLen = '</w:lvl>'.length
+    const lvl = out.slice(at, end + closeLen)
+    const tagEnd = lvl.indexOf('>')
+    let tag = lvl.slice(0, tagEnd)
+    let inner = lvl.slice(tagEnd)
+    if (m.tentative !== undefined) tag = setTagAttr(tag, 'w:tentative', m.tentative ? '1' : '0')
+    if (m.tplc !== undefined) tag = setTagAttr(tag, 'w:tplc', xmlAttr(m.tplc))
+    // 层子元素按 CT_Lvl 的序插（v0.155）：start → numFmt → **lvlRestart** → pStyle →
+    // isLgl → suff → lvlText → **lvlPicBulletId** → legacy → lvlJc → pPr → rPr。
+    // 锚点表写的是「schema 序里排在自己之后的第一个在场元素」——与自己之前的东西无关，
+    // 所以三枚可以各自独立成表（不像表级那一族要分居 tblW 两侧，见 v0.154 那次教训）
+    const insertKid = (frag: string, anchors: string[]): void => {
+      const at2 = firstIndexOf(inner, anchors)
+      inner = at2 >= 0 ? inner.slice(0, at2) + frag + inner.slice(at2) : inner.replace('</w:lvl>', `${frag}</w:lvl>`)
+    }
+    if (m.restart !== undefined) {
+      if (/<[\w:]*lvlRestart\b/.test(inner)) {
+        inner = inner.replace(/(<[\w:]*lvlRestart\b[^>]*?\sw:val=")[^"]*(")/, `$1${m.restart}$2`)
+      } else {
+        insertKid(`<w:lvlRestart w:val="${m.restart}"/>`, [
+          'pStyle', 'isLgl', 'suff', 'lvlText', 'lvlPicBulletId', 'legacy', 'lvlJc', 'pPr', 'rPr',
+        ])
+      }
+    }
+    if (m.picBulletId !== undefined) {
+      if (/<[\w:]*lvlPicBulletId\b/.test(inner)) {
+        inner = inner.replace(/(<[\w:]*lvlPicBulletId\b[^>]*?\sw:val=")[^"]*(")/, `$1${m.picBulletId}$2`)
+      } else {
+        insertKid(`<w:lvlPicBulletId w:val="${m.picBulletId}"/>`, ['legacy', 'lvlJc', 'pPr', 'rPr'])
+      }
+    }
+    if (m.suff !== undefined) {
+      if (/<[\w:]*suff\b/.test(inner)) {
+        inner = inner.replace(/(<[\w:]*suff\b[^>]*?\sw:val=")[^"]*(")/, `$1${xmlAttr(m.suff)}$2`)
+      } else {
+        // CT_Lvl 序：suff 在 lvlText 之前
+        insertKid(`<w:suff w:val="${xmlAttr(m.suff)}"/>`, ['lvlText', 'lvlPicBulletId', 'legacy', 'lvlJc', 'pPr', 'rPr'])
+      }
+    }
+    // v0.184：w:lvlJc 包恒发（默认 start），所以是「按 ilvl 改值」不是插元素——
+    // 与 suff / lvlPicBulletId 同一条现成分支。源件里 center 那一层此前被冲成 start
+    if (m.lvlJc) {
+      const frag = `<w:lvlJc w:val="${xmlAttr(m.lvlJc)}"/>`
+      if (/<[\w:]*lvlJc\b/.test(inner)) {
+        inner = inner.replace(/(<[\w:]*lvlJc\b[^>]*?\sw:val=")[^"]*(")/, `$1${xmlAttr(m.lvlJc)}$2`)
+      } else {
+        insertKid(frag, ['pPr', 'rPr'])
+      }
+    }
+    // v0.183：Word 2003 老式编号缩进补偿三枚。包不发 w:legacy，按 CT_Lvl 序
+    // 插在 lvlJc / pPr / rPr 中第一枚在场者之前（锚点表与 restart/picBulletId/suff 同源）。
+    // 三枚都是字面值原样回填，不做 onOff 归一——源件写 1/0 就还它 1/0
+    if (m.legacy) {
+      const lg = [
+        m.legacy.legacy !== undefined ? ` w:legacy="${xmlAttr(m.legacy.legacy)}"` : '',
+        m.legacy.space !== undefined ? ` w:legacySpace="${xmlAttr(m.legacy.space)}"` : '',
+        m.legacy.indent !== undefined ? ` w:legacyIndent="${xmlAttr(m.legacy.indent)}"` : '',
+      ].join('')
+      const frag = `<w:legacy${lg}/>`
+      if (/<[\w:]*legacy\b[^>]*\/>/.test(inner)) inner = inner.replace(/<[\w:]*legacy\b[^>]*\/>/, frag)
+      else insertKid(frag, ['lvlJc', 'pPr', 'rPr'])
+    }
+    out = out.slice(0, at) + tag + inner + out.slice(end + closeLen)
+  }
+  return out
 }
 
 /**
@@ -1637,41 +5011,1300 @@ export async function prosemirrorToDocxBytes(json: PMNode, meta?: DocMeta): Prom
  */
 function tblLookOf(s: DocxStyleInfo): string | undefined {
   const c = s.table?.cond
-  if (!c || !Object.keys(c).length) return undefined
+  const lk = s.table?.look
+  if ((!c || !Object.keys(c).length) && !lk) return undefined
   // 四位闸门走 table-cond 的 condLookBits：odt 出口没处存闸门，只能按同一规则再推一次，
-  // 两边共用这一枚函数才不会推出两个结果
-  const look = condLookBits(c)
-  const has = (...ts: TableCondType[]) => ts.some((t) => c[t])
+  // 两边共用这一枚函数才不会推出两个结果。有原文那枚 w:val 时以它为准（v0.147）——
+  // 它才是 Word 自己存的那份，反推只是同一规则的再推一次；ST_ShortHexNumber 的
+  // 低四位依次是 firstRow/lastRow/firstColumn/lastColumn
+  const look = condLookBits(c ?? {})
+  const v = lk?.val ? Number.parseInt(lk.val, 16) : Number.NaN
+  const bits = Number.isFinite(v)
+    ? { firstRow: !!(v & 0x1), lastRow: !!(v & 0x2), firstColumn: !!(v & 0x4), lastColumn: !!(v & 0x8) }
+    : look
+  const has = (...ts: TableCondType[]) => ts.some((t) => c?.[t])
   const bit = (b: boolean) => (b ? '1' : '0')
+  // 两枚 no*Band：原文说了按原文，没说才从条件层反推（有隔行带就套、没有就不套）
+  const nh = lk?.noHBand !== undefined ? lk.noHBand : !has('band1Horz', 'band2Horz')
+  const nv = lk?.noVBand !== undefined ? lk.noVBand : !has('band1Vert', 'band2Vert')
   return (
     `<w:tblLook` +
-    ` w:firstRow="${bit(look.firstRow)}"` +
-    ` w:lastRow="${bit(look.lastRow)}"` +
-    ` w:firstColumn="${bit(look.firstColumn)}"` +
-    ` w:lastColumn="${bit(look.lastColumn)}"` +
-    ` w:noHBand="${bit(!has('band1Horz', 'band2Horz'))}"` +
-    ` w:noVBand="${bit(!has('band1Vert', 'band2Vert'))}"` +
+    (lk?.val ? ` w:val="${lk.val}"` : '') +
+    ` w:firstRow="${bit(bits.firstRow)}"` +
+    ` w:lastRow="${bit(bits.lastRow)}"` +
+    ` w:firstColumn="${bit(bits.firstColumn)}"` +
+    ` w:lastColumn="${bit(bits.lastColumn)}"` +
+    ` w:noHBand="${bit(nh)}"` +
+    ` w:noVBand="${bit(nv)}"` +
     `/>`
   )
 }
 
-/** 给引用了这些表样式的每一张表补 `<w:tblLook>`：`<w:tblPr>` 的最后一位，插到 `</w:tblPr>` 之前就是了 */
-async function patchTblLook(bytes: Uint8Array, looks: Map<string, string>): Promise<Uint8Array> {
-  const { default: JSZip } = await import('jszip')
-  const zip = await JSZip.loadAsync(bytes)
+/**
+ * 段落属性余量 → 待补的 XML 串（v0.147）。按 CT_PPrBase 的 schema 序排好——`w:pPr`
+ * 是有序序列，乱序写会被 Word 判损坏件（与 latentStyles 插 styles.xml 同一条纪律）。
+ * 九枚里只有 textAlignment 是枚举档，其余是 onOff 的 '1'/'0'。
+ */
+const PPR_WRITE_ORDER = [
+  'suppressLineNumbers',
+  // 自动断字总闸（v0.155）：CT_PPrBase 里排在 suppressLineNumbers 之后、kinsoku 之前
+  'suppressAutoHyphens',
+  // v0.155：禁则三枚与文字方向。CT_PPrBase 里 kinsoku/wordWrap/overflowPunct 三枚
+  // 排在 topLinePunct **之前**、suppressAutoHyphens 之后；textDirection 排在 jc 之后
+  'kinsoku',
+  'wordWrap',
+  'overflowPunct',
+  'topLinePunct',
+  'autoSpaceDE',
+  'autoSpaceDN',
+  'bidi',
+  'adjustRightInd',
+  'snapToGrid',
+  // 文字方向（v0.155）：CT_PPrBase 里排在 jc 之后、textAlignment 之前
+  'textDirection',
+  'textAlignment',
+] as const
+
+/** `w:pPr` 各子元素的 schema 位次（只列会碰到的；未知元素不参与比较） */
+const PPR_RANK: Record<string, number> = {
+  pStyle: 10,
+  keepNext: 11,
+  keepLines: 12,
+  pageBreakBefore: 13,
+  framePr: 14,
+  widowControl: 15,
+  numPr: 16,
+  suppressLineNumbers: 17,
+  pBdr: 18,
+  shd: 19,
+  tabs: 20,
+  suppressAutoHyphens: 21,
+  kinsoku: 22,
+  wordWrap: 23,
+  overflowPunct: 24,
+  topLinePunct: 25,
+  autoSpaceDE: 26,
+  autoSpaceDN: 27,
+  bidi: 28,
+  adjustRightInd: 29,
+  snapToGrid: 30,
+  spacing: 31,
+  ind: 32,
+  contextualSpacing: 33,
+  mirrorIndents: 34,
+  suppressOverlap: 35,
+  jc: 36,
+  textDirection: 37,
+  textAlignment: 38,
+  textboxTightWrap: 39,
+  outlineLvl: 40,
+  divId: 41,
+  cnfStyle: 42,
+  rPr: 43,
+  sectPr: 44,
+  pPrChange: 45,
+}
+
+/** 段落节点的 data-ppr 载荷 → 余量 XML（没有可补的给空串）。属性值走 xmlAttr 转义 */
+function pprExtraXml(node: PMNode | undefined): string {
+  const raw = typeof node?.attrs?.ppr === 'string' ? node.attrs.ppr : ''
+  const kv = parsePprPayload(raw)
+  const bits: string[] = []
+  // v0.160：缩进的字符档两枚在同一枚 `<w:ind>` 上（不是各开一个元素——CT_PPrBase 里
+  // w:ind 是单枚，两枚并存时 Word 只认后写的那一枚）。载荷键带 ind 前缀，与下面那批
+  // 「一枚属性一个元素」的键分开走。回写的是**原始整数**（百分之一字符数），不做缇↔字符
+  // 的折算：折一次就对不上 Word 缩进对话框里那一栏的整数了
+  const indAttrs = PPR_IND_KEYS.map((k) => [k, kv[`ind${k[0].toUpperCase()}${k.slice(1)}`]] as const)
+    .filter(([, v]) => v !== undefined && v !== '' && /^-?\d+$/.test(v))
+    .map(([k, v]) => ` w:${k}="${v}"`)
+    .join('')
+  if (indAttrs) bits.push(`<w:ind${indAttrs}/>`)
+  for (const k of PPR_WRITE_ORDER) {
+    const v = kv[k]
+    if (v === undefined || v === '') continue
+    bits.push(`<w:${k} w:val="${xmlAttr(v)}"/>`)
+  }
+  return bits.join('')
+}
+
+/**
+ * 给每个 `<w:pPr>` 补段落属性余量（v0.147）：按**出现序**贴——第 i 段贴 `extras[i]`。
+ *
+ * 包对这一族没有槽（只有 autoSpaceDN 一枚，且它把 onOff 写成裸元素，带不出 w:val 的
+ * 「显式关」），与 w:tblLook 同一路数打包后回头补。段落没有 tblStyle 那种天然键，
+ * 只能按序；序会不会错由**计数闸门**兜底：document.xml 里 `<w:p>` 的枚数与走查时
+ * 登记的条目数对不上就整笔放弃（宁可不补，也绝不补到别的段落上）。
+ */
+async function patchParaProps(bytes: Uint8Array, extras: string[], sess?: PackSession): Promise<Uint8Array> {
+  if (!extras.some((x) => x)) return bytes
+  const zip = sess ? sess.zip : await loadZipOf(bytes)
   const file = zip.file('word/document.xml')
   if (!file) return bytes
-  const xml = await file.async('string')
+  const xml = await partText(zip, 'word/document.xml', sess)
+  // 自闭合的 `<w:p/>` 也算一段（空的段、只有分页符的段都可能写成这样）
+  const re = /<w:p(?:\s[^>]*)?\/?>/g
+  const opens = (legacyElemScan ? [...xml.matchAll(re)] : xml.matchAll(re))[Symbol.iterator]()
+  let out = ''
+  let cursor = 0
   let touched = false
-  const patched = xml.replace(/<w:tblPr>([\s\S]*?)<\/w:tblPr>/g, (all, inner: string) => {
-    const id = /<w:tblStyle w:val="([^"]+)"/.exec(inner)?.[1]
-    const look = id ? looks.get(id) : undefined
-    if (!look) return all
+  for (let i = 0; i <= extras.length; i++) {
+    const next = opens.next()
+    if (next.done) { if (i < extras.length) return bytes; break }
+    if (i === extras.length) return bytes
+    const m = next.value
+    const start = m.index ?? 0
+    const selfClosed = m[0].endsWith('/>')
+    const closeAt = selfClosed ? -1 : xml.indexOf('</w:p>', start)
+    if (!selfClosed && closeAt < 0) return bytes
+    const stop = selfClosed ? start + m[0].length : closeAt + '</w:p>'.length
+    if (!extras[i]) {
+      out += xml.slice(cursor, stop)
+      cursor = stop
+      continue
+    }
+    out += xml.slice(cursor, start) + pprInsert(xml.slice(start, stop), extras[i])
+    cursor = stop
     touched = true
-    return all.replace('</w:tblPr>', `${look}</w:tblPr>`)
+  }
+  if (!touched) return bytes
+  out += xml.slice(cursor)
+  setPart(zip, 'word/document.xml', out, sess)
+  return finishPatch(bytes, zip, sess)
+}
+
+/**
+ * 给 document.xml 里每个 `<w:{tag}>` 补属性串（v0.159 建、v0.160 泛化）：按**出现序**
+ * 贴——第 i 枚贴 `extras[i]`。
+ *
+ * 为什么要有这一层：docx 包的一批元素只认自己那两三枚属性（`createUnderline` 只写
+ * w:val 与 w:color，`createColor` 只写 w:val），`w:themeColor / w:themeTint /
+ * w:themeShade` 这一族在包外。与 w:sym 一起是同一笔机制债——sym 那一半包里有原生
+ * SymbolRun，这一半没有，于是只能走打包后的 run 级补丁位。
+ *
+ * 泛化到「任意元素名」是同一个形状的第二处需求（w:u 与 w:color 各带各的三枚）：
+ * 两族的登记数组分开、各按自己的元素出现序对位，所以不是合并成一串而是开两个 tag。
+ *
+ * 对位靠**计数闸门**：document.xml 里 `<w:{tag}` 的枚数与登记条数对不上就整笔放弃
+ * （宁可不补，也绝不补到别的 run 上）。匹配用 `(?=[\s/>])` 收边，免得把
+ * `w:unhideWhenUsed`、`w:uiPriority` 这些同前缀的元素算进来。
+ *
+ * 只扫 document.xml：样式表里的同名元素（我们自己拼的表样式 rPr）不在这一族的账上，
+ * 而 run 级补丁位管的就是正文里那一枚。脚注/批注的正文在我们的写手里走简单文本
+ * （不带 charExtra），不会登记进这一族，所以计数是对得上的
+ */
+/**
+ * v0.182：包的 `IColumnsAttributes.equalWidth` 是 boolean，序列化成
+ * `w:equalWidth="false"`；而 OOXML 的 ST_OnOff 字面是 `"0"/"1"`，源件写 `"0"`。
+ * 与 v0.179 的 `FLAT/flat` 同款：只让包发壳，字面由 post-pack 按源件回填。
+ * 只动 `<w:cols>` 开标签上的这一枚值；幂等（第二趟已经没有 "false" 可换）。
+ */
+async function patchColsOnOff(bytes: Uint8Array, sess?: PackSession): Promise<Uint8Array> {
+  const zip = sess ? sess.zip : await loadZipOf(bytes)
+  const file = zip.file('word/document.xml')
+  if (!file) return bytes
+  const xml = await partText(zip, 'word/document.xml', sess)
+  const out = xml.replace(
+    /(<w:cols\b[^>]*\bw:equalWidth=")false(")/g,
+    (_m: string, a: string, b: string) => `${a}0${b}`,
+  )
+  if (out === xml) return bytes
+  setPart(zip, 'word/document.xml', out, sess)
+  return finishPatch(bytes, zip, sess)
+}
+
+async function patchElemAttrs(bytes: Uint8Array, tag: string, extras: string[], sess?: PackSession): Promise<Uint8Array> {
+  if (!extras.some((x) => x)) return bytes
+  const zip = sess ? sess.zip : await loadZipOf(bytes)
+  const file = zip.file('word/document.xml')
+  if (!file) return bytes
+  const xml = await partText(zip, 'word/document.xml', sess)
+  // v0.192：与 patchImgXml / patchNumOverrides / patchBorderBlocks 同款——物化开标签
+  // 数组换惰性迭代器，计数闸门从「循环前先数一遍」移到「循环末尾对账」（不符就整笔
+  // 丢弃，已拼的局部串不写盘）。`legacyElemScan:true` 复刻改前路径供 A/B。
+  const re = new RegExp(`<w:${tag}(?=[\\s/>])[^>]*>`, 'g')
+  const opens: Iterable<RegExpMatchArray> = legacyElemScan ? [...xml.matchAll(re)] : xml.matchAll(re)
+  let out = ''
+  let cursor = 0
+  let touched = false
+  let count = 0
+  for (const m of opens) {
+    const start = m.index ?? 0
+    const stop = start + m[0].length
+    const add = extras[count++]
+    if (!add) {
+      out += xml.slice(cursor, stop)
+      cursor = stop
+      continue
+    }
+    // 属性追加在 `/>` 之前（自闭合）或最后那个 `>` 之前——XML 属性无序，不必讲次位
+    const tag = m[0]
+    const at = tag.endsWith('/>') ? tag.length - 2 : tag.length - 1
+    out += xml.slice(cursor, start) + tag.slice(0, at) + add + tag.slice(at)
+    cursor = stop
+    touched = true
+  }
+  if (count !== extras.length) return bytes
+  if (!touched) return bytes
+  out += xml.slice(cursor)
+  setPart(zip, 'word/document.xml', out, sess)
+  return finishPatch(bytes, zip, sess)
+}
+
+/**
+ * 按出现序在锚点元素**前面**插一整枚元素（v0.161）：第 i 个 `<w:anchor>` 之前插
+ * `extras[i]`（空串 = 这一处不用插）。
+ *
+ * 与 patchElemAttrs 的差别是**动作**：那一族是「属性补进已有元素的开标签」，这一族是
+ * 「元素补进已有父的子女位」。两族共用同一套对位纪律（出现序 + 计数闸门），但动作不同，
+ * 所以不合并——合并就得在一个函数里同时参数化「插哪」与「插什么」，读起来更费劲。
+ *
+ * 插在前面而不是后面，是因为 CT_RPrBase 这类 sequence 有次位要求：`<w:caps>` 排在
+ * `<w:smallCaps>` 之前，反了就是 Word 认不得的 rPr。
+ */
+async function patchBeforeElem(bytes: Uint8Array, anchor: string, extras: string[], sess?: PackSession): Promise<Uint8Array> {
+  if (!extras.some((x) => x)) return bytes
+  const zip = sess ? sess.zip : await loadZipOf(bytes)
+  const file = zip.file('word/document.xml')
+  if (!file) return bytes
+  const xml = await partText(zip, 'word/document.xml', sess)
+  const re = new RegExp(`<w:${anchor}(?=[\\s/>])[^>]*>`, 'g')
+  const opens = (legacyElemScan ? [...xml.matchAll(re)] : xml.matchAll(re))[Symbol.iterator]()
+  let out = ''
+  let cursor = 0
+  let touched = false
+  for (let i = 0; i <= extras.length; i++) {
+    const next = opens.next()
+    if (next.done) { if (i < extras.length) return bytes; break }
+    if (i === extras.length) return bytes
+    const start = next.value.index ?? 0
+    const add = extras[i]
+    if (!add) continue
+    out += xml.slice(cursor, start) + add
+    cursor = start
+    touched = true
+  }
+  if (!touched) return bytes
+  out += xml.slice(cursor)
+  setPart(zip, 'word/document.xml', out, sess)
+  return finishPatch(bytes, zip, sess)
+}
+
+/**
+ * 开标签 + `w:xxx="…"` 串 → 同名改值、缺的追加（v0.165 从 patchShdAttrs 抽出）。
+ *
+ * 这是「包自己会发这一枚属性」时的唯一动作：追加会造出第二枚同名属性 = 非法 XML，
+ * 而计数闸门不会替你发现。凡是要覆盖包里那个解析后的值，都得走这里。
+ */
+/**
+ * v0.187：把写手补丁链里最后三处「循环内动态编译正则」收干净
+ * （v0.186 已收掉 `tagWithAttrs` / `retag`，这三处是同一族的遗漏点）。
+ * `hasAttrNamed` 用字符串定位 + 空白收边，与 `tagWithAttrs` 同一套口径；
+ * 三处共用它，不再各写一遍 `new RegExp(...)`。
+ * `legacyAttrScan` 只给同进程 A/B 对照腿用（入口设一次），产品路径恒为 false。
+ */
+let legacyAttrScan = false
+/** v0.188：`patchImgXml` 的对照腿物化 `<w:drawing>` 块数组，产品路径惰性遍历 */
+let legacyBlockScan = false
+/** v0.190：`patchBorderBlocks` 的对照腿按边名编译 `edgeRe`，产品路径字符串定位 */
+let legacyEdgeScan = false
+/**
+ * v0.192 的 `patchElemAttrs` + v0.193 的另外六处「先数一遍再逐块改」补丁共用：
+ * 对照腿物化开标签数组，产品路径惰性迭代。数量闸门搬到循环头里，
+ * 块数不足 / 多出一块都照旧整体不动（与 `opens.length !== extras.length` 逐字同义）。
+ */
+let legacyElemScan = false
+
+/**
+ * v0.190：循环内按边名编译的 `edgeRe` 换成字符串定位（零动态正则）。
+ * 与原 `<w:${edge}(?=[\s/>])[^>]*>` 等价：标签名后必须是空白 / `/` / `>`，
+ * 命中第一枚开标签、返回它的字面与位置；没命中就是写侧没发这一边（用户删了），
+ * 不是错位。`edge` 里的正则元字符也不再被当模式解析（顺带修一个隐患）。
+ */
+export function findEdgeTag(block: string, edge: string): { at: number; xml: string } | undefined {
+  const needle = `<w:${edge}`
+  let from = 0
+  while (true) {
+    const i = block.indexOf(needle, from)
+    if (i < 0) return undefined
+    const next = block[i + needle.length]
+    if (next !== undefined && (next <= ' ' || next === '/' || next === '>')) {
+      const end = block.indexOf('>', i)
+      return end < 0 ? undefined : { at: i, xml: block.slice(i, end + 1) }
+    }
+    from = i + needle.length
+  }
+}
+
+/** 开标签上有没有这枚「空白收边」的属性（零动态正则、零临时数组） */
+function hasAttrNamed(tag: string, name: string): boolean {
+  const needle = `${name}=`
+  let at = tag.indexOf(needle)
+  while (at >= 0) {
+    if (at > 0 && tag[at - 1] <= ' ') return true
+    at = tag.indexOf(needle, at + needle.length)
+  }
+  return false
+}
+
+function mergeTagAttrs(tag: string, add: string): string {
+  let out = tag
+  // 属性串允许不带前导空格：匹配与追加都靠 `\sw:` 那一枚空白收边，而拼串的人很容易
+  // 只在第二枚起才记得加空格（v0.165 踩过：第一枚 w:color 被整条跳过，themeColor 一族
+  // 照贴不误——补丁「跑成功了一半」，账上只剩一笔没说法的值变）
+  for (const am of ` ${add}`.matchAll(/\sw:([A-Za-z]+)="([^"]*)"/g)) {
+    if (legacyAttrScan) {
+      const re = new RegExp(`(\\sw:${am[1]}=)"[^"]*"`)
+      out = re.test(out)
+        ? out.replace(re, (_all, head: string) => `${head}"${am[2]}"`)
+        : out.replace(/(\s*\/?>)$/, (_all, tail: string) => `${am[0]}${tail}`)
+      continue
+    }
+    const needle = `w:${am[1]}="`
+    let at = out.indexOf(needle)
+    while (at >= 0 && !(at > 0 && out[at - 1] <= ' ')) at = out.indexOf(needle, at + needle.length)
+    if (at >= 0) {
+      const q = out.indexOf('"', at + needle.length)
+      if (q >= 0) {
+        out = out.slice(0, at + needle.length) + am[2] + out.slice(q)
+        continue
+      }
+    }
+    out = out.replace(/(\s*\/?>)$/, (_all, tail: string) => `${am[0]}${tail}`)
+  }
+  return out
+}
+
+/**
+ * 给 document.xml 里每个 `<w:color>` 回填源件的字面 `w:val`（v0.184）。
+ *
+ * 与 `patchElemAttrs('color', ...)`（只追加主题三枚）不同：`w:val` 包自己会发，
+ * 而且发的是主题解析后的屏上色（源 FF0000 → 写出 ADBBD4）。追加会造出第二枚
+ * 同名属性 = 非法 XML，必须走 `mergeTagAttrs` **同名改值**。
+ * 计数闸门与 `colorThemes` 共用（两者同一次登记、一一对应）；空串 = 用户后来改过色
+ * 或源件没写字面值，这一枚不动。
+ */
+async function patchColorLits(bytes: Uint8Array, extras: string[], sess?: PackSession): Promise<Uint8Array> {
+  if (!extras.some((x) => x)) return bytes
+  const zip = sess ? sess.zip : await loadZipOf(bytes)
+  const file = zip.file('word/document.xml')
+  if (!file) return bytes
+  const xml = await partText(zip, 'word/document.xml', sess)
+  const re = /<w:color(?=[\s/>])[^>]*>/g
+  const opens = (legacyElemScan ? [...xml.matchAll(re)] : xml.matchAll(re))[Symbol.iterator]()
+  let out = ''
+  let cursor = 0
+  let touched = false
+  for (let i = 0; i <= extras.length; i++) {
+    const next = opens.next()
+    if (next.done) { if (i < extras.length) return bytes; break }
+    if (i === extras.length) return bytes
+    const m = next.value
+    const start = m.index ?? 0
+    const stop = start + m[0].length
+    const add = extras[i]
+    if (!add) {
+      out += xml.slice(cursor, stop)
+      cursor = stop
+      continue
+    }
+    out += xml.slice(cursor, start) + mergeTagAttrs(m[0], add)
+    cursor = stop
+    touched = true
+  }
+  if (!touched) return bytes
+  out += xml.slice(cursor)
+  setPart(zip, 'word/document.xml', out, sess)
+  return finishPatch(bytes, zip, sess)
+}
+
+/**
+ * 给 document.xml 里每个 `<w:shd>` 合并属性（v0.164）：按**出现序**贴——第 i 枚合
+ * `extras[i]`（空串 = 这一枚不动）。
+ *
+ * 与 patchElemAttrs 的差别是**动作**：那一族只追加（包压根不发那几枚），这一族要
+ * **改值**——包的 createShading 会写 `w:fill`，而它写的是解析后的屏上色，源件的字面
+ * fill 与之不同。同名的追加会造出第二枚 `w:fill`（非法 XML），所以这里先改后加。
+ *
+ * `w:shd` 在 CT_PPrBase 与 CT_TcPrBase 里都是单枚元素，所以「合并」而不是「再插一枚」
+ * 是硬要求（v0.160 的 `<w:ind>` 同一条纪律）。计数闸门同前：条数对不上就整笔放弃。
+ */
+async function patchShdAttrs(bytes: Uint8Array, extras: string[], sess?: PackSession): Promise<Uint8Array> {
+  if (!extras.some((x) => x)) return bytes
+  const zip = sess ? sess.zip : await loadZipOf(bytes)
+  const file = zip.file('word/document.xml')
+  if (!file) return bytes
+  const xml = await partText(zip, 'word/document.xml', sess)
+  const re = /<w:shd(?=[\s/>])[^>]*>/g
+  const opens = (legacyElemScan ? [...xml.matchAll(re)] : xml.matchAll(re))[Symbol.iterator]()
+  let out = ''
+  let cursor = 0
+  let touched = false
+  for (let i = 0; i <= extras.length; i++) {
+    const next = opens.next()
+    if (next.done) { if (i < extras.length) return bytes; break }
+    if (i === extras.length) return bytes
+    const m = next.value
+    const start = m.index ?? 0
+    const stop = start + m[0].length
+    const add = extras[i]
+    if (!add) {
+      out += xml.slice(cursor, stop)
+      cursor = stop
+      continue
+    }
+    let tag = m[0]
+    tag = mergeTagAttrs(tag, add)
+    out += xml.slice(cursor, start) + tag
+    cursor = stop
+    touched = true
+  }
+  if (!touched) return bytes
+  out += xml.slice(cursor)
+  setPart(zip, 'word/document.xml', out, sess)
+  return finishPatch(bytes, zip, sess)
+}
+
+/**
+ * 给每个 `<w:pBdr>` / `<w:tcBorders>` **块**里的单边元素合并属性（v0.165）。
+ *
+ * 为什么按块而不按 `<w:top>` 的出现序：`w:top` 在这份 XML 里同时长在
+ * `w:tblBorders`、`w:tcBorders`、`w:pBdr`（还有 `w:tcMar` 那一族同名元素）上，
+ * 一个全局出现序根本分不清哪一枚属于谁。块级标签是唯一的，块内再按边名找就没有歧义。
+ *
+ * 计数闸门比前几族更严：**块数对不上就整笔放弃**。登记只在「真发得出这个块」时
+ * 才 push（见 paraFormatOf / 表格那一趟），多一条少一条都说明两边看的世界不一样。
+ *
+ * extras[i] 的形状：`edge|<属性串>` 用 `;` 连，属性串即 `w:color="…" w:themeColor="…"`。
+ * 包会自己发 `w:color`（写的是解析后的屏上色），所以这一族同样是**改名不追加**。
+ */
+async function patchBorderBlocks(bytes: Uint8Array, tag: 'w:pBdr' | 'w:tcBorders', extras: string[], sess?: PackSession): Promise<Uint8Array> {
+  if (!extras.some((x) => x)) return bytes
+  const zip = sess ? sess.zip : await loadZipOf(bytes)
+  const file = zip.file('word/document.xml')
+  if (!file) return bytes
+  const xml = await partText(zip, 'word/document.xml', sess)
+  // v0.189：与 patchImgXml / patchNumOverrides 同款——物化数组换惰性迭代器，
+  // 块数闸门从「循环前先数一遍」移到「循环末尾对账」（不符就整笔丢弃，不写盘）。
+  const re = new RegExp(`<${tag}(?=[\\s/>])[^>]*?(?:/>|>[\\s\\S]*?</${tag}>)`, 'g')
+  const blocks: Iterable<RegExpMatchArray> = legacyBlockScan ? [...xml.matchAll(re)] : xml.matchAll(re)
+  let out = ''
+  let cursor = 0
+  let touched = false
+  let count = 0
+  for (const m of blocks) {
+    const start = m.index ?? 0
+    const stop = start + m[0].length
+    const add = extras[count++]
+    if (!add) {
+      out += xml.slice(cursor, stop)
+      cursor = stop
+      continue
+    }
+    let block = m[0]
+    for (const chunk of add.split(';')) {
+      const bar = chunk.indexOf('|')
+      if (bar < 0) continue
+      const edge = chunk.slice(0, bar)
+      const attrs = chunk.slice(bar + 1)
+      // 第五边（v0.167）：写手没有它的槽，块里不会有——要**插**一枚。
+      // CT_PBdr 的序是 top → left → bottom → right → **between** → bar，
+      // 所以插在 `<w:bar>` 之前；没有 bar 就落在块尾
+      if (edge === 'between') {
+        if (tag === 'w:pBdr' && !/<w:between(?=[\s/>])/.test(block)) {
+          block = block.includes('<w:bar')
+            ? block.replace(/<w:bar(?=[\s/>])/, `<w:between ${attrs}/><w:bar`)
+            : block.replace('</w:pBdr>', `<w:between ${attrs}/></w:pBdr>`)
+        }
+        continue
+      }
+      // 第六条边（v0.168）：CT_PBdr 的序里它排在 between 之后、块尾
+      if (edge === 'bar') {
+        if (tag === 'w:pBdr' && !/<w:bar(?=[\s/>])/.test(block)) {
+          block = block.replace('</w:pBdr>', `<w:bar ${attrs}/></w:pBdr>`)
+        }
+        continue
+      }
+      // v0.190：循环内按边名编译的 edgeRe → 字符串定位（零动态正则）。
+      // `legacyEdgeScan:true` 复刻改前的 `new RegExp` 路径，两腿同源只差一个参数。
+      const hit = legacyEdgeScan
+        ? (() => {
+            const re = new RegExp(`<w:${edge}(?=[\\s/>])[^>]*>`)
+            const m = re.exec(block)
+            return m ? { at: m.index ?? 0, xml: m[0] } : undefined
+          })()
+        : findEdgeTag(block, edge)
+      // 块里没有这条边 = 写侧没发它（用户删了这一边），不是错位，跳过
+      if (!hit) continue
+      block = block.slice(0, hit.at) + mergeTagAttrs(hit.xml, attrs) + block.slice(hit.at + hit.xml.length)
+    }
+    out += xml.slice(cursor, start) + block
+    cursor = stop
+    touched = true
+  }
+  if (count !== extras.length) return bytes
+  if (!touched) return bytes
+  out += xml.slice(cursor)
+  setPart(zip, 'word/document.xml', out, sess)
+  return finishPatch(bytes, zip, sess)
+}
+
+/**
+ * 摘掉包里那枚**空**的 `<w:pgNumType/>`（v0.170）。
+ *
+ * 包的 SectionProperties 构造器无条件 push 这一枚（`this.root.push(createPageNumberType(pageNumbers))`），
+ * 没给 pageNumbers 时照样落一个空元素。Word 读它等于「全是默认」，渲染没差别，但那是
+ * 源件没说过的一句话——我们的口径是「没写就别发」。只在有属性时才留。
+ */
+async function dropEmptyPgNum(bytes: Uint8Array, sess?: PackSession): Promise<Uint8Array> {
+  const zip = sess ? sess.zip : await loadZipOf(bytes)
+  const file = zip.file('word/document.xml')
+  if (!file) return bytes
+  const xml = await partText(zip, 'word/document.xml', sess)
+  const out = xml.replace(/<w:pgNumType(?:\s*\/>|>\s*<\/w:pgNumType>)/g, '')
+  if (out === xml) return bytes
+  setPart(zip, 'word/document.xml', out, sess)
+  return finishPatch(bytes, zip, sess)
+}
+
+/**
+ * 把源件的主题件带进写出包（v0.164）。
+ *
+ * 为什么必须带：写手会照原样发 `w:themeColor / w:themeFill / w:asciiTheme` 这一族引用
+ * （v0.150 起的表级边框、v0.159 的 w:u、v0.160 的 w:color、v0.161 的样式主题字体），
+ * 而 docx 包的成品里**根本没有 word/theme/theme1.xml**——引用全部悬空，Word 只能拿
+ * 自己的默认主题去解析：用户那套 accent 色在导出后集体变了色，而屏上是对的。
+ * 这一枚不是「补一个槽」，是给已经写出去的引用补上它们指着的东西。
+ *
+ * 三件事缺一不可：部件本体、`document.xml.rels` 里的关系、`[Content_Types].xml`
+ * 里的 Override。少任一件 Word 都会报包损坏。
+ */
+async function attachThemePart(bytes: Uint8Array, themeXml?: string, sess?: PackSession): Promise<Uint8Array> {
+  if (!themeXml) return bytes
+  const zip = sess ? sess.zip : await loadZipOf(bytes)
+  const THEME = 'word/theme/theme1.xml'
+  if (await zip.file(THEME)?.async('string') === themeXml) return bytes
+  zip.file(THEME, themeXml)
+  const ct = await zip.file('[Content_Types].xml')?.async('string')
+  if (ct && !ct.includes('/word/theme/theme1.xml')) {
+    zip.file(
+      '[Content_Types].xml',
+      ct.replace(
+        '</Types>',
+        '<Override PartName="/word/theme/theme1.xml" ContentType="application/vnd.openxmlformats-officedocument.theme+xml"/></Types>',
+      ),
+    )
+  }
+  const relsPath = 'word/_rels/document.xml.rels'
+  const rels = await zip.file(relsPath)?.async('string')
+  if (rels && !rels.includes('/relationships/theme')) {
+    // 关系 id 不能与已有的撞：数一遍 rId 取下一个空号（包自己的编号从 rId1 起）
+    const used = new Set([...rels.matchAll(/Id="([^"]+)"/g)].map((m) => m[1]))
+    let n = 1
+    while (used.has(`rIdTheme${n}`)) n++
+    const rel = `<Relationship Id="rIdTheme${n}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/theme" Target="theme/theme1.xml"/>`
+    zip.file(
+      relsPath,
+      rels.includes('</Relationships>')
+        ? rels.replace('</Relationships>', `${rel}</Relationships>`)
+        : rels.replace(/<Relationships([^>]*)\/>/, `<Relationships$1>${rel}</Relationships>`),
+    )
+  }
+  return finishPatch(bytes, zip, sess)
+}
+
+/** 一段 `<w:p>…</w:p>` → 补过 `<w:pPr>` 的那一段（没有 pPr 就现开一枚） */
+function pprInsert(chunk: string, extra: string): string {
+  const open = /<w:p(?:\s[^>]*)?\/?>/.exec(chunk)?.[0] ?? '<w:p>'
+  if (open.endsWith('/>')) return `<w:p><w:pPr>${extra}</w:pPr></w:p>`
+  const body = chunk.slice(open.length)
+  const a = body.indexOf('<w:pPr>')
+  if (a < 0) return open + `<w:pPr>${extra}</w:pPr>` + body
+  if (body.startsWith('<w:pPr/>', a)) return open + body.slice(0, a) + `<w:pPr>${extra}</w:pPr>` + body.slice(a + 8)
+  const b = body.indexOf('</w:pPr>', a)
+  if (b < 0) return chunk
+  const inner = body.slice(a + '<w:pPr>'.length, b)
+  return open + body.slice(0, a) + `<w:pPr>${pprOrder(inner, extra)}</w:pPr>` + body.slice(b + '</w:pPr>'.length)
+}
+
+/**
+ * 把余量元素插进既有 `<w:pPr>` 内容：逐枚找第一个 schema 位次更靠后的现有子元素，
+ * 插在它前面；没有更靠后的就追加在末尾。余量自身按位次升序给（`PPR_WRITE_ORDER`），
+ * 于是后插的天然落在先插的之后。
+ *
+ * v0.160 起多一条：**同名元素合并属性**而不是再插一枚。`w:ind` 是 CT_PPrBase 里的单枚
+ * 元素，包自己发的那一枚常常已经带着 w:left/w:firstLine（模型里算出来的缩进），再插
+ * 一枚新的会让 Word 只认后写的那一枚——先写的那枚整枚被丢，缩进静默变样。所以命中
+ * 同名就把属性并进去（已有的同名属性不覆盖，以包自己那一枚为准）
+ */
+function pprOrder(inner: string, extra: string): string {
+  const kids = [...inner.matchAll(/<w:([A-Za-z]+)[\s/>]/g)].map((m) => ({ name: m[1], at: m.index ?? 0 }))
+  const items = [...extra.matchAll(/<w:([A-Za-z]+)[^>]*?>/g)].map((m) => ({ name: m[1], xml: m[0] }))
+  let s = inner
+  let shift = 0
+  for (const it of items) {
+    const r = PPR_RANK[it.name]
+    if (r === undefined) continue
+    const same = kids.find((k) => k.name === it.name)
+    if (same) {
+      const at = same.at + shift
+      const tag = /^<w:[A-Za-z]+[^>]*>/.exec(s.slice(at))?.[0]
+      if (!tag) continue
+      const attrs = /^<w:[A-Za-z]+([^>]*?)\/?>/.exec(it.xml)?.[1] ?? ''
+      const add = [...attrs.matchAll(/\s+w:([A-Za-z]+)="[^"]*"/g)]
+        .filter((m) => legacyAttrScan
+          ? !new RegExp(`\\sw:${m[1]}=`).test(tag)
+          : !hasAttrNamed(tag, `w:${m[1]}`))
+        .map((m) => m[0])
+        .join('')
+      if (!add) continue
+      const cut = tag.endsWith('/>') ? tag.length - 2 : tag.length - 1
+      s = s.slice(0, at) + tag.slice(0, cut) + add + tag.slice(cut) + s.slice(at + tag.length)
+      shift += add.length
+      continue
+    }
+    let at = -1
+    for (const k of kids) {
+      const kr = PPR_RANK[k.name]
+      if (kr !== undefined && kr > r) {
+        at = k.at
+        break
+      }
+    }
+    const pos = at < 0 ? s.length : at + shift
+    s = s.slice(0, pos) + it.xml + s.slice(pos)
+    shift += it.xml.length
+  }
+  return s
+}
+
+/**
+ * 表自身的闸门载荷 → `<w:tblLook>` XML（v0.147）。三枚里 val 原样带，两枚 no*Band
+ * 是 onOff；一个都没说就给空串（那一格交给样式推出来的那一枚）
+ */
+function tlookXmlOf(raw: unknown): string {
+  const kv = parseTlookPayload(typeof raw === 'string' ? raw : null)
+  if (!Object.keys(kv).length) return ''
+  const parts: string[] = []
+  if (kv.val) parts.push(`w:val="${xmlAttr(kv.val)}"`)
+  if (kv.noHBand) parts.push(`w:noHBand="${kv.noHBand}"`)
+  if (kv.noVBand) parts.push(`w:noVBand="${kv.noVBand}"`)
+  return `<w:tblLook ${parts.join(' ')}/>`
+}
+
+/**
+ * 单元格不换行载荷 → `<w:noWrap/>`（v0.152）。'1' 才发（「显式关」与「没写」在
+ * Word 里同结果，读侧只存 true）——空串那一格由 patchTcPr 原样跳过
+ */
+function noWrapXmlOf(raw: unknown): string {
+  return raw === '1' || raw === 1 ? '<w:noWrap/>' : ''
+}
+
+/**
+ * 表级条件格式尺寸载荷 → 两枚元素 XML（v0.152）。CT_TblPrBase 的序：
+ * tblStyleRowBandSize 排在 tblStyleColBandSize 之前（都在 tblpPr 之后、tblW 之前）。
+ * 一枚都没说给空串（那一格交给包的默认——它两枚都不发）
+ */
+function tblPrXmlOf(raw: unknown): string {
+  const kv = parseTblPrPayload(typeof raw === 'string' ? raw : null)
+  const parts: string[] = []
+  if (kv.rowBand) parts.push(`<w:tblStyleRowBandSize w:val="${kv.rowBand}"/>`)
+  if (kv.colBand) parts.push(`<w:tblStyleColBandSize w:val="${kv.colBand}"/>`)
+  return parts.join('')
+}
+
+/**
+ * 单元格间距 → `<w:tblCellSpacing>`（v0.154）。w 是缇（dxa 档），type 原档位发回——
+ * 读侧 pct 档只记账不渲染，写侧照样原样写（那份数是从源件抄下来的，不该在往返里
+ * 被改成 dxa）。
+ *
+ * **与 bandSize 分开发、插在不同的锚点上**：CT_TblPrBase 的序里两枚 bandSize 排在
+ * `w:tblW` **之前**，而 `w:tblCellSpacing` 排在 `w:tblW`、`w:jc` **之后**（tblInd 之前）。
+ * 共用「插到第一个已知后续元素之前」那一套会把间距插到 tblW 前面，写出一枚序不对的
+ * 元素——Word 对 CT_TblPrBase 的序是认真的（判损坏件风险）。
+ */
+function tblCellSpacingXmlOf(raw: unknown): string {
+  const kv = parseTblPrPayload(typeof raw === 'string' ? raw : null)
+  if (kv.cellSp === undefined) return ''
+  const t = kv.cellSpType ? ` w:type="${xmlAttr(kv.cellSpType)}"` : ''
+  return `<w:tblCellSpacing w:w="${kv.cellSp}"${t}/>`
+}
+
+/** `w:tblCellSpacing` 的插入锚点：排在它**之后**的元素（CT_TblPrBase 序里 tblInd 起） */
+const AFTER_CELL_SPACING: string[] = ['tblInd', 'tblBorders', 'shd', 'tblLayout', 'tblCellMar', 'tblLook', 'tblCaption', 'tblDescription']
+
+/**
+ * `w:cnfStyle` 的插入锚点（v0.162）：排在它**之后**的元素（CT_TblPrBase 序里
+ * tblStyle → **cnfStyle** → tblpPr → …）。
+ *
+ * 这一族**不与 bandSize 共用锚点表**——v0.147 那条教训：同一套「插到第一个已知后续
+ * 元素之前」的表不能给两组元素共用（bandSize 排在 tblW 前、cellSpacing 排在它后，
+ * 共用会把后者插错位置）。cnfStyle 是第三组，自带第三张表。
+ */
+const AFTER_CNF_STYLE: string[] = [
+  'tblpPr', 'bidiVisual', 'tblOverlap', 'tblStyleRowBandSize', 'tblStyleColBandSize',
+  'tblW', 'jc', 'tblCellSpacing', 'tblInd', 'tblBorders', 'shd', 'tblLayout',
+  'tblCellMar', 'tblLook', 'tblCaption', 'tblDescription',
+]
+
+/**
+ * data-cnf 载荷 → `<w:cnfStyle/>`（v0.162）。
+ * 十三枚按 CNF_KEYS 的序逐枚发，空槽不发（源件没写那枚就不替它写——「没写」与
+ * 「显式 0」在 Word 里同结果，但照抄源件的形状最不容易出意外）。
+ */
+function cnfXmlOf(raw: unknown): string {
+  const kv = parseCnfPayload(typeof raw === 'string' ? raw : null)
+  const bits: string[] = []
+  for (const k of CNF_KEYS) {
+    const v = kv[k]
+    if (v === undefined || v === '') continue
+    bits.push(` w:${k}="${xmlAttr(v)}"`)
+  }
+  return bits.length ? `<w:cnfStyle${bits.join('')}/>` : ''
+}
+
+/**
+ * data-tblb 载荷 → 整片 `<w:tblBorders>` 的**内容**（v0.163）。
+ *
+ * 包恒发六枚硬编码默认的边（`new TableBorders(options.borders ?? {})`，DEFAULT_BORDER
+ * = single/4/auto），值一个都不对；而真要带上 space 与主题三枚，包那六个槽里也没有
+ * （`createBorderElement` 只发 val/sz/color/space，主题一概不认）。所以这一族走
+ * **整片替换**而不是属性补丁：`w:tblBorders` 里只有这六枚孩子，且六枚都是单枚元素，
+ * 逐枚改与整片换等价，整片换还能顺带把源件没写的边**撤掉**（包默认发全六枚）。
+ */
+function tblBordersXmlOf(raw: unknown): string {
+  const p = parseTblbPayload(typeof raw === 'string' ? raw : null)
+  const edges = Object.keys(p) as (keyof typeof p)[]
+  if (!edges.length) return ''
+  let out = ''
+  for (const e of TBLB_EDGES) {
+    const kv = p[e]
+    if (!kv) continue
+    let a = ''
+    for (const k of TBLB_KEYS) {
+      const v = kv[k]
+      if (v === undefined || v === '') continue
+      a += ` w:${k}="${xmlAttr(v)}"`
+    }
+    if (a) out += `<w:${e}${a}/>`
+  }
+  return out
+}
+
+/**
+ * 给表格补 `<w:tblLook>`：一是引用了带条件层样式的表（按 styleId 查 `looks`，老路数），
+ * 二是表**自己**带闸门的那一张（按出现序查 `own`，v0.147）——后者压过前者。
+ * 两路都走同一处补丁：贴 `<w:tblPr>` 的末位（已有 w:tblLook 就整枚替换）。
+ * 出现序的那一路由**计数闸门**兜底：`<w:tblPr>` 枚数与登记条数对不上就整笔放弃
+ */
+async function patchTblLook(
+  bytes: Uint8Array,
+  looks: Map<string, string>,
+  own: string[] = [],
+  band: string[] = [],
+  spacing: string[] = [],
+  cnf: string[] = [],
+  borders: string[] = [],
+  sess?: PackSession,
+): Promise<Uint8Array> {
+  const zip = sess ? sess.zip : await loadZipOf(bytes)
+  const file = zip.file('word/document.xml')
+  if (!file) return bytes
+  const xml = await partText(zip, 'word/document.xml', sess)
+  // 计数闸门：两族（tblLook 与 bandSize）都按 tblPr 出现序对位，
+  // 长度必须与 tblPr 枚数相等（两族在同一处 push，恒等长；取 max 只是防御）
+  const n = (xml.match(/<w:tblPr>/g) ?? []).length
+  // 计数闸门：四族都按 tblPr 出现序对位（同处 push，恒等长；取 max 只是防御）
+  if ((own.length || band.length || cnf.length) && n !== Math.max(own.length, band.length, cnf.length)) return bytes
+  let i = 0
+  let touched = false
+  const patched = xml.replace(/<w:tblPr>([\s\S]*?)<\/w:tblPr>/g, (all: string) => {
+    const inner = all.slice('<w:tblPr>'.length, -'</w:tblPr>'.length)
+    const mine = own[i] ?? ''
+    const bandMine = band[i] ?? ''
+    i++
+    const id = /<w:tblStyle w:val="([^"]+)"/.exec(inner)?.[1]
+    const look = mine || (id ? looks.get(id) : undefined)
+    let out = all
+    if (look) {
+      touched = true
+      out = /<w:tblLook[^>]*\/>/.test(inner) ? out.replace(/<w:tblLook[^>]*\/>/, look) : out.replace('</w:tblPr>', `${look}</w:tblPr>`)
+    }
+    if (bandMine) {
+      touched = true
+      out = insertTblPrKids(out, bandMine)
+    }
+    // 单元格间距（v0.154）：同一张表的第二笔补丁，锚点与 bandSize 不同（排在 tblW 之后）
+    const spFrag = spacing[i - 1] ?? ''
+    if (spFrag) {
+      touched = true
+      out = insertTblPrKids(out, spFrag, AFTER_CELL_SPACING)
+    }
+    // 表条件格式落点（v0.162）：同一张表的第三笔补丁，锚点又不同（紧跟 tblStyle）。
+    // 已在场的 cnfStyle 不重复插（读手只认表级那一枚，格级的仍走纯记账）
+    const cnfFrag = cnf[i - 1] ?? ''
+    if (cnfFrag && !/<w:cnfStyle\b/.test(inner)) {
+      touched = true
+      out = insertTblPrKids(out, cnfFrag, AFTER_CNF_STYLE)
+    }
+    // 表级边框六边（v0.163）：整片替换 `<w:tblBorders>` 的内容。包恒发这一片（六枚
+    // 硬编码默认边），所以不需要插入锚点，只要把内容换掉；源件没写 tblBorders 的表
+    // 不动（留包的默认壳，比凭空开一片更接近源件）
+    const bdFrag = borders[i - 1] ?? ''
+    if (bdFrag) {
+      touched = true
+      out = out.replace(/(<w:tblBorders>)[\s\S]*?(<\/w:tblBorders>)/, (_m: string, a: string, b: string) => a + bdFrag + b)
+    }
+    return out
   })
   if (!touched) return bytes
-  zip.file('word/document.xml', patched)
-  const buf = (await zip.generateAsync({ type: 'arraybuffer' })) as ArrayBuffer
-  return new Uint8Array(buf)
+  setPart(zip, 'word/document.xml', patched, sess)
+  return finishPatch(bytes, zip, sess)
+}
+
+/**
+ * 把 bandSize 两枚元素插进 `<w:tblPr>`：CT_TblPrBase 的序里它们排在 tblW 之前
+ * （tblStyle → tblpPr → tblOverlap → bidiVisual → **tblStyleRowBandSize →
+ * tblStyleColBandSize** → tblW → …）。包里 tblW 恒发（Table 必有宽），所以锚点
+ *  practically 总是 `<w:tblW`；找不着就退到第一个排在它们之后的元素，再不行才追加末尾
+ */
+function insertTblPrKids(all: string, frag: string, after?: string[]): string {
+  // bandSize 那一族排在 tblW 之前（默认锚点）；单元格间距排在 tblW/jc 之后，自带锚点
+  const AFTER = after ?? ['tblW', 'jc', 'tblInd', 'tblBorders', 'shd', 'tblLayout', 'tblCellMar', 'tblLook', 'tblCaption', 'tblDescription']
+  const at = firstIndexOf(all, AFTER)
+  if (at >= 0) return all.slice(0, at) + frag + all.slice(at)
+  return all.replace('</w:tblPr>', `${frag}</w:tblPr>`)
+}
+
+/**
+ * 单元格不换行补丁（v0.152）：`<w:noWrap/>` 按 `<w:tc>` 出现序插进各自的 tcPr。
+ *
+ * 包里没有 noWrap 的槽（grep dist 无运行时支持），与段落余量同路数走打包后补丁。
+ * 计数闸门认 `<w:tc>` 开标签——它恒发（每格必有），而 `<w:tcPr>` 不一定（空属性的格
+ * 可能整个不吐），所以按 tc 数对位、缺 tcPr 时现开一枚。注意正则不匹配 `<w:tcPr>`：
+ * `<w:tc` 后面紧跟的 `P` 不是空白/斜杠/`>`，天然排掉。
+ * 嵌套表安全：两族各自按自己的元素出现序对位（cellExtras 的 push 赶在格子内容之前，
+ * 外层 tc 在内层表前面入账，与 XML 序一致）。
+ */
+/**
+ * 给 document.xml 里每个 `<w:tr>` 的行属性补两枚元素（v0.172）：按**行出现序**贴——
+ * 第 i 行用 `extras[i]`（空串 = 这一行不动）。
+ *
+ * 两种落点：行里已有 `<w:trPr>` 就按 CT_TrPr 的序插在 `cantSplit`/`trHeight`/`tblHeader`
+ * 这些之后元素之前；没有就现开一枚 `<w:trPr>`（它必须是 `<w:tr>` 的第一个孩子）。
+ * 计数闸门同前：`<w:tr>` 枚数对不上就整笔放弃（嵌套表的行也在里面，两边都按文档序数）。
+ */
+async function patchTrPr(bytes: Uint8Array, extras: string[], sess?: PackSession): Promise<Uint8Array> {
+  if (!extras.some((x) => x)) return bytes
+  const zip = sess ? sess.zip : await loadZipOf(bytes)
+  const file = zip.file('word/document.xml')
+  if (!file) return bytes
+  const xml = await partText(zip, 'word/document.xml', sess)
+  const re = /<w:tr(?=[\s>])[^>]*>/g
+  const rows = (legacyElemScan ? [...xml.matchAll(re)] : xml.matchAll(re))[Symbol.iterator]()
+  let out = ''
+  let cursor = 0
+  let touched = false
+  for (let i = 0; i <= extras.length; i++) {
+    const next = rows.next()
+    if (next.done) { if (i < extras.length) return bytes; break }
+    if (i === extras.length) return bytes
+    const m = next.value
+    const start = m.index ?? 0
+    const stop = start + m[0].length
+    const add = extras[i]
+    if (!add) {
+      out += xml.slice(cursor, stop)
+      cursor = stop
+      continue
+    }
+    const open = /^\s*<w:trPr(?=[\s/>])[^>]*>/.exec(xml.slice(stop))
+    if (open && !open[0].trimEnd().endsWith('/>')) {
+      const blockStart = stop + open[0].indexOf('<w:trPr')
+      const blockEnd = xml.indexOf('</w:trPr>', blockStart)
+      if (blockEnd < 0) {
+        out += xml.slice(cursor, stop)
+        cursor = stop
+        continue
+      }
+      // CT_TrPr 的序：… gridBefore → gridAfter → wBefore → wAfter → cantSplit → trHeight …
+      const anchor = /<w:(?:cantSplit|trHeight|tblHeader|tblCellSpacing|jc|hidden)(?=[\s/>])/.exec(
+        xml.slice(blockStart, blockEnd),
+      )
+      const at = anchor ? blockStart + (anchor.index ?? 0) : blockEnd
+      out += xml.slice(cursor, at) + add
+      cursor = at
+      touched = true
+    } else {
+      // 没有 trPr：现开一枚（必须是 <w:tr> 的第一个孩子）
+      out += xml.slice(cursor, stop) + `<w:trPr>${add}</w:trPr>`
+      cursor = stop
+      touched = true
+    }
+  }
+  if (!touched) return bytes
+  out += xml.slice(cursor)
+  setPart(zip, 'word/document.xml', out, sess)
+  return finishPatch(bytes, zip, sess)
+}
+
+async function patchTcPr(bytes: Uint8Array, extras: string[], sess?: PackSession): Promise<Uint8Array> {
+  if (!extras.some((x) => x)) return bytes
+  const zip = sess ? sess.zip : await loadZipOf(bytes)
+  const file = zip.file('word/document.xml')
+  if (!file) return bytes
+  const xml = await partText(zip, 'word/document.xml', sess)
+  const re = /<w:tc(?:\s[^>]*)?\/?>/g
+  const opens = (legacyElemScan ? [...xml.matchAll(re)] : xml.matchAll(re))[Symbol.iterator]()
+  let out = ''
+  let cursor = 0
+  let touched = false
+  for (let i = 0; i <= extras.length; i++) {
+    const next = opens.next()
+    if (next.done) { if (i < extras.length) return bytes; break }
+    if (i === extras.length) return bytes
+    const m = next.value
+    const start = m.index ?? 0
+    const selfClosed = m[0].endsWith('/>')
+    const closeAt = selfClosed ? -1 : xml.indexOf('</w:tc>', start)
+    if (!selfClosed && closeAt < 0) return bytes
+    const stop = selfClosed ? start + m[0].length : closeAt + '</w:tc>'.length
+    if (!extras[i]) {
+      out += xml.slice(cursor, stop)
+      cursor = stop
+      continue
+    }
+    out += xml.slice(cursor, start) + tcPrInsert(xml.slice(start, stop), extras[i])
+    cursor = stop
+    touched = true
+  }
+  if (!touched) return bytes
+  out += xml.slice(cursor)
+  setPart(zip, 'word/document.xml', out, sess)
+  return finishPatch(bytes, zip, sess)
+}
+
+/** CT_TcPrBase 里排在 noWrap 之后的元素（锚点表）——按 schema 序插 */
+const TCPR_AFTER_NOWRAP = ['tcMar', 'textDirection', 'tcFitText', 'vAlign', 'hideMark', 'headers']
+
+/** 一枚 `<w:tc>…</w:tc>` → 补过 `<w:tcPr>` 的那一枚（没有 tcPr 就现开一枚） */
+function tcPrInsert(chunk: string, extra: string): string {
+  const open = /<w:tc(?:\s[^>]*)?\/?>/.exec(chunk)?.[0] ?? '<w:tc>'
+  if (open.endsWith('/>')) return `<w:tc><w:tcPr>${extra}</w:tcPr></w:tc>`
+  const body = chunk.slice(open.length)
+  const a = body.indexOf('<w:tcPr>')
+  if (a < 0) return open + `<w:tcPr>${extra}</w:tcPr>` + body
+  if (body.startsWith('<w:tcPr/>', a)) return open + body.slice(0, a) + `<w:tcPr>${extra}</w:tcPr>` + body.slice(a + 8)
+  const b = body.indexOf('</w:tcPr>', a)
+  if (b < 0) return chunk
+  const inner = body.slice(a + '<w:tcPr>'.length, b)
+  const at = firstIndexOf(inner, TCPR_AFTER_NOWRAP)
+  const withKid = at >= 0 ? inner.slice(0, at) + extra + inner.slice(at) : inner + extra
+  return open + body.slice(0, a) + `<w:tcPr>${withKid}</w:tcPr>` + body.slice(b + '</w:tcPr>'.length)
+}
+
+/**
+ * v0.186：`tagWithAttrs` / `retag` 原先每次调用都 `new RegExp(...)` 现编译一次
+ * ——图片壳补丁里一个 `<w:drawing>` 要 retag 十几枚，200 图就是几千次编译，
+ * 且 `tagWithAttrs` 每枚属性还要再编译一次。改成纯字符串定位：零动态正则、
+ * 零临时数组，语义逐字等价。`legacyRetag` 只给同进程 A/B 对照腿用（入口设一次），
+ * 产品路径恒为 false；改前算法原样留成第二条腿，便于对撞边界。
+ */
+let legacyRetag = false
+
+/** 对照腿：改前的动态正则实现，一字不改留着给基准对撞 */
+function legacyTagWithAttrs(tag: string, kv: Record<string, string>): string {
+  let out = tag
+  for (const k of Object.keys(kv)) {
+    const v = kv[k]
+    if (!v) continue
+    const re = new RegExp(`(\\s${k}=)"[^"]*"`)
+    if (re.test(out)) {
+      out = out.replace(re, `$1"${v}"`)
+      continue
+    }
+    const m = /^(.*?)(\/?)>$/.exec(out)
+    if (!m) continue
+    out = `${m[1]} ${k}="${v}"${m[2]}>`
+  }
+  return out
+}
+
+function legacyRetagChunk(chunk: string, tag: string, kv: Record<string, string>): string {
+  const re = new RegExp(`<${tag}(?:\\s[^>]*)?/?>`)
+  const m = re.exec(chunk)
+  if (!m) return chunk
+  return chunk.slice(0, m.index) + legacyTagWithAttrs(m[0], kv) + chunk.slice(m.index + m[0].length)
+}
+
+/** 在一枚开标签（含自闭合）上改/加属性：已有同名属性就地换值，没有就追加在 `>` 之前 */
+function tagWithAttrs(tag: string, kv: Record<string, string>): string {
+  if (legacyRetag) return legacyTagWithAttrs(tag, kv)
+  let out = tag
+  for (const k of Object.keys(kv)) {
+    const v = kv[k]
+    if (!v) continue
+    const needle = `${k}="`
+    // 前一个字符必须是空白（ASCII 空白都 <= ' '），否则 `data-k="` 之类也会命中
+    let at = out.indexOf(needle)
+    while (at >= 0 && !(at > 0 && out[at - 1] <= ' ')) at = out.indexOf(needle, at + needle.length)
+    if (at >= 0) {
+      const q = out.indexOf('"', at + needle.length)
+      if (q < 0) continue
+      out = out.slice(0, at + needle.length) + v + out.slice(q)
+      continue
+    }
+    const gt = out.lastIndexOf('>')
+    if (gt < 0) continue
+    const slash = gt > 0 && out[gt - 1] === '/' ? '/' : ''
+    const cut = slash ? gt - 1 : gt
+    out = out.slice(0, cut) + ` ${k}="${v}"` + slash + out.slice(gt)
+  }
+  return out
+}
+
+/** 块内按标签名改属性：只改第一枚（一个 w:drawing 里各层壳都只有一枚） */
+function retag(chunk: string, tag: string, kv: Record<string, string>): string {
+  if (legacyRetag) return legacyRetagChunk(chunk, tag, kv)
+  const needle = `<${tag}`
+  let at = chunk.indexOf(needle)
+  while (at >= 0) {
+    const c = chunk[at + needle.length]
+    // 标签名到此为止才算命中（`<wp:inlineX` 不算，正则的 `(?:\s[^>]*)?` 同理）
+    if (c !== undefined && (c === '>' || c === '/' || c <= ' ')) break
+    at = chunk.indexOf(needle, at + needle.length)
+  }
+  if (at < 0) return chunk
+  const end = chunk.indexOf('>', at)
+  if (end < 0) return chunk
+  return chunk.slice(0, at) + tagWithAttrs(chunk.slice(at, end + 1), kv) + chunk.slice(end + 1)
+}
+
+/**
+ * 环绕档位整片换（v0.178）：包恒发 `<wp:wrapNone/>`，源件说的是四周环绕。
+ * 元素名与 wrapText 都是源件说过的话，不能只改名或只追加——直接换整片，
+ * 位置（effectExtent 之后、docPr 之前）保持不动，符合 CT_Anchor 的 schema 序。
+ */
+function retagWrap(chunk: string, wrapText: string): string {
+  return chunk.replace(/<wp:wrapNone\s*\/>/, `<wp:wrapSquare wrapText="${wrapText}"/>`)
+}
+
+/**
+ * 图片容器壳（v0.148）：包把 wp:inline / effectExtent / docPr / cNvPr / 两枚 locks /
+ * prstGeom / xfrm 的 off+ext 全都发出来了，只是值硬编码（dist*=0、effectExtent 四边=0、
+ * locks 恒 1、cNvPr 的 name 干脆是空串）。所以这一族不像段落余量那样要插元素——
+ * 按 `<w:drawing>` 出现序逐块**改值**即可。计数闸门同款：块数与登记条数对不上整笔放弃。
+ * v0.177：载荷带 anKind=anchor 时写手给 ImageRun 传 floating，包会发 `<wp:anchor>`；
+ * 本函数再把六枚闸门与 relativeHeight 按源件原值回填（包发出的是默认值/退化值）。
+ * positionH/V 的 posOffset 与 simplePos 的 x/y 仍不在此列，账继续记。
+ */
+async function patchImgXml(bytes: Uint8Array, shells: string[], sess?: PackSession): Promise<Uint8Array> {
+  if (!shells.some((x) => x)) return bytes
+  const zip = sess ? sess.zip : await loadZipOf(bytes)
+  const file = zip.file('word/document.xml')
+  if (!file) return bytes
+  const xml = await partText(zip, 'word/document.xml', sess)
+  const DRAWING_RE = /<w:drawing>[\s\S]*?<\/w:drawing>/g
+  // v0.188：产品路径用惰性迭代器，不物化「每个元素都是整块 XML」的大数组；
+  // 计数闸门移到末尾，块数对不上就丢弃已算结果（与原先「先数再改」逐字等价，
+  // 只是异常件上多做一点无用功）。`legacyBlockScan:true` 是 A/B 对照腿。
+  const iter: Iterable<RegExpMatchArray> = legacyBlockScan
+    ? [...xml.matchAll(DRAWING_RE)]
+    : xml.matchAll(DRAWING_RE)
+  let out = ''
+  let cursor = 0
+  let touched = false
+  let i = 0
+  for (const m of iter) {
+    const start = m.index ?? 0
+    const stop = start + m[0].length
+    const kv = parseImgPayload(shells[i] ?? '')
+    i++
+    if (!Object.keys(kv).length) {
+      out += xml.slice(cursor, stop)
+      cursor = stop
+      continue
+    }
+    let chunk = m[0]
+    // wp:inline / wp:anchor 的四边避让
+    const box: Record<string, string> = {}
+    for (const k of ['distT', 'distB', 'distL', 'distR']) if (kv[k] !== undefined) box[k] = kv[k]
+    if (Object.keys(box).length) {
+      chunk = retag(chunk, 'wp:inline', box)
+      chunk = retag(chunk, 'wp:anchor', box)
+    }
+    // v0.177：浮动图六枚闸门 + relativeHeight。包把 simplePos 硬编码成 "0"、
+    // relativeHeight 在 zIndex 为 0 时退化成图片高度，其余四枚用布尔默认值——
+    // 都不是源件说过的话，一律按载荷原值回填（tagWithAttrs 已有则改、没有则补）
+    if (kv.anKind === 'anchor') {
+      const an: Record<string, string> = {}
+      for (const [k, n] of [
+        ['anOver', 'allowOverlap'],
+        ['anBehind', 'behindDoc'],
+        ['anCell', 'layoutInCell'],
+        ['anLocked', 'locked'],
+        ['anSimple', 'simplePos'],
+        ['anRelH', 'relativeHeight'],
+      ] as const) {
+        if (kv[k] !== undefined) an[n] = kv[k]
+      }
+      if (Object.keys(an).length) chunk = retag(chunk, 'wp:anchor', an)
+      // 包的 createSimplePos() 把 x/y 硬编码成 0，源件的绝对坐标（spX/spY）得按载荷回填；
+      // 不补的话这两对会从「掉了」变成「值变」——名字在、值不对，反而更难看
+      if (kv.spX !== undefined || kv.spY !== undefined) {
+        const sp: Record<string, string> = {}
+        if (kv.spX !== undefined) sp.x = kv.spX
+        if (kv.spY !== undefined) sp.y = kv.spY
+        chunk = retag(chunk, 'wp:simplePos', sp)
+      }
+      // v0.178：环绕档位。包恒发 <wp:wrapNone/>，源件说的是四周环绕时整片换掉。
+      // 只在浮动图这一支做——内嵌图（wp:inline）本来就没有环绕元素，别凭空插一枚
+      if (kv.wrapText !== undefined) chunk = retagWrap(chunk, kv.wrapText)
+    }
+    // v0.178：wp:inline 的两个流水号（anchorId/editId）。v0.150 的注释写「包不认
+    // 这两个槽」——包确实不发，但壳本身发得出，tagWithAttrs 追加即可，不必造元素
+    const boxId: Record<string, string> = {}
+    if (kv.anId !== undefined) boxId.anchorId = kv.anId
+    if (kv.anEdit !== undefined) boxId.editId = kv.anEdit
+    if (Object.keys(boxId).length) chunk = retag(chunk, 'wp:inline', boxId)
+    // v0.178：a:srcRect 源裁剪框四边。包发 <a:srcRect/> 这枚空壳（屏上由
+    // clip-path 兑现），此前只记不写——纯属性回填，零插元素、零 schema 风险
+    const sr: Record<string, string> = {}
+    for (const [k, n] of [['srT', 't'], ['srR', 'r'], ['srB', 'b'], ['srL', 'l']] as const) {
+      if (kv[k] !== undefined) sr[n] = kv[k]
+    }
+    if (Object.keys(sr).length) chunk = retag(chunk, 'a:srcRect', sr)
+    // v0.178：a:xfrm 的变换三枚（与 off/ext 同一枚元素，分开补各补各的）
+    const xf: Record<string, string> = {}
+    if (kv.xfRot !== undefined) xf.rot = kv.xfRot
+    if (kv.xfFlipH !== undefined) xf.flipH = kv.xfFlipH
+    if (kv.xfFlipV !== undefined) xf.flipV = kv.xfFlipV
+    if (Object.keys(xf).length) chunk = retag(chunk, 'a:xfrm', xf)
+    // wp:effectExtent 四边（载荷键 eeL/eeT/eeR/eeB，回写成 l/t/r/b）
+    const ee: Record<string, string> = {}
+    for (const [k, n] of [['eeL', 'l'], ['eeT', 't'], ['eeR', 'r'], ['eeB', 'b']] as const) {
+      if (kv[k] !== undefined) ee[n] = kv[k]
+    }
+    if (Object.keys(ee).length) chunk = retag(chunk, 'wp:effectExtent', ee)
+    // 画布级的对象序号与**对象名**（v0.158）：名字也走这一枚——包把 alt 同时写进 name
+    // 与 descr，源里的对象名（「图片 1」）被替代文本顶掉，得按源值设回来
+    const dp: Record<string, string> = {}
+    if (kv.docPrId !== undefined) dp.id = kv.docPrId
+    if (kv.docPrName !== undefined) dp.name = kv.docPrName
+    if (Object.keys(dp).length) chunk = retag(chunk, 'wp:docPr', dp)
+    const nv: Record<string, string> = {}
+    if (kv.cNvPrId !== undefined) nv.id = kv.cNvPrId
+    if (kv.cNvPrName !== undefined) nv.name = kv.cNvPrName
+    // 图形级替代文本（v0.158）：与画布级那枚 descr 是两枚属性，包只发后者
+    if (kv.cNvPrDescr !== undefined) nv.descr = kv.cNvPrDescr
+    if (Object.keys(nv).length) chunk = retag(chunk, 'pic:cNvPr', nv)
+    if (kv.gfl !== undefined) chunk = retag(chunk, 'a:graphicFrameLocks', { noChangeAspect: kv.gfl })
+    // a:picLocks 的纵横比锁与箭头锁（v0.149）：同一枚元素两个属性，各补各的
+    const pl: Record<string, string> = {}
+    if (kv.pic !== undefined) pl.noChangeAspect = kv.pic
+    if (kv.picArrow !== undefined) pl.noChangeArrowheads = kv.picArrow
+    if (Object.keys(pl).length) chunk = retag(chunk, 'a:picLocks', pl)
+    // pic:spPr 的黑白模式档位（v0.149）：包恒写 auto，说了才改
+    if (kv.bwMode !== undefined) chunk = retag(chunk, 'pic:spPr', { bwMode: kv.bwMode })
+    // a:blip 的 cstate（v0.150）：「打印才出图」那档。包恒写 none，说了才改
+    if (kv.blipState !== undefined) chunk = retag(chunk, 'a:blip', { cstate: kv.blipState })
+    if (kv.prst !== undefined) chunk = retag(chunk, 'a:prstGeom', { prst: kv.prst })
+    // v0.179：a:ln 三枚（w 线宽 / cap 线端 / cmpd 复合线型）。包发的那枚壳
+    // 上有 w（预打包按 lnW 传了），cap/cmpd 由这里按源件字面补——不能交给包，
+    // 它的枚举键与 OOXML 字面不同名。已有则改、没有则补，零插元素
+    const ln: Record<string, string> = {}
+    if (kv.lnW !== undefined) ln.w = kv.lnW
+    if (kv.lnCap !== undefined) ln.cap = kv.lnCap
+    if (kv.lnCmpd !== undefined) ln.cmpd = kv.lnCmpd
+    if (Object.keys(ln).length) chunk = retag(chunk, 'a:ln', ln)
+    // v0.180：CT_LineProperties 的四枚子元素（v0.179 只补了 a:ln 的三枚属性）。
+    // 包没有这些元素的构造器——v0.179 的 outline 槽让 `<a:ln>` 这枚壳发得出来之后，
+    // 子元素要在这里按 schema 序补：fill（包发的 a:noFill）→ prstDash → miter
+    // → headEnd → tailEnd。插在 `</a:ln>` 之前天然满足位次，且不需要新建 a:effectLst
+    // 那张锚点表（那是下一族的事）。
+    // 纪律：chunk 已是单个 w:drawing 块、只插第一枚 a:ln、已有同名元素改为改属性
+    // 而不是再插一枚（第二枚同名子元素 = 非法 XML，计数闸门抓不到）。
+    const lineKids: [string, Record<string, string>][] = []
+    if (kv.dashVal !== undefined) lineKids.push(['prstDash', { val: kv.dashVal }])
+    if (kv.miterLim !== undefined) lineKids.push(['miter', { lim: kv.miterLim }])
+    for (const [prefix, tag] of [['he', 'headEnd'], ['te', 'tailEnd']] as const) {
+      const a: Record<string, string> = {}
+      if (kv[prefix + 'Type']) a.type = kv[prefix + 'Type']
+      if (kv[prefix + 'W']) a.w = kv[prefix + 'W']
+      if (kv[prefix + 'Len']) a.len = kv[prefix + 'Len']
+      if (Object.keys(a).length) lineKids.push([tag, a])
+    }
+    if (lineKids.length) {
+      const lnBox = /<a:ln\b[^>]*\/>|<a:ln\b[^>]*>[\s\S]*?<\/a:ln>/.exec(chunk)
+      if (lnBox) {
+        const box = lnBox[0]
+        if (lineKids.some(([tag]) => box.includes(`<a:${tag}`))) {
+          // 包已自带其中一枚（或同一块跑第二趟）：逐枚改属性，不再插
+          for (const [tag, a] of lineKids)
+            if (box.includes(`<a:${tag}`)) chunk = retag(chunk, `a:${tag}`, a)
+        } else {
+          const frag = lineKids.map(([tag, a]) => tagWithAttrs(`<a:${tag}/>`, a)).join('')
+          const at = box.lastIndexOf('</a:ln>')
+          const fresh = box.endsWith('/>')
+            ? box.slice(0, -2) + '>' + frag + '</a:ln>'
+            : box.slice(0, at) + frag + box.slice(at)
+          chunk = chunk.slice(0, lnBox.index) + fresh + chunk.slice(lnBox.index + box.length)
+        }
+      }
+    }
+    // v0.181：a:effectLst 整片。包连 effectLst 的发射器都没有，而 v0.180 那张
+    // 「插在 </a:ln> 内部」的锚点表位次不同（这是 a:ln 的兄弟，不是它的子元素），
+    // 必须另起一张：按 CT_ShapeProperties 排在 a:ln 之后、scene3d/sp3d/extLst
+    // 之前。三维族在夹具里被塞进 effectLst 内部（结构非法），本轮不复刻。
+    const effectKids: [string, Record<string, string>][] = []
+    for (const { prefix, tag, attrs } of EFFECT_ATTRS) {
+      const a: Record<string, string> = {}
+      for (const n of attrs) {
+        const v = kv[effectKey(prefix, n)]
+        if (v !== undefined) a[n] = v
+      }
+      if (Object.keys(a).length) effectKids.push([tag, a])
+    }
+    if (effectKids.length) {
+      const spPr = /<pic:spPr\b[^>]*>[\s\S]*?<\/pic:spPr>/.exec(chunk)
+      if (spPr) {
+        const box = spPr[0]
+        if (box.includes('<a:effectLst')) {
+          // 幂等：整片已在场时逐枚改属性，不再插第二枚（计数闸门抓不到重复片）
+          for (const [tag, a] of effectKids)
+            if (box.includes(`<a:${tag}`)) chunk = retag(chunk, `a:${tag}`, a)
+        } else {
+          const frag = `<a:effectLst>${effectKids
+            .map(([tag, a]) => tagWithAttrs(`<a:${tag}/>`, a)).join('')}</a:effectLst>`
+          // 锚点表：找第一枚「排在 effectLst 之后」的在场兄弟，插在它前面。
+          // 写出包实际只发到 a:ln、这些兄弟都不在，退化到 </pic:spPr> 前——
+          // 那也正好是 a:ln 之后，schema 位次成立。
+          let at = -1
+          for (const t of ['a:scene3d', 'a:sp3d', 'a:extLst', 'a:spLocks']) {
+            const i = box.indexOf(`<${t}`)
+            if (i >= 0 && (at < 0 || i < at)) at = i
+          }
+          if (at < 0) at = box.lastIndexOf('</pic:spPr>')
+          const fresh = box.slice(0, at) + frag + box.slice(at)
+          chunk = chunk.slice(0, spPr.index) + fresh + chunk.slice(spPr.index + box.length)
+        }
+      }
+    }
+    // a:xfrm 的 a:off / a:ext（图形框自身的原点与尺寸）
+    const off: Record<string, string> = {}
+    if (kv.offX !== undefined) off.x = kv.offX
+    if (kv.offY !== undefined) off.y = kv.offY
+    if (Object.keys(off).length) chunk = retag(chunk, 'a:off', off)
+    const ext: Record<string, string> = {}
+    if (kv.extCx !== undefined) ext.cx = kv.extCx
+    if (kv.extCy !== undefined) ext.cy = kv.extCy
+    if (Object.keys(ext).length) chunk = retag(chunk, 'a:ext', ext)
+    out += xml.slice(cursor, start) + chunk
+    cursor = stop
+    touched = true
+  }
+  if (i !== shells.length) return bytes
+  if (!touched) return bytes
+  out += xml.slice(cursor)
+  setPart(zip, 'word/document.xml', out, sess)
+  return finishPatch(bytes, zip, sess)
 }

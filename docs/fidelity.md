@@ -13,118 +13,98 @@ against the lookups our import path actually performs on them, at run time. A pa
 | **never consulted** | the pair appears in real files and no code path asks for it | the actionable list: fidelity we do not claim |
 | **noise** | `rsid*`, `paraId`, `textId` | Word's save-session bookkeeping: no rendering and no UI meaning |
 
-Measured on the committed product at `HEAD` (`git:HEAD`, 50 modules,
-probe injected into 2 accessors: attr, attrL).
+Measured on the committed product at `HEAD` (`git:HEAD`, 68 modules,
+probe injected at 3 points: attr, attrL, reader.__PROBE(再导出)).
 
 ## Headline
 
 | | pairs | attribute literals |
 |---|---:|---:|
-| In scope (7 parts, 279 readable files) | 701 | 3,108,523 |
-| Word save-session noise | 19 | 770,634 |
-| Meaningful universe | 682 | 2,337,889 |
-| Consulted | 120 | 1,184,292 |
-| Never consulted | 562 | 1,153,597 |
+| In scope (7 parts, 5 readable files) | 701 | 31,482 |
+| Word save-session noise | 19 | 7,711 |
+| Meaningful universe | 682 | 23,771 |
+| Consulted | 675 | 23,396 |
+| Never consulted | 7 | 375 |
 
-**Coverage: 17.6% of distinct pairs, 50.7% of meaningful literals.**
+**Coverage: 99.0% of distinct pairs, 98.4% of meaningful literals.**
 
-The corpus held 313 .docx files (302 MiB); 34 were
+The corpus held 5 synthetic .docx files (22 KiB); 0 were
 unreadable as archives and are reported by failure class only, never by name.
+
+## Corpus provenance — this is a synthetic rebuild
+
+The 313-file real corpus this ledger was first measured on is not in the repository (it is
+everyone's local documents). What you are reading was measured on a **synthetic corpus**:
+701 element|attribute pairs with their literal counts, frozen from the original
+run into `docs/fidelity-universe.json` and rebuilt at 1/100 scale by `scripts/gen-docx-fidelity-corpus.mjs`.
+
+| rebuild check | value |
+|---|---:|
+| universe pairs present in the corpus | 701 / 701 |
+| pairs missing / extra | 0 / 0 |
+| literals: scaling step itself (raw ÷ 100 → rounded, min 1) | 31,085 → 31,321 (+0.76%) |
+| literals: scaled expectation vs actual rebuild | 31,321 vs 31,482 (+0.51%) |
+
+**By-pair coverage is comparable with the original run; by-literal coverage is not.** 按对覆盖率与旧账（313 件真件语料）可比；按字面不可比——重建按 count/100 缩放，取整与 max(1,·) 会把稀有对抬起来（见「scaling step itself」那一行），另有少量承重包裹属性（bitmap 链的 r:embed/extent/docPr、numbering 关联的 abstractNumId 等）在包裹处顺带出现；末行是「实测 vs 缩放期望」，与缩放那行基准不同，别混读
 
 ## Never consulted — largest first
 
 | `element|attribute` | literals |
 |---|---:|
-| `rFonts|hint` | 136,408 |
-| `szCs|val` | 96,610 |
-| `lsdException|name` | 66,628 |
-| `rFonts|cs` | 60,132 |
-| `lsdException|uiPriority` | 57,304 |
-| `lang|val` | 41,620 |
-| `lsdException|semiHidden` | 41,087 |
-| `lsdException|unhideWhenUsed` | 41,024 |
-| `t|space` | 34,771 |
-| `rFonts|asciiTheme` | 33,198 |
-| `rFonts|hAnsiTheme` | 33,130 |
-| `lang|eastAsia` | 29,334 |
-| `pt|x` | 28,954 |
-| `pt|y` | 28,954 |
-| `spacing|val` | 25,271 |
-| `bottom|space` | 18,417 |
-| `right|space` | 17,879 |
-| `kern|val` | 17,310 |
-| `shd|color` | 16,911 |
-| `left|space` | 16,377 |
-| `rFonts|eastAsiaTheme` | 15,650 |
-| `gd|fmla` | 13,121 |
-| `gd|name` | 13,121 |
-| `color|themeColor` | 9,168 |
-| `schemeClr|val` | 7,668 |
-| `lvlText|val` | 6,894 |
-| `lvlJc|val` | 6,879 |
-| `lang|bidi` | 6,710 |
-| `proofErr|type` | 6,414 |
-| `cxn|ang` | 6,382 |
+| `t|space` | 348 |
+| `instrText|space` | 15 |
+| `shape|gfxdata` | 7 |
+| `group|gfxdata` | 2 |
+| `line|gfxdata` | 1 |
+| `rect|gfxdata` | 1 |
+| `roundrect|gfxdata` | 1 |
 
 ## Which elements the missing literals sit on
 
 | element | never-consulted literals |
 |---|---:|
-| `rFonts` | 283,998 |
-| `lsdException` | 212,720 |
-| `szCs` | 96,610 |
-| `lang` | 77,664 |
-| `pt` | 57,908 |
-| `t` | 34,771 |
-| `spacing` | 28,041 |
-| `gd` | 26,242 |
-| `shd` | 19,754 |
-| `bottom` | 19,525 |
-| `right` | 18,693 |
-| `kern` | 17,310 |
-| `left` | 17,151 |
-| `pos` | 12,764 |
-| `color` | 9,785 |
-| `tab` | 8,783 |
-| `effectExtent` | 8,340 |
-| `schemeClr` | 7,668 |
-| `shape` | 7,239 |
-| `lvlText` | 6,894 |
+| `t` | 348 |
+| `instrText` | 15 |
+| `shape` | 7 |
+| `group` | 2 |
+| `line` | 1 |
+| `rect` | 1 |
+| `roundrect` | 1 |
 
 ## Consulted — the work already paid for
 
 | `element|attribute` | literals |
 |---|---:|
-| `rFonts|ascii` | 100,937 |
-| `sz|val` | 99,708 |
-| `rFonts|hAnsi` | 92,695 |
-| `rFonts|eastAsia` | 57,261 |
-| `tcW|type` | 41,582 |
-| `tcW|w` | 41,582 |
-| `color|val` | 40,932 |
-| `highlight|val` | 40,699 |
-| `jc|val` | 34,567 |
-| `spacing|line` | 22,836 |
-| `spacing|lineRule` | 22,836 |
-| `pStyle|val` | 22,621 |
-| `ind|firstLine` | 21,030 |
-| `vAlign|val` | 20,872 |
-| `left|val` | 19,536 |
-| `bottom|val` | 19,298 |
-| `ind|firstLineChars` | 19,143 |
-| `right|val` | 19,031 |
-| `ind|left` | 18,921 |
-| `top|val` | 18,580 |
-| `bottom|sz` | 18,418 |
-| `bottom|color` | 18,414 |
-| `shd|val` | 17,968 |
-| `shd|fill` | 17,937 |
-| `right|sz` | 17,880 |
-| `right|color` | 17,876 |
-| `top|sz` | 17,673 |
-| `top|space` | 17,672 |
-| `top|color` | 17,669 |
-| `left|sz` | 16,378 |
+| `rFonts|hint` | 1,365 |
+| `rFonts|ascii` | 1,008 |
+| `sz|val` | 997 |
+| `szCs|val` | 966 |
+| `rFonts|hAnsi` | 927 |
+| `lsdException|name` | 666 |
+| `rFonts|cs` | 600 |
+| `lsdException|uiPriority` | 573 |
+| `rFonts|eastAsia` | 573 |
+| `tcW|type` | 417 |
+| `tcW|w` | 417 |
+| `lang|val` | 416 |
+| `lsdException|semiHidden` | 411 |
+| `lsdException|unhideWhenUsed` | 410 |
+| `color|val` | 409 |
+| `highlight|val` | 407 |
+| `jc|val` | 346 |
+| `rFonts|asciiTheme` | 333 |
+| `rFonts|hAnsiTheme` | 330 |
+| `lang|eastAsia` | 293 |
+| `pt|x` | 290 |
+| `pt|y` | 290 |
+| `spacing|val` | 253 |
+| `spacing|line` | 228 |
+| `spacing|lineRule` | 228 |
+| `pStyle|val` | 226 |
+| `ind|firstLine` | 210 |
+| `vAlign|val` | 210 |
+| `left|val` | 195 |
+| `bottom|val` | 192 |
 
 ## Caveats, stated before anyone reads them off
 
@@ -143,6 +123,11 @@ unreadable as archives and are reported by failure class only, never by name.
 pnpm exec vite-node scripts/fidelity-report.mjs --corpus /path/to/docx
 pnpm exec vite-node scripts/fidelity-report.mjs --corpus /path/to/docx --selftest --clean-pass
 python3 scripts/fidelity-census.py        # independent denominator, second parser
+
+# 真件语料不在库时：先按冻结宇宙重建合成语料，再跑同一套腿
+node scripts/gen-docx-fidelity-corpus.mjs
+pnpm exec vite-node scripts/fidelity-report.mjs --clist tmp/docx-fidelity-corpus/clist.txt --selftest --clean-pass --synth
+python3 scripts/fidelity-census.py --clist tmp/docx-fidelity-corpus/clist.txt
 ```
 
 The report is deterministic: same corpus list and same source revision give byte-identical
@@ -155,6 +140,6 @@ output, so a diff of `docs/fidelity.md` is a diff of fidelity, not of a timestam
 | `--selftest` | the probe sees exactly the lookups a fixture dictates, including the pairs we deliberately do not read |
 | `--clean-pass` | the patched copy and an unpatched copy emit byte-identical HTML for every readable file: the observer does not perturb the product |
 | `--mut no-attrL` | coverage drops: the numerator really comes from run-time lookups, not from a name list in the source |
+| `--mut no-theme` | coverage does **not** move: asking for `themeShade`/`themeTint` is decoupled from whether the theme resolves (v0.155) |
+| `--mut no-themeshade` | coverage drops: the shade/tint pairs really enter the numerator through `themeRefCss` |
 | `scripts/fidelity-census.py` | a second, different XML parser (Python `xml.etree`) counts the same denominator |
-
-Last run: identical=279, differing=0, both-failed=34, only-one-failed=0.

@@ -27,9 +27,9 @@ use quick_xml::Reader;
 use serde_json::Value;
 
 use crate::xlsx::{
-    CondFormatBar, CondFormatBarStop, CondFormatIconLevel, CondFormatPayload, CondFormatStyle,
-    CondFormatStop, CustomFilterItem, CustomFilters, DataValidationPayload, FilterColumnPayload,
-    RangeRect, SheetFilterPayload, SheetPayload,
+    BorderSide, CellBorder, CondFormatBar, CondFormatBarStop, CondFormatIconLevel,
+    CondFormatPayload, CondFormatStyle, CondFormatStop, CustomFilterItem, CustomFilters,
+    DataValidationPayload, FilterColumnPayload, RangeRect, SheetFilterPayload, SheetPayload,
 };
 use crate::xlsx_style::{a1_to_rc, argb_to_hex, attr_str};
 
@@ -45,6 +45,7 @@ pub fn write_sheet_rules(ws: &mut Worksheet, sheet: &SheetPayload) -> Vec<String
     for cf in &sheet.cond_formats {
         write_cond_format(ws, cf, &mut notes);
     }
+    notes.extend(cf_write_accounts(sheet));
     notes
 }
 
@@ -124,10 +125,53 @@ fn number_of(s: &str) -> Option<f64> {
     t.parse::<f64>().ok().filter(|x| x.is_finite())
 }
 
-/// `$A$1`、`=$B$2`、`$A$1:$A$3` 这一类是引用而不是字面值：crate 对"取单元格值"另有入口
+/// `$A$1`、`=$B$2`、`$A$1:$A$3` 这一类是引用而不是字面值：crate 对"取单元格值"另有入口。
+///
+/// 早先这里写成 `contains(':')`，于是**含冒号的字面值**会被当成引用——最典型的是
+/// 时间类下拉选项（`08:00,12:00`）：它被送进 `allow_list_formula`，写出的 `formula1`
+/// 没有引号，Excel 打开就是一条无效公式，下拉整个没了。所以真的去看冒号两边是不是
+/// 单元格，而不是"有没有冒号"。
+///
+/// `=`/`$` 开头仍然一律算引用：这两条只可能**多算**，而多算的代价（走 `*_formula`
+/// 入口，最多是这一条规则不生效并进边界账）远小于漏算（写出坏公式，文件本身出问题）
 fn is_ref(s: &str) -> bool {
     let t = s.trim();
-    t.starts_with('$') || t.starts_with('=') || t.contains(':')
+    if t.starts_with('$') || t.starts_with('=') {
+        return true;
+    }
+    match t.split_once(':') {
+        Some((a, b)) => is_cell(a) && is_cell(b),
+        None => false,
+    }
+}
+
+/// `A1` / `$A$1` / `Sheet1!A1` / `'我的 表'!A1` 这一类。列 1~3 位、行 1~7 位，
+/// 超出的一律不算（与 `rects_of` 那边一样：认不出的形状不猜）
+fn is_cell(s: &str) -> bool {
+    let t = s.trim();
+    // 表名前缀（`Sheet1!`、`'带 空格'!`）与引用无关，只看感叹号后面那一段
+    let t = match t.rfind('!') {
+        Some(i) => &t[i + 1..],
+        None => t,
+    };
+    let (mut col, mut row) = (0usize, 0usize);
+    let mut saw_digit = false;
+    for c in t.chars() {
+        if c == '$' {
+            continue;
+        } else if c.is_ascii_alphabetic() {
+            if saw_digit {
+                return false; // 列号跑到数字后面（1A）不是引用
+            }
+            col += 1;
+        } else if c.is_ascii_digit() {
+            saw_digit = true;
+            row += 1;
+        } else {
+            return false;
+        }
+    }
+    (1..=3).contains(&col) && (1..=7).contains(&row)
 }
 
 /// 载荷里的日期一律 `YYYY-MM-DD`（前端 normDateValue 收过），OOXML 里是序列号
@@ -814,11 +858,21 @@ fn date_rule(op: &str) -> Option<ConditionalFormatDateRule> {
     })
 }
 
-/// 高亮的 dxf：底纹 + 字色 + 粗斜下划线删除线；什么都没带就不设格式（只当判定用）
+/// 高亮的 dxf：底纹 + 字色 + 粗斜下划线删除线 + 数字格式 + 四边边框；什么都没带就不设格式（只当判定用）
+///
+/// 对齐一族（ho/vo/wb）**故意不写**：rust_xlsxwriter 的 dxf 写不出 `<alignment>`
+/// （crate 文档明说，Excel 经典条件格式对话框同样不给设），硬憋一个 Format 也只会
+/// 落成一枚空 dxf。丢是丢了，但要丢在明处——`cf_write_accounts` 按条计数说得出。
 fn dxf_format(cf: &CondFormatPayload) -> Option<Format> {
     let s = cf.fmt.as_ref()?;
     let mut f = Format::new();
     let mut any = false;
+    // 数字格式：只带 nf 的规则（Excel 里很常见——「大于 0 显示成 0.0%」不描色只换格式）
+    // 也必须有 Format，否则 rust_xlsxwriter 压根不生成 dxf，存盘就丢了这一条
+    if let Some(nf) = &s.nf {
+        f = f.set_num_format(nf);
+        any = true;
+    }
     if let Some(bg) = &s.bg {
         f = f.set_background_color(Color::from(bg.as_str()));
         any = true;
@@ -843,7 +897,52 @@ fn dxf_format(cf: &CondFormatPayload) -> Option<Format> {
         f = f.set_font_strikethrough();
         any = true;
     }
+    // 四边边框：与单元格侧 `format_for` 同一副走法（style 映射 + 颜色分设）。
+    // 只有颜色没有样式的边，crate 的 dxf 写侧会整条丢掉（write_sub_border 见 None 就空标签），
+    // 所以那种边不算 `any`——憋一枚空 dxf 出来不如不落
+    if let Some(bd) = &s.bd {
+        let sides: [(&Option<BorderSide>, fn(Format, rust_xlsxwriter::FormatBorder) -> Format, fn(Format, Color) -> Format); 4] = [
+            (&bd.l, Format::set_border_left, Format::set_border_left_color),
+            (&bd.r, Format::set_border_right, Format::set_border_right_color),
+            (&bd.t, Format::set_border_top, Format::set_border_top_color),
+            (&bd.b, Format::set_border_bottom, Format::set_border_bottom_color),
+        ];
+        for (line, set_border, set_color) in sides {
+            if let Some(line) = line {
+                if let Some(bt) = line.s.as_deref().and_then(crate::xlsx::border_type) {
+                    f = set_border(f, bt);
+                    any = true;
+                }
+                if let Some(c) = line.c.as_deref() {
+                    f = set_color(f, Color::from(c));
+                }
+            }
+        }
+    }
     any.then_some(f)
+}
+
+/// 写侧的边界账：`dxf_format` 落不下的那几族，按**落不下的原因**分箱计数——
+/// 一簿子几十条规则时逐条一句没人看（与 `ods_cf_write_accounts` 同一条契约）
+pub fn cf_write_accounts(sheet: &SheetPayload) -> Vec<String> {
+    let mut out = Vec::new();
+    let with_align = sheet
+        .cond_formats
+        .iter()
+        .filter(|cf| {
+            cf.kind == "cell"
+                && cf.fmt.as_ref().is_some_and(|f| {
+                    f.ho.is_some() || f.vo.is_some() || f.wb.is_some()
+                })
+        })
+        .count();
+    if with_align > 0 {
+        out.push(format!(
+            "有 {} 条条件格式带对齐属性（水平/垂直/换行），xlsx 条件格式存盘不支持这一族，未写入",
+            with_align
+        ));
+    }
+    out
 }
 
 // ================= 读侧：xlsx → 规则载荷 =================
@@ -1179,8 +1278,22 @@ fn norm_cfvo(t: &str) -> String {
     .to_string()
 }
 
+/// 什么都不带的 dxf 不该占一枚 `fmt`（那种规则只当判定用）。
+/// **nf 也算有内容**：只配数字格式不描色的条件格式在 Excel 里很常见，判空会把它整条丢掉。
+/// 边框同理（只描边不染色的规则见得着）；对齐三槽也都算——`wb=Some(false)` 是显式指令，
+/// 不是"什么都没说"
 fn is_empty_style(s: &CondFormatStyle) -> bool {
-    s.bg.is_none() && s.cl.is_none() && s.bl.is_none() && s.it.is_none() && s.ul.is_none() && s.st.is_none()
+    s.bg.is_none()
+        && s.cl.is_none()
+        && s.bl.is_none()
+        && s.it.is_none()
+        && s.ul.is_none()
+        && s.st.is_none()
+        && s.nf.is_none()
+        && s.bd.as_ref().is_none_or(CellBorder::is_empty)
+        && s.ho.is_none()
+        && s.vo.is_none()
+        && s.wb.is_none()
 }
 
 /// `"甲,乙,丙"` → 裸串（list 的候选值在 OOXML 里是一段带引号的文本，Univer 要的是逗号串）
@@ -1543,6 +1656,39 @@ fn tag_attr(tag: &str, key: &str) -> Option<String> {
 mod tests {
     use super::*;
 
+    /// "是不是引用"这条判据上，漏判与误判的代价不对称：
+    /// 误判（把字面值当引用）会写出没有引号的 formula1，Excel 打开是一条无效公式——
+    /// 文件本身就是坏的。所以含冒号的字面值必须判得出来
+    #[test]
+    fn ref_detection_tells_literals_from_ranges() {
+        assert!(is_ref("$A$1:$A$3"), "最普通的区域");
+        assert!(is_ref("A1:A3"), "不带 $ 的区域");
+        assert!(is_ref("Sheet1!A1:A3"), "带表名的区域");
+        assert!(is_ref("'我的 表'!A1:B2"), "表名带空格要用单引号");
+        assert!(is_ref("$A$1"), "单格");
+        assert!(is_ref("=$B$2"), "公式");
+        assert!(is_ref("=TODAY()"), "函数也一律算引用");
+
+        // 反面：含冒号但不是引用。早先 `contains(':')` 会把这几条都当成区域
+        assert!(!is_ref("08:00,12:00"), "时间类下拉选项");
+        assert!(!is_ref("甲,乙"), "普通下拉选项");
+        assert!(!is_ref("2026-01-01"), "载荷里的日期串");
+        assert!(!is_ref("1:2:3"), "三段冒号不是区域");
+        assert!(!is_ref("A:A"), "整列引用这一版不猜（与 sqref 那边同口径）");
+        assert!(!is_ref(""), "空串");
+    }
+
+    #[test]
+    fn cell_shape_is_bounded() {
+        assert!(is_cell("A1"));
+        assert!(is_cell("$AB$12"));
+        assert!(is_cell("Sheet1!ABC1234567"));
+        assert!(!is_cell("1A"), "列号在数字之后");
+        assert!(!is_cell("ABCD1"), "列号超过三位");
+        assert!(!is_cell("A"), "没有行号");
+        assert!(!is_cell("TODAY()"), "函数不是单元格");
+    }
+
     /// 日期换算得有绝对锚点：只验"写出去再读回来"的话，历元整个偏掉 140 年也照样对得上
     #[test]
     fn date_conversions_have_anchors() {
@@ -1593,5 +1739,145 @@ mod tests {
 
     fn rc(start_row: u32, start_column: u32, end_row: u32, end_column: u32) -> RangeRect {
         RangeRect { start_row, start_column, end_row, end_column }
+    }
+
+    /// 「大于 0 显示成 0.0%」这类规则：dxf 里只有 `<numFmt>`，一个色也不描。
+    /// 判空把它整条丢了 ⇒ 打开再存一次这个串就永久没了（数据丢失，不是显示问题）
+    #[test]
+    fn cf_rule_keeps_a_numfmt_only_dxf() {
+        let dxfs = vec![CondFormatStyle {
+            nf: Some("0.0%".into()),
+            ..Default::default()
+        }];
+        let xml = r#"<worksheet xmlns="x"><conditionalFormatting sqref="A1:A9">
+              <cfRule type="cellIs" dxfId="0" priority="1" operator="greaterThan">
+                <formula>0</formula>
+              </cfRule>
+            </conditionalFormatting></worksheet>"#;
+        let out = read_sheet_rules(xml, &[], &dxfs);
+        let cf = out
+            .cond_formats
+            .first()
+            .expect("只配数字格式的规则也得读出来");
+        let fmt = cf.fmt.as_ref().expect("fmt 不能因为没描色就被判空丢掉");
+        assert_eq!(fmt.nf.as_deref(), Some("0.0%"));
+        assert!(fmt.bg.is_none() && fmt.cl.is_none(), "本来就没配颜色");
+    }
+
+    /// 反面：dxf 真的什么都没带（连 nf/bd/对齐也没有）时，仍按「只当判定用」处理
+    #[test]
+    fn cf_rule_without_any_format_has_no_fmt() {
+        let dxfs = vec![CondFormatStyle::default()];
+        let xml = r#"<worksheet xmlns="x"><conditionalFormatting sqref="A1:A9">
+              <cfRule type="cellIs" dxfId="0" priority="1" operator="greaterThan">
+                <formula>0</formula>
+              </cfRule>
+            </conditionalFormatting></worksheet>"#;
+        let out = read_sheet_rules(xml, &[], &dxfs);
+        assert!(
+            out.cond_formats.first().and_then(|c| c.fmt.as_ref()).is_none(),
+            "空 dxf 不占一枚 fmt"
+        );
+    }
+
+    /// 只配边框的 dxf 也占一枚 `fmt`：判空漏看 bd 的岁月里，这类规则存盘回来整条没了。
+    /// 边框族与数字格式不同——xlsx 写侧真写得出去（rust_xlsxwriter 的 dxf 有 `<border>`），
+    /// 所以这是纯赚的往返，不像对齐族那样只能记账
+    #[test]
+    fn cf_rule_keeps_a_border_only_dxf() {
+        let dxfs = vec![CondFormatStyle {
+            bd: Some(CellBorder {
+                t: Some(BorderSide {
+                    s: Some("thin".into()),
+                    c: None,
+                }),
+                ..Default::default()
+            }),
+            ..Default::default()
+        }];
+        let xml = r#"<worksheet xmlns="x"><conditionalFormatting sqref="A1:A9">
+              <cfRule type="cellIs" dxfId="0" priority="1" operator="greaterThan">
+                <formula>0</formula>
+              </cfRule>
+            </conditionalFormatting></worksheet>"#;
+        let out = read_sheet_rules(xml, &[], &dxfs);
+        let fmt = out
+            .cond_formats
+            .first()
+            .and_then(|c| c.fmt.as_ref())
+            .expect("只配边框的规则也得带 fmt");
+        let t = fmt
+            .bd
+            .as_ref()
+            .and_then(|b| b.t.clone())
+            .expect("上边框");
+        assert_eq!(t.s.as_deref(), Some("thin"));
+    }
+
+    /// 只配对齐的 dxf 也占一枚 `fmt`：`wb=Some(false)` 是"显式关掉换行"的指令，
+    /// 不是什么都没说——判空把它当空，这条指令就连同读进来的事实一起丢了
+    #[test]
+    fn cf_rule_keeps_an_alignment_only_dxf() {
+        let dxfs = vec![CondFormatStyle {
+            ho: Some("center".into()),
+            wb: Some(false),
+            ..Default::default()
+        }];
+        let xml = r#"<worksheet xmlns="x"><conditionalFormatting sqref="A1:A9">
+              <cfRule type="cellIs" dxfId="0" priority="1" operator="greaterThan">
+                <formula>0</formula>
+              </cfRule>
+            </conditionalFormatting></worksheet>"#;
+        let out = read_sheet_rules(xml, &[], &dxfs);
+        let fmt = out
+            .cond_formats
+            .first()
+            .and_then(|c| c.fmt.as_ref())
+            .expect("只配对齐的规则也得带 fmt");
+        assert_eq!(fmt.ho.as_deref(), Some("center"));
+        assert_eq!(fmt.wb, Some(false));
+    }
+
+    /// 写侧的边界账：对齐族读得进、带得住，但 rust_xlsxwriter 的 dxf 写不出
+    /// `<alignment>`（crate 文档明说，Excel 经典条件格式对话框同样不给设）⇒
+    /// 存盘时按条计数说得出。不混色阶/图标集那几箱，也不逐条刷屏
+    #[test]
+    fn cf_write_accounts_flags_alignment_loss() {
+        let sheet = SheetPayload {
+            cond_formats: vec![
+                CondFormatPayload {
+                    kind: "cell".into(),
+                    fmt: Some(CondFormatStyle {
+                        ho: Some("center".into()),
+                        ..Default::default()
+                    }),
+                    ..Default::default()
+                },
+                CondFormatPayload {
+                    kind: "cell".into(),
+                    fmt: Some(CondFormatStyle {
+                        wb: Some(true),
+                        ..Default::default()
+                    }),
+                    ..Default::default()
+                },
+                // 反例：只描底纹的规则不进这箱（那六枚屏上就活着，写侧也落得下）
+                CondFormatPayload {
+                    kind: "cell".into(),
+                    fmt: Some(CondFormatStyle {
+                        bg: Some("#ffc7ce".into()),
+                        ..Default::default()
+                    }),
+                    ..Default::default()
+                },
+            ],
+            ..Default::default()
+        };
+        let notes = cf_write_accounts(&sheet);
+        assert_eq!(notes.len(), 1, "一箱一句话，不逐条刷屏");
+        assert!(notes[0].contains('2'), "两条带对齐并成一条账：{notes:?}");
+        assert!(notes[0].contains("对齐"), "说得出丢的是什么：{notes:?}");
+        // 没有对齐的簿子这箱整箱不出
+        assert!(cf_write_accounts(&SheetPayload::default()).is_empty());
     }
 }

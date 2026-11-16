@@ -1,0 +1,6386 @@
+{
+ "ref": "HEAD",
+ "definition": {
+  "numerator": "source-present ∩ probe-consulted",
+  "buckets": [
+   "kept",
+   "value",
+   "lost",
+   "part"
+  ],
+  "parts": [
+   "word/document.xml",
+   "word/styles.xml",
+   "word/numbering.xml",
+   "word/footnotes.xml",
+   "word/endnotes.xml",
+   "word/comments.xml",
+   "word/commentsExtended.xml"
+  ],
+  "onOffNormalised": true,
+  "onOffBareElement": true
+ },
+ "totals": {
+  "read": 619,
+  "kept": 548,
+  "value": 5,
+  "lost": 66,
+  "part": 0,
+  "consulted": 672,
+  "srcParts": 7,
+  "outParts": 7,
+  "htmlBlocks": 37
+ },
+ "pairs": {
+  "abstractNum|abstractNumId": {
+   "bucket": "value",
+   "n": 1,
+   "src": [
+    "0"
+   ],
+   "out": [
+    "1",
+    "2",
+    "3"
+   ]
+  },
+  "abstractNum|restartNumberingAfterBreak": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "0"
+   ],
+   "out": [
+    "0"
+   ]
+  },
+  "abstractNumId|val": {
+   "bucket": "value",
+   "n": 1,
+   "src": [
+    "0"
+   ],
+   "out": [
+    "1",
+    "3"
+   ]
+  },
+  "adjustRightInd|val": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "0"
+   ],
+   "out": [
+    "0"
+   ]
+  },
+  "aliases|val": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "报告,report"
+   ],
+   "out": [
+    "报告,report"
+   ]
+  },
+  "alpha|val": {
+   "bucket": "lost",
+   "n": 1,
+   "src": [
+    "50000"
+   ],
+   "out": []
+  },
+  "alphaOff|val": {
+   "bucket": "lost",
+   "n": 1,
+   "src": [
+    "200"
+   ],
+   "out": []
+  },
+  "anchor|allowOverlap": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "1"
+   ],
+   "out": [
+    "0",
+    "1"
+   ]
+  },
+  "anchor|behindDoc": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "0"
+   ],
+   "out": [
+    "0"
+   ]
+  },
+  "anchor|distB": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "0"
+   ],
+   "out": [
+    "0"
+   ]
+  },
+  "anchor|distL": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "114300"
+   ],
+   "out": [
+    "0",
+    "114300"
+   ]
+  },
+  "anchor|distR": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "114300"
+   ],
+   "out": [
+    "0",
+    "114300"
+   ]
+  },
+  "anchor|distT": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "0"
+   ],
+   "out": [
+    "0"
+   ]
+  },
+  "anchor|layoutInCell": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "1"
+   ],
+   "out": [
+    "0",
+    "1"
+   ]
+  },
+  "anchor|locked": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "0"
+   ],
+   "out": [
+    "0"
+   ]
+  },
+  "anchor|relativeHeight": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "1"
+   ],
+   "out": [
+    "1",
+    "914400"
+   ]
+  },
+  "anchor|simplePos": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "0"
+   ],
+   "out": [
+    "0"
+   ]
+  },
+  "appearance|val": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "normal"
+   ],
+   "out": [
+    "normal"
+   ]
+  },
+  "attr|name": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "x"
+   ],
+   "out": [
+    "x"
+   ]
+  },
+  "attr|val": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "y"
+   ],
+   "out": [
+    "y"
+   ]
+  },
+  "autoSpaceDE|val": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "1"
+   ],
+   "out": [
+    "1"
+   ]
+  },
+  "autoSpaceDN|val": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "0"
+   ],
+   "out": [
+    "0"
+   ]
+  },
+  "b|val": {
+   "bucket": "kept",
+   "n": 2,
+   "src": [
+    "0",
+    "1"
+   ],
+   "out": [
+    "0",
+    "1"
+   ]
+  },
+  "background|color": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "ffe699"
+   ],
+   "out": [
+    "ffe699"
+   ]
+  },
+  "background|themeColor": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "background1"
+   ],
+   "out": [
+    "background1"
+   ]
+  },
+  "background|themeShade": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "bf"
+   ],
+   "out": [
+    "bf"
+   ]
+  },
+  "bar|color": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "7030a0"
+   ],
+   "out": [
+    "7030a0"
+   ]
+  },
+  "bar|space": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "4"
+   ],
+   "out": [
+    "4"
+   ]
+  },
+  "bar|sz": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "12"
+   ],
+   "out": [
+    "12"
+   ]
+  },
+  "bar|themeColor": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "accent4"
+   ],
+   "out": [
+    "accent4"
+   ]
+  },
+  "bar|themeTint": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "99"
+   ],
+   "out": [
+    "99"
+   ]
+  },
+  "bar|val": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "single"
+   ],
+   "out": [
+    "single"
+   ]
+  },
+  "basedOn|val": {
+   "bucket": "kept",
+   "n": 4,
+   "src": [
+    "normal",
+    "tablenormal"
+   ],
+   "out": [
+    "normal",
+    "tablenormal"
+   ]
+  },
+  "bCs|val": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "1"
+   ],
+   "out": [
+    "0",
+    "1"
+   ]
+  },
+  "bdr|color": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "ff0000"
+   ],
+   "out": [
+    "ff0000"
+   ]
+  },
+  "bdr|space": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "0"
+   ],
+   "out": [
+    "0"
+   ]
+  },
+  "bdr|sz": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "8"
+   ],
+   "out": [
+    "8"
+   ]
+  },
+  "bdr|themeColor": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "accent1"
+   ],
+   "out": [
+    "accent1"
+   ]
+  },
+  "bdr|themeShade": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "bf"
+   ],
+   "out": [
+    "bf"
+   ]
+  },
+  "bdr|themeTint": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "99"
+   ],
+   "out": [
+    "99"
+   ]
+  },
+  "bdr|val": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "single"
+   ],
+   "out": [
+    "single"
+   ]
+  },
+  "between|color": {
+   "bucket": "kept",
+   "n": 2,
+   "src": [
+    "ff9900"
+   ],
+   "out": [
+    "ff9900"
+   ]
+  },
+  "between|space": {
+   "bucket": "kept",
+   "n": 2,
+   "src": [
+    "2"
+   ],
+   "out": [
+    "2"
+   ]
+  },
+  "between|sz": {
+   "bucket": "kept",
+   "n": 2,
+   "src": [
+    "6"
+   ],
+   "out": [
+    "6"
+   ]
+  },
+  "between|themeColor": {
+   "bucket": "kept",
+   "n": 2,
+   "src": [
+    "accent2"
+   ],
+   "out": [
+    "accent2"
+   ]
+  },
+  "between|themeTint": {
+   "bucket": "kept",
+   "n": 2,
+   "src": [
+    "99"
+   ],
+   "out": [
+    "99"
+   ]
+  },
+  "between|val": {
+   "bucket": "kept",
+   "n": 2,
+   "src": [
+    "dotted"
+   ],
+   "out": [
+    "dotted"
+   ]
+  },
+  "bidi|val": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "1"
+   ],
+   "out": [
+    "1"
+   ]
+  },
+  "blip|cstate": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "print"
+   ],
+   "out": [
+    "none",
+    "print"
+   ]
+  },
+  "blip|embed": {
+   "bucket": "kept",
+   "n": 3,
+   "src": [
+    "rid#"
+   ],
+   "out": [
+    "rid#"
+   ]
+  },
+  "blipFill|rotWithShape": {
+   "bucket": "lost",
+   "n": 1,
+   "src": [
+    "1"
+   ],
+   "out": []
+  },
+  "bodyPr|anchor": {
+   "bucket": "lost",
+   "n": 1,
+   "src": [
+    "ctr"
+   ],
+   "out": []
+  },
+  "bodyPr|anchorCtr": {
+   "bucket": "lost",
+   "n": 1,
+   "src": [
+    "0"
+   ],
+   "out": []
+  },
+  "bodyPr|bIns": {
+   "bucket": "lost",
+   "n": 1,
+   "src": [
+    "91440"
+   ],
+   "out": []
+  },
+  "bodyPr|compatLnSpc": {
+   "bucket": "lost",
+   "n": 1,
+   "src": [
+    "0"
+   ],
+   "out": []
+  },
+  "bodyPr|forceAA": {
+   "bucket": "lost",
+   "n": 1,
+   "src": [
+    "0"
+   ],
+   "out": []
+  },
+  "bodyPr|fromWordArt": {
+   "bucket": "lost",
+   "n": 1,
+   "src": [
+    "0"
+   ],
+   "out": []
+  },
+  "bodyPr|horzOverflow": {
+   "bucket": "lost",
+   "n": 1,
+   "src": [
+    "overflow"
+   ],
+   "out": []
+  },
+  "bodyPr|lIns": {
+   "bucket": "lost",
+   "n": 1,
+   "src": [
+    "91440"
+   ],
+   "out": []
+  },
+  "bodyPr|numCol": {
+   "bucket": "lost",
+   "n": 1,
+   "src": [
+    "1"
+   ],
+   "out": []
+  },
+  "bodyPr|rIns": {
+   "bucket": "lost",
+   "n": 1,
+   "src": [
+    "91440"
+   ],
+   "out": []
+  },
+  "bodyPr|rot": {
+   "bucket": "lost",
+   "n": 1,
+   "src": [
+    "0"
+   ],
+   "out": []
+  },
+  "bodyPr|rtlCol": {
+   "bucket": "lost",
+   "n": 1,
+   "src": [
+    "0"
+   ],
+   "out": []
+  },
+  "bodyPr|spcCol": {
+   "bucket": "lost",
+   "n": 1,
+   "src": [
+    "0"
+   ],
+   "out": []
+  },
+  "bodyPr|spcFirstLastPara": {
+   "bucket": "lost",
+   "n": 1,
+   "src": [
+    "0"
+   ],
+   "out": []
+  },
+  "bodyPr|tIns": {
+   "bucket": "lost",
+   "n": 1,
+   "src": [
+    "45720"
+   ],
+   "out": []
+  },
+  "bodyPr|upright": {
+   "bucket": "lost",
+   "n": 1,
+   "src": [
+    "0"
+   ],
+   "out": []
+  },
+  "bodyPr|vert": {
+   "bucket": "lost",
+   "n": 1,
+   "src": [
+    "horz"
+   ],
+   "out": []
+  },
+  "bodyPr|vertOverflow": {
+   "bucket": "lost",
+   "n": 1,
+   "src": [
+    "overflow"
+   ],
+   "out": []
+  },
+  "bodyPr|wrap": {
+   "bucket": "lost",
+   "n": 1,
+   "src": [
+    "square"
+   ],
+   "out": []
+  },
+  "bookmarkEnd|id": {
+   "bucket": "kept",
+   "n": 2,
+   "src": [
+    "7",
+    "9"
+   ],
+   "out": [
+    "7",
+    "9"
+   ]
+  },
+  "bookmarkStart|id": {
+   "bucket": "kept",
+   "n": 2,
+   "src": [
+    "7",
+    "9"
+   ],
+   "out": [
+    "7",
+    "9"
+   ]
+  },
+  "bookmarkStart|name": {
+   "bucket": "kept",
+   "n": 2,
+   "src": [
+    "_cross",
+    "_toc7"
+   ],
+   "out": [
+    "_cross",
+    "_toc7"
+   ]
+  },
+  "bottom|color": {
+   "bucket": "kept",
+   "n": 2,
+   "src": [
+    "000000",
+    "0000ff"
+   ],
+   "out": [
+    "000000",
+    "0000ff",
+    "adbbd4",
+    "auto"
+   ]
+  },
+  "bottom|space": {
+   "bucket": "kept",
+   "n": 2,
+   "src": [
+    "0",
+    "4"
+   ],
+   "out": [
+    "0",
+    "2",
+    "4"
+   ]
+  },
+  "bottom|sz": {
+   "bucket": "kept",
+   "n": 2,
+   "src": [
+    "4",
+    "6"
+   ],
+   "out": [
+    "4",
+    "6"
+   ]
+  },
+  "bottom|val": {
+   "bucket": "kept",
+   "n": 2,
+   "src": [
+    "dashed",
+    "single"
+   ],
+   "out": [
+    "dashed",
+    "single"
+   ]
+  },
+  "calcOnExit|val": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "1"
+   ],
+   "out": [
+    "1"
+   ]
+  },
+  "caps|val": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "1"
+   ],
+   "out": [
+    "1"
+   ]
+  },
+  "chExt|cx": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "1000"
+   ],
+   "out": [
+    "1000"
+   ]
+  },
+  "chExt|cy": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "1000"
+   ],
+   "out": [
+    "1000"
+   ]
+  },
+  "chOff|x": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "0"
+   ],
+   "out": [
+    "0"
+   ]
+  },
+  "chOff|y": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "0"
+   ],
+   "out": [
+    "0"
+   ]
+  },
+  "Choice|Requires": {
+   "bucket": "lost",
+   "n": 1,
+   "src": [
+    "wps"
+   ],
+   "out": []
+  },
+  "cnfStyle|evenHBand": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "0"
+   ],
+   "out": [
+    "0"
+   ]
+  },
+  "cnfStyle|evenVBand": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "0"
+   ],
+   "out": [
+    "0"
+   ]
+  },
+  "cnfStyle|firstColumn": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "1"
+   ],
+   "out": [
+    "1"
+   ]
+  },
+  "cnfStyle|firstRow": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "1"
+   ],
+   "out": [
+    "1"
+   ]
+  },
+  "cnfStyle|firstRowFirstColumn": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "1"
+   ],
+   "out": [
+    "1"
+   ]
+  },
+  "cnfStyle|firstRowLastColumn": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "0"
+   ],
+   "out": [
+    "0"
+   ]
+  },
+  "cnfStyle|lastColumn": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "0"
+   ],
+   "out": [
+    "0"
+   ]
+  },
+  "cnfStyle|lastRow": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "0"
+   ],
+   "out": [
+    "0"
+   ]
+  },
+  "cnfStyle|lastRowFirstColumn": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "0"
+   ],
+   "out": [
+    "0"
+   ]
+  },
+  "cnfStyle|lastRowLastColumn": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "0"
+   ],
+   "out": [
+    "0"
+   ]
+  },
+  "cnfStyle|oddHBand": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "1"
+   ],
+   "out": [
+    "1"
+   ]
+  },
+  "cnfStyle|oddVBand": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "1"
+   ],
+   "out": [
+    "1"
+   ]
+  },
+  "cnfStyle|val": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "000000100000"
+   ],
+   "out": [
+    "000000100000"
+   ]
+  },
+  "cNvPr|descr": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "图形级替代文本"
+   ],
+   "out": [
+    "",
+    "图形级替代文本"
+   ]
+  },
+  "cNvPr|id": {
+   "bucket": "kept",
+   "n": 3,
+   "src": [
+    "11",
+    "3",
+    "4"
+   ],
+   "out": [
+    "0",
+    "11",
+    "3",
+    "4"
+   ]
+  },
+  "cNvPr|name": {
+   "bucket": "kept",
+   "n": 3,
+   "src": [
+    "cnv 名",
+    "图形余量",
+    "浮动图"
+   ],
+   "out": [
+    "",
+    "cnv 名",
+    "图形余量",
+    "浮动图"
+   ]
+  },
+  "cNvSpPr|txBox": {
+   "bucket": "lost",
+   "n": 1,
+   "src": [
+    "1"
+   ],
+   "out": []
+  },
+  "col|space": {
+   "bucket": "kept",
+   "n": 2,
+   "src": [
+    "400"
+   ],
+   "out": [
+    "400"
+   ]
+  },
+  "col|w": {
+   "bucket": "kept",
+   "n": 2,
+   "src": [
+    "2000",
+    "3000"
+   ],
+   "out": [
+    "2000",
+    "3000"
+   ]
+  },
+  "color|themeColor": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "accent1"
+   ],
+   "out": [
+    "accent1"
+   ]
+  },
+  "color|themeShade": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "bf"
+   ],
+   "out": [
+    "bf"
+   ]
+  },
+  "color|themeTint": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "99"
+   ],
+   "out": [
+    "99"
+   ]
+  },
+  "color|val": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "ff0000"
+   ],
+   "out": [
+    "ff0000"
+   ]
+  },
+  "cols|equalWidth": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "0"
+   ],
+   "out": [
+    "0"
+   ]
+  },
+  "cols|num": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "2"
+   ],
+   "out": [
+    "2"
+   ]
+  },
+  "cols|space": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "720"
+   ],
+   "out": [
+    "720"
+   ]
+  },
+  "comment|author": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "张三"
+   ],
+   "out": [
+    "张三"
+   ]
+  },
+  "comment|date": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "2026-10-25t10:00:00.000z"
+   ],
+   "out": [
+    "2026-10-25t10:00:00.000z"
+   ]
+  },
+  "comment|id": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "1"
+   ],
+   "out": [
+    "1"
+   ]
+  },
+  "comment|initials": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "zs"
+   ],
+   "out": [
+    "zs"
+   ]
+  },
+  "commentEx|done": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "1"
+   ],
+   "out": [
+    "1"
+   ]
+  },
+  "commentEx|paraId": {
+   "bucket": "value",
+   "noise": true,
+   "n": 1,
+   "src": [
+    "0f1e2d3c"
+   ],
+   "out": [
+    "00000002"
+   ]
+  },
+  "commentRangeEnd|id": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "1"
+   ],
+   "out": [
+    "1"
+   ]
+  },
+  "commentRangeStart|id": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "1"
+   ],
+   "out": [
+    "1"
+   ]
+  },
+  "commentReference|id": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "1"
+   ],
+   "out": [
+    "1"
+   ]
+  },
+  "comments|Ignorable": {
+   "bucket": "lost",
+   "n": 1,
+   "src": [
+    "w14"
+   ],
+   "out": []
+  },
+  "commentsEx|Ignorable": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "w15"
+   ],
+   "out": [
+    "w15"
+   ]
+  },
+  "creationId|id": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "00000001"
+   ],
+   "out": [
+    "00000001"
+   ]
+  },
+  "cxn|ang": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "0"
+   ],
+   "out": [
+    "0"
+   ]
+  },
+  "cxnSpLocks|noChangeShapeType": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "1"
+   ],
+   "out": [
+    "1"
+   ]
+  },
+  "default|val": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "默认"
+   ],
+   "out": [
+    "默认"
+   ]
+  },
+  "docGrid|charSpace": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "200"
+   ],
+   "out": [
+    "200"
+   ]
+  },
+  "docGrid|linePitch": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "312"
+   ],
+   "out": [
+    "312"
+   ]
+  },
+  "docGrid|type": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "lines"
+   ],
+   "out": [
+    "lines"
+   ]
+  },
+  "docPr|descr": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "画布级替代文本"
+   ],
+   "out": [
+    "",
+    "图形余量",
+    "浮动图",
+    "画布级替代文本"
+   ]
+  },
+  "docPr|id": {
+   "bucket": "kept",
+   "n": 5,
+   "src": [
+    "11",
+    "12",
+    "7",
+    "8",
+    "9"
+   ],
+   "out": [
+    "11",
+    "12",
+    "7",
+    "8",
+    "9"
+   ]
+  },
+  "docPr|name": {
+   "bucket": "kept",
+   "n": 5,
+   "src": [
+    "图形余量",
+    "图片 1",
+    "形状 1",
+    "浮动图",
+    "艺术字"
+   ],
+   "out": [
+    "图形余量",
+    "图片 1",
+    "形状 1",
+    "浮动图",
+    "艺术字"
+   ]
+  },
+  "document|Ignorable": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "w14"
+   ],
+   "out": [
+    "w14",
+    "w15",
+    "wp14"
+   ]
+  },
+  "effectExtent|b": {
+   "bucket": "kept",
+   "n": 2,
+   "src": [
+    "0"
+   ],
+   "out": [
+    "0"
+   ]
+  },
+  "effectExtent|l": {
+   "bucket": "kept",
+   "n": 2,
+   "src": [
+    "0",
+    "19050"
+   ],
+   "out": [
+    "0",
+    "19050"
+   ]
+  },
+  "effectExtent|r": {
+   "bucket": "kept",
+   "n": 2,
+   "src": [
+    "0"
+   ],
+   "out": [
+    "0"
+   ]
+  },
+  "effectExtent|t": {
+   "bucket": "kept",
+   "n": 2,
+   "src": [
+    "0",
+    "9525"
+   ],
+   "out": [
+    "0",
+    "9525"
+   ]
+  },
+  "effectRef|idx": {
+   "bucket": "lost",
+   "n": 1,
+   "src": [
+    "0"
+   ],
+   "out": []
+  },
+  "em|val": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "dot"
+   ],
+   "out": [
+    "dot"
+   ]
+  },
+  "emboss|val": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "1"
+   ],
+   "out": [
+    "1"
+   ]
+  },
+  "endnotes|Ignorable": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "w14"
+   ],
+   "out": [
+    "w14",
+    "w15",
+    "wp14"
+   ]
+  },
+  "entryMacro|val": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    ""
+   ],
+   "out": [
+    ""
+   ]
+  },
+  "ext|cx": {
+   "bucket": "kept",
+   "n": 2,
+   "src": [
+    "914400"
+   ],
+   "out": [
+    "1266825",
+    "3048000",
+    "914400"
+   ]
+  },
+  "ext|cy": {
+   "bucket": "kept",
+   "n": 2,
+   "src": [
+    "914400"
+   ],
+   "out": [
+    "2286000",
+    "638175",
+    "914400"
+   ]
+  },
+  "ext|uri": {
+   "bucket": "lost",
+   "n": 2,
+   "src": [
+    "{1234-5678-9abc-def0}",
+    "{1234-5678-9abc-def1}"
+   ],
+   "out": []
+  },
+  "extent|cx": {
+   "bucket": "kept",
+   "n": 5,
+   "src": [
+    "914400"
+   ],
+   "out": [
+    "1266825",
+    "3048000",
+    "914400"
+   ]
+  },
+  "extent|cy": {
+   "bucket": "kept",
+   "n": 5,
+   "src": [
+    "914400"
+   ],
+   "out": [
+    "2286000",
+    "638175",
+    "914400"
+   ]
+  },
+  "f|eqn": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "sum 0 0 0"
+   ],
+   "out": [
+    "sum 0 0 0"
+   ]
+  },
+  "fill|color2": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "#00ff00"
+   ],
+   "out": [
+    "#00ff00"
+   ]
+  },
+  "fill|colors": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "0% #fff,100% #000"
+   ],
+   "out": [
+    "0% #fff,100% #000"
+   ]
+  },
+  "fill|ext": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "view"
+   ],
+   "out": [
+    "view"
+   ]
+  },
+  "fill|focus": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "50%"
+   ],
+   "out": [
+    "50%"
+   ]
+  },
+  "fill|focusposition": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "0,0"
+   ],
+   "out": [
+    "0,0"
+   ]
+  },
+  "fill|focussize": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "0,0"
+   ],
+   "out": [
+    "0,0"
+   ]
+  },
+  "fill|id": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "fill1"
+   ],
+   "out": [
+    "fill1"
+   ]
+  },
+  "fill|on": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "t"
+   ],
+   "out": [
+    "t"
+   ]
+  },
+  "fill|opacity": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "0.5"
+   ],
+   "out": [
+    "0.5"
+   ]
+  },
+  "fill|opacity2": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "1"
+   ],
+   "out": [
+    "1"
+   ]
+  },
+  "fill|recolor": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "t"
+   ],
+   "out": [
+    "t"
+   ]
+  },
+  "fill|rotate": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "t"
+   ],
+   "out": [
+    "t"
+   ]
+  },
+  "fill|title": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "填充标题"
+   ],
+   "out": [
+    "填充标题"
+   ]
+  },
+  "fill|type": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "gradient"
+   ],
+   "out": [
+    "gradient"
+   ]
+  },
+  "fillRect|b": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "0"
+   ],
+   "out": [
+    "0"
+   ]
+  },
+  "fillRect|t": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "0"
+   ],
+   "out": [
+    "0"
+   ]
+  },
+  "fillRef|idx": {
+   "bucket": "lost",
+   "n": 1,
+   "src": [
+    "2"
+   ],
+   "out": []
+  },
+  "fillToRect|b": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "0"
+   ],
+   "out": [
+    "0"
+   ]
+  },
+  "fillToRect|l": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "0"
+   ],
+   "out": [
+    "0"
+   ]
+  },
+  "fillToRect|r": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "0"
+   ],
+   "out": [
+    "0"
+   ]
+  },
+  "fillToRect|t": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "0"
+   ],
+   "out": [
+    "0"
+   ]
+  },
+  "fldChar|fldCharType": {
+   "bucket": "kept",
+   "n": 3,
+   "src": [
+    "begin",
+    "end",
+    "separate"
+   ],
+   "out": [
+    "begin",
+    "end",
+    "separate"
+   ]
+  },
+  "fldChar|fldLock": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "1"
+   ],
+   "out": [
+    "1"
+   ]
+  },
+  "fontRef|idx": {
+   "bucket": "lost",
+   "n": 1,
+   "src": [
+    "minor"
+   ],
+   "out": []
+  },
+  "footerReference|id": {
+   "bucket": "lost",
+   "n": 1,
+   "src": [
+    "rid#"
+   ],
+   "out": []
+  },
+  "footerReference|type": {
+   "bucket": "lost",
+   "n": 1,
+   "src": [
+    "default"
+   ],
+   "out": []
+  },
+  "footnotes|Ignorable": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "w14"
+   ],
+   "out": [
+    "w14",
+    "w15",
+    "wp14"
+   ]
+  },
+  "formProt|val": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "1"
+   ],
+   "out": [
+    "1"
+   ]
+  },
+  "framePr|anchorLock": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "1"
+   ],
+   "out": [
+    "1"
+   ]
+  },
+  "framePr|h": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "720"
+   ],
+   "out": [
+    "720"
+   ]
+  },
+  "framePr|hAnchor": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "page"
+   ],
+   "out": [
+    "page"
+   ]
+  },
+  "framePr|hRule": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "exact"
+   ],
+   "out": [
+    "exact"
+   ]
+  },
+  "framePr|hSpace": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "12"
+   ],
+   "out": [
+    "12"
+   ]
+  },
+  "framePr|vAnchor": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "text"
+   ],
+   "out": [
+    "text"
+   ]
+  },
+  "framePr|vSpace": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "24"
+   ],
+   "out": [
+    "24"
+   ]
+  },
+  "framePr|w": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "2880"
+   ],
+   "out": [
+    "2880"
+   ]
+  },
+  "framePr|wrap": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "around"
+   ],
+   "out": [
+    "around"
+   ]
+  },
+  "framePr|x": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "720"
+   ],
+   "out": [
+    "720"
+   ]
+  },
+  "framePr|y": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "1440"
+   ],
+   "out": [
+    "1440"
+   ]
+  },
+  "gd|fmla": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "sum 0 0 0"
+   ],
+   "out": [
+    "sum 0 0 0"
+   ]
+  },
+  "gd|name": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "x1"
+   ],
+   "out": [
+    "x1"
+   ]
+  },
+  "glow|rad": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "63500"
+   ],
+   "out": [
+    "63500"
+   ]
+  },
+  "gradFill|flip": {
+   "bucket": "lost",
+   "n": 1,
+   "src": [
+    "xy"
+   ],
+   "out": []
+  },
+  "gradFill|rotWithShape": {
+   "bucket": "lost",
+   "n": 1,
+   "src": [
+    "0"
+   ],
+   "out": []
+  },
+  "graphicData|uri": {
+   "bucket": "kept",
+   "n": 2,
+   "src": [
+    "http://schemas.openxmlformats.org/drawingml/2006/picture"
+   ],
+   "out": [
+    "http://schemas.openxmlformats.org/drawingml/2006/picture"
+   ]
+  },
+  "graphicFrameLocks|noChangeAspect": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "1"
+   ],
+   "out": [
+    "1"
+   ]
+  },
+  "gridAfter|val": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "0"
+   ],
+   "out": [
+    "0"
+   ]
+  },
+  "gridCol|w": {
+   "bucket": "value",
+   "n": 4,
+   "src": [
+    "2500",
+    "5000"
+   ],
+   "out": [
+    "2505",
+    "4995"
+   ]
+  },
+  "group|anchorId": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "a4"
+   ],
+   "out": [
+    "a4"
+   ]
+  },
+  "group|coordorigin": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "0,0"
+   ],
+   "out": [
+    "0,0"
+   ]
+  },
+  "group|coordsize": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "1000,1000"
+   ],
+   "out": [
+    "1000,1000"
+   ]
+  },
+  "group|editas": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "canvas"
+   ],
+   "out": [
+    "canvas"
+   ]
+  },
+  "group|id": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "_x0000_s1025"
+   ],
+   "out": [
+    "_x0000_s1025"
+   ]
+  },
+  "group|spid": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "_x0000_s1026"
+   ],
+   "out": [
+    "_x0000_s1026"
+   ]
+  },
+  "group|spt": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "0"
+   ],
+   "out": [
+    "0"
+   ]
+  },
+  "group|style": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "position:absolute"
+   ],
+   "out": [
+    "position:absolute"
+   ]
+  },
+  "gs|pos": {
+   "bucket": "lost",
+   "n": 4,
+   "src": [
+    "0",
+    "100000"
+   ],
+   "out": []
+  },
+  "h|position": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "0,0"
+   ],
+   "out": [
+    "0,0"
+   ]
+  },
+  "h|xrange": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "0,10"
+   ],
+   "out": [
+    "0,10"
+   ]
+  },
+  "h|yrange": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "0,10"
+   ],
+   "out": [
+    "0,10"
+   ]
+  },
+  "headEnd|len": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "sm"
+   ],
+   "out": [
+    "sm"
+   ]
+  },
+  "headEnd|type": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "triangle"
+   ],
+   "out": [
+    "triangle"
+   ]
+  },
+  "headEnd|w": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "med"
+   ],
+   "out": [
+    "med"
+   ]
+  },
+  "headerReference|id": {
+   "bucket": "lost",
+   "n": 1,
+   "src": [
+    "rid#"
+   ],
+   "out": []
+  },
+  "headerReference|type": {
+   "bucket": "lost",
+   "n": 1,
+   "src": [
+    "default"
+   ],
+   "out": []
+  },
+  "hiddenLine|w": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "1pt"
+   ],
+   "out": [
+    "1pt"
+   ]
+  },
+  "hueOff|val": {
+   "bucket": "lost",
+   "n": 1,
+   "src": [
+    "60000"
+   ],
+   "out": []
+  },
+  "hyperlink|history": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "1"
+   ],
+   "out": [
+    "1"
+   ]
+  },
+  "hyperlink|id": {
+   "bucket": "kept",
+   "n": 2,
+   "src": [
+    "rid#"
+   ],
+   "out": [
+    "rid#"
+   ]
+  },
+  "hyperlink|tgtFrame": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "blank"
+   ],
+   "out": [
+    "blank"
+   ]
+  },
+  "hyperlink|tooltip": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "悬停提示"
+   ],
+   "out": [
+    "悬停提示"
+   ]
+  },
+  "i|val": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "1"
+   ],
+   "out": [
+    "0",
+    "1"
+   ]
+  },
+  "iCs|val": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "1"
+   ],
+   "out": [
+    "0",
+    "1"
+   ]
+  },
+  "id|val": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "42"
+   ],
+   "out": [
+    "42"
+   ]
+  },
+  "ilvl|val": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "0"
+   ],
+   "out": [
+    "0"
+   ]
+  },
+  "imagedata|cropbottom": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "5%"
+   ],
+   "out": [
+    "5%"
+   ]
+  },
+  "imagedata|cropleft": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "0"
+   ],
+   "out": [
+    "0"
+   ]
+  },
+  "imagedata|cropright": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "0.2"
+   ],
+   "out": [
+    "0.2"
+   ]
+  },
+  "imagedata|croptop": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "0.1"
+   ],
+   "out": [
+    "0.1"
+   ]
+  },
+  "imagedata|id": {
+   "bucket": "kept",
+   "n": 2,
+   "src": [
+    "rid#"
+   ],
+   "out": [
+    "rid#"
+   ]
+  },
+  "imagedata|title": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "老式图的标题"
+   ],
+   "out": [
+    "老式图的标题"
+   ]
+  },
+  "imprint|val": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "1"
+   ],
+   "out": [
+    "1"
+   ]
+  },
+  "ind|firstLineChars": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "200"
+   ],
+   "out": [
+    "200"
+   ]
+  },
+  "ind|hangingChars": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "0"
+   ],
+   "out": [
+    "0"
+   ]
+  },
+  "ind|left": {
+   "bucket": "kept",
+   "n": 3,
+   "src": [
+    "0",
+    "420"
+   ],
+   "out": [
+    "0",
+    "1440",
+    "2160",
+    "2880",
+    "3600",
+    "420",
+    "4320",
+    "5040",
+    "5760",
+    "6480",
+    "720"
+   ]
+  },
+  "ind|right": {
+   "bucket": "kept",
+   "n": 2,
+   "src": [
+    "0",
+    "210"
+   ],
+   "out": [
+    "0",
+    "210"
+   ]
+  },
+  "inline|anchorId": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "00000001"
+   ],
+   "out": [
+    "00000001"
+   ]
+  },
+  "inline|distB": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "0"
+   ],
+   "out": [
+    "0"
+   ]
+  },
+  "inline|distL": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "114300"
+   ],
+   "out": [
+    "0",
+    "114300"
+   ]
+  },
+  "inline|distR": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "0"
+   ],
+   "out": [
+    "0"
+   ]
+  },
+  "inline|distT": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "114300"
+   ],
+   "out": [
+    "0",
+    "114300"
+   ]
+  },
+  "inline|editId": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "00000002"
+   ],
+   "out": [
+    "00000002"
+   ]
+  },
+  "ins|author": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "张三"
+   ],
+   "out": [
+    "张三"
+   ]
+  },
+  "ins|date": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "2026-10-26t00:00:00.000z"
+   ],
+   "out": [
+    "2026-10-26t00:00:00.000z"
+   ]
+  },
+  "ins|id": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "7"
+   ],
+   "out": [
+    "7"
+   ]
+  },
+  "insideH|color": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "000000"
+   ],
+   "out": [
+    "000000",
+    "auto"
+   ]
+  },
+  "insideH|space": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "2"
+   ],
+   "out": [
+    "2"
+   ]
+  },
+  "insideH|sz": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "4"
+   ],
+   "out": [
+    "4"
+   ]
+  },
+  "insideH|themeColor": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "accent1"
+   ],
+   "out": [
+    "accent1"
+   ]
+  },
+  "insideH|themeShade": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "bf"
+   ],
+   "out": [
+    "bf"
+   ]
+  },
+  "insideH|themeTint": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "99"
+   ],
+   "out": [
+    "99"
+   ]
+  },
+  "insideH|val": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "single"
+   ],
+   "out": [
+    "single"
+   ]
+  },
+  "insideV|color": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "000000"
+   ],
+   "out": [
+    "000000",
+    "auto"
+   ]
+  },
+  "insideV|space": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "3"
+   ],
+   "out": [
+    "3"
+   ]
+  },
+  "insideV|sz": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "4"
+   ],
+   "out": [
+    "4"
+   ]
+  },
+  "insideV|themeColor": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "accent1"
+   ],
+   "out": [
+    "accent1"
+   ]
+  },
+  "insideV|themeShade": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "bf"
+   ],
+   "out": [
+    "bf"
+   ]
+  },
+  "insideV|themeTint": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "99"
+   ],
+   "out": [
+    "99"
+   ]
+  },
+  "insideV|val": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "single"
+   ],
+   "out": [
+    "single"
+   ]
+  },
+  "jc|val": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "both"
+   ],
+   "out": [
+    "both"
+   ]
+  },
+  "keepLines|val": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "1"
+   ],
+   "out": [
+    "1"
+   ]
+  },
+  "keepNext|val": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "1"
+   ],
+   "out": [
+    "1"
+   ]
+  },
+  "kern|val": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "2"
+   ],
+   "out": [
+    "2"
+   ]
+  },
+  "kinsoku|val": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "0"
+   ],
+   "out": [
+    "0"
+   ]
+  },
+  "lang|bidi": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "ar-sa"
+   ],
+   "out": [
+    "ar-sa"
+   ]
+  },
+  "lang|eastAsia": {
+   "bucket": "kept",
+   "n": 2,
+   "src": [
+    "zh-cn"
+   ],
+   "out": [
+    "zh-cn"
+   ]
+  },
+  "lang|val": {
+   "bucket": "kept",
+   "n": 2,
+   "src": [
+    "en-us"
+   ],
+   "out": [
+    "en-us"
+   ]
+  },
+  "latentStyles|count": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "2"
+   ],
+   "out": [
+    "2"
+   ]
+  },
+  "latentStyles|defLockedState": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "0"
+   ],
+   "out": [
+    "0"
+   ]
+  },
+  "latentStyles|defQFormat": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "0"
+   ],
+   "out": [
+    "0"
+   ]
+  },
+  "latentStyles|defSemiHidden": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "0"
+   ],
+   "out": [
+    "0"
+   ]
+  },
+  "latentStyles|defUIPriority": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "99"
+   ],
+   "out": [
+    "99"
+   ]
+  },
+  "latentStyles|defUnhideWhenUsed": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "0"
+   ],
+   "out": [
+    "0"
+   ]
+  },
+  "left|color": {
+   "bucket": "kept",
+   "n": 3,
+   "src": [
+    "000000",
+    "00ff00",
+    "auto"
+   ],
+   "out": [
+    "000000",
+    "00ff00",
+    "adbbd4",
+    "auto"
+   ]
+  },
+  "left|space": {
+   "bucket": "kept",
+   "n": 3,
+   "src": [
+    "0",
+    "2"
+   ],
+   "out": [
+    "0",
+    "2",
+    "3"
+   ]
+  },
+  "left|sz": {
+   "bucket": "kept",
+   "n": 3,
+   "src": [
+    "4"
+   ],
+   "out": [
+    "4"
+   ]
+  },
+  "left|val": {
+   "bucket": "kept",
+   "n": 3,
+   "src": [
+    "dashed",
+    "dotted",
+    "single"
+   ],
+   "out": [
+    "dashed",
+    "dotted",
+    "single"
+   ]
+  },
+  "legacy|legacy": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "1"
+   ],
+   "out": [
+    "1"
+   ]
+  },
+  "legacy|legacyIndent": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "0"
+   ],
+   "out": [
+    "0"
+   ]
+  },
+  "legacy|legacySpace": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "0"
+   ],
+   "out": [
+    "0"
+   ]
+  },
+  "ligatures|val": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "standardcontextual"
+   ],
+   "out": [
+    "standardcontextual"
+   ]
+  },
+  "lightRig|dir": {
+   "bucket": "lost",
+   "n": 1,
+   "src": [
+    "t"
+   ],
+   "out": []
+  },
+  "lightRig|rig": {
+   "bucket": "lost",
+   "n": 1,
+   "src": [
+    "threept"
+   ],
+   "out": []
+  },
+  "lin|ang": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "45"
+   ],
+   "out": [
+    "45"
+   ]
+  },
+  "lin|scaled": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "0"
+   ],
+   "out": [
+    "0"
+   ]
+  },
+  "line|allowincell": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "f"
+   ],
+   "out": [
+    "f"
+   ]
+  },
+  "line|anchorId": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "a2"
+   ],
+   "out": [
+    "a2"
+   ]
+  },
+  "line|coordsize": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "1000,1000"
+   ],
+   "out": [
+    "1000,1000"
+   ]
+  },
+  "line|fillcolor": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "#0000ff"
+   ],
+   "out": [
+    "#0000ff"
+   ]
+  },
+  "line|filled": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "f"
+   ],
+   "out": [
+    "f"
+   ]
+  },
+  "line|from": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "0,0"
+   ],
+   "out": [
+    "0,0"
+   ]
+  },
+  "line|id": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "ln1"
+   ],
+   "out": [
+    "ln1"
+   ]
+  },
+  "line|spid": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "ln2"
+   ],
+   "out": [
+    "ln2"
+   ]
+  },
+  "line|spt": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "20"
+   ],
+   "out": [
+    "20"
+   ]
+  },
+  "line|strokecolor": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "#000080"
+   ],
+   "out": [
+    "#000080"
+   ]
+  },
+  "line|stroked": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "t"
+   ],
+   "out": [
+    "t"
+   ]
+  },
+  "line|strokeweight": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "2pt"
+   ],
+   "out": [
+    "2pt"
+   ]
+  },
+  "line|style": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "position:absolute"
+   ],
+   "out": [
+    "position:absolute"
+   ]
+  },
+  "line|to": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "100,100"
+   ],
+   "out": [
+    "100,100"
+   ]
+  },
+  "link|val": {
+   "bucket": "kept",
+   "n": 2,
+   "src": [
+    "report",
+    "reportchar"
+   ],
+   "out": [
+    "report",
+    "reportchar"
+   ]
+  },
+  "ln|cap": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "flat"
+   ],
+   "out": [
+    "flat"
+   ]
+  },
+  "ln|cmpd": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "sng"
+   ],
+   "out": [
+    "sng"
+   ]
+  },
+  "ln|w": {
+   "bucket": "kept",
+   "n": 3,
+   "src": [
+    "9525"
+   ],
+   "out": [
+    "9525"
+   ]
+  },
+  "lnRef|idx": {
+   "bucket": "lost",
+   "n": 1,
+   "src": [
+    "1"
+   ],
+   "out": []
+  },
+  "lock|aspectratio": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "f"
+   ],
+   "out": [
+    "f"
+   ]
+  },
+  "lock|ext": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "edit"
+   ],
+   "out": [
+    "edit"
+   ]
+  },
+  "lock|shapetype": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "t"
+   ],
+   "out": [
+    "t"
+   ]
+  },
+  "lsdException|locked": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "0"
+   ],
+   "out": [
+    "0"
+   ]
+  },
+  "lsdException|name": {
+   "bucket": "kept",
+   "n": 2,
+   "src": [
+    "default paragraph font",
+    "heading 1"
+   ],
+   "out": [
+    "default paragraph font",
+    "heading 1"
+   ]
+  },
+  "lsdException|qFormat": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "1"
+   ],
+   "out": [
+    "1"
+   ]
+  },
+  "lsdException|semiHidden": {
+   "bucket": "kept",
+   "n": 2,
+   "src": [
+    "0",
+    "1"
+   ],
+   "out": [
+    "0",
+    "1"
+   ]
+  },
+  "lsdException|uiPriority": {
+   "bucket": "kept",
+   "n": 2,
+   "src": [
+    "1",
+    "9"
+   ],
+   "out": [
+    "1",
+    "9"
+   ]
+  },
+  "lsdException|unhideWhenUsed": {
+   "bucket": "kept",
+   "n": 2,
+   "src": [
+    "0",
+    "1"
+   ],
+   "out": [
+    "0",
+    "1"
+   ]
+  },
+  "lum|bright": {
+   "bucket": "lost",
+   "n": 1,
+   "src": [
+    "40000"
+   ],
+   "out": []
+  },
+  "lum|contrast": {
+   "bucket": "lost",
+   "n": 1,
+   "src": [
+    "60000"
+   ],
+   "out": []
+  },
+  "lumMod|val": {
+   "bucket": "lost",
+   "n": 3,
+   "src": [
+    "50000",
+    "80000"
+   ],
+   "out": []
+  },
+  "lumOff|val": {
+   "bucket": "lost",
+   "n": 1,
+   "src": [
+    "50000"
+   ],
+   "out": []
+  },
+  "lvl|ilvl": {
+   "bucket": "kept",
+   "n": 2,
+   "src": [
+    "0",
+    "1"
+   ],
+   "out": [
+    "0",
+    "1",
+    "2",
+    "3",
+    "4",
+    "5",
+    "6",
+    "7",
+    "8"
+   ]
+  },
+  "lvl|tentative": {
+   "bucket": "kept",
+   "n": 2,
+   "src": [
+    "0",
+    "1"
+   ],
+   "out": [
+    "0",
+    "1"
+   ]
+  },
+  "lvl|tplc": {
+   "bucket": "kept",
+   "n": 2,
+   "src": [
+    "0409001d",
+    "0409001f"
+   ],
+   "out": [
+    "0409001d",
+    "0409001f"
+   ]
+  },
+  "lvlJc|val": {
+   "bucket": "kept",
+   "n": 2,
+   "src": [
+    "center",
+    "left"
+   ],
+   "out": [
+    "center",
+    "left",
+    "start"
+   ]
+  },
+  "lvlOverride|ilvl": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "0"
+   ],
+   "out": [
+    "0"
+   ]
+  },
+  "lvlPicBulletId|val": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "7"
+   ],
+   "out": [
+    "7"
+   ]
+  },
+  "lvlRestart|val": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "0"
+   ],
+   "out": [
+    "0"
+   ]
+  },
+  "lvlText|val": {
+   "bucket": "kept",
+   "n": 2,
+   "src": [
+    "%2.",
+    "·"
+   ],
+   "out": [
+    "%1.",
+    "%2.",
+    "%3.",
+    "·",
+    "■",
+    "○",
+    "●"
+   ]
+  },
+  "maxLength|val": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "10"
+   ],
+   "out": [
+    "10"
+   ]
+  },
+  "miter|lim": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "800000"
+   ],
+   "out": [
+    "800000"
+   ]
+  },
+  "multiLevelType|val": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "hybridmultilevel"
+   ],
+   "out": [
+    "hybridmultilevel"
+   ]
+  },
+  "name|val": {
+   "bucket": "kept",
+   "n": 7,
+   "src": [
+    "normal",
+    "plain",
+    "report",
+    "report char",
+    "report head",
+    "table grid",
+    "text1"
+   ],
+   "out": [
+    "normal",
+    "plain",
+    "report",
+    "report char",
+    "report head",
+    "table grid",
+    "text1"
+   ]
+  },
+  "next|val": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "reporthead"
+   ],
+   "out": [
+    "reporthead"
+   ]
+  },
+  "noWrap|val": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "1"
+   ],
+   "out": [
+    "1"
+   ]
+  },
+  "nsid|val": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "00a1b2c3"
+   ],
+   "out": [
+    "00a1b2c3"
+   ]
+  },
+  "num|durableId": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "3c7b9a2e"
+   ],
+   "out": [
+    "3c7b9a2e"
+   ]
+  },
+  "num|numId": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "1"
+   ],
+   "out": [
+    "1",
+    "2"
+   ]
+  },
+  "numbering|Ignorable": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "w14"
+   ],
+   "out": [
+    "w14",
+    "w15",
+    "wp14"
+   ]
+  },
+  "numFmt|val": {
+   "bucket": "kept",
+   "n": 2,
+   "src": [
+    "bullet",
+    "lowerletter"
+   ],
+   "out": [
+    "bullet",
+    "decimal",
+    "lowerletter",
+    "lowerroman"
+   ]
+  },
+  "numForm|val": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "oldstyle"
+   ],
+   "out": [
+    "oldstyle"
+   ]
+  },
+  "numId|val": {
+   "bucket": "value",
+   "n": 1,
+   "src": [
+    "1"
+   ],
+   "out": [
+    "2"
+   ]
+  },
+  "numIdMacAtCleanup|val": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "0"
+   ],
+   "out": [
+    "0"
+   ]
+  },
+  "numPicBullet|numPicBulletId": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "7"
+   ],
+   "out": [
+    "7"
+   ]
+  },
+  "numSpacing|val": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "proportional"
+   ],
+   "out": [
+    "proportional"
+   ]
+  },
+  "object|dxaOrig": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "5486"
+   ],
+   "out": [
+    "5486"
+   ]
+  },
+  "object|dyaOrig": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "3200"
+   ],
+   "out": [
+    "3200"
+   ]
+  },
+  "off|x": {
+   "bucket": "kept",
+   "n": 2,
+   "src": [
+    "0"
+   ],
+   "out": [
+    "0"
+   ]
+  },
+  "off|y": {
+   "bucket": "kept",
+   "n": 2,
+   "src": [
+    "0"
+   ],
+   "out": [
+    "0"
+   ]
+  },
+  "OLEObject|DrawAspect": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "content"
+   ],
+   "out": [
+    "content"
+   ]
+  },
+  "OLEObject|ObjectID": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "_1"
+   ],
+   "out": [
+    "_1"
+   ]
+  },
+  "OLEObject|ShapeID": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "_x0000_s1027"
+   ],
+   "out": [
+    "_x0000_s1027"
+   ]
+  },
+  "outerShdw|algn": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "tl"
+   ],
+   "out": [
+    "tl"
+   ]
+  },
+  "outerShdw|blurRad": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "63500"
+   ],
+   "out": [
+    "63500"
+   ]
+  },
+  "outerShdw|dir": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "5400000"
+   ],
+   "out": [
+    "5400000"
+   ]
+  },
+  "outerShdw|dist": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "38100"
+   ],
+   "out": [
+    "38100"
+   ]
+  },
+  "outerShdw|rotWithShape": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "0"
+   ],
+   "out": [
+    "0"
+   ]
+  },
+  "outline|val": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "1"
+   ],
+   "out": [
+    "1"
+   ]
+  },
+  "overflowPunct|val": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "0"
+   ],
+   "out": [
+    "0"
+   ]
+  },
+  "p|paraId": {
+   "bucket": "value",
+   "noise": true,
+   "n": 1,
+   "src": [
+    "0f1e2d3c"
+   ],
+   "out": [
+    "00000002"
+   ]
+  },
+  "pageBreakBefore|val": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "1"
+   ],
+   "out": [
+    "1"
+   ]
+  },
+  "path|arrowok": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "t"
+   ],
+   "out": [
+    "t"
+   ]
+  },
+  "path|connectangles": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    ""
+   ],
+   "out": [
+    ""
+   ]
+  },
+  "path|connectlocs": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    ""
+   ],
+   "out": [
+    ""
+   ]
+  },
+  "path|connecttype": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "custom"
+   ],
+   "out": [
+    "custom"
+   ]
+  },
+  "path|extrusionok": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "f"
+   ],
+   "out": [
+    "f"
+   ]
+  },
+  "path|fillok": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "f"
+   ],
+   "out": [
+    "f"
+   ]
+  },
+  "path|gradientshapeok": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "t"
+   ],
+   "out": [
+    "t"
+   ]
+  },
+  "path|h": {
+   "bucket": "kept",
+   "n": 2,
+   "src": [
+    "1000"
+   ],
+   "out": [
+    "1000"
+   ]
+  },
+  "path|path": {
+   "bucket": "lost",
+   "n": 1,
+   "src": [
+    "moveto(0,0) lnto(1000,1000)"
+   ],
+   "out": []
+  },
+  "path|textboxrect": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "0,0,10,10"
+   ],
+   "out": [
+    "0,0,10,10"
+   ]
+  },
+  "path|w": {
+   "bucket": "kept",
+   "n": 2,
+   "src": [
+    "1000"
+   ],
+   "out": [
+    "1000"
+   ]
+  },
+  "pgMar|bottom": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "1440"
+   ],
+   "out": [
+    "1440"
+   ]
+  },
+  "pgMar|footer": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "992"
+   ],
+   "out": [
+    "992"
+   ]
+  },
+  "pgMar|gutter": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "0"
+   ],
+   "out": [
+    "0"
+   ]
+  },
+  "pgMar|header": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "851"
+   ],
+   "out": [
+    "851"
+   ]
+  },
+  "pgMar|left": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "1800"
+   ],
+   "out": [
+    "1800"
+   ]
+  },
+  "pgMar|right": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "1800"
+   ],
+   "out": [
+    "1800"
+   ]
+  },
+  "pgMar|top": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "1440"
+   ],
+   "out": [
+    "1440"
+   ]
+  },
+  "pgNumType|fmt": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "lowerroman"
+   ],
+   "out": [
+    "lowerroman"
+   ]
+  },
+  "pgNumType|start": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "3"
+   ],
+   "out": [
+    "3"
+   ]
+  },
+  "pgSz|code": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "9"
+   ],
+   "out": [
+    "9"
+   ]
+  },
+  "pgSz|h": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "16838"
+   ],
+   "out": [
+    "16838"
+   ]
+  },
+  "pgSz|orient": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "portrait"
+   ],
+   "out": [
+    "portrait"
+   ]
+  },
+  "pgSz|w": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "11906"
+   ],
+   "out": [
+    "11906"
+   ]
+  },
+  "picLocks|noChangeArrowheads": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "1"
+   ],
+   "out": [
+    "1"
+   ]
+  },
+  "picLocks|noChangeAspect": {
+   "bucket": "kept",
+   "n": 3,
+   "src": [
+    "0",
+    "1"
+   ],
+   "out": [
+    "0",
+    "1"
+   ]
+  },
+  "pos|x": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "5"
+   ],
+   "out": [
+    "5"
+   ]
+  },
+  "pos|y": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "6"
+   ],
+   "out": [
+    "6"
+   ]
+  },
+  "position|val": {
+   "bucket": "kept",
+   "n": 2,
+   "src": [
+    "12",
+    "24"
+   ],
+   "out": [
+    "12",
+    "24"
+   ]
+  },
+  "positionH|relativeFrom": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "page"
+   ],
+   "out": [
+    "page"
+   ]
+  },
+  "positionV|relativeFrom": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "margin"
+   ],
+   "out": [
+    "margin",
+    "page"
+   ]
+  },
+  "proofErr|type": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "spellstart"
+   ],
+   "out": [
+    "spellstart"
+   ]
+  },
+  "props3d|contourW": {
+   "bucket": "lost",
+   "n": 1,
+   "src": [
+    "12700"
+   ],
+   "out": []
+  },
+  "props3d|extrusionH": {
+   "bucket": "lost",
+   "n": 1,
+   "src": [
+    "25400"
+   ],
+   "out": []
+  },
+  "props3d|prstMaterial": {
+   "bucket": "lost",
+   "n": 1,
+   "src": [
+    "plastic"
+   ],
+   "out": []
+  },
+  "prstClr|val": {
+   "bucket": "lost",
+   "n": 1,
+   "src": [
+    "red"
+   ],
+   "out": []
+  },
+  "prstDash|val": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "dash"
+   ],
+   "out": [
+    "dash"
+   ]
+  },
+  "prstGeom|prst": {
+   "bucket": "kept",
+   "n": 2,
+   "src": [
+    "rect"
+   ],
+   "out": [
+    "rect"
+   ]
+  },
+  "prstTxWarp|prst": {
+   "bucket": "lost",
+   "n": 1,
+   "src": [
+    "textarchup"
+   ],
+   "out": []
+  },
+  "pStyle|val": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "reporthead"
+   ],
+   "out": [
+    "listparagraph",
+    "reporthead"
+   ]
+  },
+  "pt|x": {
+   "bucket": "kept",
+   "n": 2,
+   "src": [
+    "0",
+    "10"
+   ],
+   "out": [
+    "0",
+    "10"
+   ]
+  },
+  "pt|y": {
+   "bucket": "kept",
+   "n": 2,
+   "src": [
+    "0",
+    "20"
+   ],
+   "out": [
+    "0",
+    "20"
+   ]
+  },
+  "rect|allowincell": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "t"
+   ],
+   "out": [
+    "t"
+   ]
+  },
+  "rect|b": {
+   "bucket": "kept",
+   "n": 2,
+   "src": [
+    "0"
+   ],
+   "out": [
+    "0"
+   ]
+  },
+  "rect|coordsize": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "1000,1000"
+   ],
+   "out": [
+    "1000,1000"
+   ]
+  },
+  "rect|fillcolor": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "#eeeeee"
+   ],
+   "out": [
+    "#eeeeee"
+   ]
+  },
+  "rect|filled": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "t"
+   ],
+   "out": [
+    "t"
+   ]
+  },
+  "rect|id": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "rc1"
+   ],
+   "out": [
+    "rc1"
+   ]
+  },
+  "rect|l": {
+   "bucket": "kept",
+   "n": 2,
+   "src": [
+    "0"
+   ],
+   "out": [
+    "0"
+   ]
+  },
+  "rect|r": {
+   "bucket": "kept",
+   "n": 2,
+   "src": [
+    "0"
+   ],
+   "out": [
+    "0"
+   ]
+  },
+  "rect|spid": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "rc2"
+   ],
+   "out": [
+    "rc2"
+   ]
+  },
+  "rect|spt": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "1"
+   ],
+   "out": [
+    "1"
+   ]
+  },
+  "rect|strokecolor": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "#333333"
+   ],
+   "out": [
+    "#333333"
+   ]
+  },
+  "rect|stroked": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "f"
+   ],
+   "out": [
+    "f"
+   ]
+  },
+  "rect|strokeweight": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "0.75pt"
+   ],
+   "out": [
+    "0.75pt"
+   ]
+  },
+  "rect|style": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "width:10pt"
+   ],
+   "out": [
+    "width:10pt"
+   ]
+  },
+  "rect|t": {
+   "bucket": "kept",
+   "n": 2,
+   "src": [
+    "0"
+   ],
+   "out": [
+    "0"
+   ]
+  },
+  "reflection|algn": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "bl"
+   ],
+   "out": [
+    "bl"
+   ]
+  },
+  "reflection|blurRad": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "6350"
+   ],
+   "out": [
+    "6350"
+   ]
+  },
+  "reflection|dir": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "5400000"
+   ],
+   "out": [
+    "5400000"
+   ]
+  },
+  "reflection|dist": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "0"
+   ],
+   "out": [
+    "0"
+   ]
+  },
+  "reflection|endA": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "1000"
+   ],
+   "out": [
+    "1000"
+   ]
+  },
+  "reflection|endPos": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "10000"
+   ],
+   "out": [
+    "10000"
+   ]
+  },
+  "reflection|fadeDir": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "5400000"
+   ],
+   "out": [
+    "5400000"
+   ]
+  },
+  "reflection|kx": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "0"
+   ],
+   "out": [
+    "0"
+   ]
+  },
+  "reflection|ky": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "0"
+   ],
+   "out": [
+    "0"
+   ]
+  },
+  "reflection|stA": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "0"
+   ],
+   "out": [
+    "0"
+   ]
+  },
+  "reflection|stPos": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "0"
+   ],
+   "out": [
+    "0"
+   ]
+  },
+  "reflection|sx": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "100000"
+   ],
+   "out": [
+    "100000"
+   ]
+  },
+  "reflection|sy": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "100000"
+   ],
+   "out": [
+    "100000"
+   ]
+  },
+  "rFonts|ascii": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "times new roman"
+   ],
+   "out": [
+    "calibri",
+    "times new roman"
+   ]
+  },
+  "rFonts|asciiTheme": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "minorhansi"
+   ],
+   "out": [
+    "minorhansi"
+   ]
+  },
+  "rFonts|cs": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "arial"
+   ],
+   "out": [
+    "arial",
+    "等线"
+   ]
+  },
+  "rFonts|eastAsia": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "宋体"
+   ],
+   "out": [
+    "宋体",
+    "等线"
+   ]
+  },
+  "rFonts|eastAsiaTheme": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "minoreastasia"
+   ],
+   "out": [
+    "minoreastasia"
+   ]
+  },
+  "rFonts|hAnsiTheme": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "minorhansi"
+   ],
+   "out": [
+    "minorhansi"
+   ]
+  },
+  "rFonts|hint": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "eastasia"
+   ],
+   "out": [
+    "eastasia"
+   ]
+  },
+  "right|color": {
+   "bucket": "kept",
+   "n": 2,
+   "src": [
+    "000000",
+    "ffff00"
+   ],
+   "out": [
+    "000000",
+    "adbbd4",
+    "auto",
+    "ffff00"
+   ]
+  },
+  "right|space": {
+   "bucket": "kept",
+   "n": 2,
+   "src": [
+    "0",
+    "3"
+   ],
+   "out": [
+    "0",
+    "3"
+   ]
+  },
+  "right|sz": {
+   "bucket": "kept",
+   "n": 2,
+   "src": [
+    "4",
+    "6"
+   ],
+   "out": [
+    "4",
+    "6"
+   ]
+  },
+  "right|val": {
+   "bucket": "kept",
+   "n": 2,
+   "src": [
+    "double",
+    "single"
+   ],
+   "out": [
+    "double",
+    "single"
+   ]
+  },
+  "rot|lat": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "0"
+   ],
+   "out": [
+    "0"
+   ]
+  },
+  "rot|lon": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "0"
+   ],
+   "out": [
+    "0"
+   ]
+  },
+  "rot|rev": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "0"
+   ],
+   "out": [
+    "0"
+   ]
+  },
+  "roundrect|anchorId": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "a1"
+   ],
+   "out": [
+    "a1"
+   ]
+  },
+  "roundrect|arcsize": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "0.1"
+   ],
+   "out": [
+    "0.1"
+   ]
+  },
+  "roundrect|coordsize": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "1000,1000"
+   ],
+   "out": [
+    "1000,1000"
+   ]
+  },
+  "roundrect|fillcolor": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "#ffff00"
+   ],
+   "out": [
+    "#ffff00"
+   ]
+  },
+  "roundrect|filled": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "t"
+   ],
+   "out": [
+    "t"
+   ]
+  },
+  "roundrect|id": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "rr1"
+   ],
+   "out": [
+    "rr1"
+   ]
+  },
+  "roundrect|spid": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "rr2"
+   ],
+   "out": [
+    "rr2"
+   ]
+  },
+  "roundrect|spt": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "201"
+   ],
+   "out": [
+    "201"
+   ]
+  },
+  "roundrect|strokecolor": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "#ff0000"
+   ],
+   "out": [
+    "#ff0000"
+   ]
+  },
+  "roundrect|stroked": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "t"
+   ],
+   "out": [
+    "t"
+   ]
+  },
+  "roundrect|strokeweight": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "1pt"
+   ],
+   "out": [
+    "1pt"
+   ]
+  },
+  "roundrect|style": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "width:80pt;height:40pt"
+   ],
+   "out": [
+    "width:80pt;height:40pt"
+   ]
+  },
+  "rsid|val": {
+   "bucket": "kept",
+   "n": 2,
+   "src": [
+    "00a1",
+    "00b2"
+   ],
+   "out": [
+    "00a1",
+    "00b2"
+   ]
+  },
+  "rtlGutter|val": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "1"
+   ],
+   "out": [
+    "1"
+   ]
+  },
+  "satOff|val": {
+   "bucket": "lost",
+   "n": 1,
+   "src": [
+    "1000"
+   ],
+   "out": []
+  },
+  "schemeClr|val": {
+   "bucket": "lost",
+   "n": 8,
+   "src": [
+    "accent1",
+    "accent2",
+    "accent3",
+    "lt1"
+   ],
+   "out": []
+  },
+  "scrgbClr|b": {
+   "bucket": "lost",
+   "n": 1,
+   "src": [
+    "3000"
+   ],
+   "out": []
+  },
+  "scrgbClr|g": {
+   "bucket": "lost",
+   "n": 1,
+   "src": [
+    "2000"
+   ],
+   "out": []
+  },
+  "scrgbClr|r": {
+   "bucket": "lost",
+   "n": 1,
+   "src": [
+    "1000"
+   ],
+   "out": []
+  },
+  "shade|val": {
+   "bucket": "lost",
+   "n": 1,
+   "src": [
+    "50000"
+   ],
+   "out": []
+  },
+  "shadow|algn": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "tl"
+   ],
+   "out": [
+    "tl"
+   ]
+  },
+  "shadow|blurRad": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "2pt"
+   ],
+   "out": [
+    "2pt"
+   ]
+  },
+  "shadow|dir": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "2700000"
+   ],
+   "out": [
+    "2700000"
+   ]
+  },
+  "shadow|dist": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "3pt"
+   ],
+   "out": [
+    "3pt"
+   ]
+  },
+  "shadow|kx": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "0"
+   ],
+   "out": [
+    "0"
+   ]
+  },
+  "shadow|ky": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "0"
+   ],
+   "out": [
+    "0"
+   ]
+  },
+  "shadow|offset": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "2pt,2pt"
+   ],
+   "out": [
+    "2pt,2pt"
+   ]
+  },
+  "shadow|on": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "t"
+   ],
+   "out": [
+    "t"
+   ]
+  },
+  "shadow|opacity": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "0.5"
+   ],
+   "out": [
+    "0.5"
+   ]
+  },
+  "shadow|origin": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "0,0"
+   ],
+   "out": [
+    "0,0"
+   ]
+  },
+  "shadow|sx": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "1"
+   ],
+   "out": [
+    "1"
+   ]
+  },
+  "shadow|sy": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "1"
+   ],
+   "out": [
+    "1"
+   ]
+  },
+  "shadow|val": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "0.5"
+   ],
+   "out": [
+    "0.5"
+   ]
+  },
+  "shape|adj": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "0.5"
+   ],
+   "out": [
+    "0.5"
+   ]
+  },
+  "shape|alt": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "老式形状"
+   ],
+   "out": [
+    "老式形状"
+   ]
+  },
+  "shape|anchorId": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "a0"
+   ],
+   "out": [
+    "a0"
+   ]
+  },
+  "shape|bullet": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "f"
+   ],
+   "out": [
+    "f"
+   ]
+  },
+  "shape|connectortype": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "straight"
+   ],
+   "out": [
+    "straight"
+   ]
+  },
+  "shape|coordorigin": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "0,0"
+   ],
+   "out": [
+    "0,0"
+   ]
+  },
+  "shape|coordsize": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "1000,1000"
+   ],
+   "out": [
+    "1000,1000"
+   ]
+  },
+  "shape|fillcolor": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "#ffc0cb"
+   ],
+   "out": [
+    "#ffc0cb"
+   ]
+  },
+  "shape|filled": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "t"
+   ],
+   "out": [
+    "t"
+   ]
+  },
+  "shape|id": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "_x0000_s1026"
+   ],
+   "out": [
+    "_x0000_s1026"
+   ]
+  },
+  "shape|ole": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "f"
+   ],
+   "out": [
+    "f"
+   ]
+  },
+  "shape|path": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "m0,0 l100,0 e"
+   ],
+   "out": [
+    "m0,0 l100,0 e"
+   ]
+  },
+  "shape|preferrelative": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "t"
+   ],
+   "out": [
+    "t"
+   ]
+  },
+  "shape|spid": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "_x0000_s1027"
+   ],
+   "out": [
+    "_x0000_s1027"
+   ]
+  },
+  "shape|spt": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "75"
+   ],
+   "out": [
+    "75"
+   ]
+  },
+  "shape|strokecolor": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "#00ff00"
+   ],
+   "out": [
+    "#00ff00"
+   ]
+  },
+  "shape|stroked": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "f"
+   ],
+   "out": [
+    "f"
+   ]
+  },
+  "shape|strokeweight": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "2pt"
+   ],
+   "out": [
+    "2pt"
+   ]
+  },
+  "shape|style": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "width:100pt;height:50pt"
+   ],
+   "out": [
+    "width:100pt;height:50pt"
+   ]
+  },
+  "shape|type": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "#_x0000_t75"
+   ],
+   "out": [
+    "#_x0000_t75"
+   ]
+  },
+  "shapetype|adj": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "0"
+   ],
+   "out": [
+    "0"
+   ]
+  },
+  "shapetype|anchorId": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "a3"
+   ],
+   "out": [
+    "a3"
+   ]
+  },
+  "shapetype|coordsize": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "21600,21600"
+   ],
+   "out": [
+    "21600,21600"
+   ]
+  },
+  "shapetype|filled": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "f"
+   ],
+   "out": [
+    "f"
+   ]
+  },
+  "shapetype|id": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "_x0000_t202"
+   ],
+   "out": [
+    "_x0000_t202"
+   ]
+  },
+  "shapetype|oned": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "t"
+   ],
+   "out": [
+    "t"
+   ]
+  },
+  "shapetype|path": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "m0,0 l0,21600 e"
+   ],
+   "out": [
+    "m0,0 l0,21600 e"
+   ]
+  },
+  "shapetype|preferrelative": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "t"
+   ],
+   "out": [
+    "t"
+   ]
+  },
+  "shapetype|spt": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "202"
+   ],
+   "out": [
+    "202"
+   ]
+  },
+  "shapetype|stroked": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "t"
+   ],
+   "out": [
+    "t"
+   ]
+  },
+  "shd|color": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "ff0000"
+   ],
+   "out": [
+    "ff0000"
+   ]
+  },
+  "shd|fill": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "ffffff"
+   ],
+   "out": [
+    "ffffff"
+   ]
+  },
+  "shd|themeFill": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "accent2"
+   ],
+   "out": [
+    "accent2"
+   ]
+  },
+  "shd|themeFillShade": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "bf"
+   ],
+   "out": [
+    "bf"
+   ]
+  },
+  "shd|themeFillTint": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "99"
+   ],
+   "out": [
+    "99"
+   ]
+  },
+  "shd|val": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "pct25"
+   ],
+   "out": [
+    "pct25"
+   ]
+  },
+  "simplePos|x": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "360"
+   ],
+   "out": [
+    "0",
+    "360"
+   ]
+  },
+  "simplePos|y": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "720"
+   ],
+   "out": [
+    "0",
+    "720"
+   ]
+  },
+  "sizeRelH|relativeFrom": {
+   "bucket": "lost",
+   "n": 1,
+   "src": [
+    "page"
+   ],
+   "out": []
+  },
+  "sizeRelV|relativeFrom": {
+   "bucket": "lost",
+   "n": 1,
+   "src": [
+    "margin"
+   ],
+   "out": []
+  },
+  "smallCaps|val": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "1"
+   ],
+   "out": [
+    "1"
+   ]
+  },
+  "smartTag|element": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "address"
+   ],
+   "out": [
+    "address"
+   ]
+  },
+  "smartTag|uri": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "urn:schemas-microsoft-com:office:smarttags"
+   ],
+   "out": [
+    "urn:schemas-microsoft-com:office:smarttags"
+   ]
+  },
+  "snapToGrid|val": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "1"
+   ],
+   "out": [
+    "1"
+   ]
+  },
+  "sp3d|contourW": {
+   "bucket": "lost",
+   "n": 1,
+   "src": [
+    "12700"
+   ],
+   "out": []
+  },
+  "sp3d|extrusionH": {
+   "bucket": "lost",
+   "n": 1,
+   "src": [
+    "25400"
+   ],
+   "out": []
+  },
+  "sp3d|prstMaterial": {
+   "bucket": "lost",
+   "n": 1,
+   "src": [
+    "plastic"
+   ],
+   "out": []
+  },
+  "spacing|after": {
+   "bucket": "kept",
+   "n": 3,
+   "src": [
+    "0",
+    "120",
+    "240"
+   ],
+   "out": [
+    "0",
+    "120",
+    "240"
+   ]
+  },
+  "spacing|afterAutospacing": {
+   "bucket": "kept",
+   "n": 2,
+   "src": [
+    "0"
+   ],
+   "out": [
+    "0"
+   ]
+  },
+  "spacing|before": {
+   "bucket": "kept",
+   "n": 2,
+   "src": [
+    "0",
+    "120"
+   ],
+   "out": [
+    "0",
+    "120"
+   ]
+  },
+  "spacing|beforeAutospacing": {
+   "bucket": "kept",
+   "n": 2,
+   "src": [
+    "0",
+    "1"
+   ],
+   "out": [
+    "0",
+    "1"
+   ]
+  },
+  "spacing|line": {
+   "bucket": "kept",
+   "n": 2,
+   "src": [
+    "276",
+    "360"
+   ],
+   "out": [
+    "240",
+    "276",
+    "360"
+   ]
+  },
+  "spacing|lineRule": {
+   "bucket": "kept",
+   "n": 2,
+   "src": [
+    "auto"
+   ],
+   "out": [
+    "auto"
+   ]
+  },
+  "spLocks|noChangeArrowheads": {
+   "bucket": "lost",
+   "n": 1,
+   "src": [
+    "1"
+   ],
+   "out": []
+  },
+  "spLocks|noEditPoints": {
+   "bucket": "lost",
+   "n": 2,
+   "src": [
+    "1"
+   ],
+   "out": []
+  },
+  "spPr|bwMode": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "gray"
+   ],
+   "out": [
+    "auto",
+    "gray"
+   ]
+  },
+  "srcRect|b": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "10000"
+   ],
+   "out": [
+    "10000"
+   ]
+  },
+  "srcRect|l": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "5000"
+   ],
+   "out": [
+    "5000"
+   ]
+  },
+  "srcRect|r": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "0"
+   ],
+   "out": [
+    "0"
+   ]
+  },
+  "srcRect|t": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "25000"
+   ],
+   "out": [
+    "25000"
+   ]
+  },
+  "srgbClr|val": {
+   "bucket": "lost",
+   "n": 2,
+   "src": [
+    "0000ff",
+    "ff0000"
+   ],
+   "out": []
+  },
+  "start|val": {
+   "bucket": "kept",
+   "n": 2,
+   "src": [
+    "1"
+   ],
+   "out": [
+    "1"
+   ]
+  },
+  "startOverride|val": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "3"
+   ],
+   "out": [
+    "1",
+    "3"
+   ]
+  },
+  "stroke|color": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "#000080"
+   ],
+   "out": [
+    "#000080"
+   ]
+  },
+  "stroke|dashstyle": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "dash"
+   ],
+   "out": [
+    "dash"
+   ]
+  },
+  "stroke|endarrow": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "block"
+   ],
+   "out": [
+    "block"
+   ]
+  },
+  "stroke|endcap": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "round"
+   ],
+   "out": [
+    "round"
+   ]
+  },
+  "stroke|joinstyle": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "round"
+   ],
+   "out": [
+    "round"
+   ]
+  },
+  "stroke|miterlimit": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "8"
+   ],
+   "out": [
+    "8"
+   ]
+  },
+  "stroke|on": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "t"
+   ],
+   "out": [
+    "t"
+   ]
+  },
+  "stroke|startarrow": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "oval"
+   ],
+   "out": [
+    "oval"
+   ]
+  },
+  "stroke|weight": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "1pt"
+   ],
+   "out": [
+    "1pt"
+   ]
+  },
+  "style|customStyle": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "1"
+   ],
+   "out": [
+    "1"
+   ]
+  },
+  "style|default": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "1"
+   ],
+   "out": [
+    "1"
+   ]
+  },
+  "style|styleId": {
+   "bucket": "kept",
+   "n": 6,
+   "src": [
+    "normal",
+    "plain",
+    "report",
+    "reportchar",
+    "reporthead",
+    "tablegrid"
+   ],
+   "out": [
+    "normal",
+    "plain",
+    "report",
+    "reportchar",
+    "reporthead",
+    "tablegrid"
+   ]
+  },
+  "style|type": {
+   "bucket": "kept",
+   "n": 6,
+   "src": [
+    "character",
+    "paragraph",
+    "table"
+   ],
+   "out": [
+    "character",
+    "paragraph",
+    "table"
+   ]
+  },
+  "styleLink|val": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "report"
+   ],
+   "out": [
+    "report"
+   ]
+  },
+  "styles|Ignorable": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "w14",
+    "w15"
+   ],
+   "out": [
+    "w14",
+    "w15"
+   ]
+  },
+  "suff|val": {
+   "bucket": "kept",
+   "n": 2,
+   "src": [
+    "nothing",
+    "tab"
+   ],
+   "out": [
+    "nothing",
+    "tab"
+   ]
+  },
+  "suppressAutoHyphens|val": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "1"
+   ],
+   "out": [
+    "1"
+   ]
+  },
+  "suppressLineNumbers|val": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "1"
+   ],
+   "out": [
+    "1"
+   ]
+  },
+  "sym|char": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "f0fc"
+   ],
+   "out": [
+    "f0fc"
+   ]
+  },
+  "sym|font": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "wingdings"
+   ],
+   "out": [
+    "wingdings"
+   ]
+  },
+  "sz|val": {
+   "bucket": "kept",
+   "n": 2,
+   "src": [
+    "22",
+    "24"
+   ],
+   "out": [
+    "22",
+    "24"
+   ]
+  },
+  "szCs|val": {
+   "bucket": "kept",
+   "n": 2,
+   "src": [
+    "22",
+    "28"
+   ],
+   "out": [
+    "22",
+    "28"
+   ]
+  },
+  "tab|leader": {
+   "bucket": "kept",
+   "n": 2,
+   "src": [
+    "dot",
+    "middledot"
+   ],
+   "out": [
+    "dot",
+    "middledot"
+   ]
+  },
+  "tab|pos": {
+   "bucket": "kept",
+   "n": 4,
+   "src": [
+    "2880",
+    "5760",
+    "720"
+   ],
+   "out": [
+    "0",
+    "2880",
+    "5760",
+    "720"
+   ]
+  },
+  "tab|val": {
+   "bucket": "kept",
+   "n": 4,
+   "src": [
+    "center",
+    "clear",
+    "left",
+    "right"
+   ],
+   "out": [
+    "center",
+    "clear",
+    "left",
+    "right"
+   ]
+  },
+  "tailEnd|len": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "lg"
+   ],
+   "out": [
+    "lg"
+   ]
+  },
+  "tailEnd|type": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "arrow"
+   ],
+   "out": [
+    "arrow"
+   ]
+  },
+  "tailEnd|w": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "lg"
+   ],
+   "out": [
+    "lg"
+   ]
+  },
+  "tblCellSpacing|type": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "dxa"
+   ],
+   "out": [
+    "dxa"
+   ]
+  },
+  "tblCellSpacing|w": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "144"
+   ],
+   "out": [
+    "144"
+   ]
+  },
+  "tblLook|noHBand": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "1"
+   ],
+   "out": [
+    "1"
+   ]
+  },
+  "tblLook|noVBand": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "0"
+   ],
+   "out": [
+    "0",
+    "1"
+   ]
+  },
+  "tblLook|val": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "01e0"
+   ],
+   "out": [
+    "01e0"
+   ]
+  },
+  "tblOverlap|val": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "never"
+   ],
+   "out": [
+    "never"
+   ]
+  },
+  "tblpPr|bottomFromText": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "0"
+   ],
+   "out": [
+    "0"
+   ]
+  },
+  "tblpPr|horzAnchor": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "page"
+   ],
+   "out": [
+    "page"
+   ]
+  },
+  "tblpPr|leftFromText": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "108"
+   ],
+   "out": [
+    "108"
+   ]
+  },
+  "tblpPr|overlap": {
+   "bucket": "lost",
+   "n": 1,
+   "src": [
+    "never"
+   ],
+   "out": []
+  },
+  "tblpPr|rightFromText": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "108"
+   ],
+   "out": [
+    "108"
+   ]
+  },
+  "tblpPr|tblpX": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "10"
+   ],
+   "out": [
+    "10"
+   ]
+  },
+  "tblpPr|tblpXSpec": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "absolute"
+   ],
+   "out": [
+    "absolute"
+   ]
+  },
+  "tblpPr|tblpY": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "10"
+   ],
+   "out": [
+    "10"
+   ]
+  },
+  "tblpPr|topFromText": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "0"
+   ],
+   "out": [
+    "0"
+   ]
+  },
+  "tblpPr|vertAnchor": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "top"
+   ],
+   "out": [
+    "top"
+   ]
+  },
+  "tblStyle|val": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "tablegrid"
+   ],
+   "out": [
+    "tablegrid"
+   ]
+  },
+  "tblStyleColBandSize|val": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "2"
+   ],
+   "out": [
+    "2"
+   ]
+  },
+  "tblStylePr|type": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "firstrow"
+   ],
+   "out": [
+    "firstrow"
+   ]
+  },
+  "tblStyleRowBandSize|val": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "1"
+   ],
+   "out": [
+    "1"
+   ]
+  },
+  "tcW|type": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "dxa"
+   ],
+   "out": [
+    "dxa"
+   ]
+  },
+  "tcW|w": {
+   "bucket": "value",
+   "n": 1,
+   "src": [
+    "5000"
+   ],
+   "out": [
+    "2505",
+    "4995"
+   ]
+  },
+  "textAlignment|val": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "center"
+   ],
+   "out": [
+    "center"
+   ]
+  },
+  "textbox|inset": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "2pt,2pt,2pt,2pt"
+   ],
+   "out": [
+    "2pt,2pt,2pt,2pt"
+   ]
+  },
+  "textbox|style": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "mso-fit-shape-to-text:t"
+   ],
+   "out": [
+    "mso-fit-shape-to-text:t"
+   ]
+  },
+  "textDirection|val": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "tbrl"
+   ],
+   "out": [
+    "tbrl"
+   ]
+  },
+  "tint|val": {
+   "bucket": "lost",
+   "n": 1,
+   "src": [
+    "40000"
+   ],
+   "out": []
+  },
+  "tmpl|val": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "0a0b0c"
+   ],
+   "out": [
+    "0a0b0c"
+   ]
+  },
+  "top|color": {
+   "bucket": "kept",
+   "n": 5,
+   "src": [
+    "000000",
+    "336699",
+    "4472c4",
+    "ff0000"
+   ],
+   "out": [
+    "000000",
+    "336699",
+    "4472c4",
+    "adbbd4",
+    "auto",
+    "ff0000"
+   ]
+  },
+  "top|space": {
+   "bucket": "kept",
+   "n": 4,
+   "src": [
+    "0",
+    "1",
+    "2"
+   ],
+   "out": [
+    "0",
+    "1",
+    "2"
+   ]
+  },
+  "top|sz": {
+   "bucket": "kept",
+   "n": 5,
+   "src": [
+    "4",
+    "8"
+   ],
+   "out": [
+    "4",
+    "8"
+   ]
+  },
+  "top|themeColor": {
+   "bucket": "kept",
+   "n": 2,
+   "src": [
+    "accent1"
+   ],
+   "out": [
+    "accent1"
+   ]
+  },
+  "top|themeShade": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "bf"
+   ],
+   "out": [
+    "bf"
+   ]
+  },
+  "top|themeTint": {
+   "bucket": "kept",
+   "n": 2,
+   "src": [
+    "99"
+   ],
+   "out": [
+    "99"
+   ]
+  },
+  "top|val": {
+   "bucket": "kept",
+   "n": 5,
+   "src": [
+    "single"
+   ],
+   "out": [
+    "single"
+   ]
+  },
+  "topLinePunct|val": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "0"
+   ],
+   "out": [
+    "0"
+   ]
+  },
+  "trHeight|hRule": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "atleast"
+   ],
+   "out": [
+    "atleast"
+   ]
+  },
+  "trHeight|val": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "400"
+   ],
+   "out": [
+    "400"
+   ]
+  },
+  "type|val": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "continuous"
+   ],
+   "out": [
+    "continuous"
+   ]
+  },
+  "u|color": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "ff0000"
+   ],
+   "out": [
+    "ff0000"
+   ]
+  },
+  "u|themeColor": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "accent1"
+   ],
+   "out": [
+    "accent1"
+   ]
+  },
+  "u|themeTint": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "99"
+   ],
+   "out": [
+    "99"
+   ]
+  },
+  "u|val": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "single"
+   ],
+   "out": [
+    "single"
+   ]
+  },
+  "uiPriority|val": {
+   "bucket": "kept",
+   "n": 2,
+   "src": [
+    "9"
+   ],
+   "out": [
+    "9"
+   ]
+  },
+  "useLocalDpi|val": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "0"
+   ],
+   "out": [
+    "0"
+   ]
+  },
+  "vanish|val": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "1"
+   ],
+   "out": [
+    "1"
+   ]
+  },
+  "w|val": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "150"
+   ],
+   "out": [
+    "150"
+   ]
+  },
+  "wAfter|type": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "dxa"
+   ],
+   "out": [
+    "dxa"
+   ]
+  },
+  "wAfter|w": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "120"
+   ],
+   "out": [
+    "120"
+   ]
+  },
+  "widowControl|val": {
+   "bucket": "kept",
+   "n": 2,
+   "src": [
+    "0",
+    "1"
+   ],
+   "out": [
+    "0",
+    "1"
+   ]
+  },
+  "wordWrap|val": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "1"
+   ],
+   "out": [
+    "1"
+   ]
+  },
+  "wrap|anchorx": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "margin"
+   ],
+   "out": [
+    "margin"
+   ]
+  },
+  "wrap|anchory": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "page"
+   ],
+   "out": [
+    "page"
+   ]
+  },
+  "wrap|side": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "left"
+   ],
+   "out": [
+    "left"
+   ]
+  },
+  "wrap|type": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "square"
+   ],
+   "out": [
+    "square"
+   ]
+  },
+  "wrapSquare|wrapText": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "bothsides"
+   ],
+   "out": [
+    "bothsides"
+   ]
+  },
+  "xfrm|flipH": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "1"
+   ],
+   "out": [
+    "1"
+   ]
+  },
+  "xfrm|flipV": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "0"
+   ],
+   "out": [
+    "0"
+   ]
+  },
+  "xfrm|rot": {
+   "bucket": "kept",
+   "n": 1,
+   "src": [
+    "5400000"
+   ],
+   "out": [
+    "5400000"
+   ]
+  }
+ }
+}

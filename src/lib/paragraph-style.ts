@@ -1,5 +1,5 @@
 import { Extension, Mark, type CommandProps, type Editor } from '@tiptap/core'
-import { CELL_EDGES, bdAttr, edgeAttrs, inlineBorder, rgb2hex, type CellEdge } from './cell-style'
+import { BDR_ATTR, CELL_EDGES, PBAR_ATTR, PBDR_ATTR, FRAME_ATTR, PPR_ATTR, SHADE_ATTR, SHD_ATTR, TABS_ATTR, bdAttr, bdrAttrsOf, edgeAttrs, inlineBorder, parseFramePayload, parsePprPayload, parseTabsPayload, rgb2hex, shadeAttrs, shdAttrsOf, pbarAttrsOf, pbdrAttrsOf, type CellEdge } from './cell-style'
 
 /**
  * 段落的排版属性：行距、段前段后、底纹与四边边框。
@@ -30,6 +30,12 @@ export interface ParaStyleAttrs {
   bdRight: string | null
   bdBottom: string | null
   bdLeft: string | null
+  // 边框与文字的距离（v0.143）：docx 的 w:pBdr/@w:space（磅→CSS px）落这里。
+  // 段落没有「内边距」这一层，pBdr@space 是唯一来源，直接与 padding-{side} 一一对应
+  padTop: number | null
+  padRight: number | null
+  padBottom: number | null
+  padLeft: number | null
 }
 
 /** 行距上下限只是防手滑：负数与三位数倍数都不是用户想要的 */
@@ -90,6 +96,11 @@ function styleOf(a: Record<string, unknown>): { style?: string } {
   if (has(a.spaceBefore)) bits.push(`margin-top: ${a.spaceBefore}px`)
   if (has(a.spaceAfter)) bits.push(`margin-bottom: ${a.spaceAfter}px`)
   if (a.background) bits.push(`background-color: ${a.background}`)
+  // 边框与文字的距离（v0.143）：w:pBdr/@w:space 的 CSS 落点。0 不写（与「没声明」同路）
+  for (const side of ['top', 'right', 'bottom', 'left'] as const) {
+    const v = a[`pad${side[0].toUpperCase()}${side.slice(1)}`]
+    if (typeof v === 'number' && v > 0) bits.push(`padding-${side}: ${v}px`)
+  }
   for (const edge of CELL_EDGES) {
     const v = a[bdAttr(edge)]
     // 'none' 是原文件显式去掉了这条边，必须真写进 CSS，否则落回默认无边看不出来
@@ -182,7 +193,114 @@ export const ParagraphStyle = Extension.create({
             parseHTML: (el: HTMLElement) => rgb2hex(el.style.getPropertyValue('background-color')),
             renderHTML: (attrs: Record<string, unknown>) => styleOf(attrs),
           },
+          // 图案底纹的往返载荷（v0.142）：data-shade 三件套（图案|前景|背景）。
+          // 纯色走 background 那一链；只有图案族才需要这第二份表示——CSS 的
+          // background-image 画得出图案，回写时还要知道是哪一档、两色各是什么
+          shade: {
+            default: null as string | null,
+            parseHTML: (el: HTMLElement) => el.getAttribute(SHADE_ATTR) || null,
+            renderHTML: (attrs: Record<string, unknown>) => shadeAttrs(attrs.shade),
+          },
+          // 底纹的存盘原件（v0.164）：与单元格那一枚同源。屏上不兑现，只随 data-shd 进出
+          shd: {
+            default: null as string | null,
+            parseHTML: (el: HTMLElement) => el.getAttribute(SHD_ATTR) || null,
+            renderHTML: (attrs: Record<string, unknown>) => shdAttrsOf(attrs.shd),
+          },
+          // 制表位表（v0.144）：w:pPr/w:tabs/w:tab 的档位|缇|前导符。屏上无对应物
+          // （Word 制表位由 tab 字符驱动跳对齐），只随 data-tabs 载荷往返
+          tabs: {
+            default: null as string | null,
+            parseHTML: (el: HTMLElement) => el.getAttribute(TABS_ATTR) || null,
+            renderHTML: (attrs: Record<string, unknown>) => {
+              const raw = typeof attrs.tabs === 'string' ? attrs.tabs : ''
+              return parseTabsPayload(raw).length ? { [TABS_ATTR]: raw } : {}
+            },
+          },
+          // 浮动框架（v0.145）：w:pPr/w:framePr 的 key=value 载荷。Web 无页定位语义，
+          // 屏上不兑现，只随 data-frame 往返（分页四件套同款纪律）
+          frame: {
+            default: null as string | null,
+            parseHTML: (el: HTMLElement) => el.getAttribute(FRAME_ATTR) || null,
+            renderHTML: (attrs: Record<string, unknown>) => {
+              const raw = typeof attrs.frame === 'string' ? attrs.frame : ''
+              return Object.keys(parseFramePayload(raw)).length ? { [FRAME_ATTR]: raw } : {}
+            },
+          },
           ...Object.fromEntries(CELL_EDGES.map((edge) => [bdAttr(edge), borderAttr(edge)])),
+          // 边框的存盘原件（v0.165）：pBdr 每条边的字面色与主题三枚。屏上不兑现
+          // ——`bd*` 已经把线画出来了，这一份只为写回（与 shd 同款）
+          bdr: {
+            default: null as string | null,
+            parseHTML: (el: HTMLElement) => el.getAttribute(BDR_ATTR) || null,
+            renderHTML: (attrs: Record<string, unknown>) => bdrAttrsOf(attrs.bdr),
+          },
+          // 第五边 w:between（v0.167）：屏上借下边框画出来，载荷自带线型/粗细/间距
+          // 四枚原件（四边从 CSS 反推得到，这一条反推不出来）
+          pbdr: {
+            default: null as string | null,
+            parseHTML: (el: HTMLElement) => el.getAttribute(PBDR_ATTR) || null,
+            renderHTML: (attrs: Record<string, unknown>) => pbdrAttrsOf(attrs.pbdr),
+          },
+          // 第六条边 w:bar（v0.168）：段落侧边的竖线，屏上没有替身，只往返
+          pbar: {
+            default: null as string | null,
+            parseHTML: (el: HTMLElement) => el.getAttribute(PBAR_ATTR) || null,
+            renderHTML: (attrs: Record<string, unknown>) => pbarAttrsOf(attrs.pbar),
+          },
+          // 边框与文字的距离（v0.143）：w:pBdr/@w:space（磅→px）。段落侧没有 tcMar 竞争，
+          // padding-{side} 就是它自己，读回从同一条 CSS 解析；0 与未声明同路（不写）
+          ...Object.fromEntries(
+            (['top', 'right', 'bottom', 'left'] as const).map((side) => [
+              `pad${side[0].toUpperCase()}${side.slice(1)}`,
+              {
+                default: null as number | null,
+                parseHTML: (el: HTMLElement) => {
+                  const px = Number.parseFloat(el.style.getPropertyValue(`padding-${side}`))
+                  return Number.isFinite(px) && px > 0 ? px : null
+                },
+                renderHTML: (attrs: Record<string, unknown>) => styleOf(attrs),
+              },
+            ]),
+          ),
+          // 段落属性余量（v0.147）：pPr 里那批屏上不兑现的直接属性（snapToGrid/bidi/
+          // autoSpaceDE/autoSpaceDN/adjustRightInd/topLinePunct/suppressLineNumbers/
+          // textAlignment + 两枚自动段距），key=value 载荷随 data-ppr 往返
+          ppr: {
+            default: null as string | null,
+            parseHTML: (el: HTMLElement) => el.getAttribute(PPR_ATTR) || null,
+            renderHTML: (attrs: Record<string, unknown>) => {
+              const raw = typeof attrs.ppr === 'string' ? attrs.ppr : ''
+              return Object.keys(parsePprPayload(raw)).length ? { [PPR_ATTR]: raw } : {}
+            },
+          },
+          // 分页四件套（v0.143）：w:pageBreakBefore / keepNext / keepLines / widowControl。
+          // 屏上不兑现（Web 流式排版没有分页与孤行控制），只随 data-* 进出保往返。
+          // 三态：'1' 开、'0' 关、null 没写——widowControl 的「显式关」是真值
+          // （Word 默认就是开，关掉必须带得回来）。载荷字面 '1'/'0'，解析同形
+          ...Object.fromEntries(
+            (
+              [
+                ['pageBreakBefore', 'pagebreak-before'],
+                ['keepNext', 'keepnext'],
+                ['keepLines', 'keeplines'],
+                ['widowControl', 'widowcontrol'],
+              ] as const
+            ).map(([attr, dataAttr]) => [
+              attr,
+              {
+                default: null as string | null,
+                parseHTML: (el: HTMLElement) => {
+                  const v = el.getAttribute(`data-${dataAttr}`)
+                  return v === '1' || v === '0' ? v : null
+                },
+                renderHTML: (attrs: Record<string, unknown>) => {
+                  const v = attrs[attr]
+                  return v === '1' || v === '0' ? { [`data-${dataAttr}`]: v } : {}
+                },
+              },
+            ]),
+          ),
         },
       },
     ]

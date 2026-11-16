@@ -1,15 +1,5 @@
 import { memo, useEffect, useRef, useState, type CSSProperties } from 'react'
 import { useEditor, EditorContent } from '@tiptap/react'
-import StarterKit from '@tiptap/starter-kit'
-import Image from '@tiptap/extension-image'
-import Placeholder from '@tiptap/extension-placeholder'
-import TextAlign from '@tiptap/extension-text-align'
-import { TableKit } from '@tiptap/extension-table'
-import { TextStyleKit } from '@tiptap/extension-text-style'
-import { Superscript } from '@tiptap/extension-superscript'
-import { Subscript } from '@tiptap/extension-subscript'
-import Highlight from '@tiptap/extension-highlight'
-import { CharacterCount } from '@tiptap/extensions'
 import { message, open } from '@tauri-apps/plugin-dialog'
 import { invoke } from '@tauri-apps/api/core'
 import type { Tab } from '../store'
@@ -21,7 +11,11 @@ import {
   docxToHtml,
   prosemirrorToDocxBytes,
   pageNumberParts,
+  pageSetupOf,
   resolvePage,
+  DEFAULT_PAGE_BORDERS,
+  PAGE_BORDER_STYLES,
+  pageBorderCss,
   contentPxOf,
   MM_PX,
   PAGE_NUMBER_FORMATS,
@@ -35,11 +29,14 @@ import {
   type PMNode,
   type TableCond,
   type TableCondType,
+  type DocProps,
+  docPropsOf,
+  filterDocComments,
+  openDocxZip,
 } from '../lib/docx'
-import { Comment, addCommentMark, findCommentAnchor, removeCommentMark } from '../lib/comment-extension'
-import { RevDel, RevIns, RevMode, acceptRevisions, deleteAsRevision, rejectRevisions, revModeOnState, toggleRevMode } from '../lib/revision-extension'
+import { addCommentMark, findCommentAnchor, removeCommentMark } from '../lib/comment-extension'
+import { acceptRevisions, deleteAsRevision, rejectRevisions, revModeOnState, toggleRevMode } from '../lib/revision-extension'
 import {
-  Note,
   NOTE_LABEL,
   locateNote,
   noteOrdinalOf,
@@ -48,33 +45,55 @@ import {
 } from '../lib/note-extension'
 import type { DocxImport } from '../lib/docx-fidelity'
 import { nextStyleId, styleCssOf } from '../lib/doc-style-css'
-import { Toc } from '../lib/toc-extension'
-import { PageBreak } from '../lib/page-break-extension'
-import { Indent } from '../lib/indent-extension'
-import { CharSpacing } from '../lib/char-spacing'
-import { BulletChar } from '../lib/bullet-char'
+import {
+  loadSpellDict,
+  onSpellDictChange,
+  setSpellDeep,
+  spellDeepOn,
+  spellDictState,
+  spellIgnored,
+  spellPluginKey,
+  spellUnignore,
+  type SpellIssue,
+} from '../lib/spell'
+import { CollabSession, type CollabPeer, type CollabStatus } from '../lib/collab'
+import { loadMacros, newMacro, runMacro, saveMacros, type Macro, type MacroRun } from '../lib/macro'
+import { looksLikeVba, runVba, transpileVba, VBA_SAMPLE } from '../lib/vba'
+import { authorColor, identityName, setIdentityName } from '../lib/identity'
 import {
   BORDER_STYLES,
   BORDER_WIDTH_PT,
   CELL_EDGES,
-  CellStyle,
   EDGE_LABEL,
-  IndentTableView,
   bdAttr,
   borderCss,
   borderParts,
   type CellEdge,
 } from '../lib/cell-style'
-import { ParagraphStyle, RStyleMark, ruleOf, type LineRule } from '../lib/paragraph-style'
-import { TableWidth, caretColumn, tableTargetPx } from '../lib/table-width'
-import { FindReplace, frPluginKey, activeIndexOf } from '../lib/find-replace'
+import { ruleOf, type LineRule } from '../lib/paragraph-style'
+import { docExtensions } from '../lib/doc-schema'
+// v0.173：文档结构图与格式刷。形状住在 lib，组件只做接线与交互。
+import { outlineOf, activeOutlinePos } from '../lib/outline'
+import { captureFormat, clearableMarkNames, marksForSchema, paintableMarkNames, type PaintFormat } from '../lib/format-painter'
+// v0.174：视图缩放与内容区右键菜单。刻度/条目表住在 lib，组件只做接线。
+import { ZOOM_STEPS, clampZoom, fitZoom, nearestZoomStep, zoomByWheel, zoomPct, zoomStep, type FitMode } from '../lib/view-zoom'
+import { contextItems } from '../lib/context-menu'
+// v0.175：打印预览的状态与页数口径住在 lib，两处 UI 共用一份。
+// v0.181：翻页定位的三枚纯函数也在那里（等距页距，非真分页）。
+import { previewUi, estimatePages, pageScrollTop, pageOfScrollTop, clampPage } from '../lib/print-preview'
+// v0.179：标尺的刻度/缩进换算住在 lib，组件只做接线与拖动交互
+import { rulerTicks, rulerVerticalTicks, rulerIndentMarks, rulerIndentFromDrag, type RulerHandle } from '../lib/ruler'
+import { caretColumn, tableTargetPx } from '../lib/table-width'
+import { frPluginKey, activeIndexOf } from '../lib/find-replace'
 import { docTemplate } from '../lib/templates'
 import { odtToHtml, prosemirrorToOdtBytes } from '../lib/odt'
 import { planFeed, runFeed, type FeedSource } from '../lib/doc-feed'
 import { registerSaver, runExclusive } from '../lib/registry'
-import { failDialog, failStatus, statusText, statusTip } from '../lib/fail-msg'
+import { failDialog, failStatus } from '../lib/fail-msg'
+// v0.180：可交互状态栏的条目表住在 lib；fail-msg / print-preview / view-zoom 的口径在那里转调
+import { statusBarItems, type StatusBarAction } from '../lib/status-bar'
 import { saveDoneTimer } from '../lib/save-status'
-import { autoDelayMs, autoFailStatus, autoOkTip, createAutoSaveLedger, onFocusBack, staleFailureClaim } from '../lib/auto-save'
+import { autoDelayMs, autoFailStatus, createAutoSaveLedger, onFocusBack, staleFailureClaim } from '../lib/auto-save'
 import type { FailureClaim } from '../lib/auto-save'
 
 interface Props {
@@ -119,21 +138,21 @@ const FONT_SIZES_PT = [9, 10, 11, 12, 14, 16, 18, 22, 24, 28, 36, 48]
 const pt2px = (pt: number) => Math.round((pt * 96) / 72)
 const px2pt = (px: number) => Math.round((px * 72) / 96)
 
-// 图片扩展自带 width/height（像素数字），补 align=center：渲染成块级 + 双侧 auto 边距
-const ImgExt = Image.extend({
-  addAttributes() {
-    return {
-      ...this.parent?.(),
-      align: {
-        default: null,
-        parseHTML: (el: HTMLElement) =>
-          el.style.display === 'block' && el.style.marginLeft === 'auto' ? 'center' : null,
-        renderHTML: (attrs: { align?: string | null }) =>
-          attrs.align === 'center' ? { style: 'display:block;margin-left:auto;margin-right:auto' } : {},
-      },
-    }
-  },
-})
+// 字符间距档位（pt）：Word「字体→高级→间距」只有加宽/紧缩两档，这里给常用刻度。
+// 0 这一档两侧语义不同：ODT 写得下（显式压掉样式层的间距），docx 写不下
+// （库的门是 `if (options.characterSpacing)`，0 整枚不写），落到 docx 即「回到样式默认」。
+const CHAR_SPACING_PT = [-2, -1, -0.5, 0, 0.5, 1, 1.5, 2, 3, 4]
+const spacingLabel = (pt: number) => (pt === 0 ? '标准' : pt > 0 ? `加宽 ${pt}pt` : `紧缩 ${-pt}pt`)
+/** 模型存的是带单位串（"1.5pt"），UI 存数字；两边靠这个函数对齐 */
+const spacingToModel = (pt: number) => `${pt}pt`
+function spacingFromModel(raw: unknown): number {
+  if (raw === null || raw === undefined || raw === '') return 0
+  const n = Number(String(raw).replace(/pt$/i, ''))
+  return Number.isFinite(n) ? n : 0
+}
+
+// 常用符面：前六枚是 ODF/OOXML 双方都落得下的保守集，后几枚是装饰性的
+const BULLET_CHARS = ['•', '○', '■', '□', '◆', '◇', '★', '☆', '▪', '▸', '–', '—', '✓', '✗', '✦', '❖']
 
 // 状态栏字数/字符的最小刷新间隔：characterCount 每次都要遍历全文
 const WORDS_THROTTLE_MS = 400
@@ -146,11 +165,16 @@ function DocEditor({ tab }: Props) {
   const [linkDraft, setLinkDraft] = useState<string | null>(null)
   const [meta, setMeta] = useState<DocMeta>({})
   const [hfOpen, setHfOpen] = useState(false)
+  // v0.188：文档属性面板（标题/主题/作者/关键词/备注 → docProps/core.xml）
+  const [propsOpen, setPropsOpen] = useState(false)
   // 样式表面板（v0.106）：清单在 meta.styles 上，编辑即回写——渲染层与导出共用这一份
   const [styleEdOpen, setStyleEdOpen] = useState(false)
   const [pgOpen, setPgOpen] = useState(false)
   const [docH, setDocH] = useState(0)
   const [cmOpen, setCmOpen] = useState(false)
+  // v0.195：批注侧栏筛选（只看未解决 / 按作者），纯 UI 状态、不进文档
+  const [cmOnlyOpen, setCmOnlyOpen] = useState(false)
+  const [cmAuthor, setCmAuthor] = useState('')
   const [draft, setDraft] = useState<{ cid: number; text: string } | null>(null)
   const [noteDraft, setNoteDraft] = useState<{ kind: NoteKind; text: string } | null>(null)
   // 边框的待用档位（线型/磅/颜色）：点哪条边才把它写下去，所以这一份不进文档、只是工具条上的"笔"
@@ -162,10 +186,72 @@ function DocEditor({ tab }: Props) {
   const [frOpen, setFrOpen] = useState(false)
   const [frQ, setFrQ] = useState('')
   const [frCs, setFrCs] = useState(false)
+  // 拼写检查：开关与"我的词典"的展示份。词典本身住在 spell.ts（localStorage），
+  // 这里存一份只为面板上能列出并撤掉
+  const [spellOn, setSpellOn] = useState(false)
+  // —— 实时协同：会话对象、状态、面板开关。房间名默认跟着文件路径走，
+  // 同一份文档的两个实例因此自动进同一间；也可以手改成别的（换名字就是换房间）
+  const [collabOpen, setCollabOpen] = useState(false)
+  const [collab, setCollab] = useState<CollabStatus>({
+    state: 'off',
+    room: '',
+    port: 0,
+    peers: [],
+    error: '',
+  })
+  const [collabRoom, setCollabRoom] = useState('')
+  const collabRef = useRef<CollabSession | null>(null)
+  const defaultRoom = () => tab.path || tab.title || '未命名文档'
+  const [myDict, setMyDict] = useState<string[]>(() => spellIgnored())
+  // 全量词典那一档：词表 2.8MB，第一次按才下载，所以界面上得把"加载中/拉不到"说清楚
+  const [dictState, setDictState] = useState(() => spellDictState())
+  const [deep, setDeep] = useState(false)
+  useEffect(() => onSpellDictChange(() => setDictState(spellDictState())), [])
+  // 协同会话跟着这一页走：卸掉它就得把连接和我们起的中继一起收摊。
+  // 标签是常驻挂载的，所以这一路主要在关标签/关窗口时跑——漏了它就是一个
+  // 没人要的 WebSocket 和一个没人要的中继进程留在那儿
+  useEffect(() => () => {
+    collabRef.current?.dispose()
+    collabRef.current = null
+  }, [])
+  // 宏：内置那几条每次都在（删不掉），自己写的那几条存 localStorage
+  const [macros, setMacros] = useState<Macro[]>(() => loadMacros())
+  const [macroOpen, setMacroOpen] = useState(false)
+  const [macroSel, setMacroSel] = useState<string>('')
+  const [macroCode, setMacroCode] = useState('')
+  const [macroOut, setMacroOut] = useState<MacroRun | null>(null)
+  // VBA 那一档：转译预览的开关。默认关着——大多数时候用户只想跑，不想看 JS
+  const [vbaShow, setVbaShow] = useState(false)
+  // 署名（协同的"我是谁"）：修订与批注都按它记作者
+  const [who, setWho] = useState<string>(() => identityName())
   const [frRep, setFrRep] = useState('')
   const frInputRef = useRef<HTMLInputElement>(null)
   const [histOpen, setHistOpen] = useState(false)
   const [hist, setHist] = useState<{ t: number; note: string; json: string; metaJson: string }[]>([])
+  // —— v0.173 文档结构图：只在打开时才遍历全文（关着时一次 doc.descendants 都不跑）
+  const [navOpen, setNavOpen] = useState(false)
+  // —— v0.173 格式刷：载荷与「待刷」状态分开。ref 是给 selectionUpdate / handleKeyDown
+  // 这两个非 React 回调读的（effect 只订阅一次，不能把状态并进依赖里反复重挂）
+  const [painter, setPainter] = useState<PaintFormat | null>(null)
+  const [painterLocked, setPainterLocked] = useState(false)
+  const painterRef = useRef<PaintFormat | null>(null)
+  const painterLockedRef = useRef(false)
+  const painterArmedRef = useRef<{ from: number; to: number } | null>(null)
+  const paintingRef = useRef(false)
+  // —— v0.174 视图缩放：只改屏上纸面，打印/导出 PDF 由 @media print 压回 100%
+  const [zoom, setZoom] = useState(1)
+  // —— v0.174 内容区右键菜单：位置是视口坐标，条目由 lib 的纯函数按选区/表格语境生成
+  const [ctxMenu, setCtxMenu] = useState<{ x: number; y: number } | null>(null)
+  const scrollRef = useRef<HTMLDivElement | null>(null)
+  // —— v0.175 独立打印预览：同一棵 DOM 切到只读，不另画一份文档 ——
+  const [previewOpen, setPreviewOpen] = useState(false)
+  // v0.181：按等距页距翻页定位（非真分页）。targetRef 在程序化滚动期间挡住
+  // onScroll 回写，免得 smooth scroll 的中间帧把页码一路改回起点
+  const [previewPage, setPreviewPage] = useState(1)
+  const previewTargetRef = useRef<number | null>(null)
+  // —— v0.179 标尺：默认关（WPS 可开关），关着时一次刻度计算都不跑 ——
+  const [rulerOn, setRulerOn] = useState(false)
+  const rulerDragRef = useRef<RulerHandle | null>(null)
   const [autoSavedAt, setAutoSavedAt] = useState<Date | null>(null)
   // 收尾那句的时钟与表格头（v0.69）、PDF 头（v0.70）共用模块那一份：两份 1500/5000 就是两把尺子。
   // 进度门这一头不挂——v0.71 实测 .docx/.odt 原地保存整趟 30~92ms、write_file 自身 6~62ms，
@@ -190,47 +276,9 @@ function DocEditor({ tab }: Props) {
   const autoRescheduleRef = useRef<(() => void) | null>(null)
 
   const editor = useEditor({
-    extensions: [
-      StarterKit.configure({
-        heading: { levels: [1, 2, 3, 4] },
-      }),
-      // 列表符面（ODT 的 text:bullet-char 走 ul 的行内 list-style-type）：给 bulletList 挂一枚节点属性
-      BulletChar,
-      ImgExt.configure({ allowBase64: true }),
-      Placeholder.configure({ placeholder: '开始输入内容…' }),
-      TextAlign.configure({ types: ['heading', 'paragraph'] }),
-      Indent.configure({ types: ['heading', 'paragraph'] }),
-      TableKit.configure({ table: { resizable: true, View: IndentTableView } }),
-      // textStyle mark + 字色/字体族/字号。lineHeight 必须关掉：那是 TextStyleKit 给段落挂的同名属性，
-      // 与本编辑器记 OOXML 行距的 lineHeight（ParagraphStyle）撞名字，两边只能留一个
-      TextStyleKit.configure({ backgroundColor: false, lineHeight: false }),
-      // 字符间距挂同一枚 textStyle（保真导入发的 letter-spacing: Npt 靠它才进得了模型）
-      CharSpacing,
-      // 上下标不在 TextStyleKit 里（它们是独立 mark，渲染成 <sup>/<sub>）
-      Superscript,
-      Subscript,
-      // 表格/单元格的边框、底纹、竖排对齐与表格缩进：保真导入落在这些属性上
-      CellStyle,
-      // 精确列宽那一枚命令（setGridColumnWidth）：一次写遍整表，账由 redistribute 算
-      TableWidth,
-      // 段落行距/段前后/底纹/四边：docx 的 w:spacing、w:shd、w:pBdr 读进来就靠这一层接住
-      ParagraphStyle,
-      // 字符级命名样式标签（v0.113）：w:rStyle 读进来落 span[data-rstyle]，导出写回 w:rStyle
-      RStyleMark,
-      Highlight.configure({ multicolor: true }),
-      CharacterCount,
-      Toc,
-      PageBreak,
-      Comment,
-      // 修订标记（v0.100）：docx 的 w:ins/w:del 读进来落在这里，接受/拒绝在工具栏
-      RevIns,
-      RevDel,
-      // 修订模式（v0.101）：本应用里改字留痕，插入自动挂 revIns、删除转 revDel
-      RevMode,
-      // 脚注/尾注：行内原子节点，正文存在节点属性上（三条保存链路都从这一份事实出发）
-      Note,
-      FindReplace,
-    ],
+    // 扩展清单住在 lib/doc-schema.ts（v0.157）：组件与保真往返账共用同一份 schema，
+    // 否则量具看到的是另一套 parseHTML 规则，账就成了假账
+    extensions: docExtensions(),
     content: '<p></p>',
     onUpdate: () => markDirty(tab.id, true),
     editorProps: {
@@ -440,6 +488,118 @@ function DocEditor({ tab }: Props) {
     }
   }, [editor])
 
+  // 格式刷（v0.173）：按下按钮记下源格式，之后用户拖选目标文字，松开即刷。
+  // 双击按钮锁定连刷，Esc / 再点按钮退出。判据是「选区变了且非空」——捕获时那一枚
+  // 选区不算目标，否则按按钮的同一刻就把源文字自己刷一遍。
+  useEffect(() => {
+    if (!editor) return
+    const onSel = () => {
+      const payload = painterRef.current
+      if (!payload || paintingRef.current) return
+      const { from, to, empty } = editor.state.selection
+      if (empty) return
+      const armed = painterArmedRef.current
+      if (armed && from === armed.from && to === armed.to) return
+      paintingRef.current = true
+      try {
+        const chain = editor.chain().focus()
+        // 先清可刷的外观 mark 再重设：格式刷是「替换」不是「叠加」；身份型 mark
+        // 不在清名单里，别人的批注/修订/书签不会被这一刷抹掉
+        for (const name of paintableMarkNames(editor.state.schema)) chain.unsetMark(name)
+        for (const m of marksForSchema(editor.state.schema, payload)) chain.setMark(m.type.name, m.attrs)
+        if (payload.align) chain.setTextAlign(payload.align)
+        chain.run()
+        // 刚刷过的这一枚选区不再触发第二次（chain.focus 自己也会派发选区事件）
+        painterArmedRef.current = { from, to }
+        if (!painterLockedRef.current) {
+          painterRef.current = null
+          painterArmedRef.current = null
+          setPainter(null)
+        }
+      } finally {
+        paintingRef.current = false
+      }
+    }
+    // Esc 收刷放在 window 上而不是 editorProps.handleKeyDown 里：待刷时焦点可能在
+    // 工具条按钮上，编辑器的按键钩子接不到。只有这一处出口，不与别的 Esc 行为抢。
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape' || !painterRef.current) return
+      painterRef.current = null
+      painterArmedRef.current = null
+      painterLockedRef.current = false
+      setPainter(null)
+      setPainterLocked(false)
+    }
+    editor.on('selectionUpdate', onSel)
+    window.addEventListener('keydown', onKey)
+    return () => {
+      editor.off('selectionUpdate', onSel)
+      window.removeEventListener('keydown', onKey)
+    }
+  }, [editor])
+
+  // 视图缩放（v0.174）：Ctrl+滚轮按档位走。监听挂在 .doc-scroll 而不是 window，
+  // 免得别的标签/面板也跟着缩放；依赖 editor 是因为 useEditor 异步建实例，
+  // 首次渲染时 ref 还没挂上 DOM，editor 到位后会重挂一次。
+  useEffect(() => {
+    const el = scrollRef.current
+    if (!el) return
+    const onWheel = (e: WheelEvent) => {
+      if (!e.ctrlKey) return
+      e.preventDefault()
+      setZoom((z) => zoomByWheel(z, e.deltaY))
+    }
+    el.addEventListener('wheel', onWheel, { passive: false })
+    return () => el.removeEventListener('wheel', onWheel)
+  }, [editor])
+
+  // 右键菜单（v0.174）：点菜单外 / Esc 收起。菜单开着时才订阅，不常驻占事件
+  useEffect(() => {
+    if (!ctxMenu) return
+    const off = (e: PointerEvent) => {
+      if (!(e.target as HTMLElement | null)?.closest('.doc-ctx-menu')) setCtxMenu(null)
+    }
+    const key = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setCtxMenu(null)
+    }
+    window.addEventListener('pointerdown', off)
+    window.addEventListener('keydown', key)
+    return () => {
+      window.removeEventListener('pointerdown', off)
+      window.removeEventListener('keydown', key)
+    }
+  }, [ctxMenu])
+
+  // 打印预览（v0.175）：切只读 + Esc 退出。标签常驻期间 previewOpen 回 false
+  // 会自动恢复可编辑；组件卸载时 editor 实例一并销毁，不必手动复位。
+  useEffect(() => {
+    if (!editor) return
+    editor.setEditable(!previewOpen)
+  }, [editor, previewOpen])
+
+  useEffect(() => {
+    if (!previewOpen) return
+    const key = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setPreviewOpen(false)
+    }
+    window.addEventListener('keydown', key)
+    return () => window.removeEventListener('keydown', key)
+  }, [previewOpen])
+
+  // v0.181：打开预览时页码跟着当前滚动量走（文档可能已经被滚到中段）；
+  // 退出时清掉程序化滚动的目标，别让残留影响下一次
+  useEffect(() => {
+    if (!previewOpen) {
+      previewTargetRef.current = null
+      return
+    }
+    const top = scrollRef.current?.scrollTop ?? 0
+    setPreviewPage(clampPage(
+      pageOfScrollTop(top, effPx.h, zoom, effPx.top),
+      estimatePages(docH, effPx.h, effPx.top, effPx.bottom),
+    ))
+  }, [previewOpen])
+
   // —— 分批喂那一路的"读全"账（v0.87）——
   // 形状照 v0.81 那四条规矩：按**这一趟载入的身份**记而不是布尔、持有在 ref 里、失败不记账、全仓不销账。
   // 为什么这格必须是闸门：28029 块的件分批喂要吃 1097ms，其间屏上已经有半份文档，
@@ -502,14 +662,16 @@ function DocEditor({ tab }: Props) {
         let note = ''
         if (tab.path.toLowerCase().endsWith('.docx')) {
           const bytes = await readBytes(tab.path)
-          const m = await docxToDocMeta(bytes)
+          // v0.180：meta 与保真读手共用一次解包、一份部件文本缓存
+          const zipSession = await openDocxZip(bytes)
+          const m = await docxToDocMeta(bytes, zipSession)
           // 保真导入器直接读 OOXML 的 pPr/rPr，样式还原度远高于 mammoth；
           // 但它覆盖面有限（认不出的构造会漏），所以抛错或一块都没拆出来时退回 mammoth。
           let fid: DocxImport | null = null
           try {
             // 只在真的打开 .docx 时才拉这个模块，别把它塞进编辑器 chunk 的常驻体积里
             const { docxToHtmlFidelity } = await import('../lib/docx-fidelity')
-            const r = await docxToHtmlFidelity(bytes)
+            const r = await docxToHtmlFidelity(bytes, 0, zipSession)
             if (r.blocks > 0) fid = r
           } catch (e) {
             console.warn('docx 保真导入失败，回退 mammoth', e)
@@ -521,6 +683,15 @@ function DocEditor({ tab }: Props) {
               setMeta({
                 ...m,
                 ...(fid.styles?.length ? { styles: fid.styles } : {}),
+                // 潜在样式（v0.146）：Word 样式库门面账，只往返不屏现
+                ...(fid.latentStyles ? { latentStyles: fid.latentStyles } : {}),
+                // 编号定义账（v0.150）：nsid/tmpl/multiLevelType 与逐层三枚，只往返
+                ...(fid.numbering ? { numbering: fid.numbering } : {}),
+                // 节属性（v0.147）：读手走 attr 漏斗读的那一遍为准，覆盖 docxToDocMeta
+                // 的正则读数（同一份数两处读迟早分叉，读手这一遍是保真账本认的那条）
+                ...(fid.section ? { page: { ...m.page, ...pageSetupOf(fid.section) } } : {}),
+                // 文档背景（v0.155）：整篇底色，随 meta 持久化、导出回到 document 根
+                ...(fid.background ? { background: fid.background } : {}),
                 ...(fid.comments.length ? { comments: fid.comments } : {}),
               })
               if (fid.comments.length) setCmOpen(true)
@@ -852,6 +1023,8 @@ function DocEditor({ tab }: Props) {
 
   const pg = meta.page ?? {}
   const setPg = (p: Partial<typeof pg>) => patchMeta({ page: { ...pg, ...p } })
+  // v0.192：页面边框不只随 docx 往返，屏上纸面与打印预览也画出来
+  const pageBorder = pageBorderCss(pg.pageBorders)
 
   // 图片宽度按版心百分比设定；height 用当前显示比例换算，docx/odt 导出才能保形
   const setImageWidth = (pct: number) => {
@@ -896,6 +1069,160 @@ function DocEditor({ tab }: Props) {
     // 关面板即清空查询：重开时输入框状态与插件命中状态不脱节
     setFrQ('')
     editor?.commands.setFindQuery('')
+  }
+
+  // —— 拼写检查 ——
+  // 开的时候顺手扫一遍（插件 state 的 on 与命中一起落），关的时候把命中清空
+  const toggleSpell = () => {
+    if (!editor) return
+    const next = !spellOn
+    setSpellOn(next)
+    editor.commands.setSpellCheck(next)
+  }
+  // 插件 state 是唯一真源：命中随文档变，不能把列表复制进 React state 再同步
+  const spellState = editor ? spellPluginKey.getState(editor.state) : undefined
+  const spellIssues: SpellIssue[] = spellOn ? spellState?.issues ?? [] : []
+  const spellTruncated = spellOn && (spellState?.truncated ?? false)
+
+  /** 把光标挪到那一处：选中整段，用户下一步直接打字就替换掉了 */
+  const spellFocus = (i: SpellIssue) => {
+    editor?.chain().focus().setTextSelection({ from: i.from, to: i.to }).run()
+  }
+  /** 采纳建议：选中替换。改完插件自己重扫（docChanged 那一路） */
+  const spellApply = (i: SpellIssue) => {
+    if (!editor || !i.suggest) return
+    editor
+      .chain()
+      .focus()
+      .setTextSelection({ from: i.from, to: i.to })
+      .insertContent(i.suggest)
+      .run()
+    markDirty(tab.id, true)
+  }
+  const spellIgnoreOne = (i: SpellIssue) => {
+    editor?.commands.ignoreSpell(i.text)
+    setMyDict(spellIgnored())
+  }
+  /** 全量词典档的开关。词表没拉到就停在关——这一档缺了词典等于没有，不该假装开着 */
+  const toggleDeep = async () => {
+    if (!editor) return
+    if (spellDeepOn()) {
+      setSpellDeep(false)
+      setDeep(false)
+      editor.commands.rescanSpell()
+      return
+    }
+    const st = await loadSpellDict()
+    setDictState(st)
+    // 下载是异步的：这中间用户可能切了页签，编辑器已经销毁就不能再派事务
+    if (st === 'ready' && !editor.isDestroyed) {
+      setSpellDeep(true)
+      setDeep(true)
+      editor.commands.rescanSpell()
+    }
+  }
+  // —— 实时协同 ——
+  /**
+   * 开/关一次协同会话。
+   *
+   * 三态而不是两态，因为中间那一态（starting）也得能退出：连中继、
+   * 跑握手这几百毫秒里用户改主意，点第二下就该收摊，不能等它自己成败。
+   * error 态同样算"没在协同里"——点一下先收掉残句，再点才是重开。
+   */
+  const toggleCollab = async () => {
+    if (!editor) return
+    const cur = collabRef.current
+    if (cur && collab.state !== 'off') {
+      cur.stop()
+      // stop() 自己会回调置 off；这里再补一次是防它已经 dispose 过（不会再回调），
+      // 那时按钮会永远停在"退出"上
+      setCollab({ state: 'off', room: '', port: 0, peers: [], error: '' })
+      return
+    }
+    const room = collabRoom.trim() || defaultRoom()
+    setCollabRoom(room)
+    const session = new CollabSession(editor, setCollab)
+    collabRef.current = session
+    await session.start(room)
+  }
+  const toggleCollabPanel = () => {
+    const next = !collabOpen
+    setCollabOpen(next)
+    // 第一次打开时把房间名填上默认值（跟着文件路径走）：两个实例打开同一份文件
+    // 就该自动进同一间，不该要求用户先知道"房间"这个词
+    if (next && !collabRoom.trim()) setCollabRoom(defaultRoom())
+  }
+  /** 对端标签：匿名时补上 clientID 尾巴，不然几个"匿名"在面板上分不清是谁 */
+  const peerTag = (p: CollabPeer) => (p.name === '匿名' ? `匿名#${p.id}` : p.name)
+  // —— 宏 ——
+  const macroCurrent = macros.find((m) => m.id === macroSel) ?? null
+  const macroOpenOne = (id: string) => {
+    const m = macros.find((x) => x.id === id)
+    if (!m) return
+    setMacroSel(id)
+    setMacroCode(m.code)
+    setMacroOut(null)
+  }
+  const macroAdd = () => {
+    const m = newMacro()
+    // 内置的可以照着改：新建时把选中那条的代码带过来当起点
+    if (macroCurrent) m.code = macroCurrent.code
+    const next = [...macros, m]
+    setMacros(next)
+    saveMacros(next)
+    macroOpenOne(m.id)
+  }
+  const macroSave = () => {
+    const next = macros.map((m) => (m.id === macroSel ? { ...m, code: macroCode } : m))
+    setMacros(next)
+    saveMacros(next)
+  }
+  const macroDrop = (id: string) => {
+    const next = macros.filter((m) => m.id !== id)
+    setMacros(next)
+    saveMacros(next)
+    if (macroSel === id) {
+      setMacroSel('')
+      setMacroCode('')
+    }
+  }
+  const macroRun = () => {
+    if (!editor || !macroCurrent) return
+    // VBA 与 JS 走同一条沙箱、同一份 api：认得出 VBA 骨架就先转译再跑
+    if (looksLikeVba(macroCode)) {
+      const res = runVba(macroCode, editor, setStatus, tab.path)
+      setMacroOut(res)
+      // 宏改了文档就得标脏：不然这一趟的改动会在切标签时悄悄没了
+      if (res.changed) markDirty(tab.id, true)
+      if (!res.ok) setStatus(`VBA 出错：${res.error ?? '未知原因'}`)
+      return
+    }
+    const res = runMacro(macroCode, editor, setStatus)
+    setMacroOut(res)
+    // 宏改了文档就得标脏：不然这一趟的改动会在切标签时悄悄没了
+    if (res.changed) markDirty(tab.id, true)
+    if (!res.ok) setStatus(`宏出错：${res.error ?? '未知原因'}`)
+  }
+  /** 转译预览：VBA → JS 的产物摊开给人看。转译失败时把错也摊开 */
+  const macroIsVba = looksLikeVba(macroCode)
+  const vbaPreview = macroIsVba && vbaShow ? transpileVba(macroCode) : null
+  /** 一条能跑的 VBA 样例：存成一条真宏，既能直接跑也能照着改 */
+  const macroSampleVba = () => {
+    const m = newMacro('VBA 示例')
+    m.code = VBA_SAMPLE
+    const next = [...macros, m]
+    setMacros(next)
+    saveMacros(next)
+    macroOpenOne(m.id)
+    setMacroOut(null)
+    setVbaShow(true)
+  }
+
+  const spellForget = (w: string) => {
+    spellUnignore(w)
+    setMyDict(spellIgnored())
+    // 撤掉一个忽略词后要重扫，否则那一段的波浪线要等下一次输入才回来
+    editor?.commands.setSpellCheck(true)
   }
 
   // —— 自动保存与版本历史（会话内）：内容有变化才入栈，最多 20 份 ——
@@ -1038,6 +1365,9 @@ function DocEditor({ tab }: Props) {
   }
 
   const comments = meta.comments ?? []
+  // 作者下拉按显示口径去重（没写 author 的显示「我」），筛选与卡片同名
+  const cmAuthors = Array.from(new Set(comments.map((c) => c.author || '我')))
+  const shownComments = filterDocComments(comments, { openOnly: cmOnlyOpen, author: cmAuthor })
   const nextCid = () => comments.reduce((m, c) => Math.max(m, c.id), 0) + 1
 
   const startComment = () => {
@@ -1148,6 +1478,217 @@ function DocEditor({ tab }: Props) {
     </button>
   )
 
+  // —— v0.181 打印预览翻页：页数口径与状态栏/预览条同源，页距换算住在 lib ——
+  const totalPreviewPages = estimatePages(docH, effPx.h, effPx.top, effPx.bottom)
+  const goPreviewPage = (delta: number) => {
+    const p = clampPage(previewPage + delta, totalPreviewPages)
+    const top = pageScrollTop(p, effPx.h, zoom, effPx.top)
+    setPreviewPage(p)
+    previewTargetRef.current = top
+    scrollRef.current?.scrollTo({ top, behavior: 'smooth' })
+  }
+
+  // —— v0.180 可交互状态栏：条目表来自 lib 纯函数，这里只把 action 接到既有入口 ——
+  const statusItems = statusBarItems({
+    status,
+    savedAtText: autoSavedAt ? autoSavedAt.toLocaleTimeString() : '',
+    words: counts.words,
+    chars: counts.chars,
+    docH,
+    pageH: effPx.h,
+    marginTop: effPx.top,
+    marginBottom: effPx.bottom,
+    zoom,
+    revOn,
+    spellOn,
+    previewOpen,
+    histOpen,
+  })
+  const runStatus = (a: StatusBarAction) => {
+    switch (a) {
+      case 'openHistory': setHistOpen(true); break
+      case 'togglePreview': setPreviewOpen((v) => !v); break
+      case 'toggleRevision': setRevOn(toggleRevMode(editor)); break
+      case 'toggleSpell': toggleSpell(); break
+      case 'zoomOut': setZoom((z) => zoomStep(z, -1)); break
+      case 'zoomIn': setZoom((z) => zoomStep(z, 1)); break
+      case 'zoomReset': setZoom(1); break
+    }
+  }
+
+  // —— v0.173 文档结构图：关着时连一次 doc.descendants 都不跑 ——
+  const outline = navOpen ? outlineOf(editor.state.doc) : []
+  const activeOutline = navOpen ? activeOutlinePos(outline, editor.state.selection.from) : -1
+  const jumpToHeading = (pos: number) => {
+    const el = editor.view.nodeDOM(pos) as HTMLElement | null
+    el?.scrollIntoView?.({ behavior: 'smooth', block: 'start' })
+    try {
+      editor.chain().focus().setTextSelection(pos + 1).run()
+    } catch {
+      /* 文档已变、pos 失效时只滚动 */
+    }
+  }
+
+  // —— v0.173 格式刷：源格式取自当前光标/选区起点；应用发生在下一次拖选（见上面的 effect）
+  const cancelPainter = () => {
+    painterRef.current = null
+    painterArmedRef.current = null
+    painterLockedRef.current = false
+    setPainter(null)
+    setPainterLocked(false)
+  }
+  const armPainter = (locked: boolean) => {
+    const { from, to } = editor.state.selection
+    const payload = captureFormat(editor.state)
+    painterRef.current = payload
+    painterArmedRef.current = { from, to }
+    painterLockedRef.current = locked
+    setPainter(payload)
+    setPainterLocked(locked)
+  }
+  const painterClick = () => {
+    if (painterRef.current) cancelPainter()
+    else armPainter(false)
+  }
+
+  // —— v0.174 右键菜单动作：只有这一处碰 editor；条目表在 lib 里是纯函数 ——
+  const runCtx = async (id: string) => {
+    setCtxMenu(null)
+    if (!editor) return
+    const chain = editor.chain().focus()
+    switch (id) {
+      case 'undo': chain.undo().run(); return
+      case 'redo': chain.redo().run(); return
+      case 'selectAll': chain.selectAll().run(); return
+      case 'find':
+        setFrOpen(true)
+        setTimeout(() => frInputRef.current?.focus(), 0)
+        return
+      case 'painter': painterClick(); return
+      // v0.183 清除格式：只摘字符外观 mark + 三个样式标签。身份型 mark 整列保留
+      // （清掉批注/修订/书签/超链接是「删除标注」，不是「清除格式」），节点类型
+      // 也不动（标题转段落交给用户）。名单与格式刷同源，抽在 lib 里可纯函数钉。
+      case 'clearFormat': {
+        for (const name of clearableMarkNames(editor.state.schema)) chain.unsetMark(name)
+        chain.setPstyle(null).setRStyle(null).setTableStyle(null).run()
+        return
+      }
+      case 'nav': setNavOpen((v) => !v); return
+      case 'pageBreak': chain.insertPageBreak().run(); return
+      case 'addRow': chain.addRowAfter().run(); return
+      case 'deleteRow': chain.deleteRow().run(); return
+      case 'cut':
+      case 'copy': {
+        const { from, to } = editor.state.selection
+        const text = editor.state.doc.textBetween(from, to, '\n')
+        try {
+          await navigator.clipboard.writeText(text)
+          if (id === 'cut') editor.chain().focus().deleteSelection().run()
+        } catch {
+          setStatus('剪贴板不可用：请用系统快捷键 Ctrl+C / Ctrl+X')
+          setTimeout(() => setStatus(''), 2400)
+        }
+        return
+      }
+      case 'paste': {
+        try {
+          const text = await navigator.clipboard.readText()
+          // 走 text 节点而不是字符串：字符串会被当 HTML 解析，粘贴内容里的 '<' 会吞字
+          editor.chain().focus().insertContent({ type: 'text', text }).run()
+        } catch {
+          setStatus('剪贴板不可用：请用系统快捷键 Ctrl+V')
+          setTimeout(() => setStatus(''), 2400)
+        }
+        return
+      }
+      default:
+        return
+    }
+  }
+
+  // 缩放控件在工具条与打印预览条两处出现，定义一份，别让两串刻度走散
+  // v0.187：自动缩放两档，与 PDF / Impress 共用 fitZoom。
+  // 判断修正：v0.185 说「纸面固定版心，自动档没有新信息」偏保守——纸面宽确实固定，
+  // 但**视口宽随侧栏开合与窗口大小变化**，适合页宽是有实际意义的一档。
+  // Writer 是档位制下拉，落到最近一档，免得 select 里显示没有的百分比。
+  const fitTo = (mode: FitMode) => {
+    const host = scrollRef.current
+    if (!host) return
+    const z = fitZoom(effPx.w, effPx.h, host.clientWidth, host.clientHeight, mode)
+    setZoom(nearestZoomStep(z))
+  }
+
+  const zoomControls = (
+    <span className="doc-zoom" title="视图缩放：只改屏幕上的纸面，打印与导出 PDF 始终按 100% 出纸；也可在正文区按 Ctrl+滚轮">
+      <button className="tb-btn" onClick={() => setZoom((z) => zoomStep(z, -1))} title="缩小一档">
+        −
+      </button>
+      <select
+        className="tb-select"
+        value={String(zoom)}
+        onChange={(e) => setZoom(clampZoom(Number(e.target.value)))}
+      >
+        {ZOOM_STEPS.map((s) => (
+          <option key={s} value={s}>{zoomPct(s)}</option>
+        ))}
+      </select>
+      <button className="tb-btn" onClick={() => setZoom((z) => zoomStep(z, 1))} title="放大一档">
+        ＋
+      </button>
+      <button className="tb-btn" onClick={() => setZoom(1)} title="回到 100%">
+        100%
+      </button>
+      <button className="tb-btn" onClick={() => fitTo('width')} title="适合页宽：按纸面宽铺满正文区">
+        ↔
+      </button>
+      <button className="tb-btn" onClick={() => fitTo('page')} title="适合整页：纸面连高一起装下">
+        ⤢
+      </button>
+    </span>
+  )
+
+  // —— v0.179 标尺：0 点在版心左边缘（不随纸面边距走），刻度与缩进换算都在 lib。
+  // 关着时连一次刻度计算都不跑；打开时只读当前段落的三枚属性，不遍历全文。
+  const rulerGeom = {
+    contentWidthPx: Math.max(0, effPx.w - effPx.left - effPx.right),
+    mmPx: MM_PX,
+    maxIndentPx: 320, // 与 indent-extension 的 INDENT_MAX_PX 同源
+  }
+  const rulerTicksNow = rulerOn ? rulerTicks(rulerGeom) : []
+  // 与「首行」按钮同一口径：paragraph 优先，heading 兜底（光标在标题里时前者为空）。
+  // 不能用对象展开合并——heading 的空属性会把 paragraph 写过的值盖成 undefined
+  const rulerPara = rulerOn ? editor.getAttributes('paragraph') : {}
+  const rulerHead = rulerOn ? editor.getAttributes('heading') : {}
+  const rulerMarks = rulerOn ? rulerIndentMarks({
+    indentFirst: rulerPara.indentFirst ?? rulerHead.indentFirst ?? null,
+    indentLeft: rulerPara.indentLeft ?? rulerHead.indentLeft ?? null,
+    indentRight: rulerPara.indentRight ?? rulerHead.indentRight ?? null,
+  }, rulerGeom) : null
+  // 拖动换算：clientX 是缩放后的视口坐标，标尺刻度是未缩放的 CSS px，除以 zoom 折回去
+  const rulerDrag = (e: React.PointerEvent<HTMLDivElement>) => {
+    const handle = rulerDragRef.current
+    if (!handle || !rulerMarks) return
+    const box = e.currentTarget.getBoundingClientRect()
+    const atPx = (e.clientX - box.left) / zoom
+    const next = rulerIndentFromDrag(handle, atPx, rulerMarks, rulerGeom)
+    if (next) editor.chain().focus().setIndent(next).run()
+  }
+  const rulerHandle = (kind: RulerHandle, label: string, at: number) => (
+    <span
+      key={kind}
+      className={`doc-ruler-handle doc-ruler-${kind}`}
+      style={{ left: at }}
+      title={label}
+      onPointerDown={(e) => {
+        e.preventDefault()
+        rulerDragRef.current = kind
+        e.currentTarget.setPointerCapture(e.pointerId)
+      }}
+      onPointerUp={() => { rulerDragRef.current = null }}
+      onPointerCancel={() => { rulerDragRef.current = null }}
+    />
+  )
+
   const paraBorders = (edges: readonly CellEdge[], value: string | null) =>
     editor.chain().focus().setParaBorders(edges, value).run()
   const cellBorders = (edges: readonly CellEdge[], value: string | null) =>
@@ -1220,16 +1761,36 @@ function DocEditor({ tab }: Props) {
   }
 
   return (
-    <div className="editor-pane">
+    <div className={`editor-pane${previewOpen ? ' is-preview' : ''}`}>
+      {previewUi(previewOpen).showPreviewBar && (
+        <div className="doc-preview-bar">
+          <span className="doc-preview-title">打印预览 · 只读</span>
+          {previewUi(previewOpen).showPager && (
+            <span className="doc-preview-pager" title="按等距纸高翻页定位；表格/图片跨页等真分页行为由系统打印样式决定，屏幕不重排">
+              <button className="tb-btn" disabled={previewPage <= 1} onClick={() => goPreviewPage(-1)} title="上一页">◀</button>
+              <span className="doc-preview-pages">第 {previewPage} / {totalPreviewPages} 页（约）</span>
+              <button className="tb-btn" disabled={previewPage >= totalPreviewPages} onClick={() => goPreviewPage(1)} title="下一页">▶</button>
+            </span>
+          )}
+          <span className="tb-sep" />
+          {zoomControls}
+          <span className="tb-sep" />
+          {btn('打印', () => window.print(), false, '调用系统打印：按 @media print 出纸，预览缩放不影响纸面')}
+          {btn('导出 PDF', exportPdf, false, 'WebView2 原生 PrintToPdf：按打印样式矢量输出')}
+          {btn('关闭预览', () => setPreviewOpen(false), false, 'Esc 也可退出，回到可编辑状态')}
+        </div>
+      )}
       <div className="editor-toolbar">
         {btn('保存', () => saveOdoc(false), false, 'Ctrl+S：原地写回当前文件（.docx/.odt 各按自己的格式，其余存 .odoc）')}
         {btn('另存为', () => saveOdoc(true))}
         {btn('导出 docx', exportDocx)}
         {btn('导出 odt', exportOdt, false, '导出 OpenDocument 文本（LibreOffice 系通用）')}
         {btn('目录', tocAction, false, '插入/定位目录：按标题实时汇总；导出为 Word 原生 TOC 域')}
+        {btn('导航', () => setNavOpen((v) => !v), navOpen, '文档结构图：按标题 1-4 汇总，点击跳转，随编辑实时刷新')}
         {btn('分页符', () => editor.chain().focus().insertPageBreak().run(), false, 'Ctrl+Enter：打印与导出 PDF 时从此处另起一页（docx/odt 同步写分页）')}
         {btn('页眉页脚', () => setHfOpen((v) => !v), hfOpen || !!(meta.headerText || meta.footerText || meta.footerPageNumber), '设置页眉、页脚与页码')}
         {btn('页面设置', () => setPgOpen((v) => !v), pgOpen || !!meta.page, '纸张与页边距：同步应用到视图、打印与 docx/odt 导出')}
+        {btn('文档属性', () => setPropsOpen((v) => !v), propsOpen || !!meta.docProps, '标题 / 主题 / 作者 / 关键词 / 备注：写入 docProps/core.xml，随 docx 与 .odoc 往返')}
         {btn('批注', () => setCmOpen((v) => !v), cmOpen || comments.length > 0, '批注侧栏：选中文字后可添加批注，导出为 docx 原生批注')}
         {btn('新建批注', startComment, !!draft, '选中正文文字后点击，为其添加一条批注')}
         {btn('接受修订', () => runRevision('accept'), false, '接受修订（docx 修订/批注模式读入的 w:ins/w:del）：有选区只裁决选区内的，否则全文；插入文字转正、删除文字移除')}
@@ -1239,7 +1800,26 @@ function DocEditor({ tab }: Props) {
           setRevOn(toggleRevMode(editor))
           setStatus(revModeOnState(editor.state) ? '修订模式已开：插入会标记为插入、删除变成删除线留原位' : '修订模式已关')
           setTimeout(() => setStatus(''), 2400)
-        }, revOn, '本应用里改字留痕：开着时打字/粘贴标记为插入（w:ins），退格/删除/剪切变成删除线标记（w:del），署名「我」；用上面的接受/拒绝定稿')}
+        }, revOn, '本应用里改字留痕：开着时打字/粘贴标记为插入（w:ins），退格/删除/剪切变成删除线标记（w:del）；用上面的接受/拒绝定稿')}
+        <label className="doc-who" title="署名：新打的修订与批注都用它标作者，往返 Word 后作者列显示它">
+          署名
+          <input
+            className="tb-input doc-who-input"
+            value={who}
+            maxLength={40}
+            placeholder="你的名字"
+            onChange={(e) => setWho(e.target.value)}
+            onBlur={() => {
+              setIdentityName(who)
+              setWho(identityName())
+              setStatus(`署名已改为「${identityName()}」`)
+              setTimeout(() => setStatus(''), 1800)
+            }}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') (e.target as HTMLInputElement).blur()
+            }}
+          />
+        </label>
         {btn('脚注', () => startNote('footnote'), noteDraft?.kind === 'footnote', '在光标处插入脚注：正文写在文末脚注区，导出 docx/odt 为原生脚注')}
         {btn('尾注', () => startNote('endnote'), noteDraft?.kind === 'endnote', '在光标处插入尾注：编号与脚注各排各的')}
         {noteDraft && (
@@ -1262,22 +1842,9 @@ function DocEditor({ tab }: Props) {
         )}
         {btn('查找替换', () => setFrOpen((v) => !v), frOpen, 'Ctrl+F 打开：查找、定位、替换')}
         {btn('历史版本', () => setHistOpen((v) => !v), histOpen, '会话内快照：每 60 秒自动留存，可一键恢复')}
+        {btn('打印预览', () => setPreviewOpen((v) => !v), previewOpen, '独立打印预览：纸面转只读、可缩放、按等距页距翻页定位、可直接打印或导出 PDF；Esc 退出。屏幕不重排，真分页以打印样式为准')}
         {btn('打印 / PDF', () => window.print(), false, '调用系统打印，可选择另存为 PDF')}
         {btn('导出 PDF', exportPdf, false, 'WebView2 原生 PrintToPdf：按打印样式矢量输出，含高亮底色')}
-        {status && (
-          <span className="editor-status" title={statusTip(status)}>
-            {statusText(status)}
-          </span>
-        )}
-        {!status && autoSavedAt && (
-          <span className="editor-status" title={autoOkTip(auto)}>
-            已自动保存 {autoSavedAt.toLocaleTimeString()}
-          </span>
-        )}
-        <span className="editor-hint">
-          字数 {counts.words} · 字符 {counts.chars} · 约{' '}
-          {Math.max(1, Math.ceil(docH / Math.max(1, effPx.h - effPx.top - effPx.bottom)))} 页
-        </span>
       </div>
       <div className="doc-toolbar">
         <select
@@ -1338,6 +1905,24 @@ function DocEditor({ tab }: Props) {
           {FONT_SIZES_PT.map((pt) => (
             <option key={pt} value={pt}>
               {pt}
+            </option>
+          ))}
+        </select>
+        <select
+          value={String(spacingFromModel(editor.getAttributes('textStyle').letterSpacing))}
+          onChange={(e) => {
+            const pt = Number(e.target.value)
+            // 0 也照样写串（"0pt"）：它是真值，ODT 那头靠它压掉样式层的间距；
+            // 只有「未声明」才落 null
+            editor.chain().focus().setMark('textStyle', { letterSpacing: spacingToModel(pt) }).run()
+          }}
+          className="tb-select"
+          title="字符间距（Word「字体→高级→间距」）。写 docx 时按缇＝1/20 磅落 w:spacing；0 那一档 docx 写不下，等于回到样式默认"
+        >
+          <option value="">字距</option>
+          {CHAR_SPACING_PT.map((pt) => (
+            <option key={pt} value={pt}>
+              {spacingLabel(pt)}
             </option>
           ))}
         </select>
@@ -1416,7 +2001,296 @@ function DocEditor({ tab }: Props) {
         <span className="tb-sep" />
         {btn('撤销', () => editor.chain().focus().undo().run())}
         {btn('重做', () => editor.chain().focus().redo().run())}
+        <span className="tb-sep" />
+        <button
+          key="format-painter"
+          className={`tb-btn doc-painter-btn${painter ? ' tb-active' : ''}`}
+          onClick={painterClick}
+          onDoubleClick={() => armPainter(true)}
+          title={'格式刷：先点一下取源格式，再拖选目标文字即刷上；双击可连续刷，Esc 或再点按钮退出。' +
+            '只刷字符外观（粗斜、字色、高亮、字号等）与非默认对齐，不复制批注/书签/修订/超链接这些带身份的标记，也不搬缩进行距。'}
+        >
+          {painter ? (painterLocked ? '格式刷·连刷' : '格式刷·待刷') : '格式刷'}
+        </button>
+        {btn('清格式', () => void runCtx('clearFormat'), false,
+          '清除格式：摘掉选区里的字符外观（粗斜、字色、高亮、字号等）与样式标签；' +
+          '批注/书签/修订/超链接这类带身份的标记保留，标题节点也不转回段落。无选区时清的是后续输入格式')}
+        {btn('拼写', toggleSpell, spellOn, '拼写检查：常见错拼、中文误用、重复字。开着会随输入重扫')}
+        {btn('协同', toggleCollabPanel, collabOpen, '实时协同：同一房间名的多个实例一起改同一份文档，改动自动合并，不用互相锁')}
+        {btn('宏', () => setMacroOpen((v) => !v), macroOpen, '脚本宏：一段 JS 操作这篇文档（只跑自己写的）')}
+        {btn('标尺', () => setRulerOn((v) => !v), rulerOn, '水平/垂直标尺：0 点在版心左边缘，拖动三枚滑块改首行/左/右缩进；关着时不计算刻度')}
+        <span className="tb-sep" />
+        {zoomControls}
       </div>
+      {editor.isActive('bulletList') && (
+        <div className="doc-toolbar doc-bullet-bar">
+          <span className="tb-label">符面</span>
+          {BULLET_CHARS.map((c) => (
+            <button
+              key={c}
+              className={`tb-btn tb-bullet${editor.getAttributes('bulletList').bulletChar === c ? ' tb-active' : ''}`}
+              onClick={() => editor.chain().focus().updateAttributes('bulletList', { bulletChar: c }).run()}
+              title={`用「${c}」当这一层的列表符（写 ODT 落 text:bullet-char）`}
+            >
+              {c}
+            </button>
+          ))}
+          <input
+            className="tb-input doc-num"
+            placeholder="自定义"
+            maxLength={4}
+            value={String(editor.getAttributes('bulletList').bulletChar ?? '')}
+            onChange={(e) => {
+              const v = e.target.value.trim()
+              editor.chain().focus().updateAttributes('bulletList', { bulletChar: v || null }).run()
+            }}
+            title="自定义符面（可多字符）。留空＝回到宿主默认圆点，不写进档里"
+          />
+          <span className="tb-sep" />
+          <select
+            value={String(editor.getAttributes('bulletList').bulletFont ?? '')}
+            onChange={(e) =>
+              editor.chain().focus().updateAttributes('bulletList', { bulletFont: e.target.value || null }).run()
+            }
+            className="tb-select"
+            title="符面专用字体（ODF style:font-name / OOXML w:rFonts）。只记档里写的字体名，屏上仍照宿主默认画——这一层还没有 ::marker 出规则的地方"
+          >
+            <option value="">符面字体·默认</option>
+            {FONT_FAMILIES.map(([label, css]) => (
+              <option key={css} value={css}>
+                {label}
+              </option>
+            ))}
+          </select>
+          {btn(
+            '清符面',
+            () =>
+              editor
+                .chain()
+                .focus()
+                .updateAttributes('bulletList', { bulletChar: null, bulletFont: null })
+                .run(),
+            false,
+            '清掉自定义符面与符面字体，回到宿主默认',
+          )}
+        </div>
+      )}
+      {macroOpen && (
+        <div className="doc-toolbar doc-macro-bar">
+          <span className="tb-label">宏</span>
+          <select
+            className="tb-select"
+            value={macroSel}
+            onChange={(e) => macroOpenOne(e.target.value)}
+            title="选一条宏。内置那几条删不掉，可以照着改出自己的"
+          >
+            <option value="">（选一条）</option>
+            {macros.map((m) => (
+              <option key={m.id} value={m.id}>
+                {m.name}
+                {m.builtin ? '（内置）' : ''}
+              </option>
+            ))}
+          </select>
+          {btn('新建', macroAdd, false, '从选中的那条复制一份出来改')}
+          {btn('VBA 样例', macroSampleVba, false, '填一条能跑的 VBA 宏当起点（Sub/With/Find/MsgBox 都在里面）')}
+          {macroIsVba &&
+            btn(vbaShow ? '藏起转译' : '看转译', () => setVbaShow((v) => !v), vbaShow, '把这段 VBA 转出来的 JS 摊开看')}
+          {btn(
+            macroIsVba ? '运行 VBA' : '运行',
+            macroRun,
+            false,
+            macroIsVba
+              ? '先转译成 JS 再跑（转译出错会连行号一起报出来）'
+              : !macroCurrent
+                ? '先选一条宏'
+                : '跑一遍（跑的是文本框里那份代码）',
+          )}
+          {macroCurrent && (
+            <>
+              {btn('保存', macroSave, false, '把文本框里的代码存回这条宏')}
+              {!macroCurrent.builtin &&
+                btn('删除', () => macroDrop(macroCurrent.id), false, '删掉这条宏')}
+            </>
+          )}
+          {macroSel && (
+            <textarea
+              className="doc-macro-code"
+              spellCheck={false}
+              value={macroCode}
+              onChange={(e) => setMacroCode(e.target.value)}
+              placeholder={
+                macroIsVba
+                  ? "' VBA 宏：Sub Main() … End Sub。可用的对象模型见「看转译」旁边的提示"
+                  : '// 可用的东西都在 api 上：getText / insert / replaceAll / stats / log …'
+              }
+            />
+          )}
+          {macroIsVba && (
+            <span className="tb-label doc-macro-vba">
+              认出这是 VBA：会先转译成 JS 再跑。支持 Sub/Function、If/For/Do/Select/With、
+              数组、字符串函数，以及 ActiveDocument / Selection / Range / Find 这一套对象模型；
+              不支持 GoTo、类模块、二维数组——撞上了会报带行号的错
+            </span>
+          )}
+          {vbaPreview && (
+            <pre className={`doc-macro-pre${vbaPreview.ok ? '' : ' err'}`}>
+              {vbaPreview.ok ? vbaPreview.code : `转译失败：${vbaPreview.error}`}
+            </pre>
+          )}
+          {macroOut && (
+            <div className={`doc-macro-out${macroOut.ok ? '' : ' err'}`}>
+              {macroOut.log.map((l, i) => (
+                <div key={i}>{l}</div>
+              ))}
+              {!macroOut.ok && <div>出错：{macroOut.error}</div>}
+              {macroOut.ok && !macroOut.log.length && <div>（跑完了，没输出）</div>}
+            </div>
+          )}
+          <span className="tb-label doc-macro-warn">
+            只跑自己写的宏：`new Function` 不是安全边界，来路不明的脚本能碰到这个页面上的东西
+          </span>
+        </div>
+      )}
+      {spellOn && (
+        <div className="doc-toolbar doc-spell-bar">
+          <span className="tb-label">
+            {spellIssues.length ? `拼写 ${spellIssues.length} 处` : '拼写 没问题'}
+          </span>
+          {btn(
+            dictState === 'loading' ? '词典…' : '全量词典',
+            () => {
+              void toggleDeep()
+            },
+            deep,
+            dictState === 'failed'
+              ? '词表没拉到（离线或资产缺失），全量词典这一档暂时用不了'
+              : '英文全量词典（27.4 万词，第一次按才下载）：也会把人名、品牌、术语划上，误报点「忽略」加进我的词典',
+          )}
+          {spellTruncated && (
+            <span className="tb-label" title="命中太多，只列前 1200 处；改完前面几处后面会补上">
+              （只列了前 1200 处）
+            </span>
+          )}
+          {!spellIssues.length && (
+            <span className="tb-label">
+              {deep
+                ? '全量词典已开：英文查 27.4 万词，中文仍只有错写表与重复——中文的错字要分词加语言模型，这一版没有'
+                : '这一版查的是常见错拼、中文误用与重复字，不是全词典检查——漏报是它的代价'}
+            </span>
+          )}
+          <span className="doc-spell-list">
+            {spellIssues.slice(0, 40).map((i) => (
+              <span key={`${i.from}-${i.to}`} className="doc-spell-item">
+                <button
+                  className="doc-spell-word"
+                  onClick={() => spellFocus(i)}
+                  title={i.note}
+                >
+                  {i.text}
+                </button>
+                {i.suggest && (
+                  <button
+                    className="tb-btn tb-btn-mini"
+                    onClick={() => spellApply(i)}
+                    title={`改成「${i.suggest}」`}
+                  >
+                    →{i.suggest}
+                  </button>
+                )}
+                <button
+                  className="tb-btn tb-btn-mini"
+                  onClick={() => spellIgnoreOne(i)}
+                  title="加进我的词典，以后不划这一处"
+                >
+                  忽略
+                </button>
+              </span>
+            ))}
+          </span>
+          {myDict.length > 0 && (
+            <>
+              <span className="tb-sep" />
+              <span className="tb-label">我的词典</span>
+              <span className="doc-spell-list">
+                {myDict.slice(0, 20).map((w) => (
+                  <button
+                    key={w}
+                    className="tb-btn tb-btn-mini"
+                    onClick={() => spellForget(w)}
+                    title="从我的词典里撤掉（× 一下就恢复检查）"
+                  >
+                    {w} ×
+                  </button>
+                ))}
+              </span>
+            </>
+          )}
+        </div>
+      )}
+      {collabOpen && (
+        <div className="doc-toolbar doc-collab-bar">
+          <span className="tb-label">房间</span>
+          <input
+            className="doc-collab-room"
+            value={collabRoom}
+            onChange={(e) => setCollabRoom(e.target.value)}
+            // 连着的时候不许改名：换房间是另一场会话，改一半最让人误会
+            disabled={collab.state !== 'off' && collab.state !== 'error'}
+            placeholder="同名实例才会互见"
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') void toggleCollab()
+              if (e.key === 'Escape') setCollabOpen(false)
+            }}
+          />
+          {collab.state === 'on' || collab.state === 'starting' || collab.state === 'retrying'
+            ? btn(
+                collab.state === 'starting' ? '连接…' : collab.state === 'retrying' ? '重连…' : '退出',
+                () => void toggleCollab(),
+                collab.state === 'on',
+                collab.state === 'retrying'
+                  ? '连接断了，正在退避重连（间隔逐次翻倍，到 8 秒封顶）：这期间你的改动都还在本地，连上后会补齐给对面'
+                  : '退出协同：摘掉协同插件、断开连接，文档回到单机编辑',
+              )
+            : btn(
+                collab.state === 'error' ? '重试' : '开始',
+                () => void toggleCollab(),
+                false,
+                '开始实时协同：本机没有中继时会自动起一个（仅监听 127.0.0.1）',
+              )}
+          {collab.state === 'retrying' && (
+            <span className="doc-collab-note">连接断了，正在重连…（改动不会丢）</span>
+          )}
+          {collab.state === 'on' && (
+            <>
+              <span className="tb-sep" />
+              <span className="tb-label" title="中继端口（127.0.0.1）：同一台机器上的实例自动互见，跨机器要改协议层">端口 {collab.port}</span>
+              <span className="doc-collab-peers">
+                <span className="doc-collab-me">
+                  <i className="doc-collab-dot" style={{ background: authorColor(identityName()) }} />
+                  {identityName()}（我）
+                </span>
+                {collab.peers.map((p) => (
+                  <span key={p.id} className="doc-collab-peer" title={`clientID ${p.id}`}>
+                    <i className="doc-collab-dot" style={{ background: p.color }} />
+                    {peerTag(p)}
+                  </span>
+                ))}
+              </span>
+              <span className="tb-label">
+                {collab.peers.length ? `房里 ${collab.peers.length + 1} 人` : '房里只有你'}
+              </span>
+            </>
+          )}
+          {collab.state === 'error' && collab.error && (
+            <span className="doc-collab-err">{collab.error}</span>
+          )}
+          <span className="tb-label doc-collab-note">
+            同步的是正文、段落字符属性、表格、图片与批注；页眉页脚等文档级状态不在内。
+            撤销历史从开启那刻起算（之前的编辑不在协同的撤销栈里）
+          </span>
+        </div>
+      )}
       {(editor.isActive('paragraph') || editor.isActive('heading')) && (
         <div className="doc-toolbar doc-para-bar">
           {(() => {
@@ -1758,6 +2632,93 @@ function DocEditor({ tab }: Props) {
               mm
             </label>
           )}
+          {eff.cols > 1 && (
+            <label
+              className="doc-hf-field"
+              title="Word 的不等宽分栏：逐栏宽按缇原值写回 w:col。屏上 CSS columns 只能等宽，这里只管 docx 往返"
+            >
+              不等宽
+              <input
+                type="checkbox"
+                checked={!!eff.colsLayout?.widths?.length}
+                onChange={(e) => {
+                  if (!e.target.checked) {
+                    setPg({ colsLayout: undefined })
+                    return
+                  }
+                  const widths = eff.colsLayout?.widths?.length
+                    ? eff.colsLayout.widths
+                    : Array.from({ length: eff.cols }, () => ({
+                        w: Math.round(((effPx.w - effPx.left - effPx.right) * 15) / eff.cols),
+                      }))
+                  setPg({ colsLayout: { equalWidth: false, widths } })
+                }}
+              />
+            </label>
+          )}
+          {eff.cols > 1 && !!eff.colsLayout?.widths?.length && (
+            <span className="doc-hf-field" title="缇原值，直接写回 w:col/@w:w；屏上仍按等宽显示">
+              栏宽(缇)
+              {eff.colsLayout!.widths!.map((c, i) => (
+                <input
+                  key={i}
+                  className="tb-input doc-num"
+                  type="number"
+                  step="1"
+                  min="1"
+                  style={{ width: 72, marginRight: 4 }}
+                  value={c.w}
+                  onChange={(ev) => {
+                    const v = ev.target.valueAsNumber
+                    if (!Number.isFinite(v) || v <= 0) return
+                    const widths = eff.colsLayout!.widths!.map((x, j) =>
+                      j === i ? { ...x, w: Math.round(v) } : x,
+                    )
+                    setPg({ colsLayout: { ...eff.colsLayout, widths } })
+                  }}
+                />
+              ))}
+            </span>
+          )}
+          <span className="doc-pg-borders" title="页面边框：走 docx 包原生槽，随 .odoc 与 docx 往返；v0.192 起屏上纸面与打印预览同步显示">
+            <label className="tb-check">
+              <input
+                type="checkbox"
+                checked={!!pg.pageBorders}
+                onChange={(e) => setPg({ pageBorders: e.target.checked ? { ...DEFAULT_PAGE_BORDERS } : undefined })}
+              />
+              页面边框
+            </label>
+            {pg.pageBorders && (
+              <>
+                <select
+                  className="tb-select"
+                  value={pg.pageBorders.style}
+                  onChange={(e) => setPg({ pageBorders: { ...pg.pageBorders!, style: e.target.value } })}
+                  title="线型（只认四档，其它档位导入时宁缺毋滥）"
+                >
+                  {PAGE_BORDER_STYLES.map((s) => <option key={s} value={s}>{s}</option>)}
+                </select>
+                <input
+                  className="tb-input doc-color"
+                  type="color"
+                  value={`#${pg.pageBorders.color}`}
+                  onChange={(e) => setPg({ pageBorders: { ...pg.pageBorders!, color: e.target.value.replace(/^#/, '').toUpperCase() } })}
+                  title="边框颜色"
+                />
+                <input
+                  className="tb-input doc-num"
+                  type="number"
+                  min={2}
+                  max={96}
+                  step={2}
+                  value={pg.pageBorders.size}
+                  onChange={(e) => setPg({ pageBorders: { ...pg.pageBorders!, size: Math.max(2, Math.min(96, Number(e.target.value) || 4)) } })}
+                  title="线宽（w:sz，八分之一磅，2–96）"
+                />
+              </>
+            )}
+          </span>
           {meta.page && btn('重置', () => patchMeta({ page: undefined }), false, '恢复 A4 + 默认边距 + 不分栏')}
         </div>
       )}
@@ -1809,6 +2770,31 @@ function DocEditor({ tab }: Props) {
             >
               {new Date(h.t).toLocaleTimeString()} · {h.note}
             </button>
+          ))}
+        </div>
+      )}
+      {propsOpen && (
+        <div className="doc-hf-panel doc-props-panel" title="五格写入 docProps/core.xml，随 .odoc 与 docx 往返；留空用缺省值">
+          {([
+            ['title', '标题'],
+            ['subject', '主题'],
+            ['creator', '作者'],
+            ['keywords', '关键词'],
+            ['description', '备注'],
+          ] as const).map(([key, label]) => (
+            <label className="doc-hf-field" key={key}>
+              {label}
+              <input
+                className="tb-input"
+                value={meta.docProps?.[key] ?? ''}
+                placeholder={docPropsOf(meta)[key] ?? ''}
+                onChange={(e) => {
+                  const v = e.target.value
+                  const next: DocProps = { ...(meta.docProps ?? {}), [key]: v || undefined }
+                  patchMeta({ docProps: next })
+                }}
+              />
+            </label>
           ))}
         </div>
       )}
@@ -2247,7 +3233,56 @@ function DocEditor({ tab }: Props) {
         </div>
       )}
       <div className="doc-body">
-        <div className="doc-scroll">
+        {navOpen && (
+          <aside className="doc-outline">
+            <div className="doc-outline-head">
+              <span>文档结构</span>
+              <button className="tb-btn doc-outline-close" onClick={() => setNavOpen(false)} title="收起导航窗格">
+                ✕
+              </button>
+            </div>
+            <div className="doc-outline-list">
+              {outline.length === 0 ? (
+                <div className="doc-outline-empty">给段落设「标题 1–4」，这里就会列出结构并随编辑刷新。</div>
+              ) : (
+                outline.map((h) => (
+                  <button
+                    key={h.pos}
+                    className={`doc-outline-item doc-outline-l${h.level}${h.pos === activeOutline ? ' doc-outline-active' : ''}`}
+                    onClick={() => jumpToHeading(h.pos)}
+                    title={h.text}
+                  >
+                    {h.text}
+                  </button>
+                ))
+              )}
+            </div>
+            <div className="doc-outline-foot">{outline.length} 个标题 · 点击跳转</div>
+          </aside>
+        )}
+        <div
+          className="doc-scroll"
+          ref={scrollRef}
+          onScroll={() => {
+            // v0.181：只在预览态同步页码；程序化滚动（smooth）期间先不回写，
+            // 等视口抵达目标再解除，否则中间帧会把页码一路改回起点
+            if (!previewOpen) return
+            const top = scrollRef.current?.scrollTop ?? 0
+            const target = previewTargetRef.current
+            if (target !== null) {
+              if (Math.abs(top - target) < 2) previewTargetRef.current = null
+              return
+            }
+            const p = clampPage(pageOfScrollTop(top, effPx.h, zoom, effPx.top), totalPreviewPages)
+            setPreviewPage((cur) => (cur === p ? cur : p))
+          }}
+          onContextMenu={(e) => {
+            e.preventDefault()
+            // 预览态只读，不弹编辑用的右键菜单（也不放行浏览器原生菜单）
+            if (previewOpen) return
+            setCtxMenu({ x: e.clientX, y: e.clientY })
+          }}
+        >
           <div
             className="doc-page"
             style={{
@@ -2255,9 +3290,45 @@ function DocEditor({ tab }: Props) {
               maxWidth: 'none',
               minHeight: effPx.h,
               padding: `${effPx.top}px ${effPx.right}px ${effPx.bottom}px ${effPx.left}px`,
+              zoom,
+              ...(pageBorder ? { border: pageBorder } : {}),
             }}
           >
             <div className="doc-pg-lines" style={{ '--pgh': `${effPx.h}px` } as CSSProperties} />
+            {rulerOn && (
+              <>
+                {/* v0.179：标尺挂在 doc-page 内，随内联 zoom 一起缩放；0 点对齐版心左边缘 */}
+                <div
+                  className="doc-ruler-h"
+                  style={{ left: effPx.left, width: rulerGeom.contentWidthPx }}
+                  onPointerMove={rulerDrag}
+                  onPointerUp={() => { rulerDragRef.current = null }}
+                >
+                  {rulerTicksNow.map((t, i) => (
+                    <span
+                      key={i}
+                      className={`doc-ruler-tick${t.major ? ' doc-ruler-major' : ''}`}
+                      style={{ left: t.at }}
+                    >
+                      {t.label !== undefined && <i>{t.label}</i>}
+                    </span>
+                  ))}
+                  <span className="doc-ruler-avail" style={{ left: rulerMarks?.firstLine ?? 0, width: Math.max(0, (rulerMarks?.right ?? rulerGeom.contentWidthPx) - (rulerMarks?.firstLine ?? 0)) }} />
+                  {rulerHandle('first', '首行缩进：拖动改第一行的起点', rulerMarks?.firstLine ?? 0)}
+                  {rulerHandle('left', '左缩进：拖动改整段左边界，首行跟着走', rulerMarks?.left ?? 0)}
+                  {rulerHandle('right', '右缩进：拖动改整段右边界', rulerMarks?.right ?? rulerGeom.contentWidthPx)}
+                </div>
+                <div className="doc-ruler-v" style={{ top: effPx.top, height: Math.max(0, effPx.h - effPx.top - effPx.bottom) }}>
+                  {rulerVerticalTicks(Math.max(0, effPx.h - effPx.top - effPx.bottom), MM_PX).map((t, i) => (
+                    <span
+                      key={i}
+                      className={`doc-ruler-vtick${t.major ? ' doc-ruler-major' : ''}`}
+                      style={{ top: t.at }}
+                    />
+                  ))}
+                </div>
+              </>
+            )}
             {meta.headerText && <div className="doc-hf doc-hf-head">{meta.headerText}</div>}
             <div
               ref={wrapRef}
@@ -2321,9 +3392,23 @@ function DocEditor({ tab }: Props) {
         {cmOpen && (
           <aside className="doc-comments">
             <div className="doc-comments-head">
-              <span>批注 {comments.length}</span>
+              <span>批注 {comments.length}{shownComments.length !== comments.length ? ` · 显示 ${shownComments.length}` : ''}</span>
               <button className="tb-btn" onClick={() => setCmOpen(false)}>收起</button>
             </div>
+            {/* v0.195：筛选只影响侧栏显示，不改动文档里的批注；作者口径与卡片一致 */}
+            <div className="doc-comments-tools" title="只看未解决 / 按作者筛选：仅影响侧栏显示，不改动文档里的批注">
+              <label className="tb-check">
+                <input type="checkbox" checked={cmOnlyOpen} onChange={(e) => setCmOnlyOpen(e.target.checked)} />
+                只看未解决
+              </label>
+              <select className="tb-input" value={cmAuthor} onChange={(e) => setCmAuthor(e.target.value)} title="按作者筛选">
+                <option value="">全部作者</option>
+                {cmAuthors.map((a) => <option key={a} value={a}>{a}</option>)}
+              </select>
+            </div>
+            {shownComments.length === 0 && comments.length > 0 && (
+              <div className="doc-comment-empty">没有符合筛选的批注</div>
+            )}
             {draft && (
               <div className="doc-comment-card doc-comment-draft">
                 <textarea
@@ -2346,7 +3431,7 @@ function DocEditor({ tab }: Props) {
             {comments.length === 0 && !draft && (
               <div className="doc-comment-empty">选中正文文字后点「新建批注」</div>
             )}
-            {[...comments]
+            {[...shownComments]
               .sort(
                 (a, b) =>
                   (findCommentAnchor(editor, a.id)?.pos ?? Number.MAX_SAFE_INTEGER) -
@@ -2379,6 +3464,53 @@ function DocEditor({ tab }: Props) {
           </aside>
         )}
       </div>
+      {/* v0.180：独立状态栏。预览态由 .is-preview 的通配规则藏掉，纸上由 @media print 藏掉 */}
+      <div className="doc-status-bar">
+        {statusItems.flatMap((it) => [
+          ...(it.pushLeft ? [<span key="grow" className="doc-status-grow" />] : []),
+          it.action ? (
+            <button
+              key={it.id}
+              className={`doc-status-item${it.active ? ' is-active' : ''}`}
+              title={it.title}
+              onClick={() => { const a = it.action; if (a) runStatus(a) }}
+            >
+              {it.label}
+            </button>
+          ) : (
+            <span key={it.id} className="doc-status-item is-static" title={it.title}>{it.label}</span>
+          ),
+        ])}
+      </div>
+      {ctxMenu && (
+        <div
+          className="doc-ctx-menu"
+          style={{
+            left: Math.min(ctxMenu.x, Math.max(8, window.innerWidth - 200)),
+            top: Math.min(ctxMenu.y, Math.max(8, window.innerHeight - 380)),
+          }}
+        >
+          {contextItems({
+            hasSelection: !editor.state.selection.empty,
+            inTable: editor.isActive('table'),
+            navOpen,
+            painterArmed: !!painter,
+          }).map((it) =>
+            it.separator ? (
+              <div key={it.id} className="doc-ctx-sep" />
+            ) : (
+              <button
+                key={it.id}
+                className="doc-ctx-item"
+                disabled={it.disabled}
+                onClick={() => void runCtx(it.id)}
+              >
+                {it.label}
+              </button>
+            ),
+          )}
+        </div>
+      )}
     </div>
   )
 }

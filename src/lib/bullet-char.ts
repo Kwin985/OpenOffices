@@ -69,6 +69,24 @@ export const BulletChar = Extension.create({
           },
         },
       },
+      {
+        // 编号符对齐（v0.142）：OOXML 的 `w:lvl/w:lvlJc`，Word 在编号空间里左/中/右定位符面。
+        // CSS 没有对应物（`::marker` 的盒子宽高不可控，`list-style-position` 只管内外），
+        // 所以这一枚只随 data-oo-marker-align 进出文件、屏上不兑现——往返保真优先于假装能画。
+        // 与 bulletChar 分开两条：那一枚只属于 bulletList，这一枚两类列表都有。
+        types: ['bulletList', 'orderedList'],
+        attributes: {
+          markerAlign: {
+            default: null as string | null,
+            parseHTML: (el) => {
+              const v = (el.getAttribute('data-oo-marker-align') ?? '').trim().toLowerCase()
+              return v === 'center' || v === 'right' ? v : null
+            },
+            renderHTML: (attrs) =>
+              attrs.markerAlign ? { 'data-oo-marker-align': String(attrs.markerAlign) } : {},
+          },
+        },
+      },
     ]
   },
 })

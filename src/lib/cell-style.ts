@@ -106,8 +106,51 @@ export function bdAttr(edge: CellEdge): 'bdTop' | 'bdRight' | 'bdBottom' | 'bdLe
 const PAD_SIDES = ['top', 'right', 'bottom', 'left'] as const
 type PadSide = (typeof PAD_SIDES)[number]
 
-function padAttrName(side: PadSide): 'padTop' | 'padRight' | 'padBottom' | 'padLeft' {
+export function padAttrName(side: PadSide): 'padTop' | 'padRight' | 'padBottom' | 'padLeft' {
   return `pad${side[0].toUpperCase()}${side.slice(1)}` as 'padTop' | 'padRight' | 'padBottom' | 'padLeft'
+}
+
+// ---- 边框间距（v0.143）------------------------------------------------------
+//
+// OOXML 每条边框带 `w:space`（**磅**）：边框线与框内内容的距离。段落侧（w:pBdr）与逐格侧
+// （w:tcPr/w:tcBorders）都读；CSS 的 padding 正好是「border 盒与内容盒的距离」，语义同形。
+//
+// 段落与单元格的落点不同，因为单元格已有 tcMar 竞争同一条 padding：
+// - **段落**（ParagraphStyle 的 pad* 四属性）：段落没有「内边距」这一层，pBdr@space 是唯一
+//   来源，直接落 padding-{side}，读回也从这个属性解析，无歧义；
+// - **单元格**（CellStyle 的 bdSpace* 四属性，data-bdspace-{side} 载荷）：tcMar 与
+//   tcBorders@space 在 Word 里**叠加**，CSS 只有一条 padding-{side} 表达不了叠加——所以
+//   space 走独立 data-* 属性，renderHTML 时与 pad* 相加输出一条 padding，写回时 space 归
+//   w:tcBorders/@w:space、pad* 归 w:tcMar，两边各得各的，往返无损。
+
+/** 磅 → CSS px（1pt = 4/3px） */
+export function ptToPx(pt: number): number {
+  return round2(pt * (4 / 3))
+}
+
+/** CSS px → 磅 */
+export function pxToPt(px: number): number {
+  return round2((px * 3) / 4)
+}
+
+/** 边框间距载荷属性名（data-bdspace-top 等），存 CSS px 字面；0 不挂（与「没声明」同路） */
+export function bdSpaceAttr(edge: CellEdge): string {
+  return `data-bdspace-${edge}`
+}
+
+/** PM 属性名（bdSpaceTop/bdSpaceRight/bdSpaceBottom/bdSpaceLeft），存 CSS px 数值 */
+function bdSpaceName(side: PadSide): 'bdSpaceTop' | 'bdSpaceRight' | 'bdSpaceBottom' | 'bdSpaceLeft' {
+  return `bdSpace${side[0].toUpperCase()}${side.slice(1)}` as 'bdSpaceTop' | 'bdSpaceRight' | 'bdSpaceBottom' | 'bdSpaceLeft'
+}
+
+/** 几条边的间距补丁：只给 >0 的边，属性值 CSS px 字面 */
+export function bdSpaceAttrs(edges: Partial<Record<CellEdge, number>>): Record<string, string> {
+  const out: Record<string, string> = {}
+  for (const e of CELL_EDGES) {
+    const v = edges[e]
+    if (typeof v === 'number' && v > 0) out[bdSpaceAttr(e)] = String(v)
+  }
+  return out
 }
 
 /** 四条边的属性补丁：段落的 bd* 与单元格的 bd* 同名，两家的命令共用这一处 */
@@ -149,6 +192,180 @@ export function borderCss(style: string, pt: number, hex: string): string {
   return `${round2(pt * (4 / 3))}px ${style} ${hex}`
 }
 
+/* ── 边框的存盘原件（v0.165）─────────────────────────────────────
+ * 单边元素上的 `w:color="FF0000" w:themeColor="accent1" w:themeTint="99"
+ * w:themeShade="BF"` 四枚。`bd*` 那一格装的是**解析后的屏上色**（用户可改的单一
+ * 事实源，v0.160 的判据），源件那三枚引用与那枚字面色在模型里没有容身之处——
+ * 回写时包按屏上色发 w:color，主题引用整笔丢（Word 只能拿默认主题顶上）。
+ *
+ * 载荷按边分格，四段用 `|` 连、段内用 `;` 分：`edge;color;themeColor;themeTint;
+ * themeShade;screen`。`screen` 不是 OOXML 属性，是**导入那一刻的屏上色**——写侧
+ * 拿它当「用户改过色没有」的判据（与 data-shd 的 bg 同一条纪律）：改过就整笔作废，
+ * 否则 Word 按主题解析，用户换的颜色在屏上、在纸上都看不见。
+ */
+export const BDR_ATTR = 'data-bdr'
+/**
+ * v0.168 补第 6 格 `space`：**只记显式 0**（其他值 CSS 的 padding 已经表达，写手发得回来）。
+ * `w:space="0"` 与「没写」在语义上是同一档（缺省即 0），但字面是源件说过的话——
+ * CSS 没有「0 与没写」的区别，只有载荷记得住。
+ */
+export const BDR_KEYS = ['color', 'themeColor', 'themeTint', 'themeShade', 'screen', 'space'] as const
+export type BdrOrigin = { edge: CellEdge } & Partial<Record<(typeof BDR_KEYS)[number], string>>
+
+/** 逐键形状闸门：脏键整键丢（猜出来的值写进包里比不写更坏） */
+const BDR_FIELD: Record<(typeof BDR_KEYS)[number], RegExp> = {
+  // 字面色：六位 hex；Word 也写 auto（与「没写」同义，源件真写了就照带）
+  color: /^(?:[0-9A-Fa-f]{6}|auto)$/,
+  // 主题槽名（accent1 / tx1 / background2 …）
+  themeColor: /^[A-Za-z0-9]+$/,
+  themeTint: /^[0-9A-Fa-f]{2}$/,
+  themeShade: /^[0-9A-Fa-f]{2}$/,
+  screen: /^[0-9A-Fa-f]{6}$/,
+  space: /^0$/,
+}
+
+/**
+ * `data-bdr` 载荷 → 每条边的原件；`screen` 缺了的段整段丢——没有基准就分不清
+ * 「源件的色」与「用户刚换的色」，那种段宁可不补，也不能把用户的改色盖回去。
+ */
+export function parseBdrPayload(raw: string | null | undefined): BdrOrigin[] {
+  const out: BdrOrigin[] = []
+  for (const chunk of (raw ?? '').split('|')) {
+    const parts = chunk.split(';')
+    const edge = (parts[0] ?? '').trim().toLowerCase() as CellEdge
+    if (!CELL_EDGES.includes(edge)) continue
+    const spec: BdrOrigin = { edge }
+    BDR_KEYS.forEach((k, ki) => {
+      const v = (parts[ki + 1] ?? '').trim()
+      if (v && BDR_FIELD[k].test(v)) spec[k] = v
+    })
+    if (spec.screen) out.push(spec)
+  }
+  return out
+}
+
+/** 原件表 → `data-bdr` 载荷（与 parseBdrPayload 互逆；键序固定，段序按入参） */
+export function bdrPayload(origins: readonly BdrOrigin[]): string {
+  return origins
+    .filter((o) => o.screen)
+    .map((o) => [o.edge, ...BDR_KEYS.map((k) => o[k] ?? '')].join(';'))
+    .join('|')
+}
+
+/** 屏上一条样式都不兑现，只为写回（与 shdAttrsOf 同款） */
+export function bdrAttrsOf(raw: unknown): Record<string, string> {
+  const payload = typeof raw === 'string' ? raw : ''
+  return parseBdrPayload(payload).length ? { [BDR_ATTR]: payload } : {}
+}
+
+/* ── 段落的第五边 w:between（v0.167）──────────────────────────────
+ * 它和四条 CSS 边不是一回事：**没有 `bd*` 槽**，屏上是借「本段的下边框」画出来的
+ * （`betweenOfSiblings` 只在相邻两段边框签名一致时才画，末段不画）。所以载荷自带
+ * 线型/粗细/间距四枚原件（四边那几枚从 CSS 反推得到，这一条反推不出来）。
+ *
+ * `screen` 是导入那一刻的屏上色、`hidden` 是「这一段没轮到画」：
+ * - 画了（hidden 缺）：屏上的替身就是下边框，用户改过色/删掉下边框 → between 跟着走；
+ * - 没画（hidden=1）：屏上没有替身可比，原样带回，不做判据。
+ */
+export const PBDR_ATTR = 'data-pbdr'
+export const PBDR_KEYS = ['val', 'sz', 'space', 'color', 'themeColor', 'themeTint', 'themeShade', 'screen', 'hidden'] as const
+export type PbdrPayload = Partial<Record<(typeof PBDR_KEYS)[number], string>>
+
+const PBDR_FIELD: Record<(typeof PBDR_KEYS)[number], RegExp> = {
+  val: /^[A-Za-z]+$/,
+  sz: /^\d+$/,
+  // 边框间距：磅，Word 允许负数（缩进式边框），照 OOXML 的整数档收
+  space: /^-?\d+$/,
+  color: /^(?:[0-9A-Fa-f]{6}|auto)$/,
+  themeColor: /^[A-Za-z0-9]+$/,
+  themeTint: /^[0-9A-Fa-f]{2}$/,
+  themeShade: /^[0-9A-Fa-f]{2}$/,
+  screen: /^[0-9A-Fa-f]{6}$/,
+  hidden: /^[01]$/,
+}
+
+/** 定序格串 → 原件表；空串给空表，形状不对的格整格丢 */
+export function parsePbdrPayload(raw: string | null | undefined): PbdrPayload {
+  const out: PbdrPayload = {}
+  const parts = (raw ?? '').split(';')
+  PBDR_KEYS.forEach((k, ki) => {
+    const v = (parts[ki] ?? '').trim()
+    if (v && PBDR_FIELD[k].test(v)) out[k] = v
+  })
+  return out
+}
+
+/** 原件表 → `data-pbdr` 载荷（与 parsePbdrPayload 互逆；键序固定） */
+export function pbdrPayload(p: PbdrPayload): string {
+  return PBDR_KEYS.map((k) => p[k] ?? '').join(';')
+}
+
+/** 屏上一条样式都不兑现，只为写回（与 bdrAttrsOf 同款） */
+export function pbdrAttrsOf(raw: unknown): Record<string, string> {
+  const payload = typeof raw === 'string' ? raw : ''
+  return Object.keys(parsePbdrPayload(payload)).length ? { [PBDR_ATTR]: payload } : {}
+}
+
+/* ── 段落的第六条边 w:bar（v0.168）────────────────────────────────
+ * 段落左侧（或右侧）的竖线——合同/公文的「条」常用它。它比 between 简单：**没有
+ * 屏上替身**，读手也没为它画过任何东西（`borderEdges` 顺带算出来的那枚一直没人用），
+ * 所以写侧就是「有就插一枚」，不需要判据。
+ *
+ * 载荷与 between 同一套定序格（前七格有效）：线型/粗细/间距/颜色/主题三枚。
+ * 名字叫 `data-pbar`：与 `data-pbdr`（between）分开，两个元素各自的账各记各的。
+ */
+export const PBAR_ATTR = 'data-pbar'
+
+/* ── 表行余量（v0.172）──────────────────────────────────────────
+ * `w:trPr` 里那三枚：`w:gridAfter`（这一行末尾空过几格，网格记账用的补白）与 `w:wAfter`
+ * 的两枚（行末留白宽/档位，w 是缇）。包没有它们的槽，屏上也不兑现——按行随 `data-trpr`
+ * 往返，写侧在 `<w:trPr>` 里按 CT_TrPr 的序插回去（gridAfter → wBefore → wAfter，
+ * 都排在 cantSplit / trHeight / tblHeader 之前）。
+ */
+export const TRPR_ATTR = 'data-trpr'
+export const TRPR_KEYS = ['gridAfter', 'wAfterW', 'wAfterType'] as const
+export type TrPrPayload = Partial<Record<(typeof TRPR_KEYS)[number], string>>
+
+const TRPR_FIELD: Record<(typeof TRPR_KEYS)[number], RegExp> = {
+  // 空过的格数：非负整数
+  gridAfter: /^\d+$/,
+  // 行末留白：缇，非负整数
+  wAfterW: /^\d+$/,
+  // 档位：dxa（缇）/ pct（百分比）/ auto
+  wAfterType: /^(?:dxa|pct|auto)$/,
+}
+
+/** `data-trpr` 载荷 → kv 表；空串给空表，形状不对的键整键丢 */
+export function parseTrPrPayload(raw: string | null | undefined): TrPrPayload {
+  const out: TrPrPayload = {}
+  for (const item of (raw ?? '').split(';')) {
+    const i = item.indexOf('=')
+    if (i < 0) continue
+    const k = item.slice(0, i).trim() as (typeof TRPR_KEYS)[number]
+    const v = item.slice(i + 1).trim()
+    if (!TRPR_KEYS.includes(k) || !TRPR_FIELD[k].test(v)) continue
+    out[k] = v
+  }
+  return out
+}
+
+/** kv 表 → `data-trpr` 载荷（与 parseTrPrPayload 互逆；按键序输出保稳定） */
+export function trPrPayload(p: TrPrPayload): string {
+  return TRPR_KEYS.filter((k) => p[k] !== undefined).map((k) => `${k}=${p[k]}`).join(';')
+}
+
+/** 屏上一条样式都不兑现，只为写回（与 ppr 那几枚同款） */
+export function trPrAttrsOf(raw: unknown): Record<string, string> {
+  const payload = typeof raw === 'string' ? raw : ''
+  return Object.keys(parseTrPrPayload(payload)).length ? { [TRPR_ATTR]: payload } : {}
+}
+
+/** 屏上一条样式都不兑现，只为写回 */
+export function pbarAttrsOf(raw: unknown): Record<string, string> {
+  const payload = typeof raw === 'string' ? raw : ''
+  return Object.keys(parsePbdrPayload(payload)).length ? { [PBAR_ATTR]: payload } : {}
+}
+
 /** OOXML `w:sz`（1/8 磅）→ CSS 像素 */
 export function eighthsToPx(sz: number): number {
   return round2((sz / 8) * (4 / 3))
@@ -157,6 +374,688 @@ export function eighthsToPx(sz: number): number {
 /** CSS 像素 → OOXML `w:sz`（1/8 磅） */
 export function pxToEighths(px: number): number {
   return Math.max(1, Math.round(px * 6))
+}
+
+// ---- 图案底纹（v0.142）------------------------------------------------------
+//
+// OOXML 的 `w:shd` 是三件套：@w:val 图案档位、@w:color 前景、@w:fill 背景。
+// CSS 只有背景一色，图案得用 background-image 画——这一份表是**单一真源**：
+// docx-fidelity 的读侧、paragraph-style / cell-style 两个扩展的 parse/render、
+// 以及 docx.ts 写侧的回写都走它，避免三处各写一份渐变公式对不上。
+//
+// 精度分两档，导入 warn 里如实说：条纹族（stripe/cross 及其 thin* 变体）是精确的，
+// repeating-linear-gradient 就是等距条纹；pct 族是**密度近似**——Word 按像素点屏撒点，
+// CSS 只能用定尺点阵逼近，25/50/75 三档用 conic 四象限棋盘精确命中。
+
+/** 往返载荷属性名：`图案|前景|背景`（hex 不带 #）。clear 不挂——纯色走 background 那一链 */
+export const SHADE_ATTR = 'data-shade'
+
+/* ── 底纹的存盘原件（v0.164）───────────────────────────────────
+ * 与 data-shade 分工：那一份管「CSS 画不出来的图案」（图案档位与前景色），这一份管
+ * 「屏上颜色把它盖住了的原件」。`w:shd` 的 `w:fill` 常与 `w:themeFill` 一起写（Word 的
+ * 默认写法），读手按主题解析出屏上色之后，那枚字面 fill 就没人记得——model 的
+ * `background` 只有一个格子，装的是**解析后的颜色**。
+ *
+ * 只挂「解析得出来」的那一档：没有主题引用时，`background` 与字面 fill 是同一个值，
+ * 回写时从 background 构造就够了，多挂一份只是噪音。
+ *
+ * 载荷 `key=value;…`（与 data-ppr / data-frame 同款 kv）；
+ * `bg` 是**导入那一刻的屏上色**，回写时拿它当「用户改没改过底纹色」的判据——
+ * 改了就把主题引用作废（改色是用户的显式决定，不能被主题盖回去）。
+ */
+export const SHD_ATTR = 'data-shd'
+
+/** 载荷键；`bg` 非 OOXML 属性，是上面说的那道判据 */
+export const SHD_KEYS = ['fill', 'themeFill', 'themeFillTint', 'themeFillShade', 'bg'] as const
+export type ShdPayload = Partial<Record<(typeof SHD_KEYS)[number], string>>
+
+/** 逐键形状闸门：脏值整键丢（猜出来的值写进包里比不写更坏） */
+const SHD_FIELD: Record<(typeof SHD_KEYS)[number], RegExp> = {
+  // 字面填充色：六位 hex；Word 也写 auto（与「没写」同义，源件真写了就照带）
+  fill: /^(?:[0-9A-Fa-f]{6}|auto)$/,
+  // 主题槽名（accent1 / background1 / tx1 …）
+  themeFill: /^[A-Za-z0-9]+$/,
+  themeFillTint: /^[0-9A-Fa-f]{2}$/,
+  themeFillShade: /^[0-9A-Fa-f]{2}$/,
+  bg: /^[0-9A-Fa-f]{6}$/,
+}
+
+/** data-shd 载荷 → kv 表；空串返回 {}，形状不对的键整键丢 */
+export function parseShdPayload(raw: string | null | undefined): ShdPayload {
+  const out: ShdPayload = {}
+  if (!raw) return out
+  for (const item of raw.split(';')) {
+    const i = item.indexOf('=')
+    if (i <= 0) continue
+    const k = item.slice(0, i).trim() as (typeof SHD_KEYS)[number]
+    const v = item.slice(i + 1).trim()
+    if (!SHD_KEYS.includes(k) || !SHD_FIELD[k].test(v)) continue
+    out[k] = v
+  }
+  return out
+}
+
+/** kv 表 → data-shd 载荷（与 parseShdPayload 互逆；按键序输出保稳定） */
+export function shdPayloadOf(p: ShdPayload): string {
+  return SHD_KEYS.filter((k) => p[k]).map((k) => `${k}=${p[k]}`).join(';')
+}
+
+/* ── 制表位（v0.144）─────────────────────────────────────────────
+ * w:pPr/w:tabs/w:tab 三枚属性（@w:val 档位 / @w:pos 缇 / @w:leader 前导符）。
+ * 屏上无对应物（Word 制表位由字符 tab 键驱动、按段落的档位表跳对齐），只往返。
+ * 载荷：`档位|缇|leader` 多条用 `;` 分隔；leader 缺省 none 不写，clear 档无 pos/leader。
+ * 档位值域与 docx 包 TabStopType 字面一致（left/center/right/decimal/bar/clear/end/num/start），
+ * leader 包缺 heavy——库外槽透传（见 docx.ts 的 tabsOf）。 */
+export const TABS_ATTR = 'data-tabs'
+
+/** 单条制表位；val 原样存（大小写归一小写） */
+export interface TabSpec {
+  val: string
+  /** 缇；clear 档为 null */
+  pos: number | null
+  /** 前导符；none/未声明为 null */
+  leader: string | null
+}
+
+/** OOXML w:val 值域（与 docx 包 TabStopType 同款字面） */
+const TAB_VALS = new Set(['left', 'start', 'center', 'right', 'end', 'decimal', 'bar', 'clear', 'num'])
+/** OOXML w:leader 值域（docx 包 LeaderType 无 heavy，透传要靠库外槽）。
+ * 键为小写归一形，值为规范名——ST_TabTlc 里 middleDot 是唯一驼峰值 */
+export const TAB_LEADERS: Record<string, string> = {
+  none: 'none',
+  dot: 'dot',
+  hyphen: 'hyphen',
+  underscore: 'underscore',
+  heavy: 'heavy',
+  middledot: 'middleDot',
+}
+
+/** data-tabs 载荷 → TabSpec[]；非法条目整条丢（宁缺勿错） */
+export function parseTabsPayload(raw: string | null | undefined): TabSpec[] {
+  if (!raw) return []
+  const out: TabSpec[] = []
+  for (const item of raw.split(';')) {
+    const parts = item.split('|')
+    if (parts.length < 2 || parts.length > 3) continue
+    const val = parts[0].trim().toLowerCase()
+    if (!TAB_VALS.has(val)) continue
+    const posRaw = parts[1].trim()
+    const pos = val === 'clear' ? null : /^\d+$/.test(posRaw) ? Number(posRaw) : null
+    if (val !== 'clear' && pos === null) continue
+    let leader: string | null = null
+    if (parts.length === 3) {
+      const l = TAB_LEADERS[parts[2].trim().toLowerCase()]
+      if (l && l !== 'none') leader = l
+    }
+    out.push({ val, pos, leader })
+  }
+  return out
+}
+
+/** TabSpec[] → data-tabs 载荷（与 parseTabsPayload 互逆） */
+export function tabsPayload(tabs: readonly TabSpec[]): string {
+  return tabs
+    .filter((t) => TAB_VALS.has(t.val))
+    .map((t) => {
+      const pos = t.val === 'clear' ? '' : String(Math.max(0, Math.round(t.pos ?? 0)))
+      return t.leader ? `${t.val}|${pos}|${t.leader}` : `${t.val}|${pos}`
+    })
+    .join(';')
+}
+
+/* ── 段落浮动框架（v0.145）─────────────────────────────────────
+ * w:pPr/w:framePr 把段落固定在页面某处（Word 的「文字环绕框架」）。Web 流式排版没有页
+ * 定位语义，屏上不兑现，只随 data-frame 载荷往返（参照分页四件套纪律）。
+ * 载荷：`key=value;key=value`，键名即 OOXML 属性名（x/y/xAlign/yAlign/w/h/hRule/
+ * hSpace/vSpace/hAnchor/vAnchor/wrap/anchorLock/dropCap/lines）。
+ * 写侧二选一形态：xAlign/yAlign 优先（alignment 形态），否则 absolute——Word 语义里
+ * x 与 xAlign 互斥，同存是脏数据，读侧照单全读、写侧择一（另 warn 记账）。 */
+export const FRAME_ATTR = 'data-frame'
+
+/** 载荷键 → 是否数值型（其余按字符串原样存） */
+const FRAME_NUMERIC = new Set(['x', 'y', 'w', 'h', 'hSpace', 'vSpace', 'lines'])
+
+/** 读手按此清单分流：数值键走 attrNum（缇），字符串键走 attr（枚举原样） */
+export const FRAME_NUMERIC_KEYS = [...FRAME_NUMERIC] as string[]
+export const FRAME_STR_KEYS = ['xAlign', 'yAlign', 'hRule', 'hAnchor', 'vAnchor', 'wrap', 'anchorLock', 'dropCap'] as string[]
+
+export type FramePayload = Record<string, string>
+
+/** data-frame 载荷 → key/value 表；空串/无值返回 {}。数值键校验为整数，脏值整键丢 */
+export function parseFramePayload(raw: string | null | undefined): FramePayload {
+  const out: FramePayload = {}
+  if (!raw) return out
+  for (const item of raw.split(';')) {
+    const i = item.indexOf('=')
+    if (i <= 0) continue
+    const k = item.slice(0, i).trim()
+    const v = item.slice(i + 1).trim()
+    if (!k || !v) continue
+    if (FRAME_NUMERIC.has(k) && !/^-?\d+$/.test(v)) continue
+    out[k] = v
+  }
+  return out
+}
+
+/** key/value 表 → data-frame 载荷（与 parseFramePayload 互逆，按键名排序保稳定） */
+export function framePayload(kv: FramePayload): string {
+  return Object.keys(kv)
+    .sort()
+    .filter((k) => kv[k] !== '')
+    .map((k) => `${k}=${kv[k]}`)
+    .join(';')
+}
+
+/* ── 表格浮动（v0.145）─────────────────────────────────────────
+ * w:tblPr/w:tblpPr 把表格固定在页面某处（Word 的浮动表）。与 framePr 同款纪律：Web
+ * 没有页定位语义，屏上不兑现，只随 data-tblp 载荷往返。
+ * 载荷键即 OOXML 属性名：tblpX/tblpXSpec/tblpY/vertAnchor/horzAnchor/topFromText/
+ * leftFromText/bottomFromText/rightFromText/overlap（全数值型除枚举档）。
+ * 写侧直接走 docx 包 ITableFloatOptions——键名一一对应（包多一枚 tblpYSpec，
+ * OOXML 没有，不传）。注意包里 verticalAnchor 的类型面是 TableAnchorType
+ * （margin/page/text），而 OOXML 的 vertAnchor 值域含 top/bottom/center/inside/
+ * outside——BuilderElement 透传不校验，值按原样落。 */
+export const TBLP_ATTR = 'data-tblp'
+
+export type TblpPayload = Record<string, string>
+
+const TBLP_NUMERIC = new Set(['tblpX', 'tblpY', 'topFromText', 'leftFromText', 'bottomFromText', 'rightFromText'])
+
+/** data-tblp 载荷 → key/value 表；数值键校验为整数，脏值整键丢 */
+export function parseTblpPayload(raw: string | null | undefined): TblpPayload {
+  const out: TblpPayload = {}
+  if (!raw) return out
+  for (const item of raw.split(';')) {
+    const i = item.indexOf('=')
+    if (i <= 0) continue
+    const k = item.slice(0, i).trim()
+    const v = item.slice(i + 1).trim()
+    if (!k || !v) continue
+    if (TBLP_NUMERIC.has(k) && !/^-?\d+$/.test(v)) continue
+    out[k] = v
+  }
+  return out
+}
+
+/** key/value 表 → data-tblp 载荷（与 parseTblpPayload 互逆，排序保稳定） */
+export function tblpPayload(kv: TblpPayload): string {
+  return Object.keys(kv)
+    .sort()
+    .filter((k) => kv[k] !== '')
+    .map((k) => `${k}=${kv[k]}`)
+    .join(';')
+}
+
+/* ── 表自身的条件层闸门（v0.147）───────────────────────────────
+ * `w:tblPr/w:tblLook` 既可能出现在表样式里（随样式走），也可能直接出现在某张表的
+ * `w:tblPr` 上（随这张表走）。两处同名的三枚属性：val / noHBand / noVBand。
+ * 载荷：`val=04A0;noHBand=0;noVBand=0`，屏上不兑现（只影响 Word 套条件格式那一层），
+ * 只随 data-tlook 往返。写侧走打包后补丁（包没有这一枚的槽）。 */
+export const TLOOK_ATTR = 'data-tlook'
+
+/** data-tlook 载荷 → key/value 表（只认这三枚键，脏值整键丢） */
+export function parseTlookPayload(raw: string | null | undefined): Record<string, string> {
+  const out: Record<string, string> = {}
+  if (!raw) return out
+  const ok = new Set(['val', 'noHBand', 'noVBand'])
+  for (const item of raw.split(';')) {
+    const i = item.indexOf('=')
+    if (i <= 0) continue
+    const k = item.slice(0, i).trim()
+    const v = item.slice(i + 1).trim()
+    if (!ok.has(k) || !v) continue
+    if (k !== 'val' && v !== '1' && v !== '0') continue
+    out[k] = v
+  }
+  return out
+}
+
+/** key/value 表 → data-tlook 载荷（与 parseTlookPayload 互逆） */
+export function tlookPayload(kv: Record<string, string>): string {
+  return Object.keys(kv)
+    .sort()
+    .filter((k) => kv[k] !== '')
+    .map((k) => `${k}=${kv[k]}`)
+    .join(';')
+}
+
+/* ── 表级条件格式尺寸（v0.152）────────────────────────────────────
+ * `w:tblPr` 里的 `w:tblStyleRowBandSize` / `w:tblStyleColBandSize`：带状条件格式
+ * （隔行/隔列底纹）作用到第几行/第几列为止——Word 的「镶边行数/镶边列数」。
+ * 屏上不兑现（条件格式的落点不在我们的模型里，只有 tblLook 的闸门在跑），只随载荷往返。
+ * 载荷：data-tblpr="colBand=1;rowBand=1"，键名是 OOXML 元素名的驼峰缩写。
+ * 写侧走打包后补丁（包没有这两枚的槽，与 noWrap 同路数）。 */
+export const TBLPR_ATTR = 'data-tblpr'
+
+export type TblPrPayload = Record<string, string>
+
+/** data-tblpr 载荷 → key/value 表（只认这两枚键；正整数才算数，脏值整键丢） */
+export function parseTblPrPayload(raw: string | null | undefined): TblPrPayload {
+  const out: TblPrPayload = {}
+  if (!raw) return out
+  for (const item of raw.split(';')) {
+    const i = item.indexOf('=')
+    if (i <= 0) continue
+    const k = item.slice(0, i).trim()
+    const v = item.slice(i + 1).trim()
+    // v0.154：cellSp（w:tblCellSpacing/@w:w，缇）与 cellSpType（dxa/pct/auto 档位名）。
+    // 前者与 bandSize 同款（非负整数），后者是枚举串、不走数字校验
+    if (k === 'colBand' || k === 'rowBand' || k === 'cellSp') {
+      if (!/^\d+$/.test(v)) continue
+      out[k] = v
+    } else if (k === 'cellSpType' && /^[a-z]+$/.test(v)) {
+      out[k] = v
+    }
+  }
+  return out
+}
+
+/** key/value 表 → data-tblpr 载荷（与 parseTblPrPayload 互逆，排序保稳定） */
+export function tblPrPayload(kv: TblPrPayload): string {
+  return Object.keys(kv)
+    .sort()
+    .filter((k) => kv[k] !== '')
+    .map((k) => `${k}=${kv[k]}`)
+    .join(';')
+}
+
+/* ── 表条件格式的落点开关（v0.162）─────────────────────────────────
+ * `w:tblPr/w:cnfStyle` 十三枚：这一行/这一列算不算「首行/末行/奇偶数行/首列/末列/四角」，
+ * Word 的表样式靠这十三枚决定套哪一档条件格式（tblLook 只管**要不要套**，这一族管
+ * **落在哪**）。
+ *
+ * 屏上零兑现（我们没有表样式的条件层），写侧也发不出（包只发它认得的表属性），
+ * 所以走 `data-cnf` 载荷 + 打包后补丁——与 tblLook / bandSize 同住 `<w:tblPr>`、同序登记。
+ *
+ * 载荷是**定序格串**而不是 key=value：十三枚的名字是固定集合（不会像 ppr 那样逐版增补），
+ * 定序更短也更稳。格序见 CNF_KEYS，空槽留空（源件没写那枚就留空，写回时也不发它）。
+ */
+export const CNF_ATTR = 'data-cnf'
+
+/** w:cnfStyle 的十三枚属性名，**顺序即载荷格序**（与读手 noteCnfStyleMarks 的名单同源） */
+export const CNF_KEYS = [
+  'val', 'firstRow', 'lastRow', 'firstColumn', 'lastColumn',
+  'oddHBand', 'evenHBand', 'oddVBand', 'evenVBand',
+  'firstRowFirstColumn', 'firstRowLastColumn', 'lastRowFirstColumn', 'lastRowLastColumn',
+] as const
+
+export type CnfPayload = Partial<Record<(typeof CNF_KEYS)[number], string>>
+
+/**
+ * data-cnf 载荷 → 十三枚的 key/value 表。
+ * `val` 是 12 位 0/1 位串（Word 把十二个开关压成一枚存），其余十二枚是 ST_OnOff——
+ * 只收 `0`/`1`（真件里也见过 `true`/`on`，读手侧已归一成 0/1，这里不再放宽：
+ * 载荷是我们自己写的，口径只有一种）。脏格整格丢，不猜。
+ */
+export function parseCnfPayload(raw: string | null | undefined): CnfPayload {
+  const out: CnfPayload = {}
+  if (!raw) return out
+  const cells = raw.split(';')
+  CNF_KEYS.forEach((k, i) => {
+    const v = (cells[i] ?? '').trim()
+    if (!v) return
+    if (k === 'val') {
+      if (/^[01]{12}$/.test(v)) out.val = v
+      return
+    }
+    if (v === '0' || v === '1') out[k] = v
+  })
+  return out
+}
+
+/** key/value 表 → data-cnf 载荷（与 parseCnfPayload 互逆；空表给空串） */
+export function cnfPayload(kv: CnfPayload): string {
+  const cells = CNF_KEYS.map((k) => kv[k] ?? '')
+  return cells.some(Boolean) ? cells.join(';') : ''
+}
+
+/* ── 表级边框六边原值（v0.163）─────────────────────────────────────
+ * `w:tblPr/w:tblBorders` 的六条边 top / left / bottom / right / insideH / insideV，
+ * 每边七枚属性：val（线型枚举）、sz（八分之一磅）、color（字面色）、space（磅）、
+ * themeColor / themeTint / themeShade（主题引用三枚）。
+ *
+ * 为什么另开一条通道而不是复用格边那批 bdTop / bdSpace*：**表级那六枚是原件，格边那一批
+ * 是分摊结果**。屏上那一半走的是「表级边框分摊到格」（CSS 的格边 padding），值与原件
+ * 不等（pt↔px 两趟换算 + 逐格覆盖），拿分摊后的值回写表级，等于把屏上的误差写成源件
+ * 说过的话。所以这一族**只做存盘通道，屏上一动不动**——v0.163 定的口径，此前三轮挂在
+ * 清单上等的「分摊与原值冲突」就是把两趟当成一趟才有的。
+ *
+ * 载荷：边与边用 `|` 隔，边内七格用 `;` 隔（定序，空槽留空；只有真写着值的边才进载荷）。 */
+export const TBLB_ATTR = 'data-tblb'
+
+/** w:tblBorders 的六条边，**顺序即载荷格序**（CT_TblBorders 的元素序） */
+export const TBLB_EDGES = ['top', 'left', 'bottom', 'right', 'insideH', 'insideV'] as const
+
+/** 一条边的七枚属性名，**顺序即载荷格序** */
+export const TBLB_KEYS = ['val', 'sz', 'color', 'space', 'themeColor', 'themeTint', 'themeShade'] as const
+
+export type TblbEdge = (typeof TBLB_EDGES)[number]
+export type TblbPayload = Partial<Record<TblbEdge, Partial<Record<(typeof TBLB_KEYS)[number], string>>>>
+
+/** 七枚各自的形状闸门：脏格整格丢（不猜，猜出来的值写进包里比不写更坏） */
+const TBLB_FIELD: Record<(typeof TBLB_KEYS)[number], RegExp> = {
+  // 线型：OOXML 的 ST_Border 枚举（single/dashed/dotted/double/nil/none/…），纯字母
+  val: /^[A-Za-z]+$/,
+  // 线宽：八分之一磅，非负整数
+  sz: /^\d+$/,
+  // 字面色：六位 hex；Word 也写 auto（与「没写」同义，但源件真写了就照带）
+  color: /^(?:[0-9A-Fa-f]{6}|auto)$/,
+  // 边框与内容之间的间距：磅，非负整数
+  space: /^\d+$/,
+  // 主题槽名（accent1 / dark1 / majorHueShift / …），字母数字
+  themeColor: /^[A-Za-z0-9]+$/,
+  // 深浅两枚是两位 hex（Word 写 99 / BF 这样的字节值）
+  themeTint: /^[0-9A-Fa-f]{2}$/i,
+  themeShade: /^[0-9A-Fa-f]{2}$/i,
+}
+
+/** data-tblb 载荷 → 六边 × 七枚（形状不对的格整格丢；一条边全格皆空则这条边不进表） */
+export function parseTblbPayload(raw: string | null | undefined): TblbPayload {
+  const out: TblbPayload = {}
+  if (!raw) return out
+  raw.split('|').forEach((chunk, ei) => {
+    const edge = TBLB_EDGES[ei]
+    if (!edge) return
+    const kv: Partial<Record<(typeof TBLB_KEYS)[number], string>> = {}
+    chunk.split(';').forEach((v, ki) => {
+      const k = TBLB_KEYS[ki]
+      const s = (v ?? '').trim()
+      if (!k || !s || !TBLB_FIELD[k].test(s)) return
+      kv[k] = s
+    })
+    if (Object.keys(kv).length) out[edge] = kv
+  })
+  return out
+}
+
+/** 六边 × 七枚 → data-tblb 载荷（与 parseTblbPayload 互逆；空表给空串） */
+export function tblbPayload(p: TblbPayload): string {
+  const chunks = TBLB_EDGES.map((e) => {
+    const kv = p[e]
+    return TBLB_KEYS.map((k) => kv?.[k] ?? '').join(';')
+  })
+  return chunks.some(Boolean) ? chunks.join('|') : ''
+}
+
+/* ── 段落属性余量（v0.147）─────────────────────────────────────
+ * w:pPr 里那一批「说了也不改屏上排版」的直接属性：adjustRightInd（编号右边缩进跟随
+ * 自动缩进）、snapToGrid（对齐到文档网格）、topLinePunct（首尾标点压缩）、bidi（段落
+ * 从右往左）、autoSpaceDE/autoSpaceDN（中西文/数字间自动加间距）、suppressLineNumbers
+ * （本段不编号）、textAlignment（行内文字的上下对齐档）。Web 流式排版没有网格、没有
+ * 纸张行、也不做中西文间距，屏上一条都不兑现——与分页四件套同款纪律：只随载荷往返。
+ * 载荷：data-ppr="key=value;..."，键名即 OOXML 属性名（onOff 档存 '1'/'0'，
+ * textAlignment 存枚举原值）。写侧走打包后补丁（包里只有 autoSpaceDN 一枚槽，且它把
+ * onOff 写成裸元素——带不出 w:val 的「显式关」）。 */
+export const PPR_ATTR = 'data-ppr'
+
+export type PprPayload = Record<string, string>
+
+/** onOff 档：w:val 的 '1'/'0'（元素在场而无 val 时按「开」记） */
+export const PPR_ONOFF_KEYS = [
+  'adjustRightInd',
+  'snapToGrid',
+  'topLinePunct',
+  'bidi',
+  'autoSpaceDE',
+  'autoSpaceDN',
+  'suppressLineNumbers',
+  // v0.155：自动断字总闸（CT_PPrBase 里排在 suppressLineNumbers 之后、kinsoku 之前）。
+  // 屏上不兑现——CSS 没有断字开关的对应物（hyphens 只管断词，与 Word 的断字算法不是一回事）
+  'suppressAutoHyphens',
+  'beforeAutoSpace',
+  'afterAutoSpace',
+  // v0.155：禁则三枚——kinsoku（行首行尾禁则）、wordWrap（允许西文在单词内换行）、
+  // overflowPunct（允许标点溢出边界）。三者都只影响 Word 自己的断行判断，屏上不兑现
+  // （CSS 的 line-break/overflow-wrap 只是近似，照搬会改变现有排版），只随载荷往返
+  'kinsoku',
+  'wordWrap',
+  'overflowPunct',
+] as const
+
+/** 枚举档：textAlignment 的 top/center/bottom/baseline/auto；textDirection 的 tbRl/btLr/… */
+export const PPR_STR_KEYS = ['textAlignment', 'textDirection'] as const
+
+/* 缩进的字符档两枚（v0.160）：CT_Ind 上 firstLineChars / hangingChars 是「按字符数」的那
+ * 一套写法（百分之一字符宽），与 firstLine / hanging（缇）是**同一枚首行槽的两套记法**。
+ * 屏上按段落字号折成 px 兑现（读手 paraCss，折得出误差但画得像），存盘要写回**原值**——
+ * 折回缇必然对不上整数字符数，且 Word 的缩进对话框那一栏存的就是整数。
+ * 载荷键带 `ind` 前缀（`indFirstLineChars`）：与 pPr 直子的 onOff/枚举键区分开——后者一
+ * 枚属性一个元素，这两枚是**同一个元素的两个属性**，写侧要合成一个 `<w:ind>` 而不是
+ * 新增两个元素（pPr 里两枚 w:ind 会让 Word 认后写的那一枚，先写的整枚被丢）。
+ * 属性顺序按 CT_Ind 的 schema：firstLine → firstLineChars → hanging → hangingChars。 */
+export const PPR_IND_KEYS = ['firstLineChars', 'hangingChars'] as const
+
+/** data-ppr 载荷 → key/value 表；onOff 键只收 '1'/'0'，脏值整键丢 */
+export function parsePprPayload(raw: string | null | undefined): PprPayload {
+  const out: PprPayload = {}
+  if (!raw) return out
+  const onoff = new Set<string>(PPR_ONOFF_KEYS)
+  for (const item of raw.split(';')) {
+    const i = item.indexOf('=')
+    if (i <= 0) continue
+    const k = item.slice(0, i).trim()
+    const v = item.slice(i + 1).trim()
+    if (!k || !v) continue
+    if (onoff.has(k) && v !== '1' && v !== '0') continue
+    out[k] = v
+  }
+  return out
+}
+
+/** key/value 表 → data-ppr 载荷（与 parsePprPayload 互逆，排序保稳定） */
+export function pprPayload(kv: PprPayload): string {
+  return Object.keys(kv)
+    .sort()
+    .filter((k) => kv[k] !== '')
+    .map((k) => `${k}=${kv[k]}`)
+    .join(';')
+}
+
+/* ── 图片容器壳（v0.148）─────────────────────────────────────
+ * 一张位图在 OOXML 里不是「一个 <img>」而是三层壳：wp:inline/wp:anchor（画布定位）、
+ * wp:docPr + pic:cNvPr（对象名与替代文本）、pic:spPr/a:xfrm + a:prstGeom（图形框）。
+ * 这三层里除尺寸外的属性屏上一条都不兑现（Web 流式排版没有文字环绕、没有对象名、
+ * 图片框恒为矩形），但换个编辑器打开时它们决定「图贴在哪个锚上、能不能被选中改形」。
+ * 载荷：data-img="key=value;..."，EMU 档存整数原值（EMU→px 那一道只在 width/height
+ * 上做过，这里要的是能原样写回去的数），onOff 档存 '1'/'0'。
+ * 写侧走打包后补丁：包把整层壳都发出来了，只是值全部硬编码（dist*=0、effectExtent
+ * 四边=0、graphicFrameLocks/picLocks 恒 1、cNvPr 的 name 干脆是空串），补丁按块改值。
+ *
+ * 键名（EMU 档）：distT/distB/distL/distR（wp:inline 四边避让）、eeL/eeT/eeR/eeB
+ * （wp:effectExtent 四边）、offX/offY/extCx/extCy（a:xfrm 的 a:off/a:ext）、
+ * spX/spY（wp:simplePos）、docPrId/cNvPrId（两处对象序号）。
+ * 字符串档：cNvPrName、prst、posH、posV、bwMode（pic:spPr）。
+ * onOff 档：gfl、pic（两枚 locks 的 noChangeAspect）、picArrow（a:picLocks 的
+ * noChangeArrowheads）、anOver/anBehind/anCell/anLocked/anRelH/anSimple（wp:anchor 六枚闸门）。
+ * VML 壳（v0.149，只读不写——写侧只发 DrawingML 内嵌图，w:pict 那一支出不来）：
+ * 字符串档 shId/shSpid/shSpt/shType/shCoord（v:shape）、lkExt（o:lock）、idTitle
+ * （v:imagedata）、fFocus（v:fill 焦点尺寸）、sJoin/sWeight（v:stroke 连接与粗细）；
+ * onOff 档 shFill/shStroke（v:shape 的 filled/stroked）、lkAspect（o:lock 的
+ * aspectratio）、fOn（v:fill）、sOn（v:stroke）——VML 走 ST_TrueFalse（t/f），
+ * 与 CT_OnOff（1/0）值域不重叠，读手一并收、载荷里统一存 1/0。
+ * v0.150 增（全部只读不写）：
+ * - DrawingML 零星：blipState（a:blip 的 cstate，「打印才出」那档）、extUri（a:ext 的 uri，
+ *   扩展点身份）、lumModV（a:lumMod 的亮度调制）、lnW（a:ln 的线宽，EMU）；
+ * - wp:inline 的 anId/anEdit（anchorId/editId，Word 给内嵌图也发的两个流水号）；
+ * - VML 形状余量与图元几何：shPath/shFillColor（v:shape 身上的 path 缓存与填充底色）、
+ *   localDpi（o:useLocalDpi）、attrN/attrV（o:attr 扩展点一对）、
+ *   grpId/grpSpid/grpCoord/grpSize/grpStyle（v:group 的五枚，分组画布的身份与坐标）；
+ * - 图元几何族只记「枚数 + 首枚值」：shPt（v:pt 的 x/y）、shGd（v:gd 的 fmla/name）、
+ *   shCxn（v:cxn 的 ang）、shPos（v:pos 的 x/y）、shBox（v:path 的 w/h）。一条 path 上
+ *   几十上百枚 pt 是常事，全挂会把 HTML 撑爆；枚数说明「这个族在这里出现了」，
+ *   首枚值说明「它长什么样」，合起来够保真账用
+ * v0.152 增（全部只读不写，schemeClr 色彩变换与描边的尾巴）：
+ * - lumBright/lumContrast（a:lum 的亮度/对比度两档）、shadeV（a:shade 的压暗系数——
+ *   注意与段落/单元格底纹的 w:shd 不是一枚，那一族的 val 由 shadeSpec 早读着）、
+ *   gsPos（a:gs 渐变色标位置，只记第一枚）、lnCap/lnCmpd（a:ln 的线端与复合线型） */
+export const IMG_ATTR = 'data-img'
+
+export type ImgPayload = Record<string, string>
+
+/**
+ * v0.181：a:effectLst 三枚效果元素的属性清单，读手与写手**共用一份**。
+ * 包没有 effectLst 的构造器，整片由 post-pack 新建；属性名→载荷键的映射也必须同源，
+ * 否则「读手存了 osBlurRad、写手找 osBlur」这种错不报错、只是安静地什么都不做。
+ * 三维族（scene3d/sp3d/props3d）按 schema 不是 effectLst 的子元素，刻意不在表内。
+ */
+export const EFFECT_ATTRS = [
+  { prefix: 'os', tag: 'outerShdw', attrs: ['algn', 'blurRad', 'dir', 'dist', 'rotWithShape'] },
+  { prefix: 'gl', tag: 'glow', attrs: ['rad'] },
+  { prefix: 'rf', tag: 'reflection', attrs: ['algn', 'blurRad', 'dir', 'dist', 'endA', 'endPos', 'fadeDir', 'kx', 'ky', 'stA', 'stPos', 'sx', 'sy'] },
+] as const
+
+/** 载荷键 = 前缀 + 首字母大写的属性名（osBlurRad / rfEndPos …） */
+export function effectKey(prefix: string, attr: string): string {
+  return prefix + attr[0].toUpperCase() + attr.slice(1)
+}
+
+/** onOff 档：两枚 locks、a:picLocks 的箭头锁、wp:anchor 六枚闸门、VML 的五枚 t/f */
+export const IMG_ONOFF_KEYS = [
+  'gfl',
+  'pic',
+  'picArrow',
+  'anOver',
+  'anBehind',
+  'anCell',
+  'anLocked',
+  // v0.177：anRelH 不是 onOff——wp:anchor/@relativeHeight 是 unsignedInt 的层级号，
+  // 用 '1'/'0' 闸门会把真件里 251658240 这样的值整枚挡掉（夹具里的 "1" 恰好兼容）
+  'anSimple',
+  'shFill',
+  'shStroke',
+  'lkAspect',
+  'fOn',
+  'sOn',
+] as const
+
+/** 载荷分号分隔，字符串档的值里带 ';' 或 '=' 会撕裂载荷——那就不记（整键丢） */
+function imgValOk(v: string): boolean {
+  return v !== '' && !v.includes(';') && !v.includes('=')
+}
+
+/** data-img 载荷 → key/value 表；onOff 键只收 '1'/'0'，字符串键不带分隔符，脏值整键丢 */
+export function parseImgPayload(raw: string | null | undefined): ImgPayload {
+  const out: ImgPayload = {}
+  if (!raw) return out
+  const onoff = new Set<string>(IMG_ONOFF_KEYS)
+  for (const item of raw.split(';')) {
+    const i = item.indexOf('=')
+    if (i <= 0) continue
+    const k = item.slice(0, i).trim()
+    const v = item.slice(i + 1).trim()
+    if (!k || !imgValOk(v)) continue
+    if (onoff.has(k) && v !== '1' && v !== '0') continue
+    out[k] = v
+  }
+  return out
+}
+
+/** key/value 表 → data-img 载荷（与 parseImgPayload 互逆，排序保稳定） */
+export function imgPayload(kv: ImgPayload): string {
+  return Object.keys(kv)
+    .sort()
+    .filter((k) => imgValOk(kv[k]))
+    .map((k) => `${k}=${kv[k]}`)
+    .join(';')
+}
+
+/** 点阵：cell 见方的格子里一枚半径 1px 的点（密集档反过来把背景当时点） */
+function dots(fg: string, bg: string, cell: number): string {
+  return `radial-gradient(${fg} 1px, ${bg} 1.5px) 0 0/${cell}px ${cell}px`
+}
+
+/** 等距条纹：deg 走向、period 周期（px） */
+function stripes(fg: string, bg: string, deg: number, period: number): string {
+  return `repeating-linear-gradient(${deg}deg, ${fg} 0 ${period}px, ${bg} ${period}px ${period * 2}px)`
+}
+
+const PATTERN_GRAD: Record<string, (fg: string, bg: string) => string> = {
+  solid: (fg) => `linear-gradient(${fg}, ${fg})`,
+  pct5: (fg, bg) => dots(fg, bg, 16),
+  pct10: (fg, bg) => dots(fg, bg, 11),
+  pct12: (fg, bg) => dots(fg, bg, 10),
+  pct15: (fg, bg) => dots(fg, bg, 9),
+  pct20: (fg, bg) => dots(fg, bg, 8),
+  pct25: (fg, bg) => `conic-gradient(${fg} 0 25%, ${bg} 0 100%) 0 0/4px 4px`,
+  pct50: (fg, bg) => `conic-gradient(${fg} 0 25%, ${bg} 0 50%, ${fg} 0 75%, ${bg} 0) 0 0/4px 4px`,
+  pct75: (fg, bg) => `conic-gradient(${bg} 0 25%, ${fg} 0 100%) 0 0/4px 4px`,
+  pct30: (fg, bg) => dots(fg, bg, 7),
+  pct35: (fg, bg) => dots(fg, bg, 6),
+  pct37: (fg, bg) => dots(fg, bg, 6),
+  pct40: (fg, bg) => dots(fg, bg, 6),
+  pct45: (fg, bg) => dots(fg, bg, 5),
+  pct55: (fg, bg) => dots(bg, fg, 5),
+  pct60: (fg, bg) => dots(bg, fg, 4),
+  pct62: (fg, bg) => dots(bg, fg, 4),
+  pct65: (fg, bg) => dots(bg, fg, 4),
+  pct70: (fg, bg) => dots(bg, fg, 4),
+  pct80: (fg, bg) => dots(bg, fg, 3),
+  pct85: (fg, bg) => dots(bg, fg, 3),
+  pct87: (fg, bg) => dots(bg, fg, 3),
+  pct90: (fg, bg) => dots(bg, fg, 3),
+  pct95: (fg, bg) => dots(bg, fg, 2),
+  horzstripe: (fg, bg) => stripes(fg, bg, 0, 2),
+  thinhorzstripe: (fg, bg) => stripes(fg, bg, 0, 1),
+  vertstripe: (fg, bg) => stripes(fg, bg, 90, 2),
+  thinvertstripe: (fg, bg) => stripes(fg, bg, 90, 1),
+  diagstripe: (fg, bg) => stripes(fg, bg, 45, 2),
+  thindiagstripe: (fg, bg) => stripes(fg, bg, 45, 1),
+  reversediagstripe: (fg, bg) => stripes(fg, bg, -45, 2),
+  thinreversediagstripe: (fg, bg) => stripes(fg, bg, -45, 1),
+  horzcross: (fg, bg) =>
+    `repeating-linear-gradient(0deg, ${fg} 0 2px, ${bg} 2px 4px), repeating-linear-gradient(90deg, ${fg} 0 2px, ${bg} 2px 4px)`,
+  thinhorzcross: (fg, bg) =>
+    `repeating-linear-gradient(0deg, ${fg} 0 1px, ${bg} 1px 2px), repeating-linear-gradient(90deg, ${fg} 0 1px, ${bg} 1px 2px)`,
+  diagcross: (fg, bg) =>
+    `repeating-linear-gradient(45deg, ${fg} 0 2px, ${bg} 2px 4px), repeating-linear-gradient(-45deg, ${fg} 0 2px, ${bg} 2px 4px)`,
+  thindiagcross: (fg, bg) =>
+    `repeating-linear-gradient(45deg, ${fg} 0 1px, ${bg} 1px 2px), repeating-linear-gradient(-45deg, ${fg} 0 1px, ${bg} 1px 2px)`,
+}
+
+/** 图案三件套（pattern 小写档位名、fg/bg 为 '#rrggbb'） */
+export interface ShadeSpec {
+  pattern: string
+  fg: string
+  bg: string
+}
+
+/** `图案|前景|背景` → 三件套；形状不对（缺段、hex 不合法）算未声明，与 null 同路 */
+export function parseShadePayload(raw: string | null | undefined): ShadeSpec | null {
+  if (!raw) return null
+  const parts = raw.split('|')
+  if (parts.length !== 3) return null
+  const [pattern, fg, bg] = parts.map((p) => p.trim())
+  const ok = (h: string) => /^#?[0-9a-f]{3}([0-9a-f]{3})?$/i.test(h)
+  if (!pattern || !ok(fg) || !ok(bg)) return null
+  return { pattern: pattern.toLowerCase(), fg: `#${fg.replace('#', '').toLowerCase()}`, bg: `#${bg.replace('#', '').toLowerCase()}` }
+}
+
+/** 三件套 → 一段内联 CSS（背景色 + 图案渐变）；认不出的图案名只留背景一色 */
+export function shadeCss(spec: ShadeSpec): string | null {
+  const grad = PATTERN_GRAD[spec.pattern]
+  const bg = spec.bg ?? '#ffffff'
+  return grad ? `background-color: ${bg}; background-image: ${grad(spec.fg, bg)}` : `background-color: ${bg}`
+}
+
+/**
+ * data-shade 载荷 → 扩展属性要渲染的东西（属性本身 + 内联样式两段）。
+ * 载荷非法时两样都不给——那一栏当未声明，落回 background 那一链。
+ */
+export function shadeAttrs(raw: unknown): Record<string, string> {
+  const payload = typeof raw === 'string' ? raw : ''
+  const spec = parseShadePayload(payload)
+  if (!spec) return {}
+  const css = shadeCss(spec)
+  return css ? { [SHADE_ATTR]: payload, style: css } : { [SHADE_ATTR]: payload }
+}
+
+/**
+ * data-shd 载荷 → 段落/单元格上的属性（v0.164）。屏上不给样式：颜色由 `background`
+ * 那一链画，这一份只负责写回。载荷解析不出东西时整条不挂（与 data-tabs 同款纪律）
+ */
+export function shdAttrsOf(raw: unknown): Record<string, string> {
+  const payload = typeof raw === 'string' ? raw : ''
+  return Object.keys(parseShdPayload(payload)).length ? { [SHD_ATTR]: payload } : {}
 }
 
 function vAlignOf(raw: string | null | undefined): string | null {
@@ -237,11 +1136,42 @@ export const CellStyle = Extension.create({
             renderHTML: (attrs: Record<string, unknown>) =>
               attrs.background ? { style: `background-color: ${attrs.background}` } : {},
           },
+          // 图案底纹的往返载荷（v0.142）：与段落那一枚同源（SHADE_ATTR/shadeAttrs），
+          // 纯色 background 之外的第二份表示——w:shd 的图案档位与前景色只有它带得回来
+          shade: {
+            default: null as string | null,
+            parseHTML: (el: HTMLElement) => el.getAttribute(SHADE_ATTR) || null,
+            renderHTML: (attrs: Record<string, unknown>) => shadeAttrs(attrs.shade),
+          },
+          // 底纹的存盘原件（v0.164）：主题引用在时那枚字面 fill 与三枚引用名。
+          // 屏上一条样式都不兑现——`background` 已经把颜色画出来了，这一份只为写回
+          shd: {
+            default: null as string | null,
+            parseHTML: (el: HTMLElement) => el.getAttribute(SHD_ATTR) || null,
+            renderHTML: (attrs: Record<string, unknown>) => shdAttrsOf(attrs.shd),
+          },
+          // 边框的存盘原件（v0.165）：tcBorders 每条边的字面色与主题三枚。屏上不兑现
+          // ——`bd*` 已经把线画出来了，这一份只为写回（与段落那一枚同源）
+          bdr: {
+            default: null as string | null,
+            parseHTML: (el: HTMLElement) => el.getAttribute(BDR_ATTR) || null,
+            renderHTML: (attrs: Record<string, unknown>) => bdrAttrsOf(attrs.bdr),
+          },
           vAlign: {
             default: null as string | null,
             parseHTML: (el: HTMLElement) => vAlignOf(el.style.getPropertyValue('vertical-align')),
             renderHTML: (attrs: Record<string, unknown>) =>
               attrs.vAlign ? { style: `vertical-align: ${attrs.vAlign}` } : {},
+          },
+          // 单元格不换行（v0.152）：w:tcPr/w:noWrap。CSS 的 white-space: nowrap 正是
+          // 这一个——屏上直接兑现（与 vAlign 同属「有现成对应物」的一族）。
+          // 两个来源都认：导入 HTML 上的 data-nowrap 载荷与 style 里的 nowrap
+          // （后者让用户手设的 nowrap 也能落回 w:noWrap）
+          noWrap: {
+            default: null as string | null,
+            parseHTML: (el: HTMLElement) => (el.style.whiteSpace === 'nowrap' || el.getAttribute('data-nowrap') ? '1' : null),
+            renderHTML: (attrs: Record<string, unknown>) =>
+              attrs.noWrap ? { 'data-nowrap': '1', style: 'white-space: nowrap' } : {},
           },
           // 格边距：docx 的 w:tblCellMar / w:tcMar 落这里（v0.97 起）。0 是真值（Word 的上下边距
           // 常就是 0），判空不用真值判断；mergeAttributes 会把各属性给出的 style 片段串起来，
@@ -257,7 +1187,34 @@ export const CellStyle = Extension.create({
                 },
                 renderHTML: (attrs: Record<string, unknown>) => {
                   const v = attrs[padAttrName(side)]
-                  return typeof v === 'number' && v >= 0 ? { style: `padding-${side}: ${v}px` } : {}
+                  // v0.143：与边框间距（bdSpace*）相加——Word 里 tcMar 与 tcBorders@space
+                  // 是叠加关系，CSS 一条 padding-{side} 就是两者的和；两条属性各输出同一个
+                  // 合并值，mergeAttributes 串起来后谁盖谁都是这个数
+                  const sp = attrs[bdSpaceName(side)]
+                  const sum = (typeof v === 'number' ? v : 0) + (typeof sp === 'number' ? sp : 0)
+                  return sum > 0 ? { style: `padding-${side}: ${round2(sum)}px` } : {}
+                },
+              },
+            ]),
+          ),
+          // 边框间距（v0.143）：docx 的 w:tcBorders/@w:space（磅→px）走 data-bdspace-{side}
+          // 独立载荷——与 pad* 相加才是 Word 的叠加语义，但回写时 space 归 tcBorders、
+          // pad 归 tcMar，两边各得各的（详见 cell-style.ts 头注的 v0.143 段）
+          ...Object.fromEntries(
+            PAD_SIDES.map((side) => [
+              bdSpaceName(side),
+              {
+                default: null as number | null,
+                parseHTML: (el: HTMLElement) => {
+                  const v = Number.parseFloat(el.getAttribute(bdSpaceAttr(side)) ?? '')
+                  return Number.isFinite(v) && v > 0 ? round2(v) : null
+                },
+                renderHTML: (attrs: Record<string, unknown>) => {
+                  const own = attrs[bdSpaceName(side)]
+                  if (typeof own !== 'number' || own <= 0) return {}
+                  const pad = attrs[padAttrName(side)]
+                  const sum = own + (typeof pad === 'number' ? pad : 0)
+                  return { style: `padding-${side}: ${round2(sum)}px` }
                 },
               },
             ]),
@@ -269,6 +1226,12 @@ export const CellStyle = Extension.create({
         attributes: {
           // 行高：docx 的 w:trHeight 落这里（v0.97 起）。HTML 里 tr 的高度本就是下限语义，
           // 与 OOXML 的 atLeast 恰好同形；exact 的"超高裁内容"CSS 表达不了，导入按 atLeast 记
+          // 行余量（v0.172）：gridAfter 与 wAfter 两枚（w:w / w:type），屏上不兑现只往返
+          trpr: {
+            default: null as string | null,
+            parseHTML: (el: HTMLElement) => el.getAttribute(TRPR_ATTR) || null,
+            renderHTML: (attrs: Record<string, unknown>) => trPrAttrsOf(attrs.trpr),
+          },
           rowHeight: {
             default: null as number | null,
             parseHTML: (el: HTMLElement) => {
@@ -294,6 +1257,73 @@ export const CellStyle = Extension.create({
             parseHTML: (el: HTMLElement) => el.getAttribute('data-tstyle'),
             renderHTML: (attrs: Record<string, unknown>) =>
               typeof attrs.tStyle === 'string' && attrs.tStyle ? { 'data-tstyle': attrs.tStyle } : {},
+          },
+          /**
+           * 表格浮动（v0.145）：w:tblpPr 的 key=value 载荷（tblpX/tblpXSpec/tblpY/vertAnchor/
+           * horzAnchor/四 FromText/overlap）。Word 的纸面浮动表，Web 没有页定位语义，
+           * 屏上不兑现——只随 data-tblp 往返（framePr 同款纪律）
+           */
+          tblp: {
+            default: null as string | null,
+            parseHTML: (el: HTMLElement) => el.getAttribute(TBLP_ATTR) || null,
+            renderHTML: (attrs: Record<string, unknown>) => {
+              const raw = typeof attrs.tblp === 'string' ? attrs.tblp : ''
+              return Object.keys(parseTblpPayload(raw)).length ? { [TBLP_ATTR]: raw } : {}
+            },
+          },
+          /**
+           * 条件层闸门（v0.147）：表**自己** `w:tblPr` 上那一枚 `w:tblLook` 的三属性——
+           * `val`（Word 存的四位闸门原值）/ `noHBand` / `noVBand`。与样式里那一枚同名同义，
+           * 区别在于归属：样式那一枚随样式走、表这一枚随这张表走（表上的压过样式上的）。
+           * 屏上不兑现（门的开合只影响 Word 套条件格式的那一层），只随 data-tlook 往返
+           */
+          tlook: {
+            default: null as string | null,
+            parseHTML: (el: HTMLElement) => el.getAttribute(TLOOK_ATTR) || null,
+            renderHTML: (attrs: Record<string, unknown>) =>
+              typeof attrs.tlook === 'string' && attrs.tlook ? { [TLOOK_ATTR]: attrs.tlook } : {},
+          },
+          /**
+           * 表级条件格式尺寸（v0.152）：`w:tblPr` 的 `w:tblStyleColBandSize` /
+           * `w:tblStyleRowBandSize`（隔行/隔列底纹作用到第几行/列为止）。屏上不兑现
+           * （条件格式落点不在我们模型里），只随 data-tblpr 往返（tblp/tlook 同款纪律）
+           */
+          tblPr: {
+            default: null as string | null,
+            parseHTML: (el: HTMLElement) => el.getAttribute(TBLPR_ATTR) || null,
+            renderHTML: (attrs: Record<string, unknown>) => {
+              const raw = typeof attrs.tblPr === 'string' ? attrs.tblPr : ''
+              return Object.keys(parseTblPrPayload(raw)).length ? { [TBLPR_ATTR]: raw } : {}
+            },
+          },
+          /**
+           * 表条件格式的落点开关（v0.162）：`w:tblPr/w:cnfStyle` 十三枚——这一行/这一列
+           * 算不算「首行/末行/奇偶数行/首列/末列/四角」。Word 的表样式靠它决定套哪一档
+           * 条件格式（tblLook 管要不要套，这一族管落在哪）。屏上零兑现，只随 data-cnf
+           * 往返，写侧走打包后补丁（与 tblLook / bandSize 同住 tblPr、同序登记）
+           */
+          cnf: {
+            default: null as string | null,
+            parseHTML: (el: HTMLElement) => el.getAttribute(CNF_ATTR) || null,
+            renderHTML: (attrs: Record<string, unknown>) => {
+              const raw = typeof attrs.cnf === 'string' ? attrs.cnf : ''
+              return Object.keys(parseCnfPayload(raw)).length ? { [CNF_ATTR]: raw } : {}
+            },
+          },
+          /**
+           * 表级边框六边原值（v0.163）：`w:tblPr/w:tblBorders` 六条边各七枚——
+           * val/sz/color/space/themeColor/themeTint/themeShade。**只往返不兑现**：
+           * 屏上那一半走的是「分摊到格」（CSS 格边 padding），值与原件不等，拿分摊值回写
+           * 表级就是把屏上的误差写成源件说过的话。写侧按载荷重写整片 `<w:tblBorders>`
+           * （包只发六枚硬编码默认的壳），与 tblLook / bandSize 同住 tblPr、同序登记
+           */
+          tblb: {
+            default: null as string | null,
+            parseHTML: (el: HTMLElement) => el.getAttribute(TBLB_ATTR) || null,
+            renderHTML: (attrs: Record<string, unknown>) => {
+              const raw = typeof attrs.tblb === 'string' ? attrs.tblb : ''
+              return Object.keys(parseTblbPayload(raw)).length ? { [TBLB_ATTR]: raw } : {}
+            },
           },
           /** Word 的 `w:tblInd`：整张表离版心左边距多远 */
           marginLeft: {

@@ -662,6 +662,54 @@ button {
   font-size: 12px;
 }
 
+/* v0.180 Writer 可交互状态栏：底部独立一条，条目表来自 lib/status-bar.ts。
+   预览态由 .is-preview 的通配规则藏掉，纸上由 @media print 显式 display:none。 */
+.doc-status-bar {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  height: 28px;
+  padding: 0 10px;
+  border-top: 1px solid var(--border);
+  background: var(--panel);
+  font-size: 12px;
+  color: var(--text-2);
+  user-select: none;
+}
+
+.doc-status-grow {
+  flex: 1;
+}
+
+.doc-status-item {
+  display: inline-flex;
+  align-items: center;
+  padding: 3px 7px;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  line-height: 1.2;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.doc-status-item.is-static {
+  cursor: default;
+}
+
+.doc-status-item:not(.is-static):hover {
+  background: rgba(127, 127, 127, 0.14);
+  color: var(--accent);
+}
+
+.doc-status-item.is-active {
+  color: var(--accent);
+  font-weight: 600;
+}
+
 .chart-pop {
   position: absolute;
   top: 40px;
@@ -1054,6 +1102,113 @@ button {
   min-height: 1000px;
 }
 
+/* v0.179 Writer 标尺：屏幕辅助层，挂在 .doc-page 内随内联 zoom 一起缩放。
+   水平条的 left/width 由 React 按版心几何给，0 点即版心左边缘；
+   刻度位置是未缩放的 CSS px，拖动换算在组件里除以 zoom 折回去。 */
+.doc-ruler-h {
+  position: absolute;
+  top: 0;
+  height: 20px;
+  z-index: 3;
+  background: var(--bg);
+  border-bottom: 1px solid var(--border);
+  cursor: default;
+  user-select: none;
+}
+
+.doc-ruler-tick {
+  position: absolute;
+  bottom: 0;
+  width: 1px;
+  height: 4px;
+  background: var(--text-2);
+  opacity: 0.55;
+}
+
+.doc-ruler-tick.doc-ruler-major {
+  height: 8px;
+  opacity: 0.9;
+}
+
+.doc-ruler-tick i {
+  position: absolute;
+  left: 2px;
+  top: -9px;
+  font: 9px/1 ui-monospace, monospace;
+  font-style: normal;
+  color: var(--text-2);
+}
+
+/* 版心可用区（首行起点 → 右缩进），只是底色提示，不接管指针 */
+.doc-ruler-avail {
+  position: absolute;
+  top: 15px;
+  height: 5px;
+  background: color-mix(in srgb, var(--accent) 18%, transparent);
+  pointer-events: none;
+}
+
+.doc-ruler-handle {
+  position: absolute;
+  bottom: 1px;
+  width: 11px;
+  height: 11px;
+  margin-left: -5px;
+  background: var(--panel);
+  border: 1px solid var(--accent);
+  cursor: ew-resize;
+  touch-action: none;
+}
+
+.doc-ruler-first {
+  top: 1px;
+  clip-path: polygon(50% 0, 100% 100%, 0 100%);
+  border: none;
+  background: var(--accent);
+}
+
+.doc-ruler-left {
+  bottom: 1px;
+  clip-path: polygon(50% 100%, 100% 0, 0 0);
+  border: none;
+  background: var(--accent);
+}
+
+.doc-ruler-right {
+  bottom: 1px;
+  border-radius: 2px;
+}
+
+.doc-ruler-v {
+  position: absolute;
+  left: 0;
+  width: 16px;
+  z-index: 3;
+  background: var(--bg);
+  border-right: 1px solid var(--border);
+  pointer-events: none;
+}
+
+.doc-ruler-vtick {
+  position: absolute;
+  right: 0;
+  height: 1px;
+  width: 4px;
+  background: var(--text-2);
+  opacity: 0.55;
+}
+
+.doc-ruler-vtick.doc-ruler-major {
+  width: 8px;
+  opacity: 0.9;
+}
+
+/* 预览态是「纸面只读镜像」，标尺与工具条一起收起 */
+.editor-pane.is-preview .doc-ruler-h,
+.editor-pane.is-preview .doc-ruler-v {
+  display: none;
+}
+
 .doc-content {
   outline: none;
   min-height: 900px;
@@ -1284,6 +1439,15 @@ button {
   width: 220px;
 }
 
+/* v0.188：文档属性面板五格，允许多行排布，输入框比页眉页脚那两格窄一点 */
+.doc-props-panel {
+  flex-wrap: wrap;
+  row-gap: 6px;
+}
+.doc-props-panel .tb-input {
+  width: 160px;
+}
+
 .doc-hf-check {
   display: flex;
   align-items: center;
@@ -1415,16 +1579,271 @@ button {
   width: 64px;
 }
 
+/* v0.190 页面边框：与页面设置面板同排，颜色块与线宽各占一小格 */
+.doc-pg-borders {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.doc-pg-borders .tb-check {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  white-space: nowrap;
+}
+
+.doc-pg-borders .doc-color {
+  width: 34px;
+  height: 24px;
+  padding: 2px;
+}
+
 .doc-table-bar,
 .doc-img-bar,
-.doc-para-bar {
+.doc-para-bar,
+.doc-bullet-bar {
   background: rgba(44, 102, 212, 0.05);
 }
 
 :root[data-theme='dark'] .doc-table-bar,
 :root[data-theme='dark'] .doc-img-bar,
-:root[data-theme='dark'] .doc-para-bar {
+:root[data-theme='dark'] .doc-para-bar,
+:root[data-theme='dark'] .doc-bullet-bar {
   background: rgba(91, 140, 255, 0.08);
+}
+
+/* 符面那一栏：16 枚候选按 2px gap 排一行，格子压到能一眼扫完 */
+.doc-bullet-bar {
+  flex-wrap: wrap;
+  row-gap: 4px;
+}
+
+/* 拼写检查：波浪线走 SVG data-uri 的斜纹背景，不用 text-decoration——
+   后者只有 Firefox 认 wavy，且颜色改不动 */
+.oo-spell {
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='6' height='3'%3E%3Cpath d='M0 3 L1.5 1 L3 3 L4.5 1 L6 3' fill='none' stroke='%23e0483a' stroke-width='0.7'/%3E%3C/svg%3E");
+  background-repeat: repeat-x;
+  background-position: left bottom;
+  background-size: 6px 3px;
+  padding-bottom: 2px;
+}
+
+/* 疑似档（不在英文词典里）：换成橙色虚线。与确认档的红波浪线一眼分得开——
+   这一档会把人名、品牌、术语一起划上，不该跟"确凿的错"画成同一种线 */
+.oo-spell-unknown {
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='6' height='3'%3E%3Cpath d='M0 2 L3 2' fill='none' stroke='%23d98a12' stroke-width='0.8' stroke-dasharray='2 1'/%3E%3C/svg%3E");
+}
+
+.doc-spell-bar,
+.doc-macro-bar,
+.doc-collab-bar {
+  flex-wrap: wrap;
+  row-gap: 4px;
+  align-items: center;
+}
+
+.doc-collab-room {
+  width: 180px;
+  padding: 2px 6px;
+  font-size: 12px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--panel);
+  color: var(--text);
+}
+
+.doc-collab-room:disabled {
+  opacity: 0.6;
+}
+
+.doc-collab-peers {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+
+.doc-collab-me,
+.doc-collab-peer {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 1px 7px;
+  border-radius: 10px;
+  background: var(--bg);
+  font-size: 12px;
+  color: var(--text-dim);
+}
+
+.doc-collab-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  display: inline-block;
+}
+
+.doc-collab-err {
+  font-size: 12px;
+  color: #c0392b;
+}
+
+.doc-collab-note {
+  flex: 1 1 100%;
+  opacity: 0.72;
+}
+
+/* —— y-prosemirror 的远程光标与选区 ——
+   库只给元素上内联的 border-color / background-color（协作者自己的颜色），
+   几何与名牌的位置全落在样式表里。颜色一律不碰——那是用户的身份色，
+   拿项目配色去盖它，两个协作者就分不出来了。
+   注意与上游那份示例 CSS 的差别：示例写的是 border-top/bottom: 2px solid transparent，
+   但内联的 border-color 会把四条边的颜色都设上，透明那一手被内联压掉，结果光标两头
+   各多一节 2px 的色头、还会把行高顶起来。这里改成把上/右/下的**宽度**压成 0
+   （宽度不在内联样式里，压得掉），只留左边那一根线 */
+.ProseMirror-yjs-cursor {
+  position: relative;
+  margin-left: -1px;
+  margin-right: -1px;
+  border-left: 2px solid currentcolor;
+  border-right-width: 0;
+  border-top-width: 0;
+  border-bottom-width: 0;
+  word-break: break-all;
+  pointer-events: none;
+}
+
+/* 名牌：挂在光标上方，不占行高（position:absolute 才不会把行撑开） */
+.ProseMirror-yjs-cursor > div {
+  position: absolute;
+  top: -1.15em;
+  left: -2px;
+  padding: 0 4px;
+  border-radius: 3px 3px 3px 0;
+  font-size: 11px;
+  line-height: 1.3;
+  font-weight: 600;
+  color: #fff;
+  white-space: nowrap;
+  opacity: 0.95;
+}
+
+/* 远程选区：库给的是 <color>70 这种带透明的底色，这里只补一条同色描边，
+   让它在大段同色文字上也看得见 */
+.ProseMirror-yjs-selection {
+  border-radius: 2px;
+}
+
+.doc-macro-code {
+  flex: 1 1 100%;
+  min-height: 120px;
+  font-family: var(--mono, Consolas, monospace);
+  font-size: 12px;
+  line-height: 1.5;
+  padding: 6px 8px;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  background: var(--panel);
+  color: var(--text);
+  resize: vertical;
+}
+
+.doc-macro-out {
+  flex: 1 1 100%;
+  max-height: 120px;
+  overflow: auto;
+  font-family: var(--mono, Consolas, monospace);
+  font-size: 12px;
+  padding: 5px 8px;
+  border-radius: 5px;
+  background: var(--bg);
+  color: var(--text);
+}
+
+.doc-macro-out.err {
+  color: #c0392b;
+}
+
+.doc-macro-warn {
+  flex: 1 1 100%;
+  opacity: 0.75;
+}
+
+/* VBA 那一档的说明与转译预览 */
+.doc-macro-vba {
+  flex: 1 1 100%;
+  opacity: 0.8;
+  line-height: 1.5;
+}
+
+.doc-macro-pre {
+  flex: 1 1 100%;
+  max-height: 220px;
+  overflow: auto;
+  margin: 0;
+  padding: 6px 8px;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  background: var(--bg);
+  color: var(--text-dim);
+  font-family: var(--mono, Consolas, monospace);
+  font-size: 12px;
+  line-height: 1.5;
+  white-space: pre;
+}
+
+.doc-macro-pre.err {
+  color: #c0392b;
+}
+
+/* 署名：协同里"我是谁"那一格 */
+.doc-who {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 12px;
+  color: var(--text-dim);
+}
+
+.doc-who-input {
+  width: 96px;
+}
+
+.doc-spell-list {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.doc-spell-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.doc-spell-word {
+  padding: 2px 6px;
+  border-radius: 4px;
+  font-size: 13px;
+  color: #c0392b;
+  text-decoration: underline dotted #c0392b;
+}
+
+.doc-spell-word:hover {
+  background: rgba(224, 72, 58, 0.1);
+}
+
+.tb-label {
+  font-size: 12px;
+  color: var(--text-dim);
+  margin-right: 2px;
+}
+
+.tb-bullet {
+  padding: 3px 7px;
+  font-size: 14px;
+  line-height: 1.2;
+  min-width: 26px;
 }
 
 .doc-fr-panel {
@@ -1458,6 +1877,201 @@ button {
   min-height: 0;
 }
 
+/* v0.173 文档结构图（导航窗格）：与右侧批注侧栏分列，关着时整棵不渲染、也不遍历全文 */
+.doc-outline {
+  width: 224px;
+  flex-shrink: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  border-right: 1px solid var(--border);
+  background: var(--panel);
+}
+
+.doc-outline-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 10px;
+  font-size: 12px;
+  font-weight: 600;
+  border-bottom: 1px solid var(--border);
+}
+
+.doc-outline-close {
+  padding: 0 6px;
+  line-height: 20px;
+}
+
+.doc-outline-list {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 6px 4px;
+}
+
+.doc-outline-item {
+  display: block;
+  width: 100%;
+  box-sizing: border-box;
+  text-align: left;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text);
+  font-size: 12px;
+  line-height: 1.6;
+  padding: 4px 8px;
+  cursor: pointer;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.doc-outline-item:hover {
+  background: var(--bg);
+}
+
+.doc-outline-item.doc-outline-active {
+  color: var(--accent);
+  background: rgba(44, 102, 212, 0.1);
+  font-weight: 600;
+}
+
+.doc-outline-l2 { padding-left: 20px; }
+.doc-outline-l3 { padding-left: 34px; }
+.doc-outline-l4 { padding-left: 48px; }
+
+.doc-outline-empty,
+.doc-outline-foot {
+  color: var(--text-2);
+  font-size: 11px;
+  line-height: 1.6;
+  padding: 8px;
+}
+
+.doc-outline-foot {
+  border-top: 1px solid var(--border);
+}
+
+/* 格式刷待刷态：按钮高亮 + 光标提示，刷完自动退回 */
+.doc-painter-btn.tb-active {
+  cursor: copy;
+}
+
+/* v0.174 视图缩放：一组挨紧的按钮 + 刻度下拉，别和旁边的开关混成一片 */
+.doc-zoom {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.doc-zoom .tb-select {
+  width: 72px;
+}
+
+/* v0.174 内容区右键菜单：视口定位、点外部/Esc 收起；只用主题变量，暗色自动跟 */
+.doc-ctx-menu {
+  position: fixed;
+  z-index: 80;
+  min-width: 176px;
+  padding: 4px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--panel);
+  box-shadow: 0 8px 26px rgba(31, 41, 55, 0.18);
+}
+
+.doc-ctx-item {
+  display: block;
+  width: 100%;
+  box-sizing: border-box;
+  text-align: left;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text);
+  font-size: 12px;
+  line-height: 1.5;
+  padding: 5px 10px;
+  cursor: pointer;
+}
+
+.doc-ctx-item:hover:not(:disabled) {
+  background: var(--bg);
+  color: var(--accent);
+}
+
+.doc-ctx-item:disabled {
+  color: var(--text-2);
+  opacity: 0.55;
+  cursor: default;
+}
+
+.doc-ctx-sep {
+  height: 1px;
+  margin: 4px 6px;
+  background: var(--border);
+}
+
+/* v0.175 独立打印预览：同一棵 DOM 切只读，不改文档、不另画一份。
+   一条规则把 editor-pane 的所有直接子级（两条工具条 + 所有内联面板）收起来，
+   只留纸面与预览条——比逐个面板加条件渲染稳，新面板也不会漏。 */
+.editor-pane.is-preview > :not(.doc-body):not(.doc-preview-bar):not(.doc-ctx-menu) {
+  display: none;
+}
+
+.editor-pane.is-preview .doc-outline,
+.editor-pane.is-preview .doc-comments {
+  display: none;
+}
+
+.editor-pane.is-preview .doc-page {
+  box-shadow: 0 10px 34px rgba(31, 41, 55, 0.22);
+}
+
+.doc-preview-bar {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 4px;
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--border);
+  background: var(--panel);
+}
+
+.doc-preview-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--accent);
+  white-space: nowrap;
+}
+
+.doc-preview-pages {
+  font-size: 11px;
+  color: var(--text-2);
+  white-space: nowrap;
+  margin-right: 6px;
+}
+
+/* v0.181：按等距页距翻页定位（非真分页，屏幕不重排） */
+.doc-preview-pager {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.doc-preview-pager .doc-preview-pages {
+  min-width: 96px;
+  text-align: center;
+  margin-right: 0;
+}
+
+.doc-preview-pager .tb-btn:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
 .doc-comments {
   width: 268px;
   flex-shrink: 0;
@@ -1474,6 +2088,31 @@ button {
   font-weight: 600;
   font-size: 13px;
   margin-bottom: 8px;
+}
+
+/* v0.195：批注侧栏筛选条——复选框与作者下拉同一行，窄侧栏里下拉收得住 */
+.doc-comments-tools {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+  font-weight: 400;
+  font-size: 12px;
+}
+
+.doc-comments-tools .tb-check {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  white-space: nowrap;
+  color: var(--text-2);
+  cursor: pointer;
+}
+
+.doc-comments-tools .tb-input {
+  min-width: 0;
+  width: 100%;
+  flex: 1;
 }
 
 .doc-comment-empty {
@@ -1620,6 +2259,13 @@ button {
 .doc-content table td,
 .doc-content table th {
   position: relative;
+}
+
+/* 与上面同选择器的一半：单元格画框与内距。2026-10-23 追记：这条原属工作树上一版未提交的
+   表格样式，误 checkout 后从当时构建产物按声明捞回（原注释已不可考），与产物逐字一致 */
+.doc-content table td {
+  border: 1px solid var(--border);
+  padding: 6px 10px;
 }
 .doc-content .column-resize-handle {
   position: absolute;
@@ -1786,6 +2432,26 @@ button {
   padding: 26px;
 }
 
+/* v0.178：舞台缩放控件与 Writer 的 .doc-zoom 同一套档位，用 Impress 自己的按钮皮肤 */
+.ppt-zoom {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  flex-shrink: 0;
+}
+
+.ppt-zoom .tool-select {
+  width: 72px;
+}
+
+/* 屏幕缩放不上纸/不进导出：Impress 的 PDF 走离屏 .ppt-print-page（本就不读 zoom），
+   这条是给直接 window.print() 的兜底——内联 zoom 优先级高，必须 !important 压回去 */
+@media print {
+  .ppt-stage {
+    zoom: 1 !important;
+  }
+}
+
 .ppt-stage {
   width: min(100%, 900px);
   aspect-ratio: 16 / 9;
@@ -1797,6 +2463,42 @@ button {
   flex-direction: column;
   padding: 4.5% 5.5%;
   box-sizing: border-box;
+}
+
+/* v0.186：母版占位框（标题 / 正文）。百分比定位由 lib/master-rect.ts 给出；
+   随 .ppt-stage 的内联 zoom 一起缩放，打印/导出走离屏 DOM，不吃这层样式 */
+.ppt-master-rect {
+  position: absolute;
+  border: 1px dashed var(--accent, #3b82f6);
+  background: rgba(59, 130, 246, 0.07);
+  box-sizing: border-box;
+  cursor: move;
+  touch-action: none;
+}
+.ppt-master-rect-tag {
+  position: absolute;
+  left: -1px;
+  top: -19px;
+  padding: 0 5px;
+  font-size: 11px;
+  line-height: 17px;
+  white-space: nowrap;
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  background: var(--bg);
+  color: var(--accent, #3b82f6);
+  pointer-events: none;
+}
+.ppt-master-rect-handle {
+  position: absolute;
+  right: -5px;
+  bottom: -5px;
+  width: 10px;
+  height: 10px;
+  border-radius: 2px;
+  background: var(--accent, #3b82f6);
+  cursor: nwse-resize;
+  touch-action: none;
 }
 
 .ppt-stage textarea {
@@ -1974,6 +2676,36 @@ button {
   white-space: nowrap;
 }
 
+/* v0.141：属性条里的（列宽%/行高%）、（形状名/替代文本）各成一组——
+   组内挨紧、组间留缝，否则一列四个数字框看起来像四个无关的控件 */
+.ppt-bar-group {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding-left: 4px;
+  border-left: 1px solid var(--border);
+}
+.ppt-bar-label {
+  font-size: 12px;
+  color: var(--text-dim);
+}
+.ppt-bar-text {
+  width: 92px;
+  font: inherit;
+  font-size: 12px;
+  padding: 3px 5px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--panel);
+  color: var(--text);
+}
+.ppt-btn-italic {
+  font-style: italic;
+}
+.ppt-btn-underline {
+  text-decoration: underline;
+}
+
 .ppt-shape-color {
   width: 26px;
   height: 22px;
@@ -1982,6 +2714,140 @@ button {
   border-radius: 4px;
   background: none;
   cursor: pointer;
+}
+
+/* 表格形状（v0.127） */
+.ppt-shape-table {
+  overflow: hidden;
+}
+
+.ppt-table-grid {
+  width: 100%;
+  height: 100%;
+  overflow: auto;
+  background: var(--panel);
+}
+
+.ppt-table-cell {
+  width: 100%;
+  box-sizing: border-box;
+  border: 0;
+  padding: 0.15em 0.3em;
+  font: inherit;
+  color: var(--text);
+  background: transparent;
+}
+
+/* 图表形状（v0.127）：PNG 还没渲好时的占位框——虚线框说的是「这里本该有一张图」 */
+.ppt-shape-chart-hollow {
+  width: 100%;
+  height: 100%;
+  box-sizing: border-box;
+  border: 1px dashed var(--border);
+  border-radius: 4px;
+  background: var(--panel);
+}
+
+/* 图表数据的 CSV 编辑面板：形状条挂不下网格，做成一层小浮层 */
+.ppt-chart-data {
+  position: absolute;
+  left: 0;
+  bottom: calc(100% + 40px);
+  width: 320px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 8px;
+  box-shadow: 0 2px 8px rgba(31, 41, 55, 0.18);
+  z-index: 6;
+}
+
+.ppt-chart-data-label {
+  font-size: 12px;
+  color: var(--text-2);
+}
+
+.ppt-chart-data-csv {
+  width: 100%;
+  height: 120px;
+  resize: vertical;
+  font-family: ui-monospace, 'Cascadia Mono', Consolas, monospace;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 4px 6px;
+}
+
+/* 表格形状（v0.127） */
+.ppt-shape-table {
+  overflow: hidden;
+}
+
+.ppt-table-grid {
+  width: 100%;
+  height: 100%;
+  overflow: auto;
+  background: var(--panel);
+}
+
+.ppt-table-cell {
+  width: 100%;
+  box-sizing: border-box;
+  border: 0;
+  padding: 0.15em 0.3em;
+  font: inherit;
+  color: var(--text);
+  background: transparent;
+}
+
+/* 图表形状（v0.127）：PNG 还没渲好时的占位框——虚线框说的是「这里本该有一张图」 */
+.ppt-shape-chart-hollow {
+  width: 100%;
+  height: 100%;
+  box-sizing: border-box;
+  border: 1px dashed var(--border);
+  border-radius: 4px;
+  background: var(--panel);
+}
+
+/* 图表数据的 CSV 编辑面板：形状条挂不下网格，做成一层小浮层 */
+.ppt-chart-data {
+  position: absolute;
+  left: 0;
+  bottom: calc(100% + 40px);
+  width: 320px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 8px;
+  box-shadow: 0 2px 8px rgba(31, 41, 55, 0.18);
+  z-index: 6;
+}
+
+.ppt-chart-data-label {
+  font-size: 12px;
+  color: var(--text-2);
+}
+
+.ppt-chart-data-csv {
+  width: 100%;
+  height: 120px;
+  resize: vertical;
+  font-family: ui-monospace, 'Cascadia Mono', Consolas, monospace;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 4px 6px;
 }
 
 /* 静态幻灯片渲染（缩略图 / 放映共用，靠父级 font-size 缩放） */
@@ -2544,11 +3410,13 @@ button {
   }
 
   /* 版心几何由 React 内联 style 驱动（屏幕所见），内联优先级高于本块，必须 !important 才让得开；
-     否则页面自身的 padding 会和 PrintSettings 边距叠加成双份边距 */
+     否则页面自身的 padding 会和 PrintSettings 边距叠加成双份边距。
+     v0.174：视图缩放只服务于屏幕，纸上永远 100%——内联 zoom 也要 !important 压回去 */
   .doc-page {
     position: absolute;
     left: 0;
     top: 0;
+    zoom: 1 !important;
     width: 100% !important;
     max-width: none !important;
     min-height: 0 !important;
@@ -2566,6 +3434,17 @@ button {
   .doc-hf,
   .doc-pg-lines {
     display: none;
+  }
+
+  /* v0.179：标尺是屏幕辅助，纸上不出现 */
+  .doc-ruler-h,
+  .doc-ruler-v {
+    display: none !important;
+  }
+
+  /* v0.180：状态栏同样是屏幕 UI；visibility:hidden 会留 28px 空位，必须 display:none */
+  .doc-status-bar {
+    display: none !important;
   }
 
   /* 屏幕上的 900px 打字区纯属编辑辅助，纸上要的是正文本身：
@@ -2972,6 +3851,24 @@ button {
   white-space: nowrap;
 }
 
+/* v0.176 查找替换：与搜索条同一行，窄窗时整组换行而不是挤掉命中计数 */
+.pdf-search {
+  flex-wrap: wrap;
+}
+
+.pdf-replace {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding-left: 6px;
+  margin-left: 2px;
+  border-left: 1px solid var(--border);
+}
+
+.pdf-replace-input {
+  width: 128px;
+}
+
 /* v0.27 侧栏：缩略图 + 大纲，与主滚动区并排 */
 .pdf-body {
   flex: 1;
@@ -3105,6 +4002,103 @@ button {
 /* v0.29 标注编辑工具态：文字层让位，高亮可直接点选/拖移 */
 .pdf-page.anno-mode .pdf-textlayer {
   pointer-events: none;
+}
+
+/* v0.129 原地改字：文字层让位给命中判定；草稿/待写框各自一套视觉，
+   草稿是"正在改这一格"，待写是"已经排上队、保存后才烧进去" */
+.pdf-page.textedit-mode .pdf-textlayer {
+  pointer-events: none;
+}
+
+.pdf-page.textedit-mode {
+  cursor: text;
+}
+
+.pdf-te-draft {
+  position: absolute;
+  z-index: 2;
+  border: 2px dashed var(--accent);
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+  pointer-events: none;
+}
+
+.pdf-te-pending {
+  position: absolute;
+  z-index: 1;
+  border: 1px dashed #d97706;
+  background: rgba(217, 119, 6, 0.1);
+  pointer-events: none;
+}
+
+.pdf-te-pop {
+  position: absolute;
+  z-index: 30;
+  min-width: 260px;
+  padding: 8px 10px;
+  background: var(--panel, #fff);
+  border: 1px solid var(--border, #d0d0d0);
+  border-radius: 6px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.18);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.pdf-te-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.pdf-te-from {
+  font-size: 12px;
+  color: var(--text-2, #666);
+  word-break: break-all;
+}
+
+.pdf-te-input {
+  flex: 1;
+  min-width: 0;
+  padding: 4px 6px;
+  font-size: 13px;
+  border: 1px solid var(--border, #d0d0d0);
+  border-radius: 4px;
+  background: var(--panel, #fff);
+  color: inherit;
+}
+
+.pdf-te-err {
+  font-size: 12px;
+  color: #dc2626;
+}
+
+.pdf-te-btns button {
+  padding: 3px 10px;
+  font-size: 12px;
+  border: 1px solid var(--border, #d0d0d0);
+  border-radius: 4px;
+  background: var(--panel, #fff);
+  color: inherit;
+  cursor: pointer;
+}
+
+.pdf-te-btns button:first-child {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+
+.pdf-te-hint {
+  font-size: 11px;
+  line-height: 1.4;
+  color: var(--text-2, #888);
+}
+
+.pdf-tools-note {
+  font-size: 12px;
+  color: var(--text-2, #666);
+  align-self: center;
+  padding-left: 4px;
 }
 
 .pdf-page.anno-mode .pdf-anno-hl {
@@ -3271,6 +4265,24 @@ button {
   text-align: center;
   cursor: pointer;
   filter: saturate(1.2);
+}
+
+/* 文本框（v0.128）：屏上这一段是用系统字画出来的"预览"，
+   真落盘是 /FreeText 注解，字形由打开文件的阅读器按 /DA 自己配——
+   两边字体可能不一样，所以这里不追求像素级一致，只保证位置与大小对得上 */
+.pdf-anno-textbox {
+  position: absolute;
+  z-index: 3;
+  line-height: 1.4;
+  white-space: pre-wrap;
+  word-break: break-word;
+  cursor: text;
+  pointer-events: auto;
+}
+
+.pdf-anno-textbox.sel {
+  outline: 1px dashed var(--accent);
+  outline-offset: 1px;
 }
 
 /* v0.29 Acrobat 风便签弹卡：淡黄便签纸 */

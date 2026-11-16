@@ -38,6 +38,13 @@ export function decodeEnt(s: string): string {
   })
 }
 
+/**
+ * 无属性元素共用的空属性表：一篇里这种元素占多数（<w:p>、<w:tbl>、<w:tc>…），
+ * 每枚各起一个 {} 就是几万次白分配的 GC 压力。冻结住——万一有人往里写，
+ * 严格模式下当场抛而不是悄悄写坏别人那一枚。
+ */
+const NO_ATTRS: Record<string, string> = Object.freeze({})
+
 export function parseXml(src: string): XEl {
   const doc: XEl = { name: '#doc', attrs: {}, children: [] }
   const stack: XEl[] = [doc]
@@ -99,13 +106,17 @@ export function parseXml(src: string): XEl {
       continue
     }
     // 属性值可以以 / 结尾（如 <w:tab w:val="/"/>），故只有引号外的尾斜杠才算自闭合
-    const selfClosed = tag.endsWith('/') && !inQuotes(tag.slice(0, -1))
+    const selfClosed = tag.endsWith('/') && !inQuotes(tag, 0, tag.length - 1)
     const body = selfClosed ? tag.slice(0, -1) : tag
     const name = body.slice(0, tagWordEnd(body))
-    const el: XEl = { name, attrs: {}, children: [] }
-    ATTR_RE.lastIndex = 0
-    let m: RegExpExecArray | null
-    while ((m = ATTR_RE.exec(body))) el.attrs[m[1]] = decodeEnt(m[3] ?? m[4] ?? '')
+    // 纯结构标签（<w:p>、<w:tbl>）连一个 = 都没有：既没有属性可解，也不必起属性表
+    const hasEq = body.indexOf('=') >= 0
+    const el: XEl = { name, attrs: hasEq ? {} : NO_ATTRS, children: [] }
+    if (hasEq) {
+      ATTR_RE.lastIndex = 0
+      let m: RegExpExecArray | null
+      while ((m = ATTR_RE.exec(body))) el.attrs[m[1]] = decodeEnt(m[3] ?? m[4] ?? '')
+    }
     stack[stack.length - 1].children.push(el)
     stack.push(el)
     if (selfClosed) stack.pop()
@@ -114,20 +125,26 @@ export function parseXml(src: string): XEl {
   return doc
 }
 
+/** 标签名结束的位置：空白、斜杠或右尖括号。按字符码比，别为每一个字符起一次正则 */
 function tagWordEnd(s: string): number {
   let i = 0
-  while (i < s.length && !/[\s/>]/.test(s[i])) i++
+  const n = s.length
+  while (i < n) {
+    const c = s.charCodeAt(i)
+    if (c === 32 || c === 9 || c === 10 || c === 13 || c === 47 || c === 62) break
+    i++
+  }
   return i
 }
 
-/** 去掉尾字符后的片段是否停在了引号里（奇数个未转义引号） */
-function inQuotes(s: string): boolean {
-  let q = ''
-  for (const c of s) {
-    if (q === c) q = ''
-    else if (!q && (c === '"' || c === "'")) q = c
+/** [from, to) 这一截是否停在引号里（奇数个未转义引号）。传下标而不是切片，省一次字符串拷贝 */
+function inQuotes(s: string, from: number, to: number): boolean {
+  let q = 0
+  for (let i = from; i < to; i++) {
+    const c = s.charCodeAt(i)
+    if (c === 34 || c === 39) q = q === c ? 0 : (q || c)
   }
-  return q !== ''
+  return q !== 0
 }
 
 function lastIndex(stack: XEl[], name: string): number {
@@ -211,8 +228,23 @@ export function descend(el: XEl, out: XEl[] = []): XEl[] {
   return out
 }
 
+/**
+ * 前序深度优先的第一枚同名后代：命中即返回，不把整棵子树摊平成数组。
+ * 为什么不用 descend(el).find(...)：那一支每问一次就要分配一整棵子树的数组，
+ * 而导入时这种「问一次」是按段落发的（每段的 sectPr / 每枚 sdt 的 gallery），
+ * 篇一大就是 O(段数 × 子树)。下面的递归与摊平后的第一枚是同一枚（同为前序）。
+ */
 export function findDesc(el: XEl, name: string): XEl | undefined {
-  for (const d of descend(el)) if (d.name === name || local(d.name) === name) return d
+  return findDescIn(el, name, local(name))
+}
+
+function findDescIn(el: XEl, full: string, bare: string): XEl | undefined {
+  for (const c of el.children) {
+    if (typeof c === 'string') continue
+    if (c.name === full || local(c.name) === bare) return c
+    const hit = findDescIn(c, full, bare)
+    if (hit) return hit
+  }
   return undefined
 }
 
