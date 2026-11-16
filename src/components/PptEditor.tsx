@@ -48,6 +48,7 @@ import {
   tableDims,
   SLIDE_CHART_NAMES,
 } from '../lib/ppt'
+import StubNotice from './StubNotice'
 import { chartToCsv, dropSlideChart, parseChartCsv, useSlideChartPng } from '../lib/slide-chart'
 import { deckToPptxBytes } from '../lib/pptx-export'
 import { pptxBytesToDeck } from '../lib/pptx-import'
@@ -211,7 +212,7 @@ function ChartPreview({ sh }: { sh: SlideShape }) {
   const h = Math.max(64, Math.round(sh.h * 540))
   const png = useSlideChartPng(sh, w, h)
   if (png) return <img className="ppt-shape-img" src={png} alt="" draggable={false} />
-  return <div className="ppt-shape-chart-hollow" />
+  return <div className="ppt-shape-chart-hollow"><span className="ppt-chart-hollow-hint">图表预览未入库 · 数据可编辑</span></div>
 }
 
 function PptEditor({ tab }: Props) {
@@ -1855,6 +1856,11 @@ function PptEditor({ tab }: Props) {
                       </div>
                       {chartCsvFor === sh.id && sh.chart && (
                         <div className="ppt-chart-data" onPointerDown={(e) => e.stopPropagation()}>
+                          <StubNotice
+                            label="幻灯片图表预览"
+                            compact
+                            text="编辑台不生成预览图（占位框）；数据编辑与导出 PNG 仍可用"
+                          />
                           <span className="ppt-chart-data-label">
                             首行系列名 · 首列类目 · 逗号分隔
                           </span>

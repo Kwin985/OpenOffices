@@ -1769,6 +1769,39 @@ button {
   opacity: 0.75;
 }
 
+/* 兼容桩常驻标识：琥珀色警示条，一眼可辨但不是刺眼的红色错误 */
+.stub-notice {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex: 1 1 100%;
+  padding: 4px 8px;
+  margin: 2px 0;
+  border: 1px solid #b8860b;
+  border-radius: 4px;
+  background: rgba(184, 134, 11, 0.1);
+  color: #a67c00;
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.stub-notice-tag {
+  flex: 0 0 auto;
+  padding: 1px 5px;
+  border-radius: 3px;
+  background: #b8860b;
+  color: #fff;
+  font-size: 11px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.stub-notice-compact {
+  flex: 0 0 auto;
+  margin: 0;
+  padding: 2px 6px;
+}
+
 /* VBA 那一档的说明与转译预览 */
 .doc-macro-vba {
   flex: 1 1 100%;
@@ -2746,6 +2779,18 @@ button {
   border: 1px dashed var(--border);
   border-radius: 4px;
   background: var(--panel);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+/* 编辑台占位框里的淡提示；放映态的空框不带这行字，不破坏演示观感 */
+.ppt-chart-hollow-hint {
+  color: var(--text-dim);
+  font-size: 11px;
+  opacity: 0.7;
+  pointer-events: none;
+  text-align: center;
 }
 
 /* 图表数据的 CSV 编辑面板：形状条挂不下网格，做成一层小浮层 */
@@ -2813,6 +2858,18 @@ button {
   border: 1px dashed var(--border);
   border-radius: 4px;
   background: var(--panel);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+/* 编辑台占位框里的淡提示；放映态的空框不带这行字，不破坏演示观感 */
+.ppt-chart-hollow-hint {
+  color: var(--text-dim);
+  font-size: 11px;
+  opacity: 0.7;
+  pointer-events: none;
+  text-align: center;
 }
 
 /* 图表数据的 CSV 编辑面板：形状条挂不下网格，做成一层小浮层 */

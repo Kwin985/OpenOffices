@@ -4,6 +4,7 @@ import { message, open } from '@tauri-apps/plugin-dialog'
 import { invoke } from '@tauri-apps/api/core'
 import type { Tab } from '../store'
 import { useApp } from '../store'
+import StubNotice from './StubNotice'
 import { baseName, pickSaveFile, readBytes, readText, writeBytes, writeText } from '../lib/fs'
 import {
   docxToCommentHtml,
@@ -2015,9 +2016,9 @@ function DocEditor({ tab }: Props) {
         {btn('清格式', () => void runCtx('clearFormat'), false,
           '清除格式：摘掉选区里的字符外观（粗斜、字色、高亮、字号等）与样式标签；' +
           '批注/书签/修订/超链接这类带身份的标记保留，标题节点也不转回段落。无选区时清的是后续输入格式')}
-        {btn('拼写', toggleSpell, spellOn, '拼写检查：常见错拼、中文误用、重复字。开着会随输入重扫')}
-        {btn('协同', toggleCollabPanel, collabOpen, '实时协同：同一房间名的多个实例一起改同一份文档，改动自动合并，不用互相锁')}
-        {btn('宏', () => setMacroOpen((v) => !v), macroOpen, '脚本宏：一段 JS 操作这篇文档（只跑自己写的）')}
+        {btn('拼写', toggleSpell, spellOn, '拼写检查（源码未入库·兼容桩）：打开后可见常驻提示，扫描结果恒空')}
+        {btn('协同', toggleCollabPanel, collabOpen, '实时协同（源码未入库·兼容桩）：启动会报 error，不能真连房间')}
+        {btn('宏', () => setMacroOpen((v) => !v), macroOpen, '脚本宏（源码未入库·兼容桩）：可存取代码，执行会明确失败')}
         {btn('标尺', () => setRulerOn((v) => !v), rulerOn, '水平/垂直标尺：0 点在版心左边缘，拖动三枚滑块改首行/左/右缩进；关着时不计算刻度')}
         <span className="tb-sep" />
         {zoomControls}
@@ -2077,6 +2078,7 @@ function DocEditor({ tab }: Props) {
       )}
       {macroOpen && (
         <div className="doc-toolbar doc-macro-bar">
+          <StubNotice label="宏与 VBA" />
           <span className="tb-label">宏</span>
           <select
             className="tb-select"
@@ -2154,6 +2156,7 @@ function DocEditor({ tab }: Props) {
       )}
       {spellOn && (
         <div className="doc-toolbar doc-spell-bar">
+          <StubNotice label="拼写检查" />
           <span className="tb-label">
             {spellIssues.length ? `拼写 ${spellIssues.length} 处` : '拼写 没问题'}
           </span>
@@ -2230,6 +2233,7 @@ function DocEditor({ tab }: Props) {
       )}
       {collabOpen && (
         <div className="doc-toolbar doc-collab-bar">
+          <StubNotice label="实时协同" />
           <span className="tb-label">房间</span>
           <input
             className="doc-collab-room"

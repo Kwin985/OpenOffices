@@ -31,6 +31,7 @@ import {
   type TextItemGeom,
 } from '../lib/pdf-geo'
 import { fitZoom, type FitMode } from '../lib/view-zoom'
+import StubNotice from './StubNotice'
 import { sampleBackdrop, applyTextEdits, type TextEdit } from '../lib/pdf-text-edit'
 import {
   duplicatePagesInPlace,
@@ -2478,7 +2479,7 @@ function PdfViewer({ tab }: Props) {
           </button>
           <button
             className={`pdf-tool${tool === 'textedit' ? ' on' : ''}`}
-            title="原地改字：点原文输入新文字，保存时烧进文件（不可撤销，动手前请备份）"
+            title="原地改字（源码未入库·兼容桩）：可排队编辑，但保存时会明确报错、不写回文件"
             onClick={() => {
               setTool(tool === 'textedit' ? 'text' : 'textedit')
               setDrawTool(null)
@@ -2489,10 +2490,13 @@ function PdfViewer({ tab }: Props) {
             字
           </button>
           {tool === 'textedit' && (
-            <span className="pdf-tools-note">
-              点要改的字 → 输入新文字 → 保存后生效
-              {textEdits.length > 0 && `（已排 ${textEdits.length} 处待写入）`}
-            </span>
+            <>
+              <StubNotice label="PDF 原地改字" compact />
+              <span className="pdf-tools-note">
+                点要改的字 → 输入新文字 → 保存时提示「源码未入库」
+                {textEdits.length > 0 && `（已排 ${textEdits.length} 处，不会写回）`}
+              </span>
+            </>
           )}
           {tool === 'anno' && (
             <>
