@@ -52,6 +52,7 @@ import {
   slideAnimSummary,
   type SlideAnimFields,
 } from '../lib/ppt'
+
 import { chartToCsv, dropSlideChart, parseChartCsv, useSlideChartPng } from '../lib/slide-chart'
 import { deckToPptxBytes } from '../lib/pptx-export'
 import { pptxBytesToDeck } from '../lib/pptx-import'
@@ -2046,6 +2047,7 @@ function PptEditor({ tab }: Props) {
                       </div>
                       {chartCsvFor === sh.id && sh.chart && (
                         <div className="ppt-chart-data" onPointerDown={(e) => e.stopPropagation()}>
+
                           <span className="ppt-chart-data-label">
                             首行系列名 · 首列类目 · 逗号分隔
                           </span>

@@ -1,0 +1,506 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>OpenOffices 四组件深化优化规划 · 不扩格式，做深做透</title>
+<style>
+  :root{
+    --bg:#F4F6F9; --card:#FFFFFF; --line:#E4E8EF; --line-soft:#EDF0F5;
+    --ink:#0F172A; --ink-2:#475569; --ink-3:#8794A8;
+    --oo:#2563EB; --oo-soft:#E8F0FE; --oo-ink:#1D4ED8;
+    --crit:#DC2626; --warn:#EA8A0B; --good:#0F9D58;
+    --doc:#2563EB; --sheet:#0F9D58; --ppt:#EA8A0B; --pdf:#D1436B;
+    --r:14px;
+  }
+  *{box-sizing:border-box}
+  body{
+    margin:0; background:var(--bg); color:var(--ink);
+    font-family:system-ui,-apple-system,"Segoe UI","PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif;
+    font-size:15px; line-height:1.72;
+  }
+  .wrap{max-width:1080px; margin:0 auto; padding:0 24px 96px}
+
+  .hero{
+    margin:0 -24px 40px; padding:52px 48px 44px;
+    background:
+      radial-gradient(1100px 400px at 88% -10%, rgba(37,99,235,.40), transparent 62%),
+      radial-gradient(700px 320px at 4% 108%, rgba(15,157,88,.20), transparent 60%),
+      linear-gradient(160deg,#0B1220 0%,#111C33 58%,#0E1728 100%);
+    color:#fff; border-radius:0 0 28px 28px; position:relative; overflow:hidden;
+  }
+  .hero::after{
+    content:""; position:absolute; inset:0;
+    background-image:linear-gradient(rgba(255,255,255,.045) 1px,transparent 1px),
+                     linear-gradient(90deg,rgba(255,255,255,.045) 1px,transparent 1px);
+    background-size:44px 44px; mask-image:linear-gradient(to bottom,transparent,#000 30%,transparent 96%);
+    pointer-events:none;
+  }
+  .hero>*{position:relative; z-index:1}
+  .kicker{
+    display:inline-flex; align-items:center; gap:9px; font-size:12.5px; font-weight:600;
+    letter-spacing:.14em; color:#93B4FF; border:1px solid rgba(147,180,255,.34);
+    background:rgba(37,99,235,.16); padding:6px 14px; border-radius:999px; margin-bottom:20px;
+  }
+  .kicker i{width:6px;height:6px;border-radius:50%;background:#4ADE80;box-shadow:0 0 0 4px rgba(74,222,128,.18);display:block}
+  h1{margin:0 0 12px; font-size:36px; line-height:1.26; font-weight:750; letter-spacing:-.018em}
+  h1 small{display:block; font-size:15px; font-weight:500; color:#A9BAD3; margin-top:11px}
+  .axes{display:grid; grid-template-columns:repeat(4,1fr); gap:12px; margin-top:28px}
+  .axe{
+    padding:16px 17px 14px; border-radius:12px; background:rgba(255,255,255,.07);
+    border:1px solid rgba(255,255,255,.14); backdrop-filter:blur(6px);
+  }
+  .axe .t{font-size:12px; font-weight:700; letter-spacing:.06em; margin-bottom:6px}
+  .axe.doc .t{color:#8FB3FF}.axe.sheet .t{color:#6EE7A8}.axe.ppt .t{color:#FFC46B}.axe.pdf .t{color:#FF8FAE}
+  .axe .v{font-size:15.5px; font-weight:700; line-height:1.45}
+  .axe .s{font-size:12px; color:#9DAFC9; margin-top:5px; line-height:1.55}
+
+  section{margin-top:52px}
+  .secHead{display:flex; align-items:baseline; gap:14px; margin-bottom:20px}
+  .secNum{font-size:12px; font-weight:700; letter-spacing:.1em; color:var(--oo);
+    background:var(--oo-soft); padding:4px 10px; border-radius:7px; flex:none}
+  h2{margin:0; font-size:22px; font-weight:700; letter-spacing:-.012em}
+  .secHead p{margin:0; font-size:13.5px; color:var(--ink-3)}
+
+  .card{background:var(--card); border:1px solid var(--line); border-radius:var(--r); padding:22px 26px}
+  .card+.card{margin-top:14px}
+  h3{margin:0 0 10px; font-size:16px; font-weight:680}
+  p{margin:0 0 12px} p:last-child{margin-bottom:0}
+  .muted{color:var(--ink-2)}
+  code{font-family:ui-monospace,Consolas,monospace; font-size:.875em; background:#F1F4F9;
+    border:1px solid var(--line-soft); padding:1.5px 6px; border-radius:5px; color:#334155}
+
+  /* 原则 */
+  .principles{display:grid; grid-template-columns:repeat(2,1fr); gap:12px}
+  .prin{background:var(--card); border:1px solid var(--line); border-radius:12px; padding:18px 20px;
+    border-top:3px solid var(--oo)}
+  .prin h4{margin:0 0 7px; font-size:15px; font-weight:670}
+  .prin p{margin:0; font-size:13.3px; color:var(--ink-2); line-height:1.7}
+  .boundary{margin-top:14px; padding:14px 18px; border-radius:12px; background:#FFFBEB;
+    border:1px solid #FDE9C8; font-size:13.5px; color:#92400E; line-height:1.7}
+  .boundary b{color:#78350F}
+
+  /* 组件区块 */
+  .comp{background:var(--card); border:1px solid var(--line); border-radius:16px; overflow:hidden}
+  .comp+.comp{margin-top:26px}
+  .compHead{padding:22px 26px 18px; border-bottom:1px solid var(--line)}
+  .compHead .row1{display:flex; align-items:center; gap:12px; flex-wrap:wrap}
+  .compHead .icon{width:38px;height:38px;border-radius:10px;display:flex;align-items:center;justify-content:center;font-size:19px;flex:none;color:#fff}
+  .compHead h3{margin:0; font-size:19px; font-weight:720; letter-spacing:-.01em}
+  .compHead .baseline{margin-left:auto; font-size:12.5px; color:var(--ink-3)}
+  .axis{
+    margin-top:14px; padding:13px 17px; border-radius:10px; font-size:14.5px; line-height:1.65;
+    background:#F8FAFD; border:1px dashed #D7DFEA; color:var(--ink);
+  }
+  .axis b{color:var(--oo-ink)}
+  .axis .why{display:block; font-size:12.8px; color:var(--ink-3); margin-top:4px}
+
+  .tier{padding:16px 26px; border-bottom:1px solid var(--line-soft)}
+  .tier:last-child{border-bottom:0}
+  .tierHead{display:flex; align-items:center; gap:10px; margin-bottom:11px}
+  .pill{font-size:11px; font-weight:800; letter-spacing:.06em; padding:3px 10px; border-radius:999px; flex:none}
+  .p0{background:#FEF2F2; color:#B91C1C; border:1px solid #FEE2E2}
+  .p1{background:#FFFBEB; color:#B45309; border:1px solid #FDE9C8}
+  .p2{background:#F1F5F9; color:#475569; border:1px solid #E2E8F0}
+  .tierHead .t{font-size:14px; font-weight:670}
+  .tierHead .est{margin-left:auto; font-size:11.5px; color:var(--ink-3)}
+  .items{display:grid; gap:9px}
+  .item{
+    display:grid; grid-template-columns:24px 1fr auto; gap:12px; align-items:start;
+    padding:11px 14px; border-radius:10px; background:#FAFBFD; border:1px solid var(--line-soft);
+  }
+  .item .n{font-size:11.5px; font-weight:800; color:var(--ink-3); text-align:center; margin-top:2px;
+    font-variant-numeric:tabular-nums}
+  .item h5{margin:0 0 3px; font-size:13.8px; font-weight:650}
+  .item p{margin:0; font-size:12.6px; color:var(--ink-2); line-height:1.66}
+  .item .dep{font-size:11px; color:var(--ink-3); white-space:nowrap; margin-top:2px}
+  .item .dep b{color:var(--good); font-weight:700}
+
+  /* 横切 */
+  .crossGrid{display:grid; grid-template-columns:repeat(2,1fr); gap:12px}
+  .cross{background:var(--card); border:1px solid var(--line); border-radius:12px; padding:19px 21px;
+    border-left:3px solid var(--oo)}
+  .cross h4{margin:0 0 7px; font-size:15px; font-weight:670}
+  .cross p{margin:0; font-size:13.2px; color:var(--ink-2); line-height:1.7}
+
+  /* 里程碑 */
+  .phases{display:grid; gap:12px}
+  .phase{display:grid; grid-template-columns:150px 1fr; gap:0; background:var(--card);
+    border:1px solid var(--line); border-radius:12px; overflow:hidden}
+  .phase .left{padding:18px 20px; background:#0F172A; color:#fff}
+  .phase:nth-child(2) .left{background:#16233C}
+  .phase:nth-child(3) .left{background:#1E2B47}
+  .phase .left .pn{font-size:11.5px; font-weight:700; letter-spacing:.1em; color:#93B4FF; margin-bottom:5px}
+  .phase .left .pt{font-size:15.5px; font-weight:700; line-height:1.4}
+  .phase .left .pd{font-size:11.5px; color:#8FA2BF; margin-top:6px}
+  .phase .right{padding:16px 22px}
+  .phase .right ul{margin:0; padding:0; list-style:none; display:grid; gap:7px}
+  .phase .right li{font-size:13.2px; color:var(--ink-2); padding-left:16px; position:relative; line-height:1.6}
+  .phase .right li::before{content:""; position:absolute; left:0; top:.62em; width:6px; height:6px;
+    border-radius:2px; background:var(--oo)}
+  .phase .right li b{color:var(--ink)}
+  .gate{margin-top:16px; padding:15px 20px; border-radius:12px; background:#ECFDF5;
+    border:1px solid #D1FAE5; font-size:13.8px; color:#065F46; line-height:1.75}
+  .gate b{color:#064E3B}
+
+  footer{margin-top:52px; padding-top:20px; border-top:1px solid var(--line);
+    font-size:12.5px; color:var(--ink-3); line-height:1.8}
+
+  @media (max-width:900px){
+    .axes,.principles,.crossGrid{grid-template-columns:1fr}
+    .phase{grid-template-columns:1fr}
+    .item{grid-template-columns:24px 1fr}
+    .item .dep{display:none}
+    .hero{padding:38px 26px 34px}
+    h1{font-size:28px}
+  }
+</style>
+</head>
+<body>
+
+<header class="hero">
+  <div class="kicker"><i></i>深化优化规划 · 2026-10-07</div>
+  <h1>四组件深化优化规划
+    <small>前提：不再扩展格式，把现有支持的格式做深、做透、做精 —— 文字 · 表格 · 演示 · PDF</small>
+  </h1>
+  <div class="axes">
+    <div class="axe doc">
+      <div class="t">文字 Writer</div>
+      <div class="v">把"纸"搬回屏幕</div>
+      <div class="s">分页预览 → 度量对齐 Word → 样式体系 → 修订</div>
+    </div>
+    <div class="axe sheet">
+      <div class="t">表格 Calc</div>
+      <div class="v">存盘不再丢东西</div>
+      <div class="s">保留式写回 → 归一化统一 → ODS 补齐 → 透视</div>
+    </div>
+    <div class="axe ppt">
+      <div class="t">演示 Impress</div>
+      <div class="v">从版式到画布</div>
+      <div class="s">自由元素 → 母版可编辑 → 动画窗格</div>
+    </div>
+    <div class="axe pdf">
+      <div class="t">PDF</div>
+      <div class="v">从查看走向处理</div>
+      <div class="s">表单填写 → 接打印 → 图章 → 标注面板</div>
+    </div>
+  </div>
+</header>
+
+<div class="wrap">
+
+  <!-- ===== 01 原则 ===== -->
+  <section>
+    <div class="secHead">
+      <span class="secNum">01</span>
+      <h2>四条规划原则与一条边界</h2>
+      <p>先立规矩，再排工作项</p>
+    </div>
+    <div class="principles">
+      <div class="prin">
+        <h4>① 用户可感知优先于字节保真</h4>
+        <p>同样的精力，"屏上看见页、存盘不丢格式"比"多认一种冷门边框变体"回报高一个档。保真工作按用户抱怨频率排，不按 OOXML 章节顺序排。</p>
+      </div>
+      <div class="prin">
+        <h4>② 主轴一件大事 + 支线小额清账</h4>
+        <p>每个组件只立一条主轴（一个版本能讲清的叙事），其余是可随时插队的清账项。过去九个版本连啃文档表格就是这种节奏的正面示范，但四个组件不能同时开四条主轴。</p>
+      </div>
+      <div class="prin">
+        <h4>③ 优先吃依赖里现成的能力</h4>
+        <p>pdf-lib 的 <code>getForm()</code> 就在依赖树里没接线，Univer 支持注册自定义函数——很多"缺的能力"其实不用新内核，先把已有的接完。</p>
+      </div>
+      <div class="prin">
+        <h4>④ 用实机回归锁住，而不是靠记忆</h4>
+        <p>Word/Excel/PowerPoint COM 实机回归是这套项目最值钱的资产，但它现在靠本机手工跑（README 里 Word COM SaveAs 挂起的故障就是证据）。先把回归固化，再动格式层，否则每一步都在裸奔。</p>
+      </div>
+    </div>
+    <div class="boundary">
+      <b>边界声明：</b>本规划不含格式扩展，因此 <b>OCR、PDF→Word/Excel 转换、宏/VBA</b> 这类跨格式能力全部不列入。列进来的每一项要么属于既有格式的<b>保真</b>（开回来不丢、存回去不走样），要么属于既有格式的<b>编辑能力</b>（能改出别人格式里合法的内容），要么属于<b>体验</b>。
+    </div>
+  </section>
+
+  <!-- ===== 02 文字 ===== -->
+  <section>
+    <div class="secHead">
+      <span class="secNum">02</span>
+      <h2>文字 Writer · docx / odt / odoc</h2>
+      <p>现状：TipTap 流式内核，格式往返已到 w:spacing/pBdr/脚注尾注/TOC 域这一层，但"页"在屏上不存在</p>
+    </div>
+
+    <div class="comp">
+      <div class="compHead">
+        <div class="row1">
+          <div class="icon" style="background:var(--doc)">📄</div>
+          <h3>主轴：把"纸"搬回屏幕</h3>
+          <span class="baseline">覆盖 v0.88–0.95 表格九连版的自然延续</span>
+        </div>
+        <div class="axis">
+          <b>分页所见即所得的轻量实现。</b>不必造 Word 级排版引擎——v0.33 已有分页参考线与页数指示，v0.93/0.94 已能把纸面量准，缺的是把"打印侧的测量"搬回编辑态，让参考线从"近似提示"升级为"逐页精确边界"。分三步走：只读分页预览 → 编辑态页框内流式 → 度量与 Word 对齐。
+          <span class="why">为什么是主轴：这是"文字处理"这个品类的基本盘。公文、论文、合同场景里，屏上分不了页 = 用户不敢用它写正式文档。</span>
+        </div>
+      </div>
+
+      <div class="tier">
+        <div class="tierHead"><span class="pill p0">P0</span><span class="t">保真与度量补课（先让纸面对得起屏幕）</span><span class="est">约 3–5 个版本</span></div>
+        <div class="items">
+          <div class="item"><div class="n">1</div><div><h5>屏上分页预览（只读 → 编辑态渐进）</h5><p>借用 sheet-print-measure 的测量思路，在编辑区按版心切页渲染页边界；第一阶段只做只读预览，第二阶段编辑态套页框背景（流式排版不变，页界随内容实时下移）。</p></div><div class="dep">依赖：<b>无</b></div></div>
+          <div class="item"><div class="n">2</div><div><h5>纸面度量对齐 Word</h5><p>修掉 README 实测的三笔账：纸面行高比 Word 厚约 3×；px 存整数的 ±0.25pt 漂移；屏上 626px 与 contentPxOf 627px 的 1px 口径差。</p></div><div class="dep">依赖：无</div></div>
+          <div class="item"><div class="n">3</div><div><h5>表格读侧补完（v0.89–0.95 的欠账）</h5><p>读侧目前只吃 <code>w:gridCol</code>——补 <code>w:tblLayout</code> / <code>w:tcW</code> / <code>w:tblCellMar</code> / <code>w:trHeight</code>；嵌套表按所在单元格真实版心算宽；中途夹表头行跨页重复；ODT 列宽两头往返（现在写侧零枚 <code>table:table-column</code>）。</p></div><div class="dep">依赖：无</div></div>
+          <div class="item"><div class="n">4</div><div><h5>段落边框收尾</h5><p><code>w:between</code> 第五边（往返件已实测丢 7 处）；异形线型不再静默降档为实线；<code>w:space</code> 的可达性。</p></div><div class="dep">依赖：无</div></div>
+        </div>
+      </div>
+
+      <div class="tier">
+        <div class="tierHead"><span class="pill p1">P1</span><span class="t">结构化能力（长文档与企业场景的门槛）</span><span class="est">约 4–6 个版本</span></div>
+        <div class="items">
+          <div class="item"><div class="n">5</div><div><h5>命名样式体系（样式面板）</h5><p>段落样式 / 字符样式的命名、修改、继承；docx 读侧不再把样式链摊平成直接格式，写侧回写 <code>styles.xml</code>。这是长文档结构化的根，也是 docx 保真从"逐属性"升到"逐样式"的前提。</p></div><div class="dep">依赖：P0-3 完成后动</div></div>
+          <div class="item"><div class="n">6</div><div><h5>修订（Track Changes）</h5><p>docx <code>w:ins</code>/<code>w:del</code> 与 ODF <code>text:change</code> 双向往返 + 接受/拒绝 UI。与已有的批注体系（comments + commentsExtended 已实机回归）合成完整审阅闭环。缺这一项，法务/公文/出版场景进不去。</p></div><div class="dep">依赖：无</div></div>
+          <div class="item"><div class="n">7</div><div><h5>分节与多套页眉页脚</h5><p>分节符 + 每节独立页眉页脚页码（现在全局一套）。公文"正文从第 1 页起编、封面无页码"靠它。</p></div><div class="dep">依赖：P0-2</div></div>
+        </div>
+      </div>
+
+      <div class="tier">
+        <div class="tierHead"><span class="pill p2">P2</span><span class="t">长文档体验</span><span class="est">穿插进行</span></div>
+        <div class="items">
+          <div class="item"><div class="n">8</div><div><h5>解析侧拆片与导航</h5><p>fid / odt / <code>JSON.parse</code> 仍是一口气解析（v0.87 只拆了"喂"这一段）；补大纲导航侧栏（TOC 节点已有，缺常驻侧栏）。</p></div><div class="dep">依赖：无</div></div>
+          <div class="item"><div class="n">9</div><div><h5>公式只读渲染升级</h5><p>OMML/MathML 从"线性化降级"（x^2、√(y)）升级为只读排版渲染；仍不做编辑器。</p></div><div class="dep">依赖：无</div></div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ===== 03 表格 ===== -->
+  <section>
+    <div class="secHead">
+      <span class="secNum">03</span>
+      <h2>表格 Calc · xlsx / xls / ods / csv</h2>
+      <p>现状：往返覆盖面已是四组件最广（样式/合并/冻结/公式/规则/批注/链接/页面设置全通），但写侧是"整包重写"</p>
+    </div>
+
+    <div class="comp">
+      <div class="compHead">
+        <div class="row1">
+          <div class="icon" style="background:var(--sheet)">📊</div>
+          <h3>主轴：从"整包重写"到"保留式写回"</h3>
+          <span class="baseline">xlsx 保真的根，README 里已如实记着</span>
+        </div>
+        <div class="axis">
+          <b>现在 <code>write_xlsx</code> 是 <code>Workbook::new()</code> 整包重写</b>——第三方件里读侧不认识的属性（未知 sheetPr、扩展格式、第三方命名空间的一切）活不过一次存盘。用户"打开又保存"一次，文件就被悄悄洗了一遍。改成 patch-in-place（只重写我们管的那几个部件，其余字节原样保留）或把载荷覆盖面扩到"读侧认识的全部"。
+          <span class="why">为什么是主轴：往返覆盖面已经够宽了，再宽一寸不如把"存盘即损"这个根挖掉。这一条修好，之前所有保真工作的价值才落得住。</span>
+        </div>
+      </div>
+
+      <div class="tier">
+        <div class="tierHead"><span class="pill p0">P0</span><span class="t">保真收口</span><span class="est">约 3–4 个版本</span></div>
+        <div class="items">
+          <div class="item"><div class="n">1</div><div><h5>保留式写回（主轴本体）</h5><p>zip 部件级 diff 写回：只动我们重写的 sheet/styles 部件，未知部件与未知属性原样搬运。测试判据换血——"第三方件存一遍再读回，字节差为零的部分逐件列举"。</p></div><div class="dep">依赖：<b>无</b></div></div>
+          <div class="item"><div class="n">2</div><div><h5>归一化统一：屏幕层搬进同一份账</h5><p>v0.58–0.61 留下的分叉：文件说 14pt 时纸对而屏不对；列宽 MDW=7 只对 Calibri/11，底数抬到 14pt 列宽全错；行高非整数像素被 <code>as u32</code> 截断。三个一起收，判据是"同一份件屏、纸、字节三处读数一致"。</p></div><div class="dep">依赖：无</div></div>
+          <div class="item"><div class="n">3</div><div><h5>ODS 补到 xlsx 同水位</h5><p>现在记边界账的三块：ODS 图表、三类规则、页面设置；再加 ODF 字族三条变体（<code>-asian</code>/<code>-complex</code>）与 <code>office:font-face-decls</code> 映射——中文场景 font-face-decls 不接，字族往返就是碰运气。</p></div><div class="dep">依赖：无</div></div>
+        </div>
+      </div>
+
+      <div class="tier">
+        <div class="tierHead"><span class="pill p1">P1</span><span class="t">能力补强（不是新格式，是既有格式的深度）</span><span class="est">约 4–6 个版本</span></div>
+        <div class="items">
+          <div class="item"><div class="n">4</div><div><h5>公式函数覆盖度审计与补齐</h5><p>对 Excel/WPS 高频函数（查找引用 / 文本 / 日期 / 条件聚合）建覆盖矩阵；Univer 支持注册自定义函数，缺的按矩阵补。测试判据：WPS/Excel 里跑同样一组公式，结果逐格一致。</p></div><div class="dep">依赖：无</div></div>
+          <div class="item"><div class="n">5</div><div><h5>最小数据透视</h5><p>Univer 社区版无透视插件。自建最小版：拖字段 → 聚合（求和/计数/均值）→ 结果写入新表；先不做透视缓存往返（那一步可后置，xlsx 里 pivotTable 部件读侧可先记边界账）。</p></div><div class="dep">依赖：无</div></div>
+          <div class="item"><div class="n">6</div><div><h5>图表类型与坐标轴往返扩展</h5><p>VChart 路线已通，补齐常用类型（饼/条形/组合）与坐标轴格式、图例位置的 xlsx 往返；Excel 实机核色。</p></div><div class="dep">依赖：无</div></div>
+        </div>
+      </div>
+
+      <div class="tier">
+        <div class="tierHead"><span class="pill p2">P2</span><span class="t">规模与收尾</span><span class="est">穿插进行</span></div>
+        <div class="items">
+          <div class="item"><div class="n">7</div><div><h5>大表分段喂</h5><p>文档那头 v0.87 的"阈值分批喂 + 读全闸门"搬到表格（现在表格没有这本账，写出口也没有闸）。</p></div><div class="dep">依赖：无</div></div>
+          <div class="item"><div class="n">8</div><div><h5>打印记账清零</h5><p>"算不出的一律进状态栏记账"收敛为零——打印保真已经是强项，别留尾巴。</p></div><div class="dep">依赖：无</div></div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ===== 04 演示 ===== -->
+  <section>
+    <div class="secHead">
+      <span class="secNum">04</span>
+      <h2>演示 Impress · pptx / opd</h2>
+      <p>现状：母版/备注/动画的 pptx 往返已做到 PowerPoint 实机回归级别，但编辑器本身是"版式驱动"——用户不能自由摆放一个文本框</p>
+    </div>
+
+    <div class="comp">
+      <div class="compHead">
+        <div class="row1">
+          <div class="icon" style="background:var(--ppt)">🎬</div>
+          <h3>主轴：从"版式驱动"到"画布驱动"</h3>
+          <span class="baseline">编辑模型已核实：内容只有标题 + 要点行 + 一张图，位置由版式决定</span>
+        </div>
+        <div class="axis">
+          <b>自由元素是"能放 PPT"和"能做 PPT"的分水岭。</b>现在四套版式（标题/要点/图片/空白）决定了页面上只能有什么、在哪。用户想加个侧栏文本框、画个箭头、把图表挪个位置——都做不到。给画布加自由文本框与基础形状（矩形/椭圆/线条），任意摆放、缩放、旋转，配上网格与对齐辅助线。
+          <span class="why">为什么是主轴：保真侧它已经把最难啃的 timing 树啃完了，继续深挖保真的边际收益很低；而"做不了自己的 PPT"是产品层面的天花板。</span>
+        </div>
+      </div>
+
+      <div class="tier">
+        <div class="tierHead"><span class="pill p0">P0</span><span class="t">画布与接线（主轴本体）</span><span class="est">约 5–7 个版本，最大单件</span></div>
+        <div class="items">
+          <div class="item"><div class="n">1</div><div><h5>自由文本框与基础形状</h5><p>元素模型从"版式槽位"升级为"元素数组"（文本框/形状/图片，带 x/y/w/h/旋转/层级）；画布网格、对齐吸附、层级调整。旧版式自动迁移为等效元素布局（.opd 旧文件无损打开）。</p></div><div class="dep">依赖：<b>无</b></div></div>
+          <div class="item"><div class="n">2</div><div><h5>元素稳定 id 与动画接线修正</h5><p>现在导出靠"正文首行文本反查 <code>cNvPr id</code>"定位形状（pptxgenjs 不给可预测 id）——自由化之后元素自带稳定 id，timing 树映射从"反查"改为"直取"，顺带把反查这条脆弱链路拆掉。</p></div><div class="dep">依赖：P0-1</div></div>
+          <div class="item"><div class="n">3</div><div><h5>母版可编辑 + 主题色自定义</h5><p>母版几何/配色现在只读还原；开放母版编辑与任意主题色（现在 6 套固定），写侧经 <code>clrScheme</code> 回写 pptx。</p></div><div class="dep">依赖：P0-1</div></div>
+        </div>
+      </div>
+
+      <div class="tier">
+        <div class="tierHead"><span class="pill p1">P1</span><span class="t">动画与往返补全</span><span class="est">约 3–4 个版本</span></div>
+        <div class="items">
+          <div class="item"><div class="n">4</div><div><h5>动画窗格</h5><p>逐条动画现在每页只能选一种效果——升格为按元素列表管理：顺序、延时、触发（单击/随上一条）；补强调动画（放大/变色）。</p></div><div class="dep">依赖：P0-2</div></div>
+          <div class="item"><div class="n">5</div><div><h5>pptx 往返剩余三件</h5><p>图表缓存值从只读数据表升级为可编辑图表；SmartArt 降级保留为图片（现在展平成列表，形状外观丢失）；媒体元素（视频/音频）至少占位不丢。</p></div><div class="dep">依赖：P0-1</div></div>
+          <div class="item"><div class="n">6</div><div><h5>放映工具</h5><p>墨迹标注（放映中画笔）、黑屏/白屏、数字键跳页——演讲者视图已经很完整，补这三件就齐了。</p></div><div class="dep">依赖：无</div></div>
+        </div>
+      </div>
+
+      <div class="tier">
+        <div class="tierHead"><span class="pill p2">P2</span><span class="t">模板族</span><span class="est">低优先</span></div>
+        <div class="items">
+          <div class="item"><div class="n">7</div><div><h5>场景化模板族</h5><p>11 个通用模板扩为场景族（工作汇报/产品发布/教学课件），自由画布完成后模板才真正有表达力。</p></div><div class="dep">依赖：P0-1、P0-3</div></div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ===== 05 PDF ===== -->
+  <section>
+    <div class="secHead">
+      <span class="secNum">05</span>
+      <h2>PDF · 查看与标注</h2>
+      <p>现状：查看、标注（含第三方注解导入）、页面管理、加密打开、大文件分段读取都已完整；但有两件"该有而没有"的——打印没接、表单没接</p>
+    </div>
+
+    <div class="comp">
+      <div class="compHead">
+        <div class="row1">
+          <div class="icon" style="background:var(--pdf)">📕</div>
+          <h3>主轴：从"查看 + 标注"走向"处理"</h3>
+          <span class="baseline">依赖树里现成的能力还没接完</span>
+        </div>
+        <div class="axis">
+          <b>先接现成的，再谈新的。</b>pdf-lib 的 <code>getForm()</code> 表单读写 API 就在依赖里（零新依赖），而 PDF 标签现在连系统打印都没接——这是四组件里唯一一个"打印不出去"的。主轴就是把"打开看过、签过字"变成"填过表、打出来、盖过章"的完整处理链。
+          <span class="why">为什么是主轴：投入最小、品类补齐最快。表单 + 打印 + 图章三件事做完，PDF 从"阅读器"变成"处理工具"，这是用户换工具的理由。</span>
+        </div>
+      </div>
+
+      <div class="tier">
+        <div class="tierHead"><span class="pill p0">P0</span><span class="t">接现成的（性价比全场最高）</span><span class="est">约 2–3 个版本</span></div>
+        <div class="items">
+          <div class="item"><div class="n">1</div><div><h5>AcroForm 表单填写与保存</h5><p><code>pdf-lib getForm()</code> 现成：文本框、复选、单选、下拉的识别、填写、保存回写；只读字段锁定。合同/申报表场景的高频刚需。<b>零新依赖。</b></p></div><div class="dep">依赖：<b>无（API 已在依赖树）</b></div></div>
+          <div class="item"><div class="n">2</div><div><h5>PDF 打印接线</h5><p>四组件里唯一打不出去的一个。接系统打印对话框（文档那头 window.print + 表格那头 PrintToPdf 的路都现成）。</p></div><div class="dep">依赖：无</div></div>
+          <div class="item"><div class="n">3</div><div><h5>图章 / 图片标注</h5><p>图片贴页（签名图章、骑缝章场景），复用已有标注写回通道（pdf-lib 低层 Annotation 字典构造已通）。</p></div><div class="dep">依赖：无</div></div>
+        </div>
+      </div>
+
+      <div class="tier">
+        <div class="tierHead"><span class="pill p1">P1</span><span class="t">管理与检索</span><span class="est">约 3 个版本</span></div>
+        <div class="items">
+          <div class="item"><div class="n">4</div><div><h5>标注汇总面板</h5><p>全部标注列表（按页/按作者/按类型过滤）、点击定位、一键导出标注摘要文本。审阅场景刚需，数据都在，只差面板。</p></div><div class="dep">依赖：无</div></div>
+          <div class="item"><div class="n">5</div><div><h5>搜索工程化</h5><p>README 自记的三笔账一起清：从"第 1 页扫整本"改增量索引；匹配结果跨查询缓存（现在换个词全部重扫）；"500+" 诚实补报总数。</p></div><div class="dep">依赖：无</div></div>
+          <div class="item"><div class="n">6</div><div><h5>页面管理增强</h5><p>插入空白页、页码重排、批量旋转；现有五路（旋转/删除/提取/合并/拆分）补真大件整趟回归（README 记着没量过）。</p></div><div class="dep">依赖：无</div></div>
+        </div>
+      </div>
+
+      <div class="tier">
+        <div class="tierHead"><span class="pill p2">P2</span><span class="t">评估项</span><span class="est">先评估再立项</span></div>
+        <div class="items">
+          <div class="item"><div class="n">7</div><div><h5>PDF 导出长图 / 纯文本</h5><p>复用已有渲染管线，成本低；签名域只读验证工作量大，先评估证书生态再决定。</p></div><div class="dep">依赖：无</div></div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ===== 06 横切 ===== -->
+  <section>
+    <div class="secHead">
+      <span class="secNum">06</span>
+      <h2>横切工程 · 四个组件共享的三件事</h2>
+      <p>不属于哪个组件，但不做它们，四个组件的深化都会反复踩坑</p>
+    </div>
+    <div class="crossGrid">
+      <div class="cross">
+        <h4>① 纸面契约统一（打印/导出管线）</h4>
+        <p>现在三套实现并存：文档走 <code>@media print</code> + window.print，表格是 sheet-print 三件套约 3600 行自建测量，演示是每页全出血——而 <b>PDF 干脆没有打印</b>。打印/导出是四个组件唯一共享的用户出口，抽一层公共"纸面契约"（纸张/边距/缩放/页眉页脚语义），四个组件的纸面行为才有一致性，也省掉三份重复维护。</p>
+      </div>
+      <div class="cross">
+        <h4>② 实机回归自动化（质量底座）</h4>
+        <p>Word/Excel/PowerPoint COM 实机回归 + OOXML 字节差分是这套项目最值钱的资产，但目前跑在本机手工触发——README 已记录 Word COM SaveAs 环境故障、孤儿属主文件需人工清理这类脆弱性。把它固化成可重复的冒烟套件（含探针预检），是所有 P0 工作的前置。<b>先立回归，再动格式。</b></p>
+      </div>
+      <div class="cross">
+        <h4>③ 已知问题账本化</h4>
+        <p>README 里挂着一百三十多条未勾选的已知问题与未量边界，散在九十个版本的日志里。按组件建 issue 账本，每版本定额消化（比如 3 条），新发现的边界直接入账。没有账本，"做透"就永远不知道还差多少。</p>
+      </div>
+      <div class="cross">
+        <h4>④ 读写闸门补齐（性能债）</h4>
+        <p>v0.87 的"阈值分批喂 + 读全闸门"只做在文档一头，表格与演示没有这本账、写出口也没有闸；解析侧 fid/odt/JSON.parse 仍是一口气。对齐文档那头的方案即可，属于还债不是新功能。</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- ===== 07 节奏 ===== -->
+  <section>
+    <div class="secHead">
+      <span class="secNum">07</span>
+      <h2>三阶段节奏</h2>
+      <p>主轴不并行：同一时间只有一个组件在开大件</p>
+    </div>
+
+    <div class="phases">
+      <div class="phase">
+        <div class="left">
+          <div class="pn">阶段一</div>
+          <div class="pt">收口与低垂果实</div>
+          <div class="pd">横切打底 + 三个组件的 P0 清账</div>
+        </div>
+        <div class="right"><ul>
+          <li><b>前置：</b>实机回归自动化立起来（横切②）；已知问题入账本（横切③）</li>
+          <li><b>Calc：</b>保留式写回——本规划回报率最高的单件</li>
+          <li><b>PDF：</b>表单 + 打印 + 图章三连，品类感立刻不同</li>
+          <li><b>Writer：</b>度量对齐与表格读侧补完（不动主轴）</li>
+        </ul></div>
+      </div>
+      <div class="phase">
+        <div class="left">
+          <div class="pn">阶段二</div>
+          <div class="pt">两大主轴</div>
+          <div class="pd">文字分页 · 演示画布（错峰，先文字后演示）</div>
+        </div>
+        <div class="right"><ul>
+          <li><b>Writer 主轴：</b>屏上分页预览 → 编辑态页框 → 多节页眉页脚</li>
+          <li><b>Impress 主轴：</b>自由元素 → 稳定 id → 母版可编辑（紧随其后）</li>
+          <li><b>穿插：</b>归一化统一（Calc P0-2）、标注面板与搜索工程化（PDF P1）</li>
+          <li><b>横切：</b>纸面契约统一层，在两条主轴都落定后抽</li>
+        </ul></div>
+      </div>
+      <div class="phase">
+        <div class="left">
+          <div class="pn">阶段三</div>
+          <div class="pt">能力补强</div>
+          <div class="pd">修订 · 样式 · 透视 · 动画窗格</div>
+        </div>
+        <div class="right"><ul>
+          <li><b>Writer：</b>命名样式体系 → 修订（Track Changes）——企业场景两块敲门砖</li>
+          <li><b>Calc：</b>函数覆盖度审计 → 最小透视</li>
+          <li><b>Impress：</b>动画窗格 → pptx 往返剩余三件</li>
+          <li><b>收敛：</b>打印记账清零、模板族、大表分段喂</li>
+        </ul></div>
+      </div>
+    </div>
+
+    <div class="gate">
+      <b>v1.0 门槛建议：</b>四个组件各自主轴完成 + 各自 P0 清零 + 横切①②落定。到那一步，这个项目的自我介绍可以从"开源办公套件"升级为"<b>轻量、本地优先、格式往返可信的办公套件</b>"——后半个定语，就是这一整个规划买回来的东西。
+    </div>
+  </section>
+
+  <footer>
+    <b>规划依据</b>　源仓实查（2026-10-07）：PptEditor.tsx 确认演示为版式驱动模型（内容仅标题/要点/图片，位置由版式决定）；PdfViewer.tsx 确认无打印接线、无 AcroForm；pdf-lib <code>getForm()</code> 确认在依赖树内可用；paragraph-style.ts 确认文字侧为直接格式属性（无命名样式体系）；README 95 版迭代日志中 130+ 条未勾选已知问题（ODT 列宽、w:between、MDW 列宽、整包重写、搜索扫法、COM 回归脆弱性等）逐条对号入座。<br>
+    <b>排序口径</b>　P0＝保真收口或主轴地基；P1＝企业场景能力；P2＝体验与评估项。版本数按该项目历史节奏（一版一个可验证主题）估算，供参考非承诺。
+  </footer>
+
+</div>
+</body>
+</html>

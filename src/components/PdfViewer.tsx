@@ -31,6 +31,7 @@ import {
   type TextItemGeom,
 } from '../lib/pdf-geo'
 import { fitZoom, type FitMode } from '../lib/view-zoom'
+
 import { sampleBackdrop, applyTextEdits, type TextEdit } from '../lib/pdf-text-edit'
 import {
   duplicatePagesInPlace,
@@ -2489,10 +2490,13 @@ function PdfViewer({ tab }: Props) {
             字
           </button>
           {tool === 'textedit' && (
-            <span className="pdf-tools-note">
-              点要改的字 → 输入新文字 → 保存后生效
-              {textEdits.length > 0 && `（已排 ${textEdits.length} 处待写入）`}
-            </span>
+            <>
+
+              <span className="pdf-tools-note">
+                点要改的字 → 输入新文字 → 保存后生效
+                {textEdits.length > 0 && `（已排 ${textEdits.length} 处待写入）`}
+              </span>
+            </>
           )}
           {tool === 'anno' && (
             <>

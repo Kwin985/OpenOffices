@@ -4,6 +4,7 @@ import { message, open } from '@tauri-apps/plugin-dialog'
 import { invoke } from '@tauri-apps/api/core'
 import type { Tab } from '../store'
 import { useApp } from '../store'
+
 import { baseName, pickSaveFile, readBytes, readText, writeBytes, writeText } from '../lib/fs'
 import {
   docxToCommentHtml,
@@ -966,6 +967,13 @@ function DocEditor({ tab }: Props) {
   const removeDocStyle = (id: string) => {
     if (!editor) return
     const removed = styleList.find((s) => s.id === id)
+    if (removed?.kind === 'list') {
+      // 符面专字（b49）：档里那一枚字体名没有对应的 ProseMirror 引用（既不是 pStyle 也不是 rStyle），
+      // 摘掉 meta.styles 里那条即可——屏上规则由 lib/doc-style-css.ts 按它生成，条目没了规则自然没了。
+      patchMeta({ styles: styleList.filter((s) => s.id !== id) })
+      setStatus(`已删除列表符面样式 ${removed.name}`)
+      return
+    }
     if (removed?.kind === 'table') {
       // 摘掉全文引用：表节点上的 tStyle 属性，样式没了还指着就悬空
       let count = 0
@@ -2070,6 +2078,7 @@ function DocEditor({ tab }: Props) {
       )}
       {macroOpen && (
         <div className="doc-toolbar doc-macro-bar">
+
           <span className="tb-label">宏</span>
           <select
             className="tb-select"
@@ -2147,6 +2156,7 @@ function DocEditor({ tab }: Props) {
       )}
       {spellOn && (
         <div className="doc-toolbar doc-spell-bar">
+
           <span className="tb-label">
             {spellIssues.length ? `拼写 ${spellIssues.length} 处` : '拼写 没问题'}
           </span>
@@ -2223,6 +2233,7 @@ function DocEditor({ tab }: Props) {
       )}
       {collabOpen && (
         <div className="doc-toolbar doc-collab-bar">
+
           <span className="tb-label">房间</span>
           <input
             className="doc-collab-room"
@@ -2315,7 +2326,9 @@ function DocEditor({ tab }: Props) {
             const curRStyle = (editor.state.selection.$from.marks().find((m) => m.type.name === 'rStyle')?.attrs.id as string | undefined) ?? ''
             // 光标所在那张表的样式标签（v0.114）：三种身份是三个维度，展示优先级 字符 > 表格 > 段落
             const curTStyle = (String(editor.getAttributes('table').tStyle ?? '') || '') as string
-            const paraStyles = styleList.filter((s) => s.kind !== 'character' && s.kind !== 'table')
+            // 列表符面的专字（b49，kind='list'）不是段落档：它只由 lib/doc-style-css.ts 出 ::marker 规则，
+            // 混进这一桶就既出现在「套用于段落」的下拉里、又可能被当成段落身份挂到 pStyle 上。
+            const paraStyles = styleList.filter((s) => s.kind !== 'character' && s.kind !== 'table' && s.kind !== 'list')
             const charStyles = styleList.filter((s) => s.kind === 'character')
             const tableStyles = styleList.filter((s) => s.kind === 'table')
             return (
@@ -2887,6 +2900,20 @@ function DocEditor({ tab }: Props) {
                     {s.name}
                     <i className="doc-style-tag">内置</i>
                   </span>
+                ) : s.kind === 'list' ? (
+                  <>
+                    <span className="doc-style-name">
+                      {s.name}
+                      <i className="doc-style-tag">符面</i>
+                    </span>
+                    <button
+                      className="tb-btn doc-style-del"
+                      onClick={() => removeDocStyle(s.id)}
+                      title="删除这条列表符面专字：只去掉屏幕上的 ::marker 规则，文档内容不动"
+                    >
+                      删
+                    </button>
+                  </>
                 ) : (
                   <>
                     <input

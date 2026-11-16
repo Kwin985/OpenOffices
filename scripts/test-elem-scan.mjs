@@ -55,7 +55,9 @@ async function main() {
   check('两腿逐部件字符串归一后逐字相同', a === b, a === b ? '' : `长度 ${a.length} vs ${b.length}`)
   check('夹具非空（确实走到写手补丁链）', b.includes('word/document.xml') && b.includes('<w:color'))
 
-  const w = read('../src/lib/docx.ts')
+  // 源码级断言按 LF 切函数体；合并/Windows checkout 后该文件可能是 CRLF，
+  // 不归一会让 indexOf('\n}\n') 找不到收尾、slice 拖进后面整段造成假红。
+  const w = read('../src/lib/docx.ts').replace(/\r\n/g, '\n')
   const fnBody = (from) => {
     const s = w.indexOf(from)
     return w.slice(s, w.indexOf('\n}\n', s))

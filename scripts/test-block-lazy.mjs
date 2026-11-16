@@ -29,7 +29,9 @@ function normalizePart(name, text) {
 }
 
 async function main() {
-  const w = read('../src/lib/docx.ts')
+  // 源码级断言按 LF 切函数体；合并/Windows checkout 后该文件可能是 CRLF，
+  // 不归一会让 indexOf('\n}\n') 找不到收尾、slice 拖进后面整段造成假红。
+  const w = read('../src/lib/docx.ts').replace(/\r\n/g, '\n')
   // 按「顶格 } 收尾」切出单个函数体，避免把后面别的补丁一起算进来
   const fnBody = (from) => {
     const s = w.indexOf(from)

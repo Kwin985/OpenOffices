@@ -5,6 +5,9 @@
  *
  * 优先级靠 CSS 天然次序兜住：段落直接格式是 inline style，永远压过这里的规则——
  * 与 Word「直接格式覆盖样式」的语义一致，不需要任何特判。
+ *
+ * 第四型（b49，kind='list'）不挂标签：它按 ODT 读手留在 `<ul>` 上的 `data-oo-bullet-font` 出
+ * 一条 scoped 的 `li::marker{font-family}`——只换符面字族而不拖正文，这是行内属性给不了的形状。
  */
 import { BUILTIN_STYLE_IDS, type DocxStyleInfo, type TableCondType } from './docx'
 import { CELL_EDGES } from './cell-style'
@@ -225,6 +228,18 @@ export function styleCssOf(styles: DocxStyleInfo[]): string {
       out.push(...condRules(sel, s.table?.cond))
       // 条件层行高（v0.117）：行型条件落在 tr 上，独立于上面的 per-cell 规则
       out.push(...condRowRules(sel, s.table?.cond))
+      continue
+    }
+    // 列表符面的专字（b49，kind='list'）：ODT 读手把「这枚符该用哪一口字体」填进清单第四型，规则由这里出。
+    // 选择器必须 scoped 到 `ul[data-oo-bullet-font=…]`——b47 的 s1 量到裸规则 `li::marker` 无差别覆盖所有列表。
+    // 只出 `font-family` 而**不出 `content`**：一口字体名可配多枚字符（真件语料里 Symbol 同配 `ab` 与 `◆`），
+    // 出了 content 就把同族另一枚字符的字面改掉（b47 c2 的串档之地）。
+    if (s.kind === 'list') {
+      const font = s.run.font
+      if (font) {
+        const sel = `.doc-content ul[data-oo-bullet-font="${cssAttrEscape(font)}"]`
+        out.push(`${sel} li::marker{font-family:${quoted(font)}}`)
+      }
       continue
     }
     if (s.level && s.level <= 4) continue
