@@ -1,0 +1,602 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>OpenOffices v0.95 vs WPS Office · 能力差距评估</title>
+<style>
+  :root{
+    --bg:#F4F6F9; --card:#FFFFFF; --line:#E4E8EF; --line-soft:#EDF0F5;
+    --ink:#0F172A; --ink-2:#475569; --ink-3:#8794A8;
+    --oo:#2563EB; --oo-soft:#E8F0FE; --oo-ink:#1D4ED8;
+    --wps:#94A3B8; --wps-soft:#EEF1F5;
+    --crit:#DC2626; --warn:#EA8A0B; --good:#0F9D58; --mute:#94A3B8;
+    --r:14px;
+  }
+  *{box-sizing:border-box}
+  html{-webkit-text-size-adjust:100%}
+  body{
+    margin:0; background:var(--bg); color:var(--ink);
+    font-family:system-ui,-apple-system,"Segoe UI","PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif;
+    font-size:15px; line-height:1.72; letter-spacing:.005em;
+  }
+  .wrap{max-width:1080px; margin:0 auto; padding:0 24px 96px}
+
+  /* ---------- HERO ---------- */
+  .hero{
+    margin:0 -24px 40px; padding:56px 48px 48px;
+    background:
+      radial-gradient(1100px 400px at 88% -10%, rgba(37,99,235,.42), transparent 62%),
+      radial-gradient(700px 320px at 4% 108%, rgba(15,157,88,.22), transparent 60%),
+      linear-gradient(160deg,#0B1220 0%,#111C33 58%,#0E1728 100%);
+    color:#fff; border-radius:0 0 28px 28px; position:relative; overflow:hidden;
+  }
+  .hero::after{
+    content:""; position:absolute; inset:0;
+    background-image:linear-gradient(rgba(255,255,255,.045) 1px,transparent 1px),
+                     linear-gradient(90deg,rgba(255,255,255,.045) 1px,transparent 1px);
+    background-size:44px 44px; mask-image:linear-gradient(to bottom,transparent,#000 30%,transparent 96%);
+    pointer-events:none;
+  }
+  .hero>*{position:relative; z-index:1}
+  .kicker{
+    display:inline-flex; align-items:center; gap:9px; font-size:12.5px; font-weight:600;
+    letter-spacing:.14em; text-transform:uppercase; color:#93B4FF;
+    border:1px solid rgba(147,180,255,.34); background:rgba(37,99,235,.16);
+    padding:6px 14px; border-radius:999px; margin-bottom:22px;
+  }
+  .kicker i{width:6px;height:6px;border-radius:50%;background:#4ADE80;box-shadow:0 0 0 4px rgba(74,222,128,.18);display:block}
+  h1{margin:0 0 14px; font-size:38px; line-height:1.24; font-weight:750; letter-spacing:-.018em}
+  h1 small{display:block; font-size:15px; font-weight:500; color:#A9BAD3; letter-spacing:.01em; margin-top:12px}
+  .verdict{
+    margin-top:26px; padding:20px 22px; border-radius:var(--r);
+    background:rgba(255,255,255,.075); border:1px solid rgba(255,255,255,.14);
+    backdrop-filter:blur(6px);
+  }
+  .verdict b{color:#fff}
+  .verdict p{margin:0; color:#D7E1F2; font-size:15.5px; line-height:1.78}
+  .verdict .hl{color:#FFE08A; font-weight:650}
+  .heroMeta{display:flex; flex-wrap:wrap; gap:26px; margin-top:26px; padding-top:22px; border-top:1px solid rgba(255,255,255,.12)}
+  .heroMeta div{font-size:13px; color:#93A6C2}
+  .heroMeta div b{display:block; color:#fff; font-size:17px; font-weight:650; margin-bottom:2px; letter-spacing:-.01em}
+
+  /* ---------- SECTIONS ---------- */
+  section{margin-top:52px}
+  .secHead{display:flex; align-items:baseline; gap:14px; margin-bottom:22px}
+  .secNum{
+    font-size:12px; font-weight:700; letter-spacing:.1em; color:var(--oo);
+    background:var(--oo-soft); padding:4px 10px; border-radius:7px; flex:none;
+  }
+  h2{margin:0; font-size:23px; font-weight:700; letter-spacing:-.012em}
+  .secHead p{margin:0; font-size:13.5px; color:var(--ink-3)}
+
+  .card{background:var(--card); border:1px solid var(--line); border-radius:var(--r); padding:24px 26px}
+  .card+.card{margin-top:14px}
+  h3{margin:0 0 10px; font-size:16px; font-weight:680; letter-spacing:-.005em}
+  p{margin:0 0 12px}
+  p:last-child{margin-bottom:0}
+  .muted{color:var(--ink-2)}
+  code{
+    font-family:ui-monospace,"SFMono-Regular",Consolas,"Liberation Mono",monospace;
+    font-size:.875em; background:#F1F4F9; border:1px solid var(--line-soft);
+    padding:1.5px 6px; border-radius:5px; color:#334155;
+  }
+
+  /* ---------- METRIC STRIP ---------- */
+  .metrics{display:grid; grid-template-columns:repeat(5,1fr); gap:12px; margin-top:4px}
+  .metric{
+    background:var(--card); border:1px solid var(--line); border-radius:12px;
+    padding:16px 16px 14px; position:relative; overflow:hidden;
+  }
+  .metric::before{content:""; position:absolute; left:0; top:0; bottom:0; width:3px; background:var(--mute)}
+  .metric.oo::before{background:var(--oo)}
+  .metric .lab{font-size:11.5px; color:var(--ink-3); font-weight:600; letter-spacing:.04em}
+  .metric .val{font-size:15px; font-weight:700; margin:6px 0 4px; letter-spacing:-.015em}
+  .metric .sub{font-size:11.5px; color:var(--ink-3); line-height:1.5}
+  .metric .ratio{
+    display:inline-block; margin-top:7px; font-size:11px; font-weight:700;
+    padding:2px 8px; border-radius:999px; background:#FEF2F2; color:#B91C1C; border:1px solid #FEE2E2;
+  }
+  .metric .ratio.win{background:#ECFDF5; color:#047857; border-color:#D1FAE5}
+
+  /* ---------- SCORE BARS ---------- */
+  .legend{display:flex; gap:20px; align-items:center; font-size:12.5px; color:var(--ink-2); margin-bottom:18px}
+  .legend span{display:inline-flex; align-items:center; gap:7px}
+  .dot{width:10px;height:10px;border-radius:3px;display:block}
+  .dot.oo{background:var(--oo)} .dot.wps{background:var(--wps)}
+
+  .row{padding:15px 0; border-bottom:1px solid var(--line-soft)}
+  .row:last-child{border-bottom:0; padding-bottom:4px}
+  .rowTop{display:flex; align-items:baseline; gap:10px; margin-bottom:9px}
+  .rowTop .nm{font-size:14.5px; font-weight:640}
+  .rowTop .gap{margin-left:auto; font-size:11.5px; font-weight:700; padding:2.5px 9px; border-radius:999px; white-space:nowrap}
+  .g-crit{background:#FEF2F2; color:#B91C1C; border:1px solid #FEE2E2}
+  .g-warn{background:#FFFBEB; color:#B45309; border:1px solid #FDE9C8}
+  .g-mid{background:#F1F5F9; color:#475569; border:1px solid #E2E8F0}
+  .g-good{background:#ECFDF5; color:#047857; border:1px solid #D1FAE5}
+  .bars{display:grid; gap:5px}
+  .bar{display:grid; grid-template-columns:44px 1fr 40px; align-items:center; gap:11px}
+  .bar .who{font-size:11px; font-weight:700; color:var(--ink-3); letter-spacing:.02em}
+  .track{height:9px; background:#F1F4F9; border-radius:999px; overflow:hidden}
+  .fill{height:100%; border-radius:999px}
+  .fill.oo{background:linear-gradient(90deg,#3B82F6,#2563EB)}
+  .fill.wps{background:linear-gradient(90deg,#B6C2D2,#94A3B8)}
+  .bar .num{font-size:11.5px; font-weight:700; color:var(--ink-2); text-align:right; font-variant-numeric:tabular-nums}
+  .note{font-size:12.5px; color:var(--ink-3); margin-top:8px; line-height:1.65}
+
+  /* ---------- TABLE ---------- */
+  .tblWrap{overflow-x:auto; border:1px solid var(--line); border-radius:var(--r); background:var(--card)}
+  table{width:100%; border-collapse:collapse; font-size:13.5px; min-width:820px}
+  thead th{
+    text-align:left; padding:14px 16px; background:#FAFBFD; border-bottom:1px solid var(--line);
+    font-size:12px; font-weight:700; letter-spacing:.05em; color:var(--ink-2); white-space:nowrap;
+  }
+  thead th.c-oo{color:var(--oo-ink); background:#F5F8FF}
+  tbody td{padding:13px 16px; border-bottom:1px solid var(--line-soft); vertical-align:top; line-height:1.66}
+  tbody tr:last-child td{border-bottom:0}
+  tbody tr:hover td{background:#FAFBFD}
+  tbody td:first-child{font-weight:640; color:var(--ink); width:132px}
+  td.c-oo{background:#FBFCFE}
+  .dim{color:var(--ink-3); font-size:12.5px}
+  .tag{display:inline-block; font-size:11px; font-weight:700; padding:2px 8px; border-radius:6px; margin-top:5px}
+  .tag.crit{background:#FEF2F2;color:#B91C1C}
+  .tag.warn{background:#FFFBEB;color:#B45309}
+  .tag.ok{background:#ECFDF5;color:#047857}
+
+  /* ---------- LAYERS ---------- */
+  .layers{display:grid; gap:11px}
+  .layer{
+    display:grid; grid-template-columns:46px 1fr; gap:16px; align-items:start;
+    background:var(--card); border:1px solid var(--line); border-radius:12px; padding:18px 20px;
+    border-left:3px solid var(--mute);
+  }
+  .layer.hard{border-left-color:var(--crit)}
+  .layer.mid{border-left-color:var(--warn)}
+  .layer.soft{border-left-color:var(--good)}
+  .layer .lv{
+    font-size:19px; font-weight:800; color:var(--ink-3); text-align:center;
+    font-variant-numeric:tabular-nums; line-height:1.35;
+  }
+  .layer.hard .lv{color:#EF4444}
+  .layer.mid .lv{color:#F59E0B}
+  .layer.soft .lv{color:#10B981}
+  .layer h4{margin:0 0 5px; font-size:15px; font-weight:670}
+  .layer p{margin:0; font-size:13.5px; color:var(--ink-2); line-height:1.7}
+
+  /* ---------- ADVANTAGE GRID ---------- */
+  .advGrid{display:grid; grid-template-columns:repeat(auto-fit,minmax(228px,1fr)); gap:12px}
+  .adv{
+    background:linear-gradient(180deg,#FFFFFF,#F8FBFF);
+    border:1px solid var(--line); border-top:3px solid var(--oo);
+    border-radius:12px; padding:17px 18px;
+  }
+  .adv .ic{font-size:19px; margin-bottom:8px; display:block}
+  .adv h4{margin:0 0 7px; font-size:14.5px; font-weight:670}
+  .adv p{margin:0; font-size:12.8px; color:var(--ink-2); line-height:1.68}
+
+  /* ---------- CONCLUSION ---------- */
+  .concl{
+    background:linear-gradient(150deg,#0F172A,#16233C); color:#fff; border-radius:18px;
+    padding:32px 34px; border:1px solid #1E293B;
+  }
+  .concl h2{color:#fff; margin-bottom:16px}
+  .concl p{color:#C7D3E6; font-size:15px}
+  .concl .big{
+    font-size:19px; font-weight:700; line-height:1.6; color:#fff;
+    padding:18px 20px; border-radius:12px; background:rgba(37,99,235,.16);
+    border:1px solid rgba(96,148,255,.3); margin:18px 0 22px;
+  }
+  .concl .big em{color:#FFE08A; font-style:normal}
+  .steps{display:grid; gap:10px; margin-top:6px}
+  .step{display:grid; grid-template-columns:26px 1fr; gap:13px; align-items:start}
+  .step .n{
+    width:26px;height:26px;border-radius:8px;background:rgba(255,255,255,.1);
+    border:1px solid rgba(255,255,255,.18);
+    display:flex;align-items:center;justify-content:center;
+    font-size:12px;font-weight:700;color:#93B4FF;flex:none;margin-top:2px;
+  }
+  .step p{margin:0;font-size:13.8px;color:#C7D3E6}
+  .step p b{color:#fff}
+
+  footer{margin-top:56px; padding-top:22px; border-top:1px solid var(--line); font-size:12.5px; color:var(--ink-3); line-height:1.8}
+
+  @media (max-width:900px){
+    .metrics{grid-template-columns:repeat(2,1fr)}
+    h1{font-size:29px}
+    .hero{padding:40px 26px 36px; margin:0 -24px 32px}
+    .wrap{padding:0 18px 64px}
+  }
+  @media (max-width:560px){
+    .metrics{grid-template-columns:1fr}
+    .bar{grid-template-columns:38px 1fr 34px}
+  }
+  @media print{
+    body{background:#fff}
+    .hero{background:#0B1220 !important; -webkit-print-color-adjust:exact; print-color-adjust:exact}
+    .card,.metric,.layer,.adv,.tblWrap{break-inside:avoid}
+  }
+</style>
+</head>
+<body>
+
+<header class="hero">
+  <div class="kicker"><i></i>能力差距评估 · 2026-10-06</div>
+  <h1>OpenOffices v0.95 vs WPS Office
+    <small>Rust + Tauri 2 本地办公套件 / MIT 开源 &nbsp;·&nbsp; 对标金山办公 WPS Office（本地 + WPS 365）</small>
+  </h1>
+  <div class="verdict">
+    <p><b>一句话结论：</b>两者<span class="hl">不是同一个物种</span>，硬比总量没有意义。在"通用办公套件"这个定义上，差距是<span class="hl">数量级（2–3 个数量级）而非百分比</span>；但在"轻量 · 本地优先 · 全开源"这条窄生态位上，OpenOffices 已经做出了真实差异化，个别维度甚至领先。<br>
+    <b>它正确的参照系是 LibreOffice / OnlyOffice，而不是 WPS。</b></p>
+  </div>
+  <div class="heroMeta">
+    <div><b>~38,000 行</b>自有代码（Rust 13.6k + TS 14.1k + TSX 7.0k + CSS 3.2k）</div>
+    <div><b>8 个</b>Rust IPC 命令 / 4 类编辑器</div>
+    <div><b>16.6 MB</b>单文件 exe（安装包 9.2–10.2 MB）</div>
+    <div><b>95 个版本</b>的连续迭代日志</div>
+  </div>
+</header>
+
+<div class="wrap">
+
+  <!-- ============ 0. 数量级对照 ============ -->
+  <section>
+    <div class="secHead">
+      <span class="secNum">01</span>
+      <h2>先看量级：五项硬指标</h2>
+      <p>这一层不看功能，只看体量</p>
+    </div>
+
+    <div class="metrics">
+      <div class="metric">
+        <div class="lab">安装体积</div>
+        <div class="val">9.2 MB<span style="color:#94A3B8;font-weight:500"> vs </span>147–719 MB</div>
+        <div class="sub">OpenOffices NSIS 安装包 / WPS 含云组件全量安装</div>
+        <div class="ratio win">OpenOffices 领先约 16–70×</div>
+      </div>
+      <div class="metric">
+        <div class="lab">支持平台</div>
+        <div class="val">1<span style="color:#94A3B8;font-weight:500"> vs </span>8</div>
+        <div class="sub">仅 Windows（macOS 包装仍在路线图未开工）/ Win·Mac·Linux·Android·iOS·鸿蒙·Web·iPad</div>
+        <div class="ratio">差 8 倍</div>
+      </div>
+      <div class="metric">
+        <div class="lab">文档格式</div>
+        <div class="val">~12<span style="color:#94A3B8;font-weight:500"> vs </span>47–56+</div>
+        <div class="sub">xlsx/xls/ods/csv、docx/odt/odoc、pptx/opd、pdf / 含 .doc·.xls·.ppt 二进制、UOF、ET 等</div>
+        <div class="ratio">差 4–5 倍</div>
+      </div>
+      <div class="metric">
+        <div class="lab">研发体量</div>
+        <div class="val">个人级<span style="color:#94A3B8;font-weight:500"> vs </span>5,189 人</div>
+        <div class="sub">3.8 万行单仓 / 金山办公 2025 年在册员工，研发投入占营收约 33%</div>
+        <div class="ratio">数量级差距</div>
+      </div>
+      <div class="metric">
+        <div class="lab">用户规模</div>
+        <div class="val">开源小众<span style="color:#94A3B8;font-weight:500"> vs </span>6.69 亿 MAU</div>
+        <div class="sub">GitHub 单仓 / 全球月活设备，国内党政市场约 80% 份额</div>
+        <div class="ratio">数量级差距</div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ 1. 十维打分 ============ -->
+  <section>
+    <div class="secHead">
+      <span class="secNum">02</span>
+      <h2>十维能力对照</h2>
+      <p>每项 0–10 分，按"该维度上的成熟度"评，不是功能清单勾选</p>
+    </div>
+
+    <div class="card">
+      <div class="legend">
+        <span><i class="dot oo"></i>OpenOffices v0.95</span>
+        <span><i class="dot wps"></i>WPS Office</span>
+      </div>
+
+      <div class="row">
+        <div class="rowTop"><span class="nm">文字排版引擎（分页 / 所见即所得）</span><span class="gap g-crit">架构级代差</span></div>
+        <div class="bars">
+          <div class="bar"><span class="who">OO</span><div class="track"><div class="fill oo" style="width:30%"></div></div><span class="num">3.0</span></div>
+          <div class="bar"><span class="who">WPS</span><div class="track"><div class="fill wps" style="width:95%"></div></div><span class="num">9.5</span></div>
+        </div>
+        <div class="note">WPS 自带分页排版引擎，屏幕即纸面；OpenOffices 用 TipTap/ProseMirror（HTML 流式），<b>没有真正的分页排版</b>——打印走浏览器 <code>@media print</code> + WebView2 PrintToPdf。项目自己在 README 里记着"纸面行高比 Word 厚约 3×""超宽表整张推页"，这是最硬的一堵墙。</div>
+      </div>
+
+      <div class="row">
+        <div class="rowTop"><span class="nm">表格内核（规模 / 公式 / 透视）</span><span class="gap g-crit">能力面差距大</span></div>
+        <div class="bars">
+          <div class="bar"><span class="who">OO</span><div class="track"><div class="fill oo" style="width:50%"></div></div><span class="num">5.0</span></div>
+          <div class="bar"><span class="who">WPS</span><div class="track"><div class="fill wps" style="width:95%"></div></div><span class="num">9.5</span></div>
+        </div>
+        <div class="note">底层是 Univer 社区版（Apache-2.0），<b>图表、高级预设属商业版不可用</b>，项目改走 VChart 自绘绕开授权；百万行、数据透视、数组公式、宏这些 WPS 能力没有对应物。反过来，xlsx 的样式/合并/列宽/隐藏冻结/公式/批注超链接/三类规则/页面设置的往返做得相当扎实。</div>
+      </div>
+
+      <div class="row">
+        <div class="rowTop"><span class="nm">演示（母版 / 动画 / 模板）</span><span class="gap g-warn">广度差距大，深度出彩</span></div>
+        <div class="bars">
+          <div class="bar"><span class="who">OO</span><div class="track"><div class="fill oo" style="width:50%"></div></div><span class="num">5.0</span></div>
+          <div class="bar"><span class="who">WPS</span><div class="track"><div class="fill wps" style="width:90%"></div></div><span class="num">9.0</span></div>
+        </div>
+        <div class="note">只有 4 种版式、6 套主题、4 种切页 + 3 种逐条动画，无模板生态、无 3D 与形状动画编辑。但 <b>把逐条入场/出场映射成 PowerPoint 原生 <code>&lt;p:timing&gt;</code> 树、并用本机 PowerPoint COM 实机回归验证</b>——这一条比很多同类轻量实现都认真。</div>
+      </div>
+
+      <div class="row">
+        <div class="rowTop"><span class="nm">格式兼容广度</span><span class="gap g-crit">覆盖窄</span></div>
+        <div class="bars">
+          <div class="bar"><span class="who">OO</span><div class="track"><div class="fill oo" style="width:40%"></div></div><span class="num">4.0</span></div>
+          <div class="bar"><span class="who">WPS</span><div class="track"><div class="fill wps" style="width:95%"></div></div><span class="num">9.5</span></div>
+        </div>
+        <div class="note">OpenOffices 覆盖约 12 种；WPS 官方口径 47–56+ 种，含 .doc/.xls/.ppt 二进制老格式、UOF/ET 等本土格式，并支持一键互转、PDF→Word 反向转换、扫描件 OCR。缺 OCR 与 PDF→Office 转换，是两块明显的品类空缺。</div>
+      </div>
+
+      <div class="row">
+        <div class="rowTop"><span class="nm">格式往返保真深度</span><span class="gap g-good">差距最小的一项</span></div>
+        <div class="bars">
+          <div class="bar"><span class="who">OO</span><div class="track"><div class="fill oo" style="width:70%"></div></div><span class="num">7.0</span></div>
+          <div class="bar"><span class="who">WPS</span><div class="track"><div class="fill wps" style="width:90%"></div></div><span class="num">9.0</span></div>
+        </div>
+        <div class="note">这是全项目最值得肯定的一面。OOXML/ODF 冷门通道被逐条啃下来：docx 批注 <code>comments.xml</code> + <code>commentsExtended.xml</code>、正文 TOC 域、页眉页码 <code>PAGE</code> 域、脚注尾注真往返、OLE 嵌入对象用自写 CFB 解析器提取内层内容、表格打印的表头行跨页重复。仅剩"边框/对齐/数字格式"的部分维度仍在补。</div>
+      </div>
+
+      <div class="row">
+        <div class="rowTop"><span class="nm">平台覆盖</span><span class="gap g-crit">单平台 vs 全平台</span></div>
+        <div class="bars">
+          <div class="bar"><span class="who">OO</span><div class="track"><div class="fill oo" style="width:20%"></div></div><span class="num">2.0</span></div>
+          <div class="bar"><span class="who">WPS</span><div class="track"><div class="fill wps" style="width:100%"></div></div><span class="num">10</span></div>
+        </div>
+        <div class="note">OpenOffices <b>目前只出 Windows 包</b>（CI 矩阵 win+linux 已通，macOS 打包因缺签名/公证凭据仍挂在路线图）。WPS 覆盖 Win/Mac/Linux/Android/iOS/鸿蒙/Web/iPad 八个端，鸿蒙版 2025 年登顶鸿蒙 PC 应用榜。</div>
+      </div>
+
+      <div class="row">
+        <div class="rowTop"><span class="nm">协同与云</span><span class="gap g-crit">整块品类缺失</span></div>
+        <div class="bars">
+          <div class="bar"><span class="who">OO</span><div class="track"><div class="fill oo" style="width:5%"></div></div><span class="num">1.0</span></div>
+          <div class="bar"><span class="who">WPS</span><div class="track"><div class="fill wps" style="width:95%"></div></div><span class="num">9.5</span></div>
+        </div>
+        <div class="note">OpenOffices <b>没有任何多人实时协同编辑</b>，只有可选的"最近文件"端到端加密同步。WPS 是多人在线共编、毫秒级落盘、历史版本回溯、阅读/编辑/下载/打印/水印分级权限，再往上还有 WPS 365 的 IM、会议、邮箱、日历、多维表格——那已经是"数字办公平台"而不是"办公套件"了。</div>
+      </div>
+
+      <div class="row">
+        <div class="rowTop"><span class="nm">AI 与智能化</span><span class="gap g-crit">零</span></div>
+        <div class="bars">
+          <div class="bar"><span class="who">OO</span><div class="track"><div class="fill oo" style="width:5%"></div></div><span class="num">0.5</span></div>
+          <div class="bar"><span class="who">WPS</span><div class="track"><div class="fill wps" style="width:90%"></div></div><span class="num">9.0</span></div>
+        </div>
+        <div class="note">完全空白（0.5 分只给"这个维度存在"）。WPS 侧已有 WPS AI 3.0「灵犀」原生智能体、AI 大纲/生成/润色、AI 数据助手、企业知识库、数字员工，并自研 13B 政务模型。</div>
+      </div>
+
+      <div class="row">
+        <div class="rowTop"><span class="nm">生态与扩展（模板 / 插件 / 宏 / 二次开发）</span><span class="gap g-crit">近乎为零</span></div>
+        <div class="bars">
+          <div class="bar"><span class="who">OO</span><div class="track"><div class="fill oo" style="width:10%"></div></div><span class="num">1.0</span></div>
+          <div class="bar"><span class="who">WPS</span><div class="track"><div class="fill wps" style="width:95%"></div></div><span class="num">9.5</span></div>
+        </div>
+        <div class="note">OpenOffices 只有 11 个内置首页模板，无插件体系、无宏（VBA/JS）、无二次开发接口。WPS 有 30 万+ 正版模板、开放插件平台、250 个类二次开发接口、宏文档互联，以及信创适配（国产芯片/OS/大模型）与公文标准支持。</div>
+      </div>
+
+      <div class="row">
+        <div class="rowTop"><span class="nm">轻量 · 隐私 · 开源</span><span class="gap g-good">OpenOffices 唯一全面领先项</span></div>
+        <div class="bars">
+          <div class="bar"><span class="who">OO</span><div class="track"><div class="fill oo" style="width:90%"></div></div><span class="num">9.0</span></div>
+          <div class="bar"><span class="who">WPS</span><div class="track"><div class="fill wps" style="width:35%"></div></div><span class="num">3.5</span></div>
+        </div>
+        <div class="note">这是它真正的立足点：<b>MIT 开源、内核全为宽松许可</b>（Apache-2.0 / MIT / BSD，并明确拒绝 Univer 商业预设不越授权线）；<b>数据全程不出本机</b>，无账号、无云依赖；体积 1/15～1/70；冷启动被专门调优过（表格冷开 584ms、17.9MB 大 PDF 热开 91ms）；<code>lto + codegen-units=1 + strip + panic=abort</code> 一条不落。</div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ 2. 详表 ============ -->
+  <section>
+    <div class="secHead">
+      <span class="secNum">03</span>
+      <h2>逐项对照明细</h2>
+      <p>差距等级：红＝架构级 / 橙＝可追赶但工作量巨大 / 绿＝已接近或领先</p>
+    </div>
+
+    <div class="tblWrap">
+      <table>
+        <thead>
+          <tr><th>维度</th><th class="c-oo">OpenOffices v0.95</th><th>WPS Office</th><th style="width:132px">差距</th></tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>排版内核</td>
+            <td class="c-oo">TipTap / ProseMirror（HTML 流式）；页眉页脚与目录靠 DOM 模拟，打印靠浏览器引擎</td>
+            <td>自研 V8/V9 分页排版引擎，真·所见即所得，长文档/论文/公文级排版</td>
+            <td><span class="tag crit">架构级</span><div class="dim">不可靠功能补齐解决</div></td>
+          </tr>
+          <tr>
+            <td>表格内核</td>
+            <td class="c-oo">Univer 社区版 + VChart 自绘图表；筛选/排序/条件格式/数据验证/查找替换齐；无数据透视、无宏</td>
+            <td>自研引擎，百万行不卡、数据透视、图表联动、函数与公式全覆盖</td>
+            <td><span class="tag crit">大</span><div class="dim">商业内核被授权卡住</div></td>
+          </tr>
+          <tr>
+            <td>演示内核</td>
+            <td class="c-oo">自研轻量编辑器；母版/主题/备注/切页/逐条动画/演讲者视图均有；pptx 往返闭环</td>
+            <td>模板一键套用、动画转场完整、演讲者视图、3D 与形状动画</td>
+            <td><span class="tag warn">可控</span><div class="dim">深度够、广度缺</div></td>
+          </tr>
+          <tr>
+            <td>格式覆盖</td>
+            <td class="c-oo">xlsx/xls/ods/csv · docx/odt/odoc · pptx/ppt/opd · pdf（只读+标注）</td>
+            <td>47–56+ 种，含二进制老格式与本土格式；PDF 转换/OCR/填表签名一体化</td>
+            <td><span class="tag crit">宽</span><div class="dim">缺 OCR、缺 PDF→Office</div></td>
+          </tr>
+          <tr>
+            <td>往返保真</td>
+            <td class="c-oo"><b>强项</b>：批注/脚注尾注/TOC 域/页码域/OLE 内层内容/PowerPoint timing 树/表头跨页重复，均双向往返并做 Office 实机回归</td>
+            <td>100% 版面还原率宣传口径；格式互通与回存原格式</td>
+            <td><span class="tag ok">接近</span><div class="dim">冷门通道做得比多数同类认真</div></td>
+          </tr>
+          <tr>
+            <td>修订与审阅</td>
+            <td class="c-oo">批注（含 resolved 状态、orphan 处理）已通；<b>无修订/track changes</b></td>
+            <td>修订留痕、多人批注互不干扰、修改留痕可追溯</td>
+            <td><span class="tag crit">缺失</span><div class="dim">企业场景硬需求</div></td>
+          </tr>
+          <tr>
+            <td>协同</td>
+            <td class="c-oo">无实时共编；仅"最近文件"可选端到端加密同步</td>
+            <td>多人实时共编、毫秒落盘、历史版本、分级权限</td>
+            <td><span class="tag crit">品类缺失</span></td>
+          </tr>
+          <tr>
+            <td>云与账号</td>
+            <td class="c-oo">刻意为零 —— 数据不出本机，无需注册</td>
+            <td>云文档、云盘、跨端接力、断网合并</td>
+            <td><span class="tag ok">定位取舍</span><div class="dim">是做减法换来的优势</div></td>
+          </tr>
+          <tr>
+            <td>AI</td>
+            <td class="c-oo">无</td>
+            <td>WPS AI 3.0 灵犀原生智能体、AI 生成/润色/数据分析、企业知识库、数字员工</td>
+            <td><span class="tag crit">零</span></td>
+          </tr>
+          <tr>
+            <td>平台</td>
+            <td class="c-oo">Windows 单端（macOS 未打包）</td>
+            <td>八端全覆盖，鸿蒙 PC 榜第一，iPad 桌面版已上线</td>
+            <td><span class="tag crit">8×</span></td>
+          </tr>
+          <tr>
+            <td>扩展性</td>
+            <td class="c-oo">11 个内置模板；无插件、无宏、无 SDK</td>
+            <td>30 万+ 模板、插件平台、250 个类二次开发接口、宏与 VBA</td>
+            <td><span class="tag crit">近乎为零</span></td>
+          </tr>
+          <tr>
+            <td>体积 / 性能</td>
+            <td class="c-oo"><b>领先</b>：exe 16.6MB、安装包约 10MB；主包 8MB→300KB 分包懒加载；空闲预热</td>
+            <td>全量安装 147–719MB（含云组件）；另有独立移动端安装包</td>
+            <td><span class="tag ok">领先 16–70×</span></td>
+          </tr>
+          <tr>
+            <td>许可与可控</td>
+            <td class="c-oo"><b>领先</b>：MIT，内核全宽松许可，无商业授权风险；可审计、可自建</td>
+            <td>专有商业软件；个人版免费（含订阅体系与商业化组件）</td>
+            <td><span class="tag ok">领先</span></td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <!-- ============ 3. 五个层次 ============ -->
+  <section>
+    <div class="secHead">
+      <span class="secNum">04</span>
+      <h2>差距分五层，难点不在功能表上</h2>
+      <p>从最难到最容易补齐</p>
+    </div>
+
+    <div class="layers">
+      <div class="layer hard">
+        <div class="lv">L1</div>
+        <div>
+          <h4>引擎层 —— 分页排版引擎（最硬的墙）</h4>
+          <p>WPS 的底层是它自己重写过的分页排版引擎，"屏上看到的就是纸上印的"。OpenOffices 的文字编辑器是网页富文本内核，本质是流式 HTML，<b>没有页的概念</b>——页眉页脚、目录、分页符都是在上层"模拟"出来的，最终出纸交给系统打印管线。这决定了它在长文档、公文、论文这类"版式即正确性"的场景里，会被结构性限制住，不是补几个功能能跨过去的。</p>
+        </div>
+      </div>
+      <div class="layer hard">
+        <div class="lv">L2</div>
+        <div>
+          <h4>品类层 —— 协同 / 云 / AI</h4>
+          <p>WPS 早已是一站式数字办公平台：实时共编、版本回溯、权限水印、IM、会议、邮箱、多维表格、AI 智能体与数字员工。OpenOffices 在这些品类上是空白，而且<b>它的"本地优先"定位与"云协同"天然冲突</b>——想补就得重新回答"我到底是不是本地优先"这个问题。</p>
+        </div>
+      </div>
+      <div class="layer mid">
+        <div class="lv">L3</div>
+        <div>
+          <h4>生态层 —— 模板 / 插件 / 宏 / 二次开发 / 信创</h4>
+          <p>30 万模板、插件平台、250 个二次开发接口、宏与 VBA 生态、国产芯片与操作系统适配、公文与国标格式支持。这一层是"能不能进政企采购"的门槛，靠开源社区冷启动会非常慢。</p>
+        </div>
+      </div>
+      <div class="layer mid">
+        <div class="lv">L4</div>
+        <div>
+          <h4>覆盖层 —— 格式数量 / 平台数量 / 审阅能力</h4>
+          <p>格式从 12 扩到 50+、平台从 1 扩到 8、补上修订（track changes）、OCR、PDF→Office 反向转换。这些是<b>工作量问题，不是原理问题</b>——但工作量本身就非常大，且每一项都要重做一遍多端适配。</p>
+        </div>
+      </div>
+      <div class="layer soft">
+        <div class="lv">L5</div>
+        <div>
+          <h4>体验层 —— 已经做到或领先的部分</h4>
+          <p>体积、冷启动、内存占用、离线可用、无需账号、开源可审计、以及格式往返的认真程度。这些是 OpenOffices 目前真实的竞争力所在，也是它值得继续投入的方向。</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ 4. 反向优势 ============ -->
+  <section>
+    <div class="secHead">
+      <span class="secNum">05</span>
+      <h2>反过来看：OpenOffices 做对了什么</h2>
+      <p>不吹不黑，这几条是它真实的领先或不可替代</p>
+    </div>
+
+    <div class="advGrid">
+      <div class="adv">
+        <span class="ic">🔒</span>
+        <h4>数据不出本机</h4>
+        <p>无账号、无云依赖、无遥测。对涉密、内网、政企场景，这是 WPS 云端方案给不了的东西。</p>
+      </div>
+      <div class="adv">
+        <span class="ic">🧾</span>
+        <h4>许可干净到底</h4>
+        <p>MIT + 内核全宽松许可，甚至因为 Univer 高级预设属商业版而主动绕道 VChart 自绘。授权上没有一处踩线。</p>
+      </div>
+      <div class="adv">
+        <span class="ic">⚡</span>
+        <h4>体积与首开</h4>
+        <p>10MB 安装包、300KB 主包、表格冷开 584ms、大 PDF 分段读取热开 91ms，都是专门调优出来的实数。</p>
+      </div>
+      <div class="adv">
+        <span class="ic">🔬</span>
+        <h4>冷门通道的往返</h4>
+        <p>PowerPoint 原生 timing 树、docx commentsExtended、OLE 内层文件提取、表头跨页重复——这些是很多轻量套件直接放弃的硬骨头，它一块块啃了并做了 Office 实机回归。</p>
+      </div>
+      <div class="adv">
+        <span class="ic">📓</span>
+        <h4>工程诚实度罕见</h4>
+        <p>95 个版本的日志里，失败、边界、未量、已知缺陷全部明写，不粉饰。这份自我审计的密度本身就很稀缺。</p>
+      </div>
+      <div class="adv">
+        <span class="ic">🧩</span>
+        <h4>架构选型克制</h4>
+        <p>Tauri 2 壳 + Rust 处理 IO/格式 + 前端按编辑器分包，把 38k 行撑起了四类编辑器，没有过度设计。</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ 5. 结论 ============ -->
+  <section>
+    <div class="concl">
+      <h2 style="margin-bottom:0">结论与建议</h2>
+      <div class="big">
+        在"通用办公套件"这个赛道上，OpenOffices 与 WPS 的差距是<em>数量级</em>——约 <em>2–3 个数量级</em>的工程投入、8 倍平台数、4–5 倍格式数、以及整整两个缺失品类（协同、AI）。<br>
+        但它不该、也不必去追平 WPS。它真正的对手是 <em>LibreOffice / OnlyOffice</em>。
+      </div>
+
+      <p style="margin-bottom:18px">按"投入产出比"排，下面四件事比继续打磨格式往返细节更值得做：</p>
+      <div class="steps">
+        <div class="step"><div class="n">1</div><p><b>先解决引擎层，否则定位永远是"网页编辑器套壳"。</b>要么把 LibreOfficeKit / OnlyOffice 内核嵌进来换取真分页与格式广度，要么<b>明确接受"轻量编辑 + 高保真导出"的定位并在产品上写清楚</b>——最怕的是既不换引擎、又承诺完全兼容，最后两头不落。</p></div>
+        <div class="step"><div class="n">2</div><p><b>把"本地优先"当武器而不是短板。</b>协同不必学 WPS 的云文档，走本地优先的 CRDT（如 Yjs / Automerge）做局域网或点对点协同，反而构成对 WPS 的差异化——数据不出内网这件事，正是政企客户最贵的需求。</p></div>
+        <div class="step"><div class="n">3</div><p><b>补三类"缺了就进不了企业"的能力：</b>修订（track changes）、数据透视、以及 macOS 打包。前两个是采购清单上的硬项，第三个是开发者口碑的入口。</p></div>
+        <div class="step"><div class="n">4</div><p><b>不要再卷格式往返的深水区。</b>批注、脚注、timing 树这些做得越好，边际用户越少。把同等精力放到"打开速度、内存占用、安装体积、离线可靠"这四条能被普通用户直接感知的线上，回报更高。</p></div>
+      </div>
+    </div>
+  </section>
+
+  <footer>
+    <b>评估依据</b>　源仓 <code>D:/rust/tauri/OpenOffices</code>（v0.95.0，MIT）：<code>package.json</code>、<code>Cargo.toml</code>、<code>tauri.conf.json</code>、95 版 README 迭代日志、<code>src/</code> 与 <code>src-tauri/src/</code> 全量统计（自有代码约 38,000 行、8 个 IPC 命令）；构建产物 exe 16.6MB / NSIS 9.2–10.2MB。<br>
+    <b>WPS 侧数据</b>　金山办公 2025 年报与公开资料：在册员工 5,189 人、研发投入约占营收 33%、全球月活设备 6.69 亿、国内党政市场约 80% 份额、官方口径支持 47–56+ 种办公格式、安装体积 147–719MB、覆盖 Windows/macOS/Linux/Android/iOS/鸿蒙/Web/iPad 八端。<br>
+    <b>评分口径</b>　十维分值按"该维度上的能力成熟度"评定，0–10；差距标签为架构级判断，非精确测量。部分 WPS 宣传口径（如"200+ 格式""100% 版面还原"）未采用，已取更保守的官方与第三方数据。
+  </footer>
+
+</div>
+</body>
+</html>
