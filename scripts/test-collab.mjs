@@ -19,7 +19,9 @@
 //      （服务端超时后发 RFC 6455 ping，符合规范的客户端会自动回 pong）
 // 第 2 组要用一个"读超时压到毫秒级"的中继实例：生产的 90 秒在测试里等不起。
 
-import { spawn } from 'node:child_process'
+import { spawn, spawnSync } from 'node:child_process'
+import { existsSync } from 'node:fs'
+import { fileURLToPath } from 'node:url'
 import * as Y from 'yjs'
 import { readSyncMessage, writeSyncStep1, writeUpdate } from 'y-protocols/sync'
 import {
@@ -36,6 +38,36 @@ const MSG_SYNC = 0
 const MSG_AWARENESS = 1
 const MSG_PING = 2
 const MSG_PONG = 3
+
+// v0.208：自包含构建中继。relay.rs 在 v0.197 已入库、用的是生产 ws_relay 模块，
+// 干净 clone 上没有预构建二进制时在这里按需 cargo build，不用再 SKIP 这道 E2E。
+// 显式给了 RELAY_BIN 就一律信它、不碰 cargo；已存在也不重建（cargo 自身有增量缓存）。
+function ensureRelay() {
+  if (process.env.RELAY_BIN) {
+    if (!existsSync(process.env.RELAY_BIN)) {
+      console.error(`RELAY_BIN 指向的文件不存在：${process.env.RELAY_BIN}`)
+      process.exit(1)
+    }
+    return
+  }
+  if (existsSync(RELAY)) return
+  const manifest = fileURLToPath(new URL('../src-tauri/Cargo.toml', import.meta.url))
+  console.log('COMPAT|中继未构建，先 cargo build --example relay（仅此一次）…')
+  const r = spawnSync('cargo', ['build', '--manifest-path', manifest, '--example', 'relay'], {
+    cwd: fileURLToPath(new URL('..', import.meta.url)),
+    encoding: 'utf8',
+    timeout: 600_000,
+  })
+  if (r.error || r.status !== 0) {
+    console.error('COMPAT|cargo build --example relay 失败：' + (r.error?.message || (r.stderr || '').slice(-800)))
+    process.exit(1)
+  }
+  if (!existsSync(RELAY)) {
+    console.error('COMPAT|构建成功但没找到中继二进制：' + RELAY)
+    process.exit(1)
+  }
+}
+ensureRelay()
 
 const ok = []
 const bad = []

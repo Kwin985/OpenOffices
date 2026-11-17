@@ -35,16 +35,10 @@ const listOnly = argv.includes('--list')
 const includeOptional = argv.includes('--include-optional')
 
 // 需要仓库外预构建产物的脚本：默认跳过，不因为环境缺件把整批判红。
-// test-collab 要一个真的 WebSocket 中继进程（cargo build --example relay），
-// 或由 RELAY_BIN 指向任意可执行文件。
-const relayBin = process.env.RELAY_BIN
-  ?? `${root}src-tauri/target/debug/examples/relay${process.platform === 'win32' ? '.exe' : ''}`
-const OPTIONAL = new Map([
-  ['test-collab.mjs', {
-    ready: () => existsSync(relayBin),
-    why: '需 cargo build --example relay，或设 RELAY_BIN 指向已构建的中继',
-  }],
-])
+// v0.208 起这张表为空：原先唯一的 test-collab 现在自己会 cargo build --example relay
+// （relay.rs v0.197 已入库、用生产 ws_relay 模块），干净 clone 也能真跑，不再 SKIP。
+// 保留机制与 --include-optional 出口，将来若再有依赖外部产物的测试可照此登记。
+const OPTIONAL = new Map([])
 
 const files = readdirSync(`${root}scripts`)
   .filter((f) => /^test-.*\.mjs$/.test(f))
