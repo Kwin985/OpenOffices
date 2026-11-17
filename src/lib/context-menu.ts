@@ -24,6 +24,68 @@ export interface CtxItem {
   separator?: boolean
 }
 
+// ── Impress 内容区右键菜单（v0.206）──
+// 与 Writer 共用 CtxItem 契约与「disabled 只在真禁用时出现」的纪律，但条目表独立：
+// Impress 是自研 Deck + React 状态，没有 ProseMirror 的 editor.*，探测与执行都留在组件侧。
+// 这里只按「命中的是什么」决定该出现哪些项——纯函数、零 import、Node 侧可钉。
+
+export interface PptCtxState {
+  /** 右键落在形状上（true）还是舞台空白处（false） */
+  onShape: boolean
+  /** 命中形状是不是图表（图表才有 CSV 编辑项） */
+  isChart: boolean
+  /** 命中形状是不是文本类（可就地改字） */
+  isText: boolean
+  /** 当前是否已在编辑该形状的文字 */
+  editing: boolean
+  /** 剪贴板里有没有形状（组件侧探测，纯函数只认这个布尔） */
+  hasClipboard: boolean
+  /** 是否还有上一页 / 下一页（首尾页灰掉翻页项） */
+  hasPrev: boolean
+  hasNext: boolean
+}
+
+/** 把视口坐标裁进屏幕内：菜单四边都不溢出（含左侧/顶部）。Writer / Impress 同用。 */
+export function clampMenuPos(x: number, y: number, vw: number, vh: number, w = 200, h = 380): { x: number; y: number } {
+  return {
+    x: Math.max(8, Math.min(x, vw - w)),
+    y: Math.max(8, Math.min(y, vh - h)),
+  }
+}
+
+export function pptContextItems(s: PptCtxState): CtxItem[] {
+  const out: CtxItem[] = []
+  if (s.onShape) {
+    out.push(
+      { id: 'editText', label: s.editing ? '结束编辑' : '编辑文字', ...(!s.isText && !s.isChart ? { disabled: true } : {}) },
+      { id: 'duplicate', label: '复制形状' },
+      { id: 'delete', label: '删除形状' },
+      { id: 'sep-shape', label: '', separator: true },
+      { id: 'layerUp', label: '上移一层' },
+      { id: 'layerDown', label: '下移一层' },
+      ...(s.isChart ? [
+        { id: 'sep-chart', label: '', separator: true },
+        { id: 'chartData', label: '编辑图表数据' },
+      ] : []),
+    )
+  } else {
+    out.push(
+      { id: 'addText', label: '插入文本框' },
+      { id: 'addTable', label: '插入表格' },
+      { id: 'addChart', label: '插入图表' },
+      { id: 'sep-page', label: '', separator: true },
+      { id: 'paste', label: '粘贴', ...(!s.hasClipboard ? { disabled: true } : {}) },
+    )
+  }
+  out.push(
+    { id: 'sep-page-nav', label: '', separator: true },
+    { id: 'find', label: '查找替换' },
+    { id: 'prevSlide', label: '上一页', ...(!s.hasPrev ? { disabled: true } : {}) },
+    { id: 'nextSlide', label: '下一页', ...(!s.hasNext ? { disabled: true } : {}) },
+  )
+  return out
+}
+
 export function contextItems(s: CtxState): CtxItem[] {
   const out: CtxItem[] = [
     { id: 'undo', label: '撤销' },

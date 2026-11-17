@@ -65,6 +65,7 @@ import type { FailureClaim } from '../lib/auto-save'
 import { pptTemplate } from '../lib/templates'
 import { ZOOM_STEPS, clampZoom, fitZoom, nearestZoomStep, stageZoomStyle, zoomByWheel, zoomPct, zoomStep, type FitMode } from '../lib/view-zoom'
 import { PPT_FIND_CAP, pptFind, pptMatchLabel, pptReplaceAll, pptReplaceAt } from '../lib/ppt-find'
+import { pptContextItems, clampMenuPos, type CtxItem } from '../lib/context-menu'
 import { RECT_KEY, dragRect, rectFor, rectStyle, type DragMode, type PlaceholderKind } from '../lib/master-rect'
 import StaticSlide from './StaticSlide'
 
@@ -280,6 +281,14 @@ function PptEditor({ tab }: Props) {
   // v0.205 动画刷：复制本页 7 枚动画字段，再点缩略图刷过去。
   // 不复制 animOrder（揭示序按本页内容编，刷到内容不同的页会指错节点）。
   const [animBrush, setAnimBrush] = useState<SlideAnimFields | null>(null)
+  // v0.206 内容区右键菜单：打开时把「命中了什么」快照进 state，不依赖 selShape——
+  // [cur] 那个 effect 会在换页时清空选中，右键落到形状上的当口也可能已经清空。
+  // shapeId=null 表示右键落在舞台空白处，此时给页级项；非 null 给形状项。
+  type PptCtx = { x: number; y: number; shapeId: string | null; isChart: boolean; isText: boolean }
+  const [ctxMenu, setCtxMenu] = useState<PptCtx | null>(null)
+  // 轻量形状剪贴板：只在内存里，复制/粘贴形状用。跨标签不共享、退出即丢——
+  // 右键菜单的「粘贴」按它决定灰不灰，不假装系统剪贴板里有东西。
+  const [shapeClip, setShapeClip] = useState<SlideShape | null>(null)
   const dragRef = useRef<{
     id: string
     mode: 'move' | 'resize'
@@ -469,6 +478,24 @@ function PptEditor({ tab }: Props) {
     return () => window.removeEventListener('keydown', onKey)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [present, loaded, showFind, frHits, frIdx, deck, animBrush])
+
+  // v0.206 右键菜单：只在菜单开着时挂监听，点菜单外 / Esc 收起，成对移除不常驻占事件。
+  // Esc 与查找/动画刷共用同一枚键：这里在捕获阶段先处理，菜单开着时优先收菜单。
+  useEffect(() => {
+    if (!ctxMenu) return
+    const onDown = (e: PointerEvent) => {
+      if (!(e.target as HTMLElement)?.closest('.doc-ctx-menu')) setCtxMenu(null)
+    }
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') { e.preventDefault(); setCtxMenu(null) }
+    }
+    window.addEventListener('pointerdown', onDown)
+    window.addEventListener('keydown', onKey, true)
+    return () => {
+      window.removeEventListener('pointerdown', onDown)
+      window.removeEventListener('keydown', onKey, true)
+    }
+  }, [ctxMenu])
 
   // 放映按键
   useEffect(() => {
@@ -793,6 +820,31 @@ function PptEditor({ tab }: Props) {
     setEditingShape(null)
   }
 
+  // v0.206 右键菜单的复制形状：新 id、错开一点位置，避免和原件重叠看不见。
+  // 图表形状另起 id 后得清掉旧 id 的 PNG 缓存吗？不用——新 id 没有缓存，会按新数据现渲。
+  const duplicateShape = (sid: string) => {
+    const sh = (deck.slides[cur]?.shapes ?? []).find((x) => x.id === sid)
+    if (!sh) return
+    const nid = newId()
+    const copy: SlideShape = { ...sh, id: nid, x: sh.x + 0.04, y: sh.y + 0.04, anim: undefined, exitAnim: undefined }
+    editSlide(cur, (s) => {
+      s.shapes = [...(s.shapes ?? []), copy]
+    })
+    setShapeClip(copy)
+    setSelShape(nid)
+  }
+
+  // 粘贴形状：从内存剪贴板落到当前页，同样换 id + 错位。
+  const pasteShape = () => {
+    if (!shapeClip) return
+    const nid = newId()
+    const copy: SlideShape = { ...shapeClip, id: nid, x: shapeClip.x + 0.04, y: shapeClip.y + 0.04, anim: undefined, exitAnim: undefined }
+    editSlide(cur, (s) => {
+      s.shapes = [...(s.shapes ?? []), copy]
+    })
+    setSelShape(nid)
+  }
+
   // 层级（v0.108）：数组序 = 层叠序（后画在上），与 pptx spTree 文档序同语义；
   // 「上一层」即向数组尾挪一格
   const moveShape = (sid: string, dir: -1 | 1) =>
@@ -817,6 +869,32 @@ function PptEditor({ tab }: Props) {
     })
 
   const resetRevealOrder = () => editSlide(cur, (s) => (s.animOrder = undefined))
+
+  // v0.206 右键菜单执行：唯一碰编辑状态的地方，条目表在 lib 里是纯函数。
+  // 一律走 edit/editSlide（会标脏触发自动保存），不裸 setDeck。
+  const runCtx = (id: string, c: { shapeId: string | null; isChart: boolean; isText: boolean }) => {
+    const sid = c.shapeId
+    switch (id) {
+      case 'editText':
+        if (sid && (c.isText || c.isChart)) {
+          setEditingShape((v) => (v === sid ? null : sid))
+          if (c.isChart) setChartCsvFor(sid)
+        }
+        break
+      case 'duplicate': if (sid) duplicateShape(sid); break
+      case 'delete': if (sid) removeShape(sid); break
+      case 'layerUp': if (sid) moveShape(sid, 1); break
+      case 'layerDown': if (sid) moveShape(sid, -1); break
+      case 'chartData': if (sid && c.isChart) setChartCsvFor(sid); break
+      case 'addText': addTextBox(); break
+      case 'addTable': addTable(); break
+      case 'addChart': addChart(); break
+      case 'paste': pasteShape(); break
+      case 'find': setShowFind(true); break
+      case 'prevSlide': setCur((v) => Math.max(0, v - 1)); break
+      case 'nextSlide': setCur((v) => Math.min(deck.slides.length - 1, v + 1)); break
+    }
+  }
 
   const shapePointerDown = (e: React.PointerEvent, sh: SlideShape, mode: 'move' | 'resize') => {
     if (editingShape === sh.id) return // 正在改文字的框不拖
@@ -1297,6 +1375,39 @@ function PptEditor({ tab }: Props) {
         </div>
       )}
 
+      {ctxMenu && (() => {
+        const menuCtx = {
+          onShape: ctxMenu.shapeId !== null,
+          isChart: ctxMenu.isChart,
+          isText: ctxMenu.isText,
+          editing: ctxMenu.shapeId !== null && editingShape === ctxMenu.shapeId,
+          hasClipboard: shapeClip !== null,
+          hasPrev: cur > 0,
+          hasNext: cur < deck.slides.length - 1,
+        }
+        const items: CtxItem[] = pptContextItems(menuCtx)
+        const pos = clampMenuPos(ctxMenu.x, ctxMenu.y, window.innerWidth, window.innerHeight)
+        return (
+          <div className="doc-ctx-menu" style={{ left: pos.x, top: pos.y }}>
+            {items.map((it) => it.separator ? (
+              <div key={it.id} className="doc-ctx-sep" />
+            ) : (
+              <button
+                key={it.id}
+                className="doc-ctx-item"
+                disabled={it.disabled}
+                onClick={() => {
+                  setCtxMenu(null)
+                  runCtx(it.id, ctxMenu)
+                }}
+              >
+                {it.label}
+              </button>
+            ))}
+          </div>
+        )
+      })()}
+
       {showSequence && seqItems.length > 0 && (
         <div className="ppt-seq-panel">
           <span className="ppt-seq-label">播放顺序</span>
@@ -1429,6 +1540,10 @@ function PptEditor({ tab }: Props) {
               setSelShape(null)
               setEditingShape(null)
             }}
+            onContextMenu={(e) => {
+              e.preventDefault()
+              setCtxMenu({ x: e.clientX, y: e.clientY, shapeId: null, isChart: false, isText: false })
+            }}
           >
             {/* v0.186：母版占位框。百分比定位相对 .ppt-stage 自身，随舞台内联 zoom
                 一起缩放；拖动/缩放都写回 deck.master，导出与放映走的是同一份矩形 */}
@@ -1559,6 +1674,15 @@ function PptEditor({ tab }: Props) {
                   onPointerMove={shapePointerMove}
                   onPointerUp={shapePointerUp}
                   onDoubleClick={() => sh.kind === 'text' && setEditingShape(sh.id)}
+                  onContextMenu={(e) => {
+                    e.preventDefault()
+                    e.stopPropagation()
+                    // 命中快照进 state，不读 selShape（舞台清空可能已经发生）
+                    setCtxMenu({
+                      x: e.clientX, y: e.clientY, shapeId: sh.id,
+                      isChart: sh.kind === 'chart', isText: sh.kind === 'text',
+                    })
+                  }}
                 >
                   {sh.kind === 'image' ? (
                     <img className="ppt-shape-img" src={sh.image} alt="" draggable={false} />
