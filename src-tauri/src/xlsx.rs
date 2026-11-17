@@ -1424,9 +1424,14 @@ pub fn write_xlsx_sync(path: String, workbook: WorkbookPayload) -> Result<Vec<St
             }
         }
         // 列宽/行高：载荷即像素。crate 序列化按 chars=px/7 不扣 5px 填充，
-        // 与读侧 round(chars*7+5) 互为逆运算须先减填充。行高这一路**不是无损的**：
-        // `set_row_height_pixels` 只收整数像素，载荷里非整的那一档在 `as u32` 上被截掉
-        // （最多 1px＝0.75pt 的字节漂移，路线图里挂着）；缺省行高那一层也因此不走它，见 `SheetFormat`
+        // 与读侧 round(chars*7+5) 互为逆运算须先减填充。
+        // 行高这一路的 `as u32` **不会截值**：载荷里的 px 来自前端写手
+        // `univer-io.ts` 的 `RowDatum.h = Math.round(px)`，进 Rust 前已是整数像素，
+        // crate 的 `set_row_height_pixels` 本来就只收整数。旧注释说「非整那一档被截掉、
+        // 最多漂 1px」是 v0.19 时代的历史陈述——那时写手还没加 round；v0.24 起数据契约
+        // 改成整数像素后该分支已不可达（roadmap:173 的待办据此澄清，v0.207）。
+        // 别为它加 post-pack 定点改写：那会把一条不可达的假红变成真改字节的风险。
+        // 缺省行高那一层不走这里，见 `SheetFormat`。
         for (c, px) in &sheet.col_widths {
             let Ok(col) = u16::try_from(*c) else { continue };
             let _ = ws.set_column_width_pixels(col, (*px - 5.0).round().max(1.0) as u32);
