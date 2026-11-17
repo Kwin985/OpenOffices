@@ -4314,6 +4314,36 @@ pptx `no-ga` 42 条全红、干净腿复位逐字节相同。
 `modules` 仍 81、变异腿 59.4 / 52.5 / 99.0 / 96.5 不动、`no-theme` 不动、
 pptx `no-ga` 42 条全红、干净腿复位逐字节相同。
 
+## v0.208（协同 E2E 自包含：relay 按需构建，干净 clone 不再 SKIP）
+
+**门禁最后一处可选缺口堵上**
+
+- `run-tests` 的 71 份里，`test-collab.mjs` 原先是唯一「可选」项：它要一个真的
+  WebSocket 中继进程，干净 clone 上没有预构建二进制就被 SKIP——**SKIP 不是通过**，
+  这道 E2E 在交付口径里一直是空的，只在本机因残留一个 10 月的旧 `relay.exe` 才常绿。
+- 但 `relay.rs` 源码 v0.197 已入库、用的是生产 `pub mod ws_relay`、`[[example]]`
+  无 feature 门控——缺的只是构建这一步。于是给 `test-collab.mjs` 加 `ensureRelay()`：
+  显式 `RELAY_BIN` 时一律信它（不存在则明确报错）；未指定且二进制不在时
+  `cargo build --example relay`，构建失败 / 产物缺失都明确报错，不在环境缺件时静默降级。
+- `run-tests` 的 `OPTIONAL` 表清空 → **71 份全必跑、可选 0 份**；保留机制与
+  `--include-optional` 出口供将来外部产物测试登记。
+
+**实测**：把本机 relay 二进制改名后跑 `test-collab`，打出
+`COMPAT|中继未构建，先 cargo build --example relay`，构建完 12 项断言全过；
+`--list` 从「71 份，可选 1 份」变成「71 份，可选 0 份」。
+`--only collab` 11.6s PASS、`--only pptx-corpus` 39.4s PASS。
+
+**边界**：`check-clean-tree` 导出的树只跑 tsc + vite build、不跑全量测试；
+若在那棵树上跑全量，会触发一次完整 Rust example 重编译——这是预期代价，
+不夸大「干净树上全量也能秒跑」。本轮不碰产品代码、不动账本，五本账 md5 与
+provenance 均未变。
+
+**门禁（诚实记）**：干净树 tsc 0 / vite build ✓、`cargo test --lib`
+**166 passed / 11 ignored**；全量 71 份跑到 677s 时 `test-pptx-corpus.mjs`
+被外层资源竞争拖过每份 180s 线而 SIGTERM（`RUN|70 通过 / 1 失败 / 0 跳过`），
+**两份在 runner 内单跑均 PASS（collab 11.6s、pptx-corpus 39.4s）**——是超时误杀
+不是测试红；此前同样配置下 71/71 全绿（632.5s）。五本账 md5 与 v0.207 逐字节相同。
+
 ## 性能（v0.3）
 
 
