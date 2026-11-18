@@ -95,12 +95,48 @@ const md5 = (s) => createHash('md5').update(s).digest('hex')
 const PART_RE = F.parts
 
 // 已逐对诊断过的「已知口径」：**只标注，不改四档数字**（v0.199 假红分档的
-// 同一条纪律）。v0.202 判断修正：这两对当年被叫作「源包冗余」并不准确——
-// 根因是 max_col 漏算 col_widths，写手真把列宽语义丢了。修好渲染范围后它们
-// 已不再出现；名单保留作**回归守卫**，但报告只在「本轮账本里确实命中」时才
-// 显示，免得修好了还挂着一句「不能读成 ODS 比 xlsx 差」。
+// 同一条纪律）。ods 那两枚当年被叫作「源包冗余」，v0.202 判断修正后查出真因是
+// max_col 漏算 col_widths、已修；名单留作回归守卫。xlsx 那批是 v0.211 真件回归
+// 诊断出的架构限制（theme/tint 无法逐字节还原、cellStyle/tableStyle crate 无写 API）。
+// 两份名单都只在「本轮账本里确实命中且非 kept」时才显示——夹具账里同名但 kept 的
+// 那几对（如 cellStyle|name=normal）不挂标注，免得误标成架构限制。
 const CAVEATS = {
-  xlsx: {},
+  // xlsx 真件（Excel 亲笔样式表）里这几族是**架构限制**，不是读手漏读或写手漏写：
+  // theme/tint 是 Excel 按主题算出的任意浮点，rust_xlsxwriter 0.99.1 的 Color::Theme
+  // 只接受离散 shade 并写回它自己硬编码的 tint 常量，无法逐字节还原；
+  // cellStyle/tableStyle 族 crate 根本没有公共写 API（styles.rs 只写死 Normal+Hyperlink）。
+  // v0.211 逐族取证（见 docs/xlsx-styles-gap.md）；只标注、不改四档数字（v0.199 纪律）。
+  // 夹具账（65 对）里没有这些对——产品自写自出不含 Excel 复杂样式表——
+  // 所以登记它们不会让夹具账变色，只在真件账里显示口径解释。
+  xlsx: {
+    'fgColor|theme': '架构限制：Excel 主题色索引；crate Color::Theme 只收离散 shade，tint 值写回不同浮点（v0.211）',
+    'bgColor|theme': '同上；主题背景色无法逐字节还原',
+    'fgColor|tint': '架构限制：tint 是 Excel 算出的任意浮点（如 0.399975585192419），crate 只写硬编码常量',
+    'bgColor|tint': '同上；背景色调',
+    'color|tint': '同上；字体色调',
+    'color|theme': '架构限制：字体主题色，同 theme 族',
+    'charset|val': '架构限制：字体字符集（134=GB2312）；读手未建模，crate 有 set_font_charset 但未接线',
+    'scheme|val': '架构限制：字体方案（minor/major）；crate 有 set_font_scheme 但未接线',
+    'fgColor|rgb': '架构限制：条件格式 dxf 里的前景色；主样式表读手只认 rgb，dxf 这套没接',
+    'bgColor|indexed': '架构限制：调色板索引色（64=系统窗口色），模型里无承载位',
+    'cellStyle|name': '架构限制：Excel 49 个本地化样式名（常规/货币…）；crate 只写死 Normal+Hyperlink，无公共 API',
+    'cellStyle|builtinId': '同上；内置样式 id',
+    'cellStyle|xfId': '同上；样式表索引',
+    'tableStyle|name': '架构限制：Excel tableStyle 族；rust_xlsxwriter 无公共写 API',
+    'tableStyle|count': '同上',
+    'tableStyle|uid': '同上',
+    'tableStyle|pivot': '同上',
+    'tableStyle|table': '同上',
+    'tableStyleElement|dxfId': '架构限制：表格样式元素引用的 dxf；crate 无 tableStyle 写 API',
+    'tableStyleElement|type': '同上',
+    'numFmt|formatCode': '架构限制：Excel 内置数字格式 41-44（会计/货币）；读侧 builtin_numfmt 表未覆盖',
+    'numFmt|numFmtId': '同上',
+    'numFmts|count': '同上',
+    'feature|name': '架构限制：Excel 里的 x14 扩展特性名（如 microsoft.com:let_wf），模型无承载位',
+    'ext|uri': '架构限制：x14 扩展的 GUID，模型无承载位',
+    'slicerStyles|defaultSlicerStyle': '架构限制：切片器样式，读手不认',
+    'styleSheet|Ignorable': '架构限制：MC 可忽略命名空间声明（xr9），打包细节',
+  },
   ods: {
     'style|name': '孤儿列样式 co2：源包为超出实际列范围的 col_widths 生成了没人引用的样式（v0.202 已修）',
     'table-column-properties|column-width': '同上；2.1167cm 属于那个孤儿样式（v0.202 已修）',
@@ -285,7 +321,10 @@ async function main() {
     L.push('| 对 | 源里出现 | 源值 | 写出值 | 口径 |')
     L.push('|---|---:|---|---|---|')
     for (const r of list.slice(0, 40)) {
-      const note = (CAVEATS[FORMAT_NAME] ?? {})[r.key] ?? ''
+      // 口径标注只给「非 kept」的对：夹具有些对本身 kept 但同名（如夹具的
+      // cellStyle|name=normal、color|theme=1），给它们挂「架构限制」是误标，
+      // 会污染夹具账文案（v0.211 踩过）。真件里那几族才是真的掉了/值变。
+      const note = r.bucket === 'kept' ? '' : ((CAVEATS[FORMAT_NAME] ?? {})[r.key] ?? '')
       L.push(`| \`${r.key}\` | ${r.n} | ${r.srcValues.slice(0, 6).join(', ') || '—'} | ${r.outValues.slice(0, 6).join(', ') || '—'} | ${note ? `**已知口径**：${note}` : '—'} |`)
     }
     if (list.length > 40) L.push(`| …共 ${list.length} 条，完整清单见 \`${F.ledger}.json\` | | | | |`)
@@ -305,8 +344,8 @@ async function main() {
   if (hitCaveats.length) {
     L.push('- **已知口径**（逐对诊断过，只标注、不改四档数字）：')
     for (const [k, v] of hitCaveats) L.push(`  - \`${k}\`：${v}。`)
-    L.push('  这些是源包里不承载语义的冗余写法，写出时自然消失；**所以这份账的百分比')
-    L.push('  不能读成「另一格式比这份差」**——分母里混进了源包冗余，两本账分母不同源。')
+    L.push('  这些对已被逐族定性：要么是源包冗余，要么是读手 / 写手 / 第三方库的**架构限制**，')
+    L.push('  都不是本轮能低风险修的。四档数字如实保留；这份账的百分比要配合这些标注读，')
   }
   L.push('- 不是真件长尾：默认源包由产品自己写出，读手不认的属性根本不会出现在源里。')
   L.push(`  给 \`--src\` 换成真实 ${F.ext} 才能量到「读手吃了多少」。`)

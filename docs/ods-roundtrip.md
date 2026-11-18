@@ -67,9 +67,9 @@
 |---|---:|---|---|---|
 | `table-cell|value-type` | 8 | string | string | — |
 | `style|family` | 5 | table-cell, table-column, table-row | table-cell, table-column, table-row | — |
-| `style|name` | 5 | co1, co2, default, ro1, ro2 | co1, co2, default, ro1, ro2 | **已知口径**：孤儿列样式 co2：源包为超出实际列范围的 col_widths 生成了没人引用的样式（v0.202 已修） |
+| `style|name` | 5 | co1, co2, default, ro1, ro2 | co1, co2, default, ro1, ro2 | — |
 | `table-column-properties|break-before` | 2 | auto | auto | — |
-| `table-column-properties|column-width` | 2 | 2.1167cm, 3.1750cm | 2.1167cm, 3.1750cm | **已知口径**：同上；2.1167cm 属于那个孤儿样式（v0.202 已修） |
+| `table-column-properties|column-width` | 2 | 2.1167cm, 3.1750cm | 2.1167cm, 3.1750cm | — |
 | `table-column|number-columns-repeated` | 2 | 1 | 1 | — |
 | `table-column|style-name` | 2 | co1, co2 | co1, co2 | — |
 | `table-row-properties|break-before` | 2 | auto | auto | — |
