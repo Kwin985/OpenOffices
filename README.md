@@ -4412,6 +4412,48 @@ provenance 均未变。
 **门禁**：干净树 tsc 0 / vite build ✓、`cargo test --lib` **166 passed / 11 ignored**；
 五本账 md5 与 v0.209 逐字节相同、主账本零改动（真件输出全落 `tmp/` 与独立报告）。
 
+## v0.211（xlsx styles 视觉语义：深度诊断 + 口径分档，不硬修）
+
+用户把 **xlsx styles.xml 视觉语义保真**列为第一优先级。深度取证
+（preserve / 读手 / 模型 / 第三方库写手四处）后，**结论是不能本轮硬修**——
+把根因与不可行方向钉死，比交一个"看起来修了"的补丁更负责任。
+
+**不是一个 bug，是三类东西**
+
+1. **读手已建模、写手没接**（真 bug）：`xf|fillId/fontId/borderId/numFmtId` 各 56 次
+   从 `0,10,11,12…` 塌成 0、`sz|val` 11/13/15/18 只写 11、边框 double/medium 变 thin。
+2. **第三方库架构限制**（不可逐字节还原）：theme/tint 是 Excel 算出的任意浮点
+   （`0.399975585192419`），而 crate `Color::Theme` 只收离散 shade、写回它硬编码的
+   tint 常量——改用 Theme 会写出**不同的数字**，账照判值变；49 个本地化样式名
+   （常规/货币…）crate 只写死 Normal+Hyperlink、无公共 API；tableStyle 族完全没有
+   写 API。
+3. **白名单普查口径放大**（假红）：分母是「白名单部件全部属性对」而非「读手查问过的」，
+   Excel 声明性属性（`applyProtection=0`、各种 `count`）全进分母。
+
+**整份搬 styles.xml 这条路证伪了**：源件 `fonts=32/fills=42/borders=21/cellXfs=7`，
+写出包 `1/2/5/6`——crate 按写入顺序重排索引，单元格 `s=` 从 `1..6` 变 `1..5`；
+读侧一读 `s=` 就解析成 `CellStyle`、**原始下标丢弃**，没有映射可用。整份搬会让
+样式表指向完全不同的样式，视觉全乱，比现在更糟。
+
+**本轮实际交付**
+
+- `docs/xlsx-styles-gap.md`：三类根因、不可行方向、下一轮立项建议
+  （**先解决读侧 `s=` 下标丢失这个根**，否则任何补读补写都是叶）、边界。
+- `scripts/sheet-roundtrip.mjs` 的 `CAVEATS.xlsx` 登记 25 族架构限制：**真件账**的
+  掉了/值变表与边界段自带逐族解释，32% 这个数字不再是一句绝望的数；**夹具账**
+  因这些对是 kept 不受影响，md5 仍 `0fd13292…`/`0e3e3f42…`。
+- 修了 CAVEATS 渲染的误标：原逻辑给所有同名对挂标注，会把夹具里 kept 的
+  `cellStyle|name=normal` 标成"架构限制"。改为只给**非 kept** 对挂——连带清理了
+  ODS 账里 v0.202 修好后仍挂着的两条旧标注（数字 14/14 未动）。
+- `scripts/test-xlsx-styles-caveats.mjs` 16 条守卫，自包含不读 `tmp/`。
+
+**下一轮若要做类 1 修复**：扩 `CellStyle` 存源 `xf` 下标 → 写手按"尽量复用同一套
+样式表"的顺序构造 Format → 重签五本账基线与 `expectKept`。独立成轮，不是顺手修。
+
+**门禁**：干净树 tsc 0 / vite build ✓、`cargo test --lib` **166 passed / 11 ignored**；
+五本账 md5 全部复跑一致（ODS 仅文案连带清理、数字 14/14 未动）、两份表格变异腿各
+12/12、全量 74 份 73/1/0（800.3s，`test-pptx-corpus` 又被单份超时误杀，单跑 33.4s PASS）。
+
 ## 性能（v0.3）
 
 
