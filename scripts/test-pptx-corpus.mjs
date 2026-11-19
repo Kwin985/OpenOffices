@@ -44,7 +44,13 @@ const r = spawnSync(process.execPath, [
   cli, 'scripts/pptx-corpus.mjs', '--limit', '2', '--out', TEST_OUT,
 ], { cwd: REPO, encoding: 'utf8', timeout: 420_000, maxBuffer: 16 * 1024 * 1024 })
 const text = (r.stdout || '') + (r.stderr || '')
-check('跑批跑成', r.status === 0, text.trim().split('\n').slice(-2).join(' ').slice(0, 160))
+// 诊断：SKIP 行才是真因，但它在 stdout 靠前、slice(-2) 只会截到末尾的汇总，
+// 把「跑成 0/2」显示出来却看不到为什么。全量长跑里子脚本偶发 0/2 时，
+// 这一行能区分「夹具没生成」「assertAtRef 挡了」「tmp 目录冲突」三种情况。
+const skips = text.split('\n').filter((l) => l.startsWith('SKIP'))
+const detail = skips.length ? skips.join(' | ').slice(0, 400)
+  : text.trim().split('\n').slice(-3).join(' ').slice(0, 160)
+check('跑批跑成', r.status === 0, detail)
 check('两份都跑成', /跑成 2\/2/.test(r.stdout || ''))
 const total = (r.stdout || '').match(/合计 (\d+)\/(\d+)（([\d.]+)%）/)
 check('输出有合计三元组', !!total)

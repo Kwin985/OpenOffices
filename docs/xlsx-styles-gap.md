@@ -29,12 +29,31 @@
 | `numFmt|formatCode/numFmtId`（41–44 会计格式） | 读侧 `builtin_numfmt` 表没覆盖这几个内置 id |
 | `feature|name` / `ext|uri` / `slicerStyles` / `styleSheet|Ignorable` | x14 扩展与打包细节，模型无承载位 |
 
-### 类 3 · 白名单普查口径放大（假红）
+### 类 3 · 白名单普查口径放大 + 孤儿样式（假红）
 
 分母是「白名单部件里**全部属性对**」——不是「读手查问过的」。Excel 亲笔样式表里
 大量 `xf|applyProtection=0`、`applyNumberFormat=0`、`*_count` 这类**声明性/冗余**
 属性，读手不需要、写手也不会发，但它们全进分母被判 lost。这与 docx 保真账的
 「默认属性进分母」是同一口径现象（v0.203 的 70.1%→18.5%）。
+
+**v0.212 补证：rgb 色族也是假红，不是读手漏读。** 逐节统计 R09 的 styles.xml：
+
+| 节 | rgb | theme | 谁在用 |
+|---|---:|---:|---|
+| `fonts` | 12 | 8 | 字体定义 |
+| `fills` | 7 | 24 | 填充定义 |
+| `borders` | 17 | 4 | 边框定义 |
+| `dxfs` | 0 | 43 | 条件格式（全 theme） |
+| `cellXfs` / `cellStyleXfs` | 0 / 0 | 0 / 0 | 只是引用上面各表 |
+
+真件有 **49 个 `cellStyleXfs`（本地化命名样式）+ 7 个 `cellXfs`，但单元格只引用
+`s=1..6`**。写手只重建「实际被单元格引用的样式」，其余 49 个命名样式连同它们带的
+29 个 `color|rgb`、7 个 `fgColor|rgb` 是**孤儿定义**——没有任何格子会用到，写出包
+自然没有。这与 v0.202 ODS 的孤儿列样式 `co2` 完全同族，**不是架构限制也不是读手 bug**。
+
+上一轮把 `fgColor|rgb` 定性成「dxf 前景色、dxf 没接」是错的：真件 `dxfs` 节 rgb 恰为 0，
+那 7 个全在 `fills`。本轮已改正 CAVEATS 措辞。教训：**定性前先数清族在哪些节，
+别凭属性名猜上下文**。
 
 ## 二、为什么不能整份搬运 styles.xml（(a) 方向不可行）
 

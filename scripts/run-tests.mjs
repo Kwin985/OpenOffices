@@ -40,6 +40,15 @@ const includeOptional = argv.includes('--include-optional')
 // 保留机制与 --include-optional 出口，将来若再有依赖外部产物的测试可照此登记。
 const OPTIONAL = new Map([])
 
+// 每份测试的超时：默认 180s，但有几份自己内部还在等子进程（pptx-corpus 等
+// 420s 的 pptx 生成、collab 等 600s 的 cargo build），外层 180s 会先杀掉它们，
+// 表现为连续几轮「跑到末尾某份 FAIL、单跑又全 PASS」——是量具自相矛盾不是测试红。
+// v0.212 按各测试内部声明对齐；新增长腿时在这里登记，别再让门禁数字背锅。
+const TIMEOUTS = new Map([
+  ['test-pptx-corpus.mjs', 480_000],
+  ['test-collab.mjs', 660_000],
+])
+
 const files = readdirSync(`${root}scripts`)
   .filter((f) => /^test-.*\.mjs$/.test(f))
   .filter((f) => !only || f.includes(only))
@@ -71,7 +80,7 @@ for (const f of files) {
   const r = spawnSync(process.execPath, [cli, `scripts/${f}`], {
     cwd: root,
     encoding: 'utf8',
-    timeout: 180_000,
+    timeout: TIMEOUTS.get(f) ?? 180_000,
     maxBuffer: 8 * 1024 * 1024,
   })
   const secs = ((Date.now() - t0) / 1000).toFixed(1)

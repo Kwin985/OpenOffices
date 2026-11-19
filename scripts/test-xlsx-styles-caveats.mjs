@@ -30,7 +30,14 @@ check('报告点名 styles.xml 60 对留 5 对', /60 对只留 5 对/.test(real)
 check('账本渲染层支持逐对口径列', /\*\*已知口径\*\*：\$\{note\}/.test(src))
 check('账本渲染层边界段有已知口径节', /\*\*已知口径\*\*（逐对诊断过/.test(src))
 
-// ── ④ 诊断文档钉死根因与不可行方向 ──────────────────────────
+// ── ④ v0.212 补证：rgb 族是孤儿假红，不是架构限制 ────────────
+check('fgColor|rgb 改判为孤儿样式', /fgColor\|rgb[\s\S]{0,100}孤儿样式/.test(src))
+check('color|rgb 定性非架构限制', /color\|rgb[\s\S]{0,120}非架构限制/.test(src))
+check('indexed 定性点名 crate 无 Indexed', /Indexed 变体/.test(src))
+check('诊断文档有各节 rgb/theme 分布表', /fonts[\s\S]{0,200}dxfs[\s\S]{0,200}cellXfs/.test(gap))
+check('诊断文档点了孤儿样式同族 co2', /孤儿列样式 `co2`|孤儿样式.*co2/.test(gap))
+
+// ── ⑤ 诊断文档钉死根因与不可行方向 ──────────────────────────
 for (const [name, re] of [
   ['整份搬 styles 不可行', /整份搬 styles\.xml[\s\S]{0,100}必错位|搬了必错位/],
   ['tint 任意浮点写不回', /任意浮点[\s\S]{0,80}写不回|无法逐字节还原/],
