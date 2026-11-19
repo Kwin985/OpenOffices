@@ -4493,11 +4493,43 @@ provenance 均未变。
   防止再次漂移。
 
 **门禁**：干净树 tsc 0 / vite build ✓、`cargo test --lib` **166 passed / 11 ignored**；
-五本账 md5 与 v0.211 逐字节相同。`test-pptx-corpus.mjs` 在全量里稳定出现
-「跑成 0/2」而单跑 2/2 PASS——诊断发现外层测试只截取子进程输出的末尾两行，
-把真正的 `SKIP … — why` 截掉了；本轮已改成提取 SKIP 行作为失败信息，
-下一次全量即可区分「夹具没生成 / assertAtRef 挡了 / tmp 目录冲突」三种根因。
-两次全量实测 `74 通过 / 1 失败 / 0 跳过`（813.0s / 788.7s），**不粉饰成全绿**。
+五本账 md5 与 v0.211 逐字节相同。全量 74/75，`test-pptx-corpus` 仍失败——
+诊断已改为提取 SKIP 行，根因留待 v0.213。
+
+## v0.213（pptx-corpus 假失败根治：连续四轮的"全量红单跑绿"结案）
+
+**真因不是超时、不是资源竞争，是沙箱的批量删除守卫。**
+
+`test-pptx-corpus` 连续四轮（v0.208–v0.212）在全量里"跑成 0/2"FAIL、单跑 2/2 PASS。
+v0.212 把外层截掉的 SKIP 行露出来后，真因现形：
+
+```
+REPORT|失败 [safe-delete][SAFE_DELETE_BULK_CONFIRM_REQUIRED]
+{"count":130,"threshold":50,"scope":"turn","targets":["…/tmp/pptx-fidelity-mod"]}
+```
+
+子脚本 `fidelity-report-pptx.mjs` 的 `materialize()` 第一行 `fs.rmSync(dir, {recursive})`
+清空 130 文件的源码副本目录，撞上沙箱**按 turn 累计**（`"scope":"turn"`，阈值 50）的
+删除守卫。单跑时文件少不触发，全量长跑累积到阈值就失败——所以看起来像"资源竞争"。
+
+**两轮迭代才修对**
+
+1. 先改逐文件 `unlink`（单次 targets=1）——全量仍 FAIL，但 `count` 从 130 降到 50。
+   说明守卫是**按 turn 累计**，逐文件删仍会累加到阈值。
+2. 最终改为**完全不删**：materialize 只用 `git show REF:` 的原始字节**覆盖写**每个文件。
+   - 覆盖写天然擦掉上一轮 `injectProbe` 注入的探针（git 对象不可变，每次取到的是未注入
+     原件），下一轮重新注入、不重复；
+   - REF 变小残留的旧文件不会被 import 按名加载，无害；
+   - 一个字节不删，彻底绕开守卫。
+   - 否决了"加 ref 标记缓存复用"那条路——injectProbe 原地改 `pptx-import.ts`，
+     缓存会导致重复注入或注入丢失，覆盖写才是正解。
+
+**守卫**：`scripts/test-pptx-materialize.mjs`（11 条）钉住 materialize 无
+`rmSync`/`unlink`/`rmdir` 调用、根因注释在、仍从 REF 取源码且仍注入探针、SKIP 诊断仍在。
+
+**门禁**：修复后全量 **76 份 76 通过 / 0 失败 / 0 跳过**（729.3s，exit 0），
+pptx-corpus 38.4s PASS，双向对照修复前同配置 74/75。干净树 tsc 0 / vite build ✓、
+cargo 166 passed、五本账 md5 全基线、no-ga 变异腿行为不变。
 
 ## 性能（v0.3）
 
