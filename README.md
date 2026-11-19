@@ -4454,6 +4454,51 @@ provenance 均未变。
 五本账 md5 全部复跑一致（ODS 仅文案连带清理、数字 14/14 未动）、两份表格变异腿各
 12/12、全量 74 份 73/1/0（800.3s，`test-pptx-corpus` 又被单份超时误杀，单跑 33.4s PASS）。
 
+## v0.212（补证孤儿样式假红 + 修 runner 超时矛盾）
+
+**两个各自独立的完善，都不是刷分**
+
+**① xlsx rgb 色族也是假红，不是架构限制**
+
+上轮把 `fgColor|rgb` 判成"dxf 前景色、dxf 没接"，这轮数清了族在哪些节才发现问题：
+
+| 节 | rgb | theme |
+|---|---:|---:|
+| `fonts` | 12 | 8 |
+| `fills` | 7 | 24 |
+| `borders` | 17 | 4 |
+| `dxfs` | **0** | 43 |
+
+真件 `dxfs` 节 rgb 恰为 0——那 7 个 `fgColor|rgb` 全在 `fills`，不是 dxf。更关键：
+真件有 **49 个命名样式（`cellStyleXfs`）+ 7 个 `cellXfs`，单元格却只用 `s=1..6`**。
+那 49 个命名样式连同它们带的 29 个 `color|rgb`、7 个 `fgColor|rgb`，**没有任何格子
+引用**——写手只重建实际用到的样式，其余是孤儿定义。这与 v0.202 ODS 的孤儿列样式
+`co2` 完全同族，**既不是架构限制也不是读手 bug**。
+
+- 修正 CAVEATS 措辞（rgb 族改判孤儿假红、indexed 点明 crate 无 `Indexed` 变体），
+  `docs/xlsx-styles-gap.md` 补各节分布表与同族论证，21 条守卫加固（自包含）。
+- 教训：**定性前先数清族在哪些节，别凭属性名猜上下文**。
+- 夹具账 md5 仍 `0fd13292…`/`0e3e3f42…`（这些对夹具是 kept，不受标注影响）。
+
+**② runner 的超时自相矛盾，连续 4 轮污染门禁数字**
+
+`run-tests.mjs` 给每份测试 **180s**，但 `test-pptx-corpus.mjs` 内部等子进程 **420s**、
+`test-collab.mjs` 内部等 cargo build **600s**——外层永远先 SIGTERM，表现就是
+"全量跑到末尾某份 FAIL、单跑全 PASS"。这解释了为什么 `test-pptx-corpus` 连续四轮
+（v0.208–v0.211）都是那个"失败清单"里的常客——**是量具配置错了，不是测试红**。
+
+- `run-tests.mjs` 加 per-test `TIMEOUTS` 表（pptx-corpus 480s、collab 660s），
+  按各测试内部声明对齐，默认值 180s 不变；新增长腿在此登记。
+- `scripts/test-runner-timeout.mjs` 8 条守卫钉住"外层超时 ≥ 内层超时"这条不变量，
+  防止再次漂移。
+
+**门禁**：干净树 tsc 0 / vite build ✓、`cargo test --lib` **166 passed / 11 ignored**；
+五本账 md5 与 v0.211 逐字节相同。`test-pptx-corpus.mjs` 在全量里稳定出现
+「跑成 0/2」而单跑 2/2 PASS——诊断发现外层测试只截取子进程输出的末尾两行，
+把真正的 `SKIP … — why` 截掉了；本轮已改成提取 SKIP 行作为失败信息，
+下一次全量即可区分「夹具没生成 / assertAtRef 挡了 / tmp 目录冲突」三种根因。
+两次全量实测 `74 通过 / 1 失败 / 0 跳过`（813.0s / 788.7s），**不粉饰成全绿**。
+
 ## 性能（v0.3）
 
 
