@@ -3954,6 +3954,11 @@ D53 记「要先新建载荷槽 + 定 CT_RPr 位次」，本轮复查后把口�
   字号/边框简化）是真 bug；② theme/tint 是 Excel 任意浮点、crate `Color::Theme`
   只写离散 shade 硬编码常量，逐字节还原做不到；cellStyle/tableStyle crate 无写 API；
   ③ 白名单普查把声明性/冗余属性算进分母，是口径假红。
+  **【v0.214 更正】** 第②类里 theme 那一半判错了：crate tint 常量与 Excel 源值是
+  同一个 double（17 位 vs 15 位打印精度），20 组合 19 个可精确写回；只是这份真件的
+  theme 色全在孤儿样式里（被引用 cellXfs 的 fillId/fontId 全 0），写回零账面收益。
+  本轮试写完整读写闭环后又全部回退，产品码零改动、五本账零改；cellStyle/tableStyle
+  无写 API 那半句仍成立。
 - **整份搬运证伪**（关键判断）：源 32/42/21/7 → 写出 1/2/5/6，crate 按写入顺序
   重排索引，`s=` 从 1..6 变 1..5；读侧一读 `s=` 就丢原始下标，无映射可用——
   整份搬 styles.xml 会让视觉全乱。**先解决索引丢失这个根，再谈补读补写**。

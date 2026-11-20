@@ -4427,6 +4427,12 @@ provenance 均未变。
    tint 常量——改用 Theme 会写出**不同的数字**，账照判值变；49 个本地化样式名
    （常规/货币…）crate 只写死 Normal+Hyperlink、无公共 API；tableStyle 族完全没有
    写 API。
+   **【v0.214 更正】** theme 那半句判错了：crate 的 tint 常量与 Excel 源值**是同一个
+   double**（`0.39997558519241921` vs `0.399975585192419`，只是 17 位/15 位打印精度差），
+   20 个组合里 19 个能精确写回。但**这份真件的 theme 色全在孤儿样式里**——被单元格
+   引用的 cellXfs 的 fillId/fontId 全是 0，写回也进不了写出包。所以本轮试写了完整
+   读写闭环（读侧建模+写侧 Color::Theme+has_any）后**又全部回退**：改代码救不回
+   没人用的样式。cellStyle/tableStyle 那半句仍成立。
 3. **白名单普查口径放大**（假红）：分母是「白名单部件全部属性对」而非「读手查问过的」，
    Excel 声明性属性（`applyProtection=0`、各种 `count`）全进分母。
 
