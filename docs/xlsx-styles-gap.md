@@ -22,7 +22,7 @@
 
 | 族 | 为什么不可修 |
 |---|---|
-| `fgColor/bgColor/color|theme` + `|tint` | crate `Color::Theme(u8, u8)` 的 shade 是**离散 0–5**，`attributes()` 写回它自己硬编码的 tint 常量（如 `-0.34998626667073579`）；Excel 源件是任意浮点（如 `0.399975585192419`）。换 Theme 会写出**不同的数字**，账照判值变，甚至把原本 kept 的主题色写漂流 |
+| ~~`fgColor/bgColor/color|theme` + `|tint`~~ | **v0.214 更正：此条定性错误，theme 色其实可写回**。crate `Color::Theme(u8,u8)` 的 tint 常量与 Excel 源值**是同一个 double**（源 `0.399975585192419` vs crate `0.39997558519241921`，仅 15 位/17 位打印精度差）；穷举 R09 的 20 个 (theme,tint) 组合，**19 个**能精确映射到 crate 的离散 shade（如 color≥3 的 shade 1/2/3 = +0.8/+0.6/+0.4）。独立探针实证 `Color::Theme(4,3)` 写出 `theme="4" tint="0.39997558519241921"`。但要账面判 kept 还需账本对浮点做数值归一（字符串比对会判值变）。**本轮未落地产品改动**，原因见下一节：真件 R09 的 theme 色全在孤儿样式里，写代码零账面收益 |
 | `charset|val` / `scheme|val` | crate 有 `set_font_charset` / `set_font_scheme`，但读手没建模、写手没接；接了也只是"写出同一个枚举值"，可修，但属类 1 的延伸 |
 | `cellStyle|name/builtinId/xfId`（49 个本地化样式名） | crate `styles.rs:765-797` **只写死 Normal + Hyperlink，无公共写 API** |
 | `tableStyle*` / `tableStyleElement*`（10 个表格样式） | crate 完全没有 tableStyle 写 API |
@@ -87,17 +87,35 @@ styles.xml 是读手消费的正向部件，压根不在搬运白名单。更重
    `cellStyle|name=normal` 标成"架构限制"；改为只给非 kept 的对挂。
 3. 本文把根因、不可行方向、可行子集钉死，避免下一轮重复调研。
 
-## 五、下一轮若要做类 1 的修复（立项建议）
+## 五、v0.214 立项复核：先做"谁在用"，别急着写修复
 
-**目标**：把 `xf|fillId/fontId/borderId/numFmtId` 的塌缩从 56 次降到可解释范围。
+本轮试图落地 theme 色读写闭环（读侧建模 theme+tint → 写侧 `Color::Theme` →
+账本浮点归一），**做完又全部回退**，因为数据推翻了立项前提：
 
-**前提**：先解决"索引丢失"——`xlsx_style.rs` 读 `s=` 时把源 `xf` 下标存进
-`CellStyle`（新增一个可选字段），写手按"尽量复用同一套样式表"的顺序构造 Format，
-而不是每个格子新建。这是类 1 的**根**，其余族都是叶。
+**① theme 色可写回（更正 v0.211）**：穷举 R09 的 20 个 (theme,tint) 组合，
+19 个能被 crate 的离散 shade 精确写出；独立探针实证 `Color::Theme(4,3)` 写出
+`theme="4" tint="0.39997558519241921"`——与源 `0.399975585192419` 是同一个 double。
+代码路径本身可行（读侧 `fill_themes`/`cl_theme` + 写侧 theme 优先 + `has_any`
+纳入 theme 字段，都已实现并验证读手能读到）。
 
-**代价**：载荷 schema 变更 ⇒ 夹具账 md5、`roundtrip-mut.mjs` 的 `expectKept=65`、
-五本账 provenance 都要重签；且要有 docx/pptx 账零影响的对照证据。
-**不属于"顺手修"，独立成轮。**
+**② 但这些 theme 色在这份真件里全是孤儿样式，写回零收益**：
+- R09 的 24 个 theme fill、字体 theme 色，都挂在 49 个命名样式（`cellStyleXfs`）上；
+- 实际被单元格引用的 `cellXfs[1..6]` 的 `fillId/fontId` **全是 0**——格子只用边框与对齐；
+- 所以写手重建时这些 theme 色根本不会出现在写出包，账面数字从 33/103 到 33/103
+  没变（只值变/掉了互换一对）。**改代码救不回一个没人用的样式**。
+
+**③ 合成件验证还撞上另一个独立问题**：造了 theme 色被单元格实际引用的合成件，
+`read_xlsx_sync` 返回的 `cells_with_style=0`——`sheet_paths` 的名字与 calamine 的
+sheet 名匹配失败，样式没进 payload。这是量具适配问题，不在本轮范围。
+
+**结论与下一轮立项**：
+1. **不要为了这份真件的 32% 去写 theme 色修复**——它的 theme 族是假红，
+   写回也进不了账。这再次印证"百分比低 ≠ 该修"。
+2. 真正值得做的是**先拿到一份 theme 色被实际引用的真件 / 或修好合成件的
+   sheet 名匹配**，用一个 theme 色真正参与往返的输入，才能验证读写闭环。
+3. 类 1 的 s= 索引丢失仍是根，但**只有在样式真被引用时**才有意义；
+   在此之前写修复等于对着孤儿样式使劲。
+4. 本轮产品代码零改动、五本账基线全不动；上面的实现细节与探针数据留作下一轮起点。
 
 ## 边界
 

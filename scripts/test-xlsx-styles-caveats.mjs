@@ -30,7 +30,13 @@ check('报告点名 styles.xml 60 对留 5 对', /60 对只留 5 对/.test(real)
 check('账本渲染层支持逐对口径列', /\*\*已知口径\*\*：\$\{note\}/.test(src))
 check('账本渲染层边界段有已知口径节', /\*\*已知口径\*\*（逐对诊断过/.test(src))
 
-// ── ④ v0.212 补证：rgb 族是孤儿假红，不是架构限制 ────────────
+// ── ④ v0.214 更正：theme 族定性从「架构限制」改为「孤儿样式」──
+check('theme 族不再标架构限制', !/fgColor\|theme': '架构限制/.test(src))
+check('theme 族改判孤儿样式', /fgColor\|theme': '孤儿样式/.test(src))
+check('诊断文档记录 v0.214 更正', /v0\.214 更正|v0\.214 立项复核/.test(gap))
+check('诊断文档点名 cellXfs fillId 全 0', /fillId\/fontId[\s\S]{0,60}全是 0|fillId.*全是 0/.test(gap))
+
+// ── ⑤ v0.212 补证：rgb 族是孤儿假红，不是架构限制 ────────────
 check('fgColor|rgb 改判为孤儿样式', /fgColor\|rgb[\s\S]{0,100}孤儿样式/.test(src))
 check('color|rgb 定性非架构限制', /color\|rgb[\s\S]{0,120}非架构限制/.test(src))
 check('indexed 定性点名 crate 无 Indexed', /Indexed 变体/.test(src))

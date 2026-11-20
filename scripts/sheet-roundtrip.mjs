@@ -109,12 +109,12 @@ const CAVEATS = {
   // 夹具账（65 对）里没有这些对——产品自写自出不含 Excel 复杂样式表——
   // 所以登记它们不会让夹具账变色，只在真件账里显示口径解释。
   xlsx: {
-    'fgColor|theme': '架构限制：Excel 主题色索引；crate Color::Theme 只收离散 shade，tint 值写回不同浮点（v0.211）',
-    'bgColor|theme': '同上；主题背景色无法逐字节还原',
-    'fgColor|tint': '架构限制：tint 是 Excel 算出的任意浮点（如 0.399975585192419），crate 只写硬编码常量',
+    'fgColor|theme': '孤儿样式：真件 theme 色全挂在未被单元格引用的命名样式上（cellXfs 的 fillId 全 0）；crate 其实可写回（v0.214 更正，见 docs/xlsx-styles-gap.md）',
+    'bgColor|theme': '同上；主题背景色也是孤儿样式，非架构限制',
+    'fgColor|tint': '孤儿样式：真件 tint 与 crate 常量是同一个 double（15/17 位打印精度差），可写回但没人用（v0.214）',
     'bgColor|tint': '同上；背景色调',
     'color|tint': '同上；字体色调',
-    'color|theme': '架构限制：字体主题色，同 theme 族',
+    'color|theme': '孤儿样式：字体主题色同族，非架构限制',
     'charset|val': '架构限制：字体字符集（134=GB2312）；读手未建模，crate 有 set_font_charset 但未接线',
     'scheme|val': '架构限制：字体方案（minor/major）；crate 有 set_font_scheme 但未接线',
     'fgColor|rgb': '填充前景色：真件 7 个全在 fills 节（dxf 里 rgb=0），多属未被单元格引用的孤儿样式定义；写手只重建实际引用的样式（v0.212 定性）',
