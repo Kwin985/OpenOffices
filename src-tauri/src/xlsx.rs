@@ -67,8 +67,15 @@ pub struct CellStyle {
     pub ff: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cl: Option<String>,
+    /// 字体主题色 (theme index, crate shade)，读自 <color theme tint>；与 cl 互斥（theme 优先）。
+    /// v0.215：Excel tint 是离散档，可反推成 rust_xlsxwriter 的 Color::Theme 逐档写回。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cl_theme: Option<(u8, u8)>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub bg: Option<String>,
+    /// 填充前景色主题色，与 bg 互斥（theme 优先）。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bg_theme: Option<(u8, u8)>,
     /// 四边边框
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub bd: Option<CellBorder>,
@@ -93,7 +100,9 @@ impl CellStyle {
             || self.fs.is_some()
             || self.ff.is_some()
             || self.cl.is_some()
+            || self.cl_theme.is_some()
             || self.bg.is_some()
+            || self.bg_theme.is_some()
             || self.bd.as_ref().is_some_and(|b| !b.is_empty())
             || self.ho.is_some()
             || self.vo.is_some()
@@ -1064,10 +1073,16 @@ fn format_for(s: Option<&CellStyle>, default: Option<&DefaultFont>) -> Format {
         f = f.set_font_size(size);
     }
     if let Some(st) = st {
-        if let Some(cl) = &st.cl {
+        // v0.215：主题色优先。Excel theme+tint 是离散档，反推成 crate 的
+        // Color::Theme(color, shade) 写回（tint 常量与源是同一个 double）。
+        if let Some((c, sh)) = st.cl_theme {
+            f = f.set_font_color(Color::Theme(c, sh));
+        } else if let Some(cl) = &st.cl {
             f = f.set_font_color(Color::from(cl.as_str()));
         }
-        if let Some(bg) = &st.bg {
+        if let Some((c, sh)) = st.bg_theme {
+            f = f.set_background_color(Color::Theme(c, sh));
+        } else if let Some(bg) = &st.bg {
             f = f.set_background_color(Color::from(bg.as_str()));
         }
         if let Some(bd) = &st.bd {
@@ -3451,5 +3466,46 @@ mod tests {
             );
         }
     }
+
+    /// v0.215：主题色（Excel theme+tint）往返。
+    /// 用 crate 自己写一份「主题色被单元格实际引用」的源件 → 产品读手 → 写手 →
+    /// 读写出包的 styles.xml，断言 theme/tint 逐档写回。
+    /// 这是真产品缺口：此前读侧不建模 theme 色，has_any() 把只有主题色的样式
+    /// 过滤掉，用户打开主题色表格会丢样式。与真件 R09 的孤儿 theme 色无关——
+    /// 那份真件的 theme 色没人引用，这里用合成件钉住「被引用时能读能存」。
+    #[test]
+    fn theme_color_roundtrip() {
+        use rust_xlsxwriter::{Color as XColor, Format as XFormat, Workbook as XWorkbook};
+        let src = tmp_path("theme-src");
+        let out = tmp_path("theme-out");
+        // 1. crate 造源件：A1 用 theme=4 shade=3（tint 0.4）做填充 + theme=1 shade=2 做字体
+        {
+            let mut wb = XWorkbook::new();
+            let ws = wb.add_worksheet();
+            let fmt = XFormat::new()
+                .set_background_color(XColor::Theme(4, 3))
+                .set_font_color(XColor::Theme(1, 2));
+            ws.write_with_format(0, 0, "主题", &fmt).expect("写源件");
+            wb.save(&src).expect("存源件");
+        }
+        // 2. 产品读手：cell.s 必须带 theme 字段（此前 has_any() 会过滤掉 → styled_cells=0）
+        let payload = read_xlsx_sync(src.clone()).expect("读源件");
+        let s0 = payload.sheets[0].cells.iter()
+            .find(|c| c.r == 0 && c.c == 0)
+            .and_then(|c| c.s.as_ref())
+            .expect("A1 应有样式");
+        assert_eq!(s0.bg_theme, Some((4, 3)), "填充主题色应读到 (4,3)");
+        assert_eq!(s0.cl_theme, Some((1, 2)), "字体主题色应读到 (1,2)");
+        // 3. 产品写手：往返
+        write_xlsx_sync(out.clone(), payload).expect("写回");
+        // 4. 读写出包 styles.xml：theme 数字要在，tint 常量要在（17 位与源 15 位是同一个 double）
+        let styles = entry(&out, "xl/styles.xml");
+        assert!(styles.contains(r#"theme="4""#), "写出包应有 theme=4：{styles}");
+        assert!(styles.contains("0.39997558519241921"), "写出包应有 shade=3 的 tint 常量：{styles}");
+        assert!(styles.contains(r#"theme="1""#), "写出包应有字体 theme=1");
+        std::fs::remove_file(&src).ok();
+        std::fs::remove_file(&out).ok();
+    }
+
 }
 

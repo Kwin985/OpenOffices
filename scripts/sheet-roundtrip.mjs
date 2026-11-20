@@ -109,9 +109,9 @@ const CAVEATS = {
   // 夹具账（65 对）里没有这些对——产品自写自出不含 Excel 复杂样式表——
   // 所以登记它们不会让夹具账变色，只在真件账里显示口径解释。
   xlsx: {
-    'fgColor|theme': '孤儿样式：真件 theme 色全挂在未被单元格引用的命名样式上（cellXfs 的 fillId 全 0）；crate 其实可写回（v0.214 更正，见 docs/xlsx-styles-gap.md）',
-    'bgColor|theme': '同上；主题背景色也是孤儿样式，非架构限制',
-    'fgColor|tint': '孤儿样式：真件 tint 与 crate 常量是同一个 double（15/17 位打印精度差），可写回但没人用（v0.214）',
+    'fgColor|theme': '孤儿样式：产品码 v0.215 已能写回 theme 色（合成件验证），但真件 theme 色全挂在未被单元格引用的命名样式上（cellXfs 的 fillId 全 0），写回也进不了账',
+    'bgColor|theme': '同上；主题背景色同理，非架构限制',
+    'fgColor|tint': '孤儿样式：tint 与 crate 常量是同一个 double（15/17 位打印精度差），v0.215 已能写回，但真件里没人引用',
     'bgColor|tint': '同上；背景色调',
     'color|tint': '同上；字体色调',
     'color|theme': '孤儿样式：字体主题色同族，非架构限制',

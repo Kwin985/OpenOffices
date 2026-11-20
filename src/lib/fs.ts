@@ -21,7 +21,11 @@ export interface CellStyle {
   it?: boolean
   fs?: number
   cl?: string
+  /** 字体主题色 [theme index, crate shade]，Excel theme+tint 反推；屏上 Univer 无主题色槽暂不消费 */
+  cl_theme?: [number, number]
   bg?: string
+  /** 填充主题色 [theme index, crate shade]，同上 */
+  bg_theme?: [number, number]
   bd?: CellBorder
   ho?: 'left' | 'center' | 'right' | 'justify'
   vo?: 'top' | 'middle' | 'bottom'

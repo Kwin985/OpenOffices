@@ -54,6 +54,30 @@ struct FontInfo {
     ff: Option<String>,
     fs: Option<f64>,
     cl: Option<String>,
+    /// 字体主题色 (theme, shade)，读自 <color theme tint>。v0.215。
+    cl_theme: Option<(u8, u8)>,
+}
+
+/// 把 Excel 的 <color theme="c" tint="t"/> 反推成 rust_xlsxwriter 的
+/// Color::Theme(color, shade)。crate 的映射（color.rs::attributes）：color 0/1/2
+/// 各有独立 5 档 tint；color ≥3 共用一张表（shade 1/2/3 = +0.8/+0.6/+0.4）。
+/// tint 缺省（0）→ shade 0（crate 只写 theme 不写 tint）。
+/// 匹配用 1e-9 容差：Excel 源是 15 位浮点、crate 常量是 17 位，同一个 double。
+fn theme_shade(theme: u8, tint: f64) -> Option<u8> {
+    const C0: [(u8, f64); 5] = [(1, -0.049989318521683403), (2, -0.14999847407452621),
+        (3, -0.249977111117893), (4, -0.34998626667073579), (5, -0.499984740745262)];
+    const C1: [(u8, f64); 5] = [(1, 0.499984740745262), (2, 0.34998626667073579),
+        (3, 0.249977111117893), (4, 0.14999847407452621), (5, 0.049989318521683403)];
+    const C2: [(u8, f64); 5] = [(1, -0.099978637043366805), (2, -0.249977111117893),
+        (3, -0.499984740745262), (4, -0.749992370372631), (5, -0.89999084444715716)];
+    const CN: [(u8, f64); 5] = [(1, 0.79998168889431442), (2, 0.59999389629810485),
+        (3, 0.39997558519241921), (4, -0.249977111117893), (5, -0.499984740745262)];
+    if tint.abs() < 1e-9 { return Some(0) }
+    let table: &[(u8, f64)] = match theme { 0 => &C0, 1 => &C1, 2 => &C2, _ => &CN };
+    for (s, v) in table {
+        if (v - tint).abs() < 1e-9 { return Some(*s) }
+    }
+    None
 }
 
 #[derive(Default, Clone)]
@@ -95,6 +119,9 @@ struct XfRec {
 struct StyleBook {
     fonts: Vec<FontInfo>,
     fills: Vec<Option<String>>,
+    /// 与 fills 平行的主题色表：fills[i] 存 rgb 串、fill_themes[i] 存 (theme, shade)。
+    /// v0.215：主题填充色原本整族丢弃，这里并排接住。
+    fill_themes: Vec<Option<(u8, u8)>>,
     xfs: Vec<XfRec>,
     borders: Vec<BorderRec>,
     numfmts: HashMap<u32, String>,
@@ -285,6 +312,7 @@ fn parse_styles(xml: &str) -> StyleBook {
     let mut book = StyleBook::default();
     let mut cur_font = FontInfo::default();
     let mut cur_fill: Option<String> = None;
+    let mut cur_fill_theme: Option<(u8, u8)> = None;
     let mut cur_border = BorderRec::default();
     let mut cur_side: Option<(String, BSide)> = None;
     let mut cur_xf: Option<XfRec> = None;
@@ -301,7 +329,7 @@ fn parse_styles(xml: &str) -> StyleBook {
                         sec = nm.to_string()
                     }
                     "font" => cur_font = FontInfo::default(),
-                    "fill" => cur_fill = None,
+                    "fill" => { cur_fill = None; cur_fill_theme = None; },
                     "border" if sec == "borders" => cur_border = BorderRec::default(),
                     "left" | "right" | "top" | "bottom" if sec == "borders" => {
                         cur_side = Some((
@@ -322,15 +350,40 @@ fn parse_styles(xml: &str) -> StyleBook {
                     ("fonts", "i") => cur_font.it = bool_attr(e),
                     ("fonts", "name") => cur_font.ff = attr_str(e, "val"),
                     ("fonts", "sz") => cur_font.fs = attr_str(e, "val").and_then(|v| v.parse().ok()),
-                    ("fonts", "color") if cur_font.cl.is_none() => {
-                        cur_font.cl = attr_str(e, "rgb").as_deref().and_then(argb_to_hex);
+                    ("fonts", "color") if cur_font.cl.is_none() && cur_font.cl_theme.is_none() => {
+                        // v0.215：theme 优先，否则退回 rgb
+                        let mut matched = false;
+                        if let Some(t) = attr_str(e, "theme").and_then(|v| v.parse::<u8>().ok()) {
+                            let tint = attr_str(e, "tint").and_then(|v| v.parse::<f64>().ok()).unwrap_or(0.0);
+                            if let Some(sh) = theme_shade(t, tint) {
+                                cur_font.cl_theme = Some((t, sh));
+                                matched = true;
+                            }
+                        }
+                        if !matched {
+                            cur_font.cl = attr_str(e, "rgb").as_deref().and_then(argb_to_hex);
+                        }
                     }
                     ("fonts", "font") => book.fonts.push(FontInfo::default()),
-                    ("fills", "fill") => book.fills.push(None),
+                    ("fills", "fill") => {
+                        book.fills.push(None);
+                        book.fill_themes.push(None);
+                    }
                     ("fills", "fgColor") | ("fills", "bgColor") => {
-                        if let Some(hex) = attr_str(e, "rgb").as_deref().and_then(argb_to_hex) {
-                            if nm == "fgColor" || cur_fill.is_none() {
-                                cur_fill = Some(hex);
+                        // 与 font color 同规：theme 优先；只认 fgColor（或首个颜色）
+                        if nm == "fgColor" || (cur_fill.is_none() && cur_fill_theme.is_none()) {
+                            let mut matched = false;
+                            if let Some(t) = attr_str(e, "theme").and_then(|v| v.parse::<u8>().ok()) {
+                                let tint = attr_str(e, "tint").and_then(|v| v.parse::<f64>().ok()).unwrap_or(0.0);
+                                if let Some(sh) = theme_shade(t, tint) {
+                                    cur_fill_theme = Some((t, sh));
+                                    matched = true;
+                                }
+                            }
+                            if !matched {
+                                if let Some(hex) = attr_str(e, "rgb").as_deref().and_then(argb_to_hex) {
+                                    cur_fill = Some(hex);
+                                }
                             }
                         }
                     }
@@ -372,7 +425,10 @@ fn parse_styles(xml: &str) -> StyleBook {
                 let nm = nm.as_ref();
                 match nm {
                     "font" => book.fonts.push(std::mem::take(&mut cur_font)),
-                    "fill" => book.fills.push(cur_fill.take()),
+                    "fill" => {
+                        book.fills.push(cur_fill.take());
+                        book.fill_themes.push(cur_fill_theme.take());
+                    },
                     "left" | "right" | "top" | "bottom" if sec == "borders" => {
                         if let Some((key, side)) = cur_side.take() {
                             set_border_side(&mut cur_border, &key, side);
@@ -636,6 +692,7 @@ fn style_for(xf: usize, book: &StyleBook) -> Option<CellStyle> {
     let rec = merged_xf(book.xfs.get(xf)?, book);
     let f = book.fonts.get(rec.font as usize).cloned().unwrap_or_default();
     let bg = book.fills.get(rec.fill as usize).cloned().flatten();
+    let bg_theme = book.fill_themes.get(rec.fill as usize).copied().flatten();
     let bd = book.borders.get(rec.border as usize).and_then(|b| {
         let cell_bd = CellBorder {
             t: side_to_payload(&b.t),
@@ -661,7 +718,9 @@ fn style_for(xf: usize, book: &StyleBook) -> Option<CellStyle> {
             .filter(|n| !n.is_empty() && n != "Calibri" && n != "等线"),
         fs: f.fs.filter(|v| *v > 0.0 && (*v - 11.0).abs() > f64::EPSILON),
         cl: f.cl,
+        cl_theme: f.cl_theme,
         bg,
+        bg_theme,
         bd,
         ho: rec.ho.clone(),
         vo: rec.vo.clone(),
