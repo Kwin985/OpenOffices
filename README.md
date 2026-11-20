@@ -4537,6 +4537,40 @@ REPORT|失败 [safe-delete][SAFE_DELETE_BULK_CONFIRM_REQUIRED]
 pptx-corpus 38.4s PASS，双向对照修复前同配置 74/75。干净树 tsc 0 / vite build ✓、
 cargo 166 passed、五本账 md5 全基线、no-ga 变异腿行为不变。
 
+## v0.215（xlsx 主题色读写闭环：真产品缺口，合成件验证）
+
+**修的是用户会遇到的 bug，不是刷真件账数字**
+
+v0.214 我写完 theme 建模又回退，理由是真件 R09 的 theme 色全是孤儿样式、零账面
+收益。但复查发现回退理由只对那份真件成立：**合成件 styled_cells=0 不是量具 bug**
+（两件 workbook.xml/rels 完全一样、R09 有 48 个 styled cells），而是产品码不建模
+theme 色、`has_any()` 把只有主题色的样式过滤掉——用户打开一个主题色填充的表格，
+屏上和存盘都会丢样式。这是真缺口，该修。
+
+**实现**（读手 → 载荷 → 写手）
+
+- 读侧：`FontInfo.cl_theme` + `StyleBook.fill_themes` 平行表 + `theme_shade()` 反推
+  （Excel 15 位浮点与 crate 17 位常量是同一个 double，1e-9 容差匹配）+ `style_for` 传递。
+- 写侧：`format_for` 里 `Color::Theme(color, shade)` 优先于 rgb。
+- **关键补丁**：`has_any()` 纳入两个 theme 字段——这是 v0.214 漏掉、导致合成件
+  styled_cells=0 的真正原因。
+- 前端 `fs.ts` interface 同步；屏上 Univer 无主题色槽，**本轮只保存盘，界面显示另算边界**。
+
+**验证**：新增自包含的 Rust 单元测试 `theme_color_roundtrip`——crate 自己写一份
+"A1 用 theme=4 shade=3 填充 + theme=1 shade=2 字体"的源件（主题色被单元格实际引用），
+走产品读手 → 写手 → 读写出包 styles.xml。断言读手读到 `bg_theme=Some((4,3))`、
+`cl_theme=Some((1,2))`，写出包含 `theme="4"`、`tint="0.39997558519241921"`、`theme="1"`。
+**测试通过**，不依赖任何未入库文件。
+
+**账本影响：零**——夹具账 md5 完全不变（`0fd13292…`，65/65；夹具是产品自写自出、
+没有 theme 色），真件账仍 33/103=32%（theme 是孤儿样式、写回进不了账），五本账
+md5 全基线、表格变异腿各 12/12。**无需重签任何账本**。价值全在产品能力：
+主题色表格现在读得进、存得回。
+
+**门禁**：干净树 tsc 0 / vite build ✓、cargo **167 passed / 11 ignored**（+1 新测试）、
+全量 **76 份 76 通过 / 0 失败 / 0 跳过**（999.7s）；五本账 md5 全基线、
+表格变异腿各 12/12、守卫 29/29。
+
 ## 性能（v0.3）
 
 
