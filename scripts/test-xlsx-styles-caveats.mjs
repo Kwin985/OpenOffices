@@ -41,7 +41,16 @@ check('theme 往返测试在场', /fn theme_color_roundtrip/.test(rust))
 check('has_any 纳入 theme 字段', /self\.cl_theme\.is_some\(\)[\s\S]{0,80}self\.bg_theme\.is_some\(\)/.test(rust))
 check('写手用 Color::Theme', /set_background_color\(Color::Theme\(c, sh\)\)/.test(rust))
 
-// ── ⑤ v0.212 补证：rgb 族是孤儿假红，不是架构限制 ────────────
+// ── ⑤ v0.216 判死：Univer 有 th 槽但无 tint，接显示会破坏保真 ──
+check('诊断文档有 v0.216 判死节', /v0\.216 屏上显示主题色：查明并判死/.test(gap))
+check('判死记录 th 槽存在', /th\?: ThemeColorType/.test(gap) && /确实有主题色槽|有 `th` 槽/.test(gap))
+check('判死记录枚举对齐', /DARK1=0[\s\S]{0,120}ACCENT1=4/.test(gap))
+check('判死记录无 tint 槽', /无 tint 槽|没有 tint/.test(gap))
+check('判死记录强 schema', /STYLE_KEYS/.test(gap) && /强 schema/.test(gap))
+check('判死记录回写风险', /屏上回写会破坏|tint 被抹掉/.test(gap))
+check('README 更正无槽说法', /无主题色槽.*是错的|说法是错的/.test(read('../README.md')))
+
+// ── ⑥ v0.212 补证：rgb 族是孤儿假红，不是架构限制 ────────────
 check('fgColor|rgb 改判为孤儿样式', /fgColor\|rgb[\s\S]{0,100}孤儿样式/.test(src))
 check('color|rgb 定性非架构限制', /color\|rgb[\s\S]{0,120}非架构限制/.test(src))
 check('indexed 定性点名 crate 无 Indexed', /Indexed 变体/.test(src))

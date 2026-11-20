@@ -4554,7 +4554,11 @@ theme 色、`has_any()` 把只有主题色的样式过滤掉——用户打开�
 - 写侧：`format_for` 里 `Color::Theme(color, shade)` 优先于 rgb。
 - **关键补丁**：`has_any()` 纳入两个 theme 字段——这是 v0.214 漏掉、导致合成件
   styled_cells=0 的真正原因。
-- 前端 `fs.ts` interface 同步；屏上 Univer 无主题色槽，**本轮只保存盘，界面显示另算边界**。
+- 前端 `fs.ts` interface 同步；**本轮只保存盘，界面显示另算边界**。
+  **【v0.216 更正】**「Univer 无主题色槽」的说法是错的——Univer 0.25.1 的
+  `IColorStyle` 有 `th?: ThemeColorType`，枚举值与 Excel 主题色索引完全一致。
+  但无 tint 槽、style 是强 schema 无法藏原始值，接显示会让用户编辑后保存时
+  抹掉 tint、破坏存盘保真，故**判死不做**（详见 docs/xlsx-styles-gap.md 第七节）。
 
 **验证**：新增自包含的 Rust 单元测试 `theme_color_roundtrip`——crate 自己写一份
 "A1 用 theme=4 shade=3 填充 + theme=1 shade=2 字体"的源件（主题色被单元格实际引用），

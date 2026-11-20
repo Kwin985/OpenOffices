@@ -129,8 +129,9 @@ styles.xml 是读手消费的正向部件，压根不在搬运白名单。更重
 - **实现**：读侧 `FontInfo.cl_theme` + `StyleBook.fill_themes` + `theme_shade()` 反推
   （15/17 位同一 double、1e-9 容差）+ `style_for` 传递；写侧 `format_for` 里
   `Color::Theme` 优先；`has_any()` 纳入两个 theme 字段（这是 v0.214 漏掉、导致
-  合成件 styled_cells=0 的关键）；前端 `fs.ts` interface 同步（屏上 Univer 无主题色槽，
-  仅存盘保真，界面显示是另一条边界）。
+  合成件 styled_cells=0 的关键）；前端 `fs.ts` interface 同步（**【v0.216 更正】**
+  此处说"Univer 无主题色槽"是错的——实际有 `th` 槽，详见第七节；但接显示会破坏
+  存盘保真的 tint，故判死不做，界面显示仍是未接边界）。
 
 **账本影响**：夹具账 md5 **完全不变**（`0fd13292…`，65/65）——夹具是产品自写自出、
 没有 theme 色；真件账仍 33/103=32%（theme 是孤儿样式，写回进不了账）；五本账
@@ -145,3 +146,38 @@ md5 全基线、表格变异腿各 12/12。**无需重签任何账本**。
 - 未做真机 Excel 打开写出包的视觉对撞——账面丢 70 对不等于屏上一定看得出差别，
   特别是类 3 的声明性属性。
 - 六条旧诚实边界（宏沙箱 / 协同鉴权 / PDF 改字形变等）一条未动。
+
+## 七、v0.216 屏上显示主题色：查明并判死（不做）
+
+v0.215 落地了存盘保真后，剩一个问题：用户打开主题色表格，屏上能不能显示正确颜色？
+此前我说"Univer 无主题色槽"——**这是错的，没查 d.ts 就下了结论**。本轮查证后判死。
+
+### 事实（Univer 0.25.1，从 npm 包 d.ts 取证）
+
+- `IColorStyle` **确实有主题色槽**：`th?: ThemeColorType`（定义于
+  `packages/core/.../i-style-data.d.ts`，本地 `node_modules/@univerjs/presets/lib/umd/index.js`
+  bundle 里也能找到 `ThemeColorType` 枚举、`Lo=[rgb,th]` 验证器）。
+- `ThemeColorType` 枚举值与 Excel/OOXML 主题色索引**完全一致**：
+  `DARK1=0, LIGHT1=1, DARK2=2, LIGHT2=3, ACCENT1=4 … ACCENT6=9,
+  HYPERLINK=10, FOLLOWED_HYPERLINK=11`。
+
+### 为什么仍然判死（三条硬约束）
+
+1. **`IColorStyle` 无 tint 槽**：定义只有 `rgb` + `th`，注释写的是
+   "RGB color **or** theme color"——两者互斥。Excel 主题色的明暗档
+   （tint 0.4/0.6/0.8 等）在 Univer 里**无处安放**。
+2. **style 对象是强 schema**：`STYLE_KEYS` 精确列出允许字段，没有 index signature。
+   想在 style 里藏原始 `(theme, tint)` 做回写保真的方案不成立——自定义字段不会被透传。
+3. **屏上回写会破坏 v0.215 的存盘保真**：接 `th` 后，用户编辑别的格子再保存，
+   `workbookToPayload → flattenStyle` 只能读回 `th`（无 tint），tint 被抹掉——
+   这正是 v0.199 教训「屏上值回写 = 把换算误差写成源件的话」的场景。
+
+另外，Univer 默认主题配色（primary/gray 系）与 Excel Office 主题
+（ACCENT1-6）方案不同，即使接 `th` 显示，颜色也未必与 Excel 一致。
+
+### 结论
+
+**不接屏上主题色显示**，保持"存盘保真、屏上暂不显示"的当前状态。
+这是有据的判死（同 v0.205 Calc 缩放：查实 API 限制后明确移出清单），
+不是无限顺延。若将来 Univer 支持主题色 + tint 且配色可对齐，再重新评估。
+产品代码零改动、账本零改动。
