@@ -236,6 +236,18 @@ function esc(s: string): string {
 }
 
 /**
+ * 合并的语言串 → ODF 的 language + country 两枚属性（v0.224）。
+ * docx 的 `w:lang` 把语言装一个格（`zh-CN`），ODF 拆两格发；只有尾段长得像地区码
+ * （两字母全大写，或 ISO 639-2/UN M.49 的三位数字）才拆，其余形状整串进 language——
+ * 宁可保形也不造一枚非法的 fo:country。返回串自带前导空格，调用处直接拼接。
+ */
+function langPair(langAttr: string, countryAttr: string, tag: string): string {
+  const m = /^([A-Za-z]{2,3})[-_]([A-Z]{2}|\d{3})$/.exec(tag.trim())
+  if (!m) return ` ${langAttr}="${esc(tag.trim())}"`
+  return ` ${langAttr}="${esc(m[1])}" ${countryAttr}="${esc(m[2])}"`
+}
+
+/**
  * 文档属性五格 → ODF `meta.xml`（v0.191）。
  *
  * docx 侧 v0.188 已做 `DocMeta.docProps` 的读写链，ODT 侧此前**根本不发
@@ -678,6 +690,16 @@ class OdtBuilder {
       // 58%/-25% 是 LibreOffice 自己写上下标时用的偏移档位，跟着它才不会被判成自定义位置
       if (m.sp) tp += ' style:text-position="super 58%"'
       else if (m.sb) tp += ' style:text-position="sub -25%"'
+      // locale 三件套（v0.224）：ODF 一个语言拆 language+country 两格发。合并串只在
+      // 「尾段是两字母地区码或三位数字码」时才拆（zh-CN → zh + CN）；zh-Hans 这类
+      // 变体不拆——塞进 fo:country 是造非法值，整串落 fo:language 让读侧自己保形。
+      if (m.lang) tp += langPair('fo:language', 'fo:country', String(m.lang))
+      if (m.langEa) tp += langPair('style:language-asian', 'style:country-asian', String(m.langEa))
+      if (m.langBidi) tp += langPair('style:language-complex', 'style:country-complex', String(m.langBidi))
+      // 复杂文字字号：模型存半点，ODF 习惯 pt（24 半点 → 12pt）
+      if (Number(m.szcs) > 0) tp += ` style:font-size-complex="${Number(m.szcs) / 2}pt"`
+      // 字符缩放：模型存整数百分比，ODF 发带 % 的字面
+      if (Number(m.scale) > 0) tp += ` style:text-scale="${Number(m.scale)}%"`
       out += `<style:style style:name="${name}" style:family="text"><style:text-properties${tp}/></style:style>`
     }
     return out
@@ -818,6 +840,14 @@ class OdtBuilder {
           // ODF 的上下标是一个属性两值（style:text-position="super 58%"），故两个布尔键分开记
           sp: marks.some((k) => k.type === 'superscript'),
           sb: marks.some((k) => k.type === 'subscript'),
+          // locale 三件套 / 复杂文字字号 / 字符缩放（v0.224）：docx 读手发成 charExtra mark
+          // 的五枚 data-*，此前 ODT 写手不认这枚 mark ⇒ 存 .odt 时整族消失。值域与
+          // charStyleXml 的发法一一对应：lang 合并串（zh-CN）在发侧拆回 language+country。
+          lang: (at('charExtra')?.lang ?? undefined) as string | undefined,
+          langEa: (at('charExtra')?.langEa ?? undefined) as string | undefined,
+          langBidi: (at('charExtra')?.langBidi ?? undefined) as string | undefined,
+          szcs: (at('charExtra')?.szcs ?? undefined) as number | undefined,
+          scale: (at('charExtra')?.scale ?? undefined) as number | undefined,
         }
         const hasAny = Object.values(markKey).some(Boolean)
         if (hasAny) {
@@ -1170,6 +1200,20 @@ interface StyleInfo {
   ls?: string
   sup?: boolean
   sub?: boolean
+  /**
+   * locale 三件套 + 复杂文字字号 + 字符缩放（v0.224）：
+   * docx 读手把 w:lang 三枚发成 `data-lang` / `data-lang-ea` / `data-lang-bidi`、
+   * w:szCs 发 `data-szcs`、w:w 发 `data-scale`（`charExtra` mark 接），ODT 侧此前
+   * 一枚都不读——打开 .odt 时拼写/断行语言、复杂文字字号、字符缩放整族消失。
+   * ODF 把一个语言拆成 language + country 两格发，读时合并成 docx 的 `"zh-CN"` 形状；
+   * `szCs` 存半点（12pt → 24），`scale` 存整数百分比（120% → 120）。
+   * 三族都屏上不兑现（CSS 无对应物），只往返——与 docx 链同一口径。
+   */
+  lang?: string
+  langEa?: string
+  langBidi?: string
+  szCs?: number
+  scale?: number
 }
 
 function pick(el: Element, localName: string): Element | null {
@@ -1597,10 +1641,17 @@ export async function odtToHtml(
     const pp = pick(el, 'paragraph-properties')
     const bg = tp.getAttribute('fo:background-color') ?? pp?.getAttribute('fo:background-color')
     if (bg && bg !== 'transparent' && bg !== 'inherit') out.bg = bg
+    // 字族兜底（v0.222 立案，v0.224 补）：LibreOffice 写 `style:font-name`，但第三方程式
+    // 可能只写 `fo:font-family`（CSS 同名的 ODF 化身）。兜底链一律 `||`——`??` 在 xmldom
+    // 下对缺属性返回空串、整条失效（教训㊿）。`fo:font-family` 允许带引号的族名（`'Liberation Serif'`），
+    // 配对引号剥掉再进 fam。
     const font =
-      tp.getAttribute('style:font-name') ?? tp.getAttribute('fo:font-name') ?? tp.getAttribute('style:font-name-asian')
+      tp.getAttribute('style:font-name') ||
+      tp.getAttribute('fo:font-name') ||
+      tp.getAttribute('fo:font-family') ||
+      tp.getAttribute('style:font-name-asian')
     if (font && /courier|mono|consolas|menlo/i.test(font)) out.mono = true
-    if (font) out.fam = font
+    if (font) out.fam = font.replace(/^['"](.*)['"]$/, '$1')
     const sz = tp.getAttribute('fo:font-size')
     if (sz) {
       const v = parseFloat(sz)
@@ -1627,6 +1678,41 @@ export async function odtToHtml(
       const w = pos.trim().toLowerCase()
       out.sup = w.startsWith('super')
       out.sub = w.startsWith('sub')
+    }
+    // locale 三件套（v0.224）：language + country 是一个语言的两个格，合并成 docx 的
+    // `"zh-CN"` 形状（缺国只发语言）；asian/complex 两套对应 w:lang 的 eastAsia/bidi。
+    // 屏上不兑现，只随 data-* 往返——与 docx 读手同一口径。
+    const langOf = (l: string | null, c: string | null): string => {
+      const la = (l || '').trim()
+      const co = (c || '').trim()
+      return la ? (co ? `${la}-${co}` : la) : ''
+    }
+    const lang = langOf(tp.getAttribute('fo:language'), tp.getAttribute('fo:country'))
+    if (lang) out.lang = lang
+    const langEa = langOf(tp.getAttribute('style:language-asian'), tp.getAttribute('style:country-asian'))
+    if (langEa) out.langEa = langEa
+    const langBidi = langOf(tp.getAttribute('style:language-complex'), tp.getAttribute('style:country-complex'))
+    if (langBidi) out.langBidi = langBidi
+    // 字符缩放（v0.224）：`style:text-scale` 是百分比，docx 的 `w:w` 同义（120% ↔ 120）。
+    // 非正数与不认得的写法按没说走。
+    const scale = tp.getAttribute('style:text-scale')
+    if (scale) {
+      const v = parseFloat(scale)
+      if (Number.isFinite(v) && v > 0) out.scale = Math.round(v)
+    }
+    // 复杂文字字号（v0.224）：`style:font-size-complex` ↔ docx 的 `w:szCs`（半点）。
+    // 沿用 run 级字号的同一把单位尺，最后折半点（px → pt ×2）。
+    const szc = tp.getAttribute('style:font-size-complex')
+    if (szc) {
+      const v = parseFloat(szc)
+      if (Number.isFinite(v) && v > 0)
+        out.szCs = /cm$/.test(szc)
+          ? Math.round(v * 37.8 * 1.5)
+          : /mm$/.test(szc)
+            ? Math.round(v * 3.78 * 1.5)
+            : /px$/.test(szc)
+              ? Math.round(v * 1.5)
+              : Math.round(v * 2)
     }
     return out
   }
@@ -1864,13 +1950,22 @@ export async function odtToHtml(
     // `charStyleXml` 会把 highlight mark 的色写成 `fo:background-color`，两头对不上）。
     if (si.bg)
       html = `<mark data-color="${si.bg}" style="background-color: ${si.bg}; color: inherit">${html}</mark>`
-    // 字体族/字号/字色/字距同挂 textStyle mark，必须合成一个 span，不能嵌套两层同类 mark
     const css: string[] = []
     if (si.fam) css.push(`font-family: ${si.fam}`)
     if (si.szPx) css.push(`font-size: ${si.szPx}px`)
     if (si.color) css.push(`color: ${si.color}`)
     if (si.ls) css.push(`letter-spacing: ${si.ls}`)
-    if (css.length) html = `<span style="${css.join('; ')}">${html}</span>`
+    // 字体族/字号/字色/字距同挂 textStyle mark，必须合成一个 span，不能嵌套两层同类 mark。
+    // locale 三件套/复杂文字字号/字符缩放（v0.224）也搭同一枚 span——它们没有 CSS 形状，
+    // 走 data-* 由 charExtra mark 接（与 docx 读手发的形状逐字相同）；只有 data 没有 css
+    // 时 span 照发（style 为空串合法），否则语言在「HTML → 模型」那一步就没车坐。
+    const dataAttrs =
+      (si.lang ? ` data-lang="${esc(si.lang)}"` : '') +
+      (si.langEa ? ` data-lang-ea="${esc(si.langEa)}"` : '') +
+      (si.langBidi ? ` data-lang-bidi="${esc(si.langBidi)}"` : '') +
+      (si.szCs != null ? ` data-szcs="${si.szCs}"` : '') +
+      (si.scale != null ? ` data-scale="${si.scale}"` : '')
+    if (css.length || dataAttrs) html = `<span style="${css.join('; ')}"${dataAttrs}>${html}</span>`
     if (si.strike) html = `<s>${html}</s>`
     if (si.underline) html = `<u>${html}</u>`
     if (si.italic) html = `<em>${html}</em>`
