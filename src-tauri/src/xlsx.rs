@@ -1367,6 +1367,22 @@ pub fn write_xlsx_sync(path: String, workbook: WorkbookPayload) -> Result<Vec<St
             let row = cell.r;
             let Ok(col) = u16::try_from(cell.c) else { continue };
             if in_merge(row, cell.c) {
+                // v0.220：合并区里锚点由 merge_range 写，非锚点格**不能整片跳过**。
+                // merge_range 会拿锚点格式铺满整片（crate 内部就是逐格 write_blank(锚点fmt)），
+                // 源件里那些各带边框/填充的非锚点空格会被刷成锚点那一份——真件实测
+                // B2:H2 两侧各 6 格外框多出一条左边线。只补「自带样式且没有值」这一种：
+                // 有值的非锚点格维持原样（Excel 本身不产生这种件，改了反而要猜语义）。
+                let is_anchor = sheet
+                    .merges
+                    .iter()
+                    .any(|m| m.start_row == row && m.start_column == cell.c);
+                let no_value = matches!(cell.v.as_ref(), None | Some(Value::Null));
+                if !is_anchor && no_value {
+                    if let Some(st) = cell.s.as_ref().filter(|x| x.has_any()) {
+                        let fmt = format_for(Some(st), default_font);
+                        let _ = ws.write_blank(row, col, &fmt);
+                    }
+                }
                 continue;
             }
             let st = cell.s.as_ref().filter(|x| x.has_any());
@@ -3565,6 +3581,63 @@ mod tests {
         let fmt_nonzero = xfs.iter().any(|x| x.contains("numFmtId=\"164\""));
         assert!(fill_nonzero, "写出的 fillId 应保留非0值（语义未塌缩）");
         assert!(fmt_nonzero, "写出的 numFmtId 应保留非0值（语义未塌缩）");
+        std::fs::remove_file(&src).ok();
+        std::fs::remove_file(&out).ok();
+    }
+
+    /// v0.220：合并区里**非锚点格自己的样式**必须活下来。
+    ///
+    /// 真件账本是族级口径（元素|属性的去重值集合），看不见「某一格拿了另一格的样式」：
+    /// R09 里 `right|style` 源/出都含 thin 就判 kept，可实际有 12 格的右边框被写成了左边框。
+    /// 逐单元格对撞才露出来——根因是 `merge_range` 用锚点格式铺满整片，而主循环又用
+    /// `in_merge()` 把区内所有格（含各带样式的非锚点空格）跳过，那些格就只剩锚点那一份。
+    /// 本测试造一个「锚点四条边、非锚点只有底边」的合成件，往返后非锚点格不许长出左边。
+    #[test]
+    fn merged_non_anchor_cell_styles_kept() {
+        use rust_xlsxwriter::{Format as XFormat, FormatBorder as XBorder, Workbook as XWorkbook};
+        let src = tmp_path("merge-src");
+        let out = tmp_path("merge-out");
+        {
+            let mut wb = XWorkbook::new();
+            let ws = wb.add_worksheet();
+            // 锚点 B1：四条边全 thin；C1：只有底边（右边与左边都不该出现）
+            let anchor = XFormat::new().set_border(XBorder::Thin);
+            let inner = XFormat::new().set_border_bottom(XBorder::Thin);
+            ws.merge_range(0, 1, 0, 3, "表头", &anchor).expect("写合并区");
+            // 与 Excel 亲笔同形：非锚点格各自带样式（merge_range 刚用锚点格式铺过，这里覆盖回去）
+            ws.write_blank(0, 2, &inner).expect("写 C1");
+            ws.write_blank(0, 3, &inner).expect("写 D1");
+            wb.save(&src).expect("存源件");
+        }
+        let p1 = read_xlsx_sync(src.clone()).expect("读源件");
+        let bd_of = |p: &WorkbookPayload, col: u32| -> Option<CellBorder> {
+            p.sheets[0]
+                .cells
+                .iter()
+                .find(|c| c.r == 0 && c.c == col)
+                .and_then(|c| c.s.as_ref())
+                .and_then(|s| s.bd.clone())
+        };
+        let b1 = bd_of(&p1, 1).expect("B1 应有边框");
+        let c1 = bd_of(&p1, 2).expect("C1 应有自己的边框");
+        assert!(b1.l.is_some(), "源件 B1 左边框应在载荷里");
+        assert!(c1.l.is_none(), "源件 C1 不该有左边框");
+        assert!(c1.b.is_some(), "源件 C1 底边框应在载荷里");
+        write_xlsx_sync(out.clone(), p1).expect("写回");
+        let p2 = read_xlsx_sync(out.clone()).expect("读写出包");
+        let b1b = bd_of(&p2, 1).expect("写出包 B1 仍应有边框");
+        let c1b = bd_of(&p2, 2).expect("写出包 C1 的样式不该被锚点顶替");
+        assert!(b1b.l.is_some(), "锚点四条边不该被非锚点反噬");
+        assert!(c1b.l.is_none(), "C1 左边框是被锚点格式刷出来的假边，必须没有");
+        assert!(c1b.b.is_some(), "C1 自己的底边框要留下");
+        // 合并区本身不许因为补写空格而消失
+        assert!(
+            p2.sheets[0]
+                .merges
+                .iter()
+                .any(|m| m.start_row == 0 && m.start_column == 1 && m.end_row == 0 && m.end_column == 3),
+            "合并区应原样保留"
+        );
         std::fs::remove_file(&src).ok();
         std::fs::remove_file(&out).ok();
     }
