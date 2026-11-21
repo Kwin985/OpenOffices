@@ -1006,6 +1006,94 @@ export function wpsShapesOf(docXml: string): WpsShape[] {
   return out
 }
 
+/**
+ * 图片形状属性里模型没有槽的那几片（v0.219）。
+ *
+ * `pic:spPr` 的填充位、`a:ln` 的子填充、`a:custGeom`、`pic:blipFill@rotWithShape`
+ * 四片从 v0.155 起只按名记账（reader 的 `DRAWING_SHELL_ATTRS`），屏上零兑现、
+ * 模型零载荷、docx 包也没有构造器——往返后写手一律发 `<a:noFill/>` 与
+ * `prstGeom rect`，源件的渐变/线色变换/自定义几何/填充旋转就这么没了。
+ *
+ * 为什么这四片可以贴、别的几片不行：它们都在**合法位**上——
+ *   CT_ShapeProperties 的填充组一枚，位置在 geometry 之后、`a:ln` 之前；
+ *   CT_LineProperties 的填充组是 `a:ln` 的第一个子元素；
+ *   `a:custGeom` 与 `a:prstGeom` 同住 geometry 槽（二选一）；
+ *   `rotWithShape` 是 `pic:blipFill` 自己的属性。
+ * 同族里颜色变换（`a:gradFill` 被夹具塞进 `pic:blipFill`）、`a:ext`（没套
+ * `a:extLst`）、`a:scene3d`/`a:sp3d`（被塞进 `a:effectLst`）三处都写在**非法位**，
+ * 补它们等于照抄非法 XML，一律不追（口径见 docs/docx-fidelity-audit.md）。
+ */
+export interface PicSppr {
+  /** 源包 `<wp:docPr id=…>`：写出包按它找回同一只 drawing */
+  docPrId: string
+  /** 源 spPr 直挂的填充元素字面（写手发的 `a:noFill` 不在其列） */
+  fill?: string
+  /** 源第一枚 `a:ln` 的子填充元素字面 */
+  lnFill?: string
+  /** 源 `a:custGeom` 整段（与 prstGeom 二选一） */
+  custGeom?: string
+  /** 源 `pic:blipFill@rotWithShape` */
+  blipRot?: string
+}
+
+/** 填充组的元素名（CT_ShapeProperties 与 CT_LineProperties 共用 EG_FillProperties） */
+const FILL_TAGS = ['gradFill', 'blipFill', 'pattFill', 'solidFill', 'grpFill']
+
+/** 在一段 XML 里找**最先出现**的那枚填充元素字面；a:noFill 不算（它是缺省态） */
+function fillElemIn(xml: string): { literal: string; at: number } | null {
+  let best: { literal: string; at: number } | null = null
+  for (const t of FILL_TAGS) {
+    const m = new RegExp(`<a:${t}\\b[\\s\\S]*?</a:${t}>|<a:${t}\\b[^>]*/>`).exec(xml)
+    if (!m) continue
+    const at = m.index ?? 0
+    if (!best || at < best.at) best = { literal: m[0], at }
+  }
+  return best
+}
+
+/**
+ * 从源包提取图片四片余量（按 docPr id 对位）。
+ *
+ * 切段口径：以 `<pic:pic>…</pic:pic>` 为单位（非贪婪安全——pic 里不会有嵌套 pic），
+ * docPr 在它前面的同一只 drawing 里，向前找最近一枚；若中间隔着 `</w:drawing>`
+ * 说明这只 pic 自己没 docPr，跳过而不是认领别人的。
+ */
+export function picSpprsOf(docXml: string): PicSppr[] {
+  const out: PicSppr[] = []
+  for (const m of docXml.matchAll(/<pic:pic(?:\s[^>]*)?>[\s\S]*?<\/pic:pic>/g)) {
+    const at = m.index ?? 0
+    const before = docXml.slice(Math.max(0, at - 3000), at)
+    const docs = [...before.matchAll(/<wp:docPr\b[^>]*\bid="([^"]+)"/g)]
+    if (!docs.length) continue
+    const docPrId = docs[docs.length - 1][1]
+    const lastDocAt = docs[docs.length - 1].index ?? 0
+    if (before.slice(lastDocAt).includes('</w:drawing>')) continue
+    const block = m[0]
+    const item: PicSppr = { docPrId }
+    const sp = /<pic:spPr\b[^>]*>[\s\S]*?<\/pic:spPr>/.exec(block)?.[0] ?? ''
+    if (sp) {
+      const geom = /<a:(prstGeom|custGeom)\b[\s\S]*?<\/a:\1>/.exec(sp)
+      const geomEnd = geom ? (geom.index ?? 0) + geom[0].length : -1
+      if (geom && geom[1] === 'custGeom') item.custGeom = geom[0]
+      // 填充位：geometry 之后、第一枚 a:ln 之前
+      const lnAt = sp.indexOf('<a:ln', geomEnd < 0 ? 0 : geomEnd)
+      const start = geomEnd < 0 ? 0 : geomEnd
+      const region = sp.slice(start, lnAt < 0 ? sp.length : lnAt)
+      const fill = fillElemIn(region)
+      if (fill) item.fill = fill.literal
+      // 线填充：第一枚 a:ln 的子填充
+      const ln = /<a:ln\b[^>]*>[\s\S]*?<\/a:ln>/.exec(sp)?.[0] ?? ''
+      const lnFill = ln ? fillElemIn(ln.slice(ln.indexOf('>') + 1)) : null
+      if (lnFill) item.lnFill = lnFill.literal
+    }
+    const bf = /<pic:blipFill\b[^>]*>/.exec(block)?.[0] ?? ''
+    const rot = /\brotWithShape="([^"]*)"/.exec(bf)
+    if (rot) item.blipRot = rot[1]
+    if (item.fill || item.lnFill || item.custGeom || item.blipRot !== undefined) out.push(item)
+  }
+  return out
+}
+
 /** 从源包按段落边界提取 VML/嵌入对象整段；源件没说过的一律不生成指令 */
 export function vmlShapesOf(docXml: string, relsText: string): VmlShape[] {
   const imageRIds = new Set<string>()
@@ -1145,6 +1233,12 @@ export interface DocMeta {
    * `patchWpsShapes` 按正文文字把被拍平的段落换回完整形状（含 bodyPr 19 枚）。
    */
   wpsShapes?: WpsShape[]
+  /**
+   * 图片四片合法余量（v0.219）：`picSpprsOf` 从源包提取，`patchPicSppr` 在 post-pack
+   * 按 docPr id 把 `a:noFill`/`prstGeom rect` 换成源件的填充、线填充、custGeom，
+   * 并补 `pic:blipFill@rotWithShape`。
+   */
+  picSppr?: PicSppr[]
   /** 文档属性（v0.188）：由 `docxToDocMeta` 从 docProps/core.xml 读出，编辑器可改 */
   docProps?: DocProps
   page?: PageSetup
@@ -1506,6 +1600,9 @@ export async function docxToDocMeta(
   // v0.218：wps 文本框整段字面（上面 docXml 已读，零新增部件读）
   const wpsShapes = wpsShapesOf(docXml)
   if (wpsShapes.length) out.wpsShapes = wpsShapes
+  // v0.219：图片四片合法余量（填充/线填充/custGeom/blipFill 旋转），同一份 docXml
+  const picSppr = picSpprsOf(docXml)
+  if (picSppr.length) out.picSppr = picSppr
   return out
 }
 
@@ -4065,6 +4162,8 @@ export async function prosemirrorToDocxBytes(
   const withVml = await patchVmlShapes(withPlacements, meta?.vmlShapes, sess)
   // v0.218：wps 文本框整段字面（按正文文字把拍平的段落换回形状，含 bodyPr 19 枚）
   const withWps = await patchWpsShapes(withVml, meta?.wpsShapes, sess)
+  // v0.219：图片四片合法余量（填充/线填充/custGeom/blipFill 旋转）按源件字面补回
+  const withPicSppr = await patchPicSppr(withWps, meta?.picSppr, sess)
   // 表闸门三样都要补：样式推出来的（looks）与表自己带的（dt.tblLooks），
   // v0.152 起再加表级条件格式尺寸两枚（dt.tblPrs，与 tblLook 同住 tblPr）
   const needTbl =
@@ -4075,7 +4174,7 @@ export async function prosemirrorToDocxBytes(
     dt.cnfStyles.some((x) => x) ||
     dt.tblBorders.some((x) => x)
   // 单元格不换行（v0.152）：包里没有 noWrap 的槽，按 <w:tc> 出现序插 <w:noWrap/>
-  const withCell = dt.cellExtras.some((x) => x) ? await patchTcPr(withWps, dt.cellExtras, sess) : withWps
+  const withCell = dt.cellExtras.some((x) => x) ? await patchTcPr(withPicSppr, dt.cellExtras, sess) : withPicSppr
   // 底纹的存盘原件（v0.164）：按 <w:shd> 出现序**合并**属性（包只发 val/color/fill 三枚，
   // 且 fill 写的是解析后的屏上色——源件的字面色与主题三枚都要改回来/补上去）
   const withShd = await patchShdAttrs(withCell, dt.shdExtras, sess)
@@ -4603,6 +4702,109 @@ export async function patchWpsShapes(
   }
   if (!touched) return bytes
   setPart(zip, 'word/document.xml', out, sess)
+  return finishPatch(bytes, zip, sess)
+}
+
+/**
+ * v0.219：图片四片合法余量按源件字面补回——把写手无条件发的 `<a:noFill/>` 与
+ * `prstGeom rect` 换成源件的填充组、线填充、`a:custGeom`，并补
+ * `pic:blipFill@rotWithShape`。
+ *
+ * 为什么不整段换 `pic:spPr`：`pic:spPr/a:xfrm` 是**用户能改**的东西（尺寸/旋转/
+ * 翻转/裁切都在这一片或它旁边），整段换会把用户刚做完的编辑改回源件的旧值——
+ * v0.218 换 graphicData 时已踩过这个边界（那边没有 xfrm 之外的编辑面）。这里只
+ * 补模型**彻底没有槽**的静态美术描述，xfrm / a:ln 的属性 / bwMode 全部留给写手。
+ *
+ * 位次（照 CT_ShapeProperties 与 CT_LineProperties 的 sequence）：
+ *   spPr 填充组在 geometry 之后、`a:ln` 之前 —— 直接替掉那一枚 `a:noFill/>`；
+ *   `a:ln` 的填充组是它的第一个子元素 —— 替掉 `<a:ln>` 里的那枚 `a:noFill/>`；
+ *   custGeom 与 prstGeom 同槽 —— 整枚换掉，不会出现两枚 geometry。
+ *
+ * 守卫：① 只在「写出包这一位还是缺省态」时换（noFill / prstGeom / 无 attr），
+ * 天然幂等，第二趟什么都不做；② docPr id 找不到就跳过；③ 只动 spPr 与 blipFill，
+ * `pic:pic`/`pic:spPr`/`wp:docPr` 计数不变。
+ */
+export async function patchPicSppr(
+  bytes: Uint8Array,
+  items: PicSppr[] | undefined,
+  sess?: PackSession,
+): Promise<Uint8Array> {
+  if (!items?.length) return bytes
+  const zip = sess ? sess.zip : await loadZipOf(bytes)
+  let out = await partText(zip, 'word/document.xml', sess)
+  if (!out) return bytes
+  const tag = 'word/document.xml'
+  const NOFILL = '<a:noFill/>'
+  let touched = false
+  for (const it of items) {
+    if (!it.docPrId) continue
+    const docAt = out.indexOf(`<wp:docPr id="${it.docPrId}"`)
+    if (docAt < 0) continue
+    const picAt = out.indexOf('<pic:pic', docAt)
+    if (picAt < 0) continue
+    const picEnd = out.indexOf('</pic:pic>', picAt)
+    if (picEnd < 0) continue
+    let region = out.slice(picAt, picEnd)
+    let changed = false
+
+    // ① pic:blipFill@rotWithShape（属性位，无则补）
+    if (it.blipRot !== undefined) {
+      const bf = /<pic:blipFill\b[^>]*>/.exec(region)
+      if (bf && !/\brotWithShape=/.test(bf[0])) {
+        const open = bf[0].slice(0, -1) + ` rotWithShape="${it.blipRot}">`
+        region = region.slice(0, bf.index) + open + region.slice(bf.index + bf[0].length)
+        changed = true
+      }
+    }
+
+    const spAt = region.indexOf('<pic:spPr')
+    const spEnd = spAt < 0 ? -1 : region.indexOf('</pic:spPr>', spAt)
+    if (spAt >= 0 && spEnd >= 0) {
+      const spTail = '</pic:spPr>'
+      let box = region.slice(spAt, spEnd + spTail.length)
+
+      // ② a:ln 的子填充：只替 `<a:ln …>` 里的第一枚 a:noFill
+      if (it.lnFill) {
+        const ln = /<a:ln\b[^>]*>[\s\S]*?<\/a:ln>/.exec(box)
+        if (ln) {
+          const nf = ln[0].indexOf(NOFILL, ln[0].indexOf('>') + 1)
+          if (nf >= 0) {
+            const fresh = ln[0].slice(0, nf) + it.lnFill + ln[0].slice(nf + NOFILL.length)
+            box = box.slice(0, ln.index) + fresh + box.slice(ln.index + ln[0].length)
+            changed = true
+          }
+        }
+      }
+
+      // ③ custGeom 替 prstGeom（同槽二选一，不共存）
+      if (it.custGeom && !box.includes('<a:custGeom')) {
+        const g = /<a:prstGeom\b[^>]*\/>|<a:prstGeom\b[\s\S]*?<\/a:prstGeom>/.exec(box)
+        if (g) {
+          box = box.slice(0, g.index) + it.custGeom + box.slice(g.index + g[0].length)
+          changed = true
+        }
+      }
+
+      // ④ spPr 填充组：geometry 之后、第一枚 a:ln 之前的那枚 a:noFill
+      if (it.fill) {
+        const geom = /<a:(prstGeom|custGeom)\b[\s\S]*?<\/a:\1>/.exec(box)
+        const head = geom ? (geom.index ?? 0) + geom[0].length : box.indexOf('>') + 1
+        const lnAt = box.indexOf('<a:ln', head)
+        const nf = box.indexOf(NOFILL, head)
+        if (nf >= 0 && (lnAt < 0 || nf < lnAt)) {
+          box = box.slice(0, nf) + it.fill + box.slice(nf + NOFILL.length)
+          changed = true
+        }
+      }
+
+      if (changed) region = region.slice(0, spAt) + box + region.slice(spEnd + spTail.length)
+    }
+    if (!changed) continue
+    out = out.slice(0, picAt) + region + out.slice(picEnd)
+    touched = true
+  }
+  if (!touched) return bytes
+  setPart(zip, tag, out, sess)
   return finishPatch(bytes, zip, sess)
 }
 
