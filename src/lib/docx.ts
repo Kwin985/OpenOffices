@@ -3612,6 +3612,15 @@ function blocksOf(
       // vertAnchor 值域含 top/bottom/center/inside/outside——BuilderElement 透传不校验，
       // 原值落；类型面按库外槽断言绕过
       const tblp = tblpFloatOf(node.attrs?.tblp)
+      // 表级对齐（v0.223）：`w:tblPr/w:jc`。库有槽（`ITableOptions.alignment` → `w:jc`），
+      // 不用走 post-pack 补丁。只发能兑现的两档：`left` 与缺省同形（发出去是凭空多一枚
+      // 声明，Word 打开再存也还是会把它删掉），故按「没说」处理。
+      const tblAlign =
+        node.attrs?.talign === 'center'
+          ? AlignmentType.CENTER
+          : node.attrs?.talign === 'right'
+            ? AlignmentType.RIGHT
+            : undefined
       // 表自身的闸门（v0.147）：与段落余量同理，按出现序登记，打包后贴回 <w:tblPr>
       dt.tblLooks.push(tlookXmlOf(node.attrs?.tlook))
       // 表级条件格式尺寸（v0.152）：两枚 bandSize 与 tblLook 同住 tblPr、同序登记，
@@ -3638,6 +3647,7 @@ function blocksOf(
             ? { indent: { size: Math.round(num(node.attrs?.marginLeft) * PX_TWIP), type: WidthType.DXA } }
             : {}),
           ...(tblp ? { float: tblp } : {}),
+          ...(tblAlign ? { alignment: tblAlign } : {}),
           rows: rows.map((r, ri) => {
               // 逐格的 w:tcW 吃掉它跨的那几枚网格列；网格游标按 shape 给的真格子起始列走，
               // 被上面竖跨压掉的那几枚列不能省（不省就会把整行往左错一枚，键进去的账落错格子）

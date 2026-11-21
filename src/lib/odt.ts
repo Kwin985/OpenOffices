@@ -17,7 +17,7 @@ import {
   type PageSetup,
   type PMNode,
 } from './docx'
-import { bdAttr, borderParts, CELL_EDGES, cssBorder, rgb2hex, type CellEdge } from './cell-style'
+import { bdAttr, borderParts, CELL_EDGES, cssBorder, rgb2hex, TALIGN_ATTR, type CellEdge } from './cell-style'
 import {
   condLadderAppearance,
   condLadderMargin,
@@ -1006,7 +1006,12 @@ class OdtBuilder {
     const look = condLookBits(t.cond)
     const hasT = Object.keys(t).length > 0
     const last = grid.length - 1
-    const ts = this.tStyle(node, t.align)
+    // 表级对齐（v0.223）：表自己说的 `talign` 压过命名表样式带的 al（与 docx 侧
+    // 「表级直接格式 > 样式层」同一顺序），两处都空时才落 `table:align="margins"`。
+    const ts = this.tStyle(
+      node,
+      node.attrs?.talign === 'center' || node.attrs?.talign === 'right' ? (node.attrs.talign as string) : t.align,
+    )
     let out = `<table:table${ts ? ` table:style-name="${ts}"` : ''}>`
     grid.forEach((line, ri) => {
       let rowXml = ''
@@ -1791,14 +1796,23 @@ export async function odtToHtml(
   }
 
   /** 表格样式（table 家族）的 fo:margin-left → 缩进；表宽由 CellStyle 的 renderHTML 自己收 */
-  const tableStyleCss = (name: string | null | undefined): string => {
+  const tableAttrsOf = (name: string | null | undefined): string => {
     let ml: number | undefined
+    let al = ''
     for (const el of styleChain(name)) {
       const tp = pick(el, 'table-properties')
       const v = len2px(tp?.getAttribute('fo:margin-left'))
       if (v !== undefined) ml = v
+      // 表级对齐（v0.223）：`table:align` 是 ODF 里「整表靠哪边」的那一枚。
+      // 此前只读 `fo:margin-left`，一个方向都没读 ⇒ LibreOffice 里居中的表导入后贴左。
+      // `margins`（两侧都留版心边距）与 `left` 都和缺省同形，两者不出属性——发了等于
+      // 凭空多一枚声明，下游还得再判一次「这是不是默认值」。链上自己赢，子样式说的压父。
+      const a = (tp?.getAttribute('table:align') ?? '').toLowerCase()
+      if (a === 'center' || a === 'right') al = a
+      else if (a === 'left' || a === 'margins') al = ''
     }
-    return ml && ml > 0 ? ` style="margin-left: ${ml}px"` : ''
+    const css = ml && ml > 0 ? ` style="margin-left: ${ml}px"` : ''
+    return `${css}${al ? ` ${TALIGN_ATTR}="${al}"` : ''}`
   }
 
   /**
@@ -2349,7 +2363,7 @@ export async function odtToHtml(
           rows.push(`<tr${rh !== undefined ? ` style="height: ${rh}px"` : ''}>${cells.join('')}</tr>`)
         }
         inCell--
-        return `<table${tableStyleCss(el.getAttribute('table:style-name'))}><tbody>${rows.join('')}</tbody></table>`
+        return `<table${tableAttrsOf(el.getAttribute('table:style-name'))}><tbody>${rows.join('')}</tbody></table>`
       }
       case 'body':
       case 'text':

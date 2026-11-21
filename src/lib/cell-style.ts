@@ -723,6 +723,17 @@ export function cnfPayload(kv: CnfPayload): string {
  * 载荷：边与边用 `|` 隔，边内七格用 `;` 隔（定序，空槽留空；只有真写着值的边才进载荷）。 */
 export const TBLB_ATTR = 'data-tblb'
 
+/**
+ * 表级对齐（v0.223）：`w:tblPr/w:jc`（docx）与 `table:align`（ODF）是同一件事——整张表
+ * 相对版心靠哪边。屏上兑现成左右 auto 边距（居中两侧 auto、贴右只留左侧 auto），
+ * 载荷只留这两个值（`center` / `right`）：`left` 与缺省同形、`start`/`end` 在导入侧
+ * 已折成 `left`/`right`，落进来的一定是能兑现的那两档。
+ *
+ * 为什么单开一枚属性而不是折进 marginLeft：两者语义正交（缩进是「离左边多远」，
+ * 对齐是「让哪边留白」），Word 里也各有各的元素（`w:tblInd` vs `w:jc`）。
+ * */
+export const TALIGN_ATTR = 'data-talign'
+
 /** w:tblBorders 的六条边，**顺序即载荷格序**（CT_TblBorders 的元素序） */
 export const TBLB_EDGES = ['top', 'left', 'bottom', 'right', 'insideH', 'insideV'] as const
 
@@ -1339,6 +1350,25 @@ export const CellStyle = Extension.create({
               return { style: `margin-left: ${n}px; width: calc(100% - ${n}px)` }
             },
           },
+          /**
+           * 表级对齐（v0.223）：读侧 `w:tblPr/w:jc`（docx）与 `table:align`（ODF）落这里。
+           * 排在 marginLeft 之后不是随意的：两条都写 `margin-left`，后写的赢——有对齐时
+           * 缩进让位给 auto（Word 里 jc 与 tblInd 同存时，纸上也是对齐先定位置、缩进再在
+           * 那一侧内挪，CSS 表达不了那一层，宁可让居中/贴右看得见）。
+           */
+          talign: {
+            default: null as string | null,
+            parseHTML: (el: HTMLElement) => {
+              const v = (el.getAttribute(TALIGN_ATTR) || '').toLowerCase()
+              return v === 'center' || v === 'right' ? v : null
+            },
+            renderHTML: (attrs: Record<string, unknown>) => {
+              const v = attrs.talign === 'center' || attrs.talign === 'right' ? (attrs.talign as string) : ''
+              if (!v) return {}
+              const style = v === 'center' ? 'margin-left: auto; margin-right: auto' : 'margin-left: auto; margin-right: 0'
+              return { [TALIGN_ATTR]: v, style }
+            },
+          },
         },
       },
     ]
@@ -1395,12 +1425,21 @@ export class IndentTableView extends TableView {
   private applyIndent(node: Node): void {
     const ml = Number(node.attrs?.marginLeft)
     const has = Number.isFinite(ml) && ml > 0
-    this.table.style.marginLeft = has ? `${ml}px` : ''
+    // 表级对齐（v0.223）：可缩放模式下 renderHTML 的那些样式不落到元素上（见类注），
+    // 对齐同样得在这里补。三档互斥：居中两侧 auto、贴右只留左侧 auto，缺省回到缩进。
+    const al = node.attrs?.talign === 'center' || node.attrs?.talign === 'right' ? (node.attrs.talign as string) : ''
+    if (al) {
+      this.table.style.marginLeft = 'auto'
+      this.table.style.marginRight = al === 'center' ? 'auto' : '0'
+    } else {
+      this.table.style.marginLeft = has ? `${ml}px` : ''
+      this.table.style.marginRight = ''
+    }
     // 整表每列都带账 ⇒ 表宽就是这份账本身，与 docx 的 w:tblW（网格和）同一形状；
     // 没账或部分账才退回版心比例，此时缩进必须同时收右边，否则整张表顶出页面
     const total = accountTotalPx(node)
     if (total) this.table.style.width = `${total}px`
-    else this.table.style.width = has ? `calc(100% - ${ml}px)` : ''
+    else this.table.style.width = has && !al ? `calc(100% - ${ml}px)` : ''
   }
 
   /**

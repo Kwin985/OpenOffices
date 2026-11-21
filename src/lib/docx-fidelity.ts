@@ -50,7 +50,7 @@ import { all, allDesc, attr, attrL, attrNum, descend, els, find, findDesc, findL
 import { FieldEngine, fieldLabel, parseInstr, recomputable } from './docx-fields'
 import { embedHtml, inlineFlatten, unwrapEmbed, type EmbedHtml } from './ole'
 import { chartToHtml, smartArtToHtml } from './ooxml-graphics'
-import { BDR_ATTR, CELL_EDGES, PBAR_ATTR, PBDR_ATTR, TRPR_ATTR, CNF_ATTR, CNF_KEYS, CSS_BORDER_STYLE, EFFECT_ATTRS, FRAME_NUMERIC_KEYS, FRAME_STR_KEYS, IMG_ATTR, PPR_ATTR, PPR_IND_KEYS, PPR_ONOFF_KEYS, PPR_STR_KEYS, SHD_ATTR, TAB_LEADERS, TBLB_ATTR, TBLB_EDGES, TBLB_KEYS, TBLPR_ATTR, TLOOK_ATTR, bdSpaceAttrs, bdrPayload, borderParts, cnfPayload, effectKey, eighthsToPx, framePayload, imgPayload, pprPayload, ptToPx, rgb2hex, shadeCss, shdPayloadOf, tblbPayload, tblpPayload, tblPrPayload, tabsPayload, tlookPayload, pbdrPayload, trPrPayload, type BdrOrigin, type CellEdge, type CnfPayload, type FramePayload, type ImgPayload, type PprPayload, type ShdPayload, type TabSpec, type TblbPayload, type TblpPayload } from './cell-style'
+import { BDR_ATTR, CELL_EDGES, PBAR_ATTR, PBDR_ATTR, TRPR_ATTR, CNF_ATTR, CNF_KEYS, CSS_BORDER_STYLE, EFFECT_ATTRS, FRAME_NUMERIC_KEYS, FRAME_STR_KEYS, IMG_ATTR, PPR_ATTR, PPR_IND_KEYS, PPR_ONOFF_KEYS, PPR_STR_KEYS, SHD_ATTR, TAB_LEADERS, TALIGN_ATTR, TBLB_ATTR, TBLB_EDGES, TBLB_KEYS, TBLPR_ATTR, TLOOK_ATTR, bdSpaceAttrs, bdrPayload, borderParts, cnfPayload, effectKey, eighthsToPx, framePayload, imgPayload, pprPayload, ptToPx, rgb2hex, shadeCss, shdPayloadOf, tblbPayload, tblpPayload, tblPrPayload, tabsPayload, tlookPayload, pbdrPayload, trPrPayload, type BdrOrigin, type CellEdge, type CnfPayload, type FramePayload, type ImgPayload, type PprPayload, type ShdPayload, type TabSpec, type TblbPayload, type TblpPayload } from './cell-style'
 import { ooxmlLine } from './paragraph-style'
 import {
   asTableCondType,
@@ -3886,6 +3886,15 @@ class Fidelity {
       const t = tblPr ? (attr(find(tblPr, 'w:tblInd'), 'w:type') ?? '').toLowerCase() : ''
       if (t && t !== 'dxa') this.warn(`表缩进档位 w:tblInd/@w:type=${t} 未保留（dxa 之外的档位没有 px 化出路）`)
     }
+    // 表级对齐（v0.223）：`w:tblPr/w:jc` 是这张表自己在说他靠哪边。此前只有**命名表样式**
+    // 那一层读过同名的 `w:jc`（见 `styleTableAlign` → tStyle 的 al），表自身直接写的这一枚
+    // 从没查问过 ⇒ Word 里居中的表导入后贴左，存盘时 `w:jc` 整枚消失（屏上那一刻就是错的）。
+    // `start`/`end` 是 ST_Jc 的另一套写法（与 `left`/`right` 同档），按同一档折；
+    // `both`/`distribute` 在表上没有对应的排版语义，如实告警后按「没说」走。
+    const jcRaw = (val(tblPr, 'w:jc') ?? '').toLowerCase()
+    const talign = jcRaw === 'center' ? 'center' : jcRaw === 'right' || jcRaw === 'end' ? 'right' : ''
+    if (jcRaw && !talign && jcRaw !== 'left' && jcRaw !== 'start')
+      this.warn(`表级对齐档位 w:tblPr/w:jc=${jcRaw} 未保留（只兑现居中与贴右）`)
     // 表级默认格边距（w:tblCellMar）：v0.97 之前整条丢弃，声明了的左右 108 缇（=7.2px）也读不出来。
     // 逐格 w:tcMar 只在它说到的那几边上优先。
     // 再往下一层（样式层）：表引用的样式（w:tblStyle）及其 basedOn 祖先说的格边距是这一层的基座，
@@ -4024,7 +4033,7 @@ class Fidelity {
     // 表级边框六边原值（v0.163）：屏上那一半走「分摊到格」那一趟（上面 tbSpace 已经在跑），
     // 这一趟只把原件照带回去——两趟值是两回事，不能互相顶替
     const tblbAttr = readTblbPayload(tblBordersEl)
-    let s = `<table${tblStyle ? ` style="${tblStyle}"` : ''}${ownerAttr}${tblpAttr ? ` data-tblp="${tblpAttr}"` : ''}${tlookAttr ? ` ${TLOOK_ATTR}="${tlookAttr}"` : ''}${tblprAttr ? ` ${TBLPR_ATTR}="${tblprAttr}"` : ''}${cnfAttr ? ` ${CNF_ATTR}="${cnfAttr}"` : ''}${tblbAttr ? ` ${TBLB_ATTR}="${tblbAttr}"` : ''}>`
+    let s = `<table${tblStyle ? ` style="${tblStyle}"` : ''}${talign ? ` ${TALIGN_ATTR}="${talign}"` : ''}${ownerAttr}${tblpAttr ? ` data-tblp="${tblpAttr}"` : ''}${tlookAttr ? ` ${TLOOK_ATTR}="${tlookAttr}"` : ''}${tblprAttr ? ` ${TBLPR_ATTR}="${tblprAttr}"` : ''}${cnfAttr ? ` ${CNF_ATTR}="${cnfAttr}"` : ''}${tblbAttr ? ` ${TBLB_ATTR}="${tblbAttr}"` : ''}>`
     for (let ri = 0; ri < plan.length; ri++) {
       const trPr = find(rows[ri], 'w:trPr')
       // 表头由 w:trPr/w:tblHeader 决定，不限首行（Word 里可以声明第 2 行起重复表头）
