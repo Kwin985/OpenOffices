@@ -108,3 +108,48 @@ ODF 里这两族各有两枚同义属性（`style:text-underline-type` / `style:
   `style:width`（表宽）仍不发：列宽走的是 `table:table-column` + 首行 `colwidth` 那条路。
 - 合并区里的 `table:covered-table-cell` 占位格不带 `table:style-name`：读写两侧对称，往返不多丢东西，
   但 LibreOffice 打开那些格会退回默认框线。
+
+## 五、查问面普查（v0.224）：43 对「源里在场、读手从未查问」
+
+v0.222/223 的缺口都是「族级探针」撞出来的。这一轮换一套口径，把**读手查问了哪些「元素|属性」对**
+整个记一遍（探针包在测试 DOM 的 `Element.prototype.getAttribute` 上，只记录不改返回值；源包普查
+同一套解析器跑两遍、一遍不开记录），与源包真在场的对比。夹具 = LibreOffice 形状的手写富件
+（段落/行内全排 + 表三族 + 列表档 + 链接/书签/脚注/批注 + 页面版式），95 对源对、**43 对从未查问**。
+
+探针脚本不入库（`tmp/probe-odt-consult.mjs`，gitignored），方法与数字记在这里——它就是将来
+ODT 账本的夹具雏形与分母来源。
+
+### A. 本轮修掉（9 对）：docx 链已有槽、ODT 侧整族消失
+
+| 族 | 源对 | 修法 |
+|---|---|---|
+| 字族兜底 | `text-properties\|font-family` | 兜底链末位补 `fo:font-family`（配对引号剥掉），沿用 `\|\|`（教训㊿） |
+| locale | `language` / `country` / `language-asian` / `country-asian` / `language-complex` / `country-complex`（6 对） | language+country 合并成 docx 的 `"zh-CN"` 形状 → `data-lang` / `data-lang-ea` / `data-lang-bidi`（charExtra mark 接）；写侧把 mark 拆回两格，只有尾段像地区码才拆，`zh-Hans` 这类变体整串进 `fo:language` 不造非法 `fo:country` |
+| 字符缩放 | `text-scale` | → `data-scale`（120% ↔ 120，与 `w:w` 同义） |
+| 复杂文字字号 | `font-size-complex` | → `data-szcs`（半点，12pt ↔ 24） |
+
+五族屏上都不兑现（CSS 无对应物），只往返——与 docx 链同一口径。守卫 `test-odt-run-extra.mjs`
+18 条；负控（读手退回 HEAD）14 红 / 4 绿，绿的 4 条全是反例。
+
+### B. docx 链有对应物、留待后续（按价值排序）
+
+- `text-underline-style` / `-width` / `-color`（3 对）：docx 下划线载荷六格（线型;屏上色;字面色;主题三枚），
+  ODT 只读 `type` ⇒ 下划线颜色/线宽丢。**下一波最顺手的一族**。
+- `bookmark|name`（1）：docx 读手读 `w:bookmarkStart@w:name` 且有 `test-bookmark-ids` 守卫；ODT 书签名不读不写。
+- `annotation|creator` / `|date`（2）：**写手反而发 `dc:creator`，读手不读**——又一次「两头对不上」，
+  与 v0.222 高亮同款病。
+- `list-level-properties|space-before` / `|min-label-width` / `|list-level-position-and-space-mode` +
+  `list-level-style-number|num-suffix`（4 对）：列表标签几何与编号后缀；docx 列表有 ind/suff 对应。
+- `text-transform`（1）：docx 有 caps/smallCaps 槽；ODT 的 `uppercase|lowercase|small-caps` 不读。
+- `table-properties|width`（1）：表宽；docx 有 `w:tblW` 账。列宽那条路是通的，表级宽不是。
+- `page-layout-properties|print-orientation`（1）：docx 页面设置有 orientation 槽。
+- `paragraph-properties|keep-together` / `|hyphenate`（2）、`table-cell|value-type`（1）、
+  `a|style-name` / `|visited-style-name` / `|type`（3）、`text-properties|font-weight-asian` /
+  `|font-size-asian`（2，docx 无 szEa 槽）、`text-shadow` / `font-relief`（2，docx 槽是布尔近似）。
+
+### C. 结构/身份对，不该读、记口径不追（10 对）
+
+`office:version` ×2（写手自定）、`style|family` / `style|class`（写手按已知家族发）、
+`font-face|name` / `|font-family` / `|font-family-generic` / `|font-pitch`（font-face-decls 壳，
+写手重建）、`master-page|name`、`table|name`、`page-number|select-page`（页码格式的判据已在
+footer 那一路按结构认，不认这枚枚举值）。
