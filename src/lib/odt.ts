@@ -1010,9 +1010,14 @@ class OdtBuilder {
     let out = `<table:table${ts ? ` table:style-name="${ts}"` : ''}>`
     grid.forEach((line, ri) => {
       let rowXml = ''
-      const lastCol = Math.max(...line.map((x) => x.col), 0)
+      // 行右缘不能取「最右那格的**左**边」：末格跨出去的那几列、以及被上一行的纵向合并
+      // 整段盖住的尾巴，都不在 line 里，按左边当界会一枚占位都不发。ODF 的格位按行内
+      // 元素序算，少了占位格后头的格子就左移一格（v0.222 与 ods.rs 同一条）。
+      let rowEnd = 0
+      for (const it of line) rowEnd = Math.max(rowEnd, it.col + (spans.get(`${ri},${it.col}`)?.cs ?? 1))
+      for (let k = 0; k < cols; k++) if (covered.has(`${ri},${k}`)) rowEnd = Math.max(rowEnd, k + 1)
       let c = 0
-      while (c <= lastCol) {
+      while (c < rowEnd) {
         if (covered.has(`${ri},${c}`)) {
           rowXml += '<table:covered-table-cell/>'
           c++
@@ -1039,7 +1044,10 @@ class OdtBuilder {
           })
           .join('')
         rowXml += `<table:table-cell${attrs}>${body}</table:table-cell>`
-        c += sp?.cs ?? 1
+        // 跨出去的列各补一枚 covered 占位：`c += colspan` 会把它们整段跳过，
+        // 那些位置在 ODF 里就没有格元素了（LibreOffice 自己的输出也是逐枚补）
+        for (let k = 1; k < colspan; k++) rowXml += '<table:covered-table-cell/>'
+        c += colspan
       }
       const rn = this.rStyle(rows[ri], hasT ? this.condRowHeight(t, look, ri, ri === last) : undefined)
       out += `<table:table-row${rn ? ` table:style-name="${rn}"` : ''}>${rowXml}</table:table-row>`
@@ -1571,9 +1579,13 @@ export async function odtToHtml(
     const tp = pick(el, 'text-properties') ?? el
     if (tp.getAttribute('fo:font-weight') === 'bold') out.bold = true
     if (tp.getAttribute('fo:font-style') === 'italic') out.italic = true
-    const ul = tp.getAttribute('style:text-underline-type') ?? tp.getAttribute('style:text-underline-style')
+    // 两枚兜底用 `||` 而不是 `??`：`getAttribute` 缺属性时浏览器返回 null、而测试用的
+    // `@xmldom/xmldom` 返回空串——`??` 在 xmldom 下整枚兜底失效，于是「只写 -style 不写
+    // -type」的合法 ODF（LibreOffice 两个都写，别家不一定）在测试里读不到下划线/删除线，
+    // 浏览器里却读得到。用 `||` 让两边量到同一件事（v0.222）。
+    const ul = tp.getAttribute('style:text-underline-type') || tp.getAttribute('style:text-underline-style')
     if (ul && ul !== 'none') out.underline = true
-    const lt = tp.getAttribute('style:text-line-through-type') ?? tp.getAttribute('style:text-line-through-style')
+    const lt = tp.getAttribute('style:text-line-through-type') || tp.getAttribute('style:text-line-through-style')
     if (lt && lt !== 'none') out.strike = true
     const color = tp.getAttribute('fo:color')
     if (color && color !== 'inherit') out.color = color
@@ -1832,7 +1844,12 @@ export async function odtToHtml(
   const htmlOfStyle = (si: StyleInfo, inner: string): string => {
     let html = inner
     if (si.mono) html = `<code>${html}</code>`
-    if (si.bg) html = `<span style="background-color: ${si.bg}">${html}</span>`
+    // 底色走 `<mark data-color>`：这是 docx 读手（`docx-fidelity.ts`）发的同一枚形状，
+    // TipTap 的 Highlight 只按 `<mark>` 解析。此前这里发的是行内 `background-color` 的
+    // `<span>`，schema 认不出 ⇒ 高亮在「HTML → 模型」那一步就没了（写手侧一直是好的，
+    // `charStyleXml` 会把 highlight mark 的色写成 `fo:background-color`，两头对不上）。
+    if (si.bg)
+      html = `<mark data-color="${si.bg}" style="background-color: ${si.bg}; color: inherit">${html}</mark>`
     // 字体族/字号/字色/字距同挂 textStyle mark，必须合成一个 span，不能嵌套两层同类 mark
     const css: string[] = []
     if (si.fam) css.push(`font-family: ${si.fam}`)
