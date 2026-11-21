@@ -61,10 +61,18 @@ const withMit = boxes.find((b) => b.includes('<a:miter'))
 check('写手：线端插在带载荷的那一块', !!withEnds)
 check('写手：miter 插在另一块', !!withMit && withMit !== withEnds)
 
-const order = (b) => [...b.matchAll(/<a:(noFill|prstDash|miter|headEnd|tailEnd)\b/g)].map((m) => m[1])
+const order = (b) => [...b.matchAll(/<a:(noFill|solidFill|gradFill|blipFill|pattFill|grpFill|prstDash|miter|headEnd|tailEnd)\b/g)].map((m) => m[1])
 eq('写手：CT_LineProperties 子元素序（fill → dash → head → tail）',
   order(withEnds ?? '').join(' > '), 'noFill > prstDash > headEnd > tailEnd')
-eq('写手：另一块序（fill → miter）', order(withMit ?? '').join(' > '), 'noFill > miter')
+// v0.219：夹具第二块 a:ln 源件带 `<a:solidFill><a:schemeClr val="accent2">`（含 lumMod
+// 颜色变换）——模型无槽、包也发不出，此前往返后被写手的 `<a:noFill/>` 顶掉。picSppr
+// 通道按源件补回，所以这一块的填充**应该**是 solidFill 而不是 noFill。上面那条
+// （源件无填充的那一块仍是 noFill）才是「包发的 noFill 不被乱顶」这条纪律的守卫。
+eq('写手：另一块序（fill → miter）', order(withMit ?? '').join(' > '), 'solidFill > miter')
+check('写手：线填充按源件补回（schemeClr + 颜色变换）',
+  /<a:solidFill><a:schemeClr val="accent2"><a:lumMod val="50000"\/><a:lumOff val="50000"\/>/
+    .test(withMit ?? '') || /<a:solidFill><a:schemeClr val="accent1">/.test(withMit ?? ''),
+  (withMit ?? '').slice(0, 120))
 
 const tagOf = (t) => [...outXml.matchAll(new RegExp(`<a:${t}\\b[^>]*>`, 'g'))].map((m) => m[0])
 eq('写手：prstDash 原值', tagOf('prstDash')[0], '<a:prstDash val="dash"/>')
@@ -73,7 +81,9 @@ eq('写手：tailEnd 原值', tagOf('tailEnd')[0], '<a:tailEnd type="arrow" w="l
 eq('写手：miter 原值', tagOf('miter')[0], '<a:miter lim="800000"/>')
 for (const t of ['prstDash', 'miter', 'headEnd', 'tailEnd'])
   eq(`写手：${t} 只插一枚（幂等）`, tagOf(t).length, 1)
-check('写手：包发的 a:noFill 没被顶掉', (outXml.match(/<a:noFill\s*\/>/g) ?? []).length >= 2)
+// v0.219 起这里不再是「≥2 枚都还在」：源件那一块 a:ln 本来有填充，按源件换成 solidFill
+// 才对。留下的两枚 noFill 是**源件本来就没填充**的两处（图 3 的 spPr 填充位与它的 a:ln）。
+eq('写手：源件无填充的两处仍是 noFill', (outXml.match(/<a:noFill\s*\/>/g) ?? []).length, 2)
 
 // ---- 3. 纪律（源码级）----------------------------------------------------
 {
