@@ -101,5 +101,10 @@ ODF 里这两族各有两枚同义属性（`style:text-underline-type` / `style:
   ODT 照抄这句话就行，价值在于**变异腿能抓住回归**，而不在于那个百分数。
 - `fo:font-family` 读手仍不认（只认 `style:font-name` / `fo:font-name` / `style:font-name-asian`）。
   LibreOffice 写的是后者，第三方件可能只写前者，缺真件可证。
-- 表级 `table:align` / `style:width` 写手不发（`<table:table>` 出来不带 `table:style-name`），
-  列宽那一路（`table:table-column` + 首行 `colwidth`）是通的。
+- ~~表级 `table:align` / `style:width` 写手不发~~ —— **v0.223 更正**：`table:align` 的写手一直是通的
+  （`tableStyleXml` 发 `table:align="center|right|margins"`，只发 `style:name` 那枚只在「有缩进或有对齐」
+  时才发），缺的是**读侧**：`tableStyleCss` 只读 `fo:margin-left`，一个方向都没读，写手因此永远拿不到
+  非缺省档。v0.223 已补（读侧沿样式链读 `table:align`、模型 `data-talign`、docx 侧同一条 `w:jc`）。
+  `style:width`（表宽）仍不发：列宽走的是 `table:table-column` + 首行 `colwidth` 那条路。
+- 合并区里的 `table:covered-table-cell` 占位格不带 `table:style-name`：读写两侧对称，往返不多丢东西，
+  但 LibreOffice 打开那些格会退回默认框线。

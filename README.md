@@ -4810,6 +4810,63 @@ Rust lib **169 通过**（xlsx 族 25）；夹具账复位 65/65、md5 `0fd13292
 Rust lib **171 通过**（+2 条新守卫）、ODS 族 35 通过 / 1 ignored；ODS 往返账 14/14 复位、
 md5 与基线逐字节一致、`docs/ods-roundtrip.*` git 零改动。
 
+## v0.223（表级对齐：`w:jc` 与 `table:align` 在两条链上都只读了一半）
+
+上一节把 ODT 链的「读写不对称」翻出来三条，顺着「同一族还有谁」往下查，撞到**表级对齐**——
+这一族的特殊之处是**两条链各缺一半，缺的还不是同一半**：
+
+| 链 | 读侧 | 写侧 |
+|---|---|---|
+| docx | 只读**命名表样式**那一层的 `w:tblPr/w:jc`（`styleTableAlign` → `tStyle` 的 `al`），**表自己直接写的那一枚从没查问过** | 模型没有槽 ⇒ 存盘时整枚 `w:jc` 消失 |
+| ODT | 只认 `fo:margin-left`（缩进），`table:align` 一个方向都没读 | **一直是通的**（`tableStyleXml` 会写 `table:align`），可读侧不给值，写侧就永远只发缺省 |
+
+所以用户在 Word / LibreOffice 里居中的表，打开是贴左的，存回去连声明都没了；而 ODT 那一侧
+的写手看起来「没问题」，恰恰是读侧什么都不给它，这层「正确」把缺口盖住了（与 v0.222 高亮
+那条正好反过来——那次是读手发错形状、写手是好的）。
+
+**修**：模型加一枚 `talign`（`data-talign`，只留 `center` / `right` 两档，`left` 与缺省同形
+不出属性）；docx 读手按 `w:jc` 读、`start`/`end` 折成 `left`/`right`，`both`/`distribute`
+在表上没有排版语义，如实告警后按「没说」走；写手走库的槽（`ITableOptions.alignment` → `w:jc`），
+不用 post-pack 补丁；ODT 读手把 `table:align` 沿样式链读出来（子样式说的压父，`margins` 是
+缺省档不出属性），写手把模型上那枚排在命名表样式的 `al` 之前。
+
+屏上那一半单列一件事：表格在**可缩放模式**下 DOM 由 prosemirror-tables 建，`renderHTML` 的样式
+只进 JSON 不进页面（v0.122 踩过一次），所以对齐的 `auto` 边距同样得在 `IndentTableView.applyIndent`
+里补，三档互斥（居中两侧 auto、贴右只留左侧 auto、缺省回到缩进）。
+
+### 守卫（`test-table-align.mjs`，17 条）
+
+读侧六个形状（center / right / `end` 折档 / `left` 不出属性 / 没有 `w:jc` 不出属性 / ODF 子样式压父），
+写侧五个落点（`<w:jc w:val="center"/>`、`right`、没对齐不发 `w:jc`；`table:align="center"`/`"right"`、
+没对齐不发 `table:align`），外加一条跨链（ODT 读到的居中，写出 docx 仍是 `w:jc`）。
+
+负控实测：把两个读手退回 HEAD 那一版，**11 条红 / 6 条绿**——绿的那 6 条全是「不该发」的反例
+（它们本来就该在两态都绿），正面断言一条不落全红。
+
+### 账本（三份都没动，这才是本轮该有的形状）
+
+| 账 | 结果 | md5 |
+|---|---|---|
+| docx 保真账 | 99.0% / 98.4%（701 对） | `dd942eb8` / `d69a6b20`，与基线逐字节相同 |
+| 变异腿 | `no-attr` 59.4% / `no-attrL` 52.5% | 与历史记录一字不差 |
+| docx 往返账 | 583/619 = 94.2% | `cd7873f2` / `4ffc55cc`，逐字节相同 |
+
+为什么应该不动：夹具里没有一枚 `w:jc`（读手新查问的那一对进不了分子——账本只算「源里真在场
+∩ 查问过」），写手也只在模型带 `talign` 时才发 `w:jc`。**没有数字变化不等于没做事**：这一轮
+的收益在屏上与存盘，账本量的是「源里说过的东西还在不在」，量不到「源里说的东西以前没被读」。
+
+**门禁**：全量 **81 份 81 通过 / 0 失败 / 0 跳过**（1171.2s）；`check:clean` **全绿**
+（tsc 0 / vite build ✓，尾部收尾清理被 turn 累计删除守卫拦 418 > 50，非构建失败）。
+
+### 这一轮没做的
+
+- `fo:font-family` 读手仍不认（只认 `style:font-name` / `fo:font-name` / `-asian`）。
+- **上一节那句「表级 `table:align` / `style:width` 写手不发」只对了一半**：`table:align` 写手一直
+  发得出来（缺的是读侧给值），`style:width`（表宽）仍不发——列宽走的是 `table:table-column` 那条路。
+- 合并区里那些 **covered 占位格不带 `table:style-name`**：读写两侧对称，往返不多丢东西，但它们在
+  LibreOffice 里会退回默认框线，记着。
+- ODT 链**仍然没有账本**。这一轮又添了一条「账本量不到这类缺口」的实证（见上）。
+
 ## v0.222（ODT 链：补发占位格 + 高亮改发 `<mark>` + 两处 `??` 兜底失效）
 
 v0.221 修完 ODS 的合并区，顺着「同一族还有谁」往下查，发现 **ODT（Writer 那一侧）是全仓唯一
