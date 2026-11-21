@@ -65,12 +65,13 @@ export async function mutationSuite(format) {
     maxBuffer: 16 * 1024 * 1024,
   })
 
-  // 自包含：干净 clone 上缺 dump 时，自己跑一次产品真链路（内含 cargo test）。
-  if (!fs.existsSync(outPath) || !fs.existsSync(srcPath)) {
-    const gen = run(false)
-    if (gen.error || gen.status !== 0) {
-      throw new Error(`生成 ${format} dump 失败：` + ((gen.stdout || '') + (gen.stderr || '')).trim().split('\n').slice(-4).join(' '))
-    }
+  // 每次都从产品夹具重新 dump（内含 cargo test），不复用 tmp 里现成的那两份。
+  // v0.220：复用会撞上「上一次 --src 外部真件留下的 dump」——基线保留数当场对不上，
+  // 报出来的是一条假红（真因是量具输入换了，不是产品坏了）。假红比真红更坏，
+  // 这条路径于是改成无条件重建：干净 clone 上本来也是这条分支。
+  const gen = run(false)
+  if (gen.error || gen.status !== 0) {
+    throw new Error(`生成 ${format} dump 失败：` + ((gen.stdout || '') + (gen.stderr || '')).trim().split('\n').slice(-4).join(' '))
   }
 
   const backup = fs.readFileSync(outPath)
