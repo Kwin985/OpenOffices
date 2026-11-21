@@ -4047,4 +4047,26 @@ D53 记「要先新建载荷槽 + 定 CT_RPr 位次」，本轮复查后把口�
   夹具账 md5 假变（0fd13292→1791c0c4）；重新 dump 复位后回基线。教训：中途跑过
   外部件 dump，夹具账必须重新 dump 复位再对 md5。
 
+## v0.218 追加（优先级③ bodyPr 19 对：真缺口，wps 文本框壳保真）
+
+- **优先级③（docx 剩余 60 对）里最大单族 bodyPr(19/19 全掉)真修好了**，与前几轮
+  的孤儿/假红/判死有本质区别：验证是真缺口——真 Word 文本框的 wps:wsp 壳含
+  bodyPr 19 枚，读手把 txbxContent 正文读进模型但整只壳无槽、写手只发 pic:pic
+  占位，往返后正文拍平成普通段落、壳全丢。
+- **修法**：新通道 wpsShapes（仿 v0.196 vmlShapes 整段字面搬）——读手提取
+  `<a:graphicData>` 字面 + docPr id + 正文 + bodyPr 存 meta；写手按 docPr id 找到
+  drawing 空壳、把 graphicData 的 pic:pic 占位换成 wps 形状、删掉拍平的重复正文。
+- **两轮迭代**：① 整段换 `<w:p>` 使 docPr/drawing 各从 5 变 7（重复带 docPr）
+  → 只换 graphicData 内部；② 正文重复 → 删纯正文段落（含 drawing/pict/wps 的跳过，
+  避免误删艺术字那只的 drawing）。非贪婪 `<w:p>` 截断坑（教训29）用先定位
+  `<wps:wsp>` 再前后找 graphicData 边界解决。
+- **账本真实收益并列记**：图形壳 259/319(81.2%) → **287/319(90.0%)**、合计
+  548/619(88.5%) → **576/619(93.1%)**、图形壳掉了 60 → **32**；bodyPr 19 对全
+  转 kept（账本 `bodyPr|` 行数归零）、连带修好同形状其他属性共少掉 28 对。
+  其他四本账 md5 全基线不变。
+- **守卫**：test-docx-wps-shape.mjs 14 条；test-vml-shapes 链断言从"固定笔数"
+  放宽为"不断链"（中间插入新通道是合法的）。
+- **教训**：整段搬字面壳时要先问"包里有没有别的通道已经发了这部分"——docPr
+  由 docPrShells 发过，整段换 w:p 就重复；只换真正缺的那一段（graphicData）才对。
+
 

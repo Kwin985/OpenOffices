@@ -22,9 +22,9 @@
  },
  "totals": {
   "read": 619,
-  "kept": 548,
+  "kept": 576,
   "value": 5,
-  "lost": 66,
+  "lost": 38,
   "part": 0,
   "consulted": 672,
   "srcParts": 7,
@@ -551,156 +551,194 @@
    "out": []
   },
   "bodyPr|anchor": {
-   "bucket": "lost",
+   "bucket": "kept",
    "n": 1,
    "src": [
     "ctr"
    ],
-   "out": []
+   "out": [
+    "ctr"
+   ]
   },
   "bodyPr|anchorCtr": {
-   "bucket": "lost",
+   "bucket": "kept",
    "n": 1,
    "src": [
     "0"
    ],
-   "out": []
+   "out": [
+    "0"
+   ]
   },
   "bodyPr|bIns": {
-   "bucket": "lost",
+   "bucket": "kept",
    "n": 1,
    "src": [
     "91440"
    ],
-   "out": []
+   "out": [
+    "91440"
+   ]
   },
   "bodyPr|compatLnSpc": {
-   "bucket": "lost",
+   "bucket": "kept",
    "n": 1,
    "src": [
     "0"
    ],
-   "out": []
+   "out": [
+    "0"
+   ]
   },
   "bodyPr|forceAA": {
-   "bucket": "lost",
+   "bucket": "kept",
    "n": 1,
    "src": [
     "0"
    ],
-   "out": []
+   "out": [
+    "0"
+   ]
   },
   "bodyPr|fromWordArt": {
-   "bucket": "lost",
+   "bucket": "kept",
    "n": 1,
    "src": [
     "0"
    ],
-   "out": []
+   "out": [
+    "0"
+   ]
   },
   "bodyPr|horzOverflow": {
-   "bucket": "lost",
+   "bucket": "kept",
    "n": 1,
    "src": [
     "overflow"
    ],
-   "out": []
+   "out": [
+    "overflow"
+   ]
   },
   "bodyPr|lIns": {
-   "bucket": "lost",
+   "bucket": "kept",
    "n": 1,
    "src": [
     "91440"
    ],
-   "out": []
+   "out": [
+    "91440"
+   ]
   },
   "bodyPr|numCol": {
-   "bucket": "lost",
+   "bucket": "kept",
    "n": 1,
    "src": [
     "1"
    ],
-   "out": []
+   "out": [
+    "1"
+   ]
   },
   "bodyPr|rIns": {
-   "bucket": "lost",
+   "bucket": "kept",
    "n": 1,
    "src": [
     "91440"
    ],
-   "out": []
+   "out": [
+    "91440"
+   ]
   },
   "bodyPr|rot": {
-   "bucket": "lost",
+   "bucket": "kept",
    "n": 1,
    "src": [
     "0"
    ],
-   "out": []
+   "out": [
+    "0"
+   ]
   },
   "bodyPr|rtlCol": {
-   "bucket": "lost",
+   "bucket": "kept",
    "n": 1,
    "src": [
     "0"
    ],
-   "out": []
+   "out": [
+    "0"
+   ]
   },
   "bodyPr|spcCol": {
-   "bucket": "lost",
+   "bucket": "kept",
    "n": 1,
    "src": [
     "0"
    ],
-   "out": []
+   "out": [
+    "0"
+   ]
   },
   "bodyPr|spcFirstLastPara": {
-   "bucket": "lost",
+   "bucket": "kept",
    "n": 1,
    "src": [
     "0"
    ],
-   "out": []
+   "out": [
+    "0"
+   ]
   },
   "bodyPr|tIns": {
-   "bucket": "lost",
+   "bucket": "kept",
    "n": 1,
    "src": [
     "45720"
    ],
-   "out": []
+   "out": [
+    "45720"
+   ]
   },
   "bodyPr|upright": {
-   "bucket": "lost",
+   "bucket": "kept",
    "n": 1,
    "src": [
     "0"
    ],
-   "out": []
+   "out": [
+    "0"
+   ]
   },
   "bodyPr|vert": {
-   "bucket": "lost",
+   "bucket": "kept",
    "n": 1,
    "src": [
     "horz"
    ],
-   "out": []
+   "out": [
+    "horz"
+   ]
   },
   "bodyPr|vertOverflow": {
-   "bucket": "lost",
+   "bucket": "kept",
    "n": 1,
    "src": [
     "overflow"
    ],
-   "out": []
+   "out": [
+    "overflow"
+   ]
   },
   "bodyPr|wrap": {
-   "bucket": "lost",
+   "bucket": "kept",
    "n": 1,
    "src": [
     "square"
    ],
-   "out": []
+   "out": [
+    "square"
+   ]
   },
   "bookmarkEnd|id": {
    "bucket": "kept",
@@ -1007,7 +1045,6 @@
     "4"
    ],
    "out": [
-    "0",
     "11",
     "3",
     "4"
@@ -1022,19 +1059,20 @@
     "浮动图"
    ],
    "out": [
-    "",
     "cnv 名",
     "图形余量",
     "浮动图"
    ]
   },
   "cNvSpPr|txBox": {
-   "bucket": "lost",
+   "bucket": "kept",
    "n": 1,
    "src": [
     "1"
    ],
-   "out": []
+   "out": [
+    "1"
+   ]
   },
   "col|space": {
    "bucket": "kept",
@@ -1413,12 +1451,14 @@
    ]
   },
   "effectRef|idx": {
-   "bucket": "lost",
+   "bucket": "kept",
    "n": 1,
    "src": [
     "0"
    ],
-   "out": []
+   "out": [
+    "0"
+   ]
   },
   "em|val": {
    "bucket": "kept",
@@ -1469,8 +1509,6 @@
     "914400"
    ],
    "out": [
-    "1266825",
-    "3048000",
     "914400"
    ]
   },
@@ -1481,8 +1519,6 @@
     "914400"
    ],
    "out": [
-    "2286000",
-    "638175",
     "914400"
    ]
   },
@@ -1690,12 +1726,14 @@
    ]
   },
   "fillRef|idx": {
-   "bucket": "lost",
+   "bucket": "kept",
    "n": 1,
    "src": [
     "2"
    ],
-   "out": []
+   "out": [
+    "2"
+   ]
   },
   "fillToRect|b": {
    "bucket": "kept",
@@ -1762,12 +1800,14 @@
    ]
   },
   "fontRef|idx": {
-   "bucket": "lost",
+   "bucket": "kept",
    "n": 1,
    "src": [
     "minor"
    ],
-   "out": []
+   "out": [
+    "minor"
+   ]
   },
   "footerReference|id": {
    "bucket": "lost",
@@ -1970,6 +2010,7 @@
     "http://schemas.openxmlformats.org/drawingml/2006/picture"
    ],
    "out": [
+    "http://schemas.microsoft.com/office/word/2010/wordprocessingshape",
     "http://schemas.openxmlformats.org/drawingml/2006/picture"
    ]
   },
@@ -3078,12 +3119,14 @@
    ]
   },
   "lnRef|idx": {
-   "bucket": "lost",
+   "bucket": "kept",
    "n": 1,
    "src": [
     "1"
    ],
-   "out": []
+   "out": [
+    "1"
+   ]
   },
   "lock|aspectratio": {
    "bucket": "kept",
@@ -4035,12 +4078,14 @@
    ]
   },
   "prstTxWarp|prst": {
-   "bucket": "lost",
+   "bucket": "kept",
    "n": 1,
    "src": [
     "textarchup"
    ],
-   "out": []
+   "out": [
+    "textarchup"
+   ]
   },
   "pStyle|val": {
    "bucket": "kept",
@@ -4661,7 +4706,7 @@
    "out": []
   },
   "schemeClr|val": {
-   "bucket": "lost",
+   "bucket": "kept",
    "n": 8,
    "src": [
     "accent1",
@@ -4669,7 +4714,12 @@
     "accent3",
     "lt1"
    ],
-   "out": []
+   "out": [
+    "accent1",
+    "accent2",
+    "accent3",
+    "lt1"
+   ]
   },
   "scrgbClr|b": {
    "bucket": "lost",
@@ -5367,20 +5417,24 @@
    ]
   },
   "spLocks|noChangeArrowheads": {
-   "bucket": "lost",
+   "bucket": "kept",
    "n": 1,
    "src": [
     "1"
    ],
-   "out": []
+   "out": [
+    "1"
+   ]
   },
   "spLocks|noEditPoints": {
-   "bucket": "lost",
+   "bucket": "kept",
    "n": 2,
    "src": [
     "1"
    ],
-   "out": []
+   "out": [
+    "1"
+   ]
   },
   "spPr|bwMode": {
    "bucket": "kept",

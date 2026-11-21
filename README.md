@@ -4609,6 +4609,47 @@ md5 回到基线。**教训：中途跑过外部件 dump 后，夹具账必须�
 **门禁**：干净树 tsc 0 / vite build ✓、cargo **168 passed / 11 ignored**（+1）、
 全量 **76 份 76 通过 / 0 失败 / 0 跳过**（851.6s）、守卫 41/41、五本账 md5 全基线。
 
+## v0.218（优先级③ bodyPr 19 对：真缺口，wps 文本框壳保真）
+
+优先级③ docx 剩余 60 对里最大的单族 `bodyPr`(19/19 全掉)——这轮**真修好了**，
+不是假红、不是判死。
+
+**验证是真缺口**：真 Word 文本框的 `<wps:wsp>` 壳含 CT_TextBodyProperties 的
+bodyPr 19 枚属性。产品读手把 `<w:txbxContent>` 正文读进模型（屏上看得到），但整只
+wps 形状壳无槽、写手只发 `pic:pic` 占位——往返后正文被拍平成普通段落、壳全丢。
+这与前几轮的孤儿/假红有本质区别。
+
+**修法**：新通道 `wpsShapes`（仿 v0.196 vmlShapes 的整段字面搬）——
+- 读手 `wpsShapesOf` 从源包提取含 `<wps:wsp>` 的 `<a:graphicData>` 字面 +
+  docPr id + 正文 + bodyPr 属性，存 `meta.wpsShapes`。
+- 写手 `patchWpsShapes` 按 **docPr id** 找到 drawing 空壳，把 graphicData 里的
+  pic:pic 占位换成 wps 形状字面，并删掉被拍平的重复正文段落。
+
+**两轮迭代才修对**：① 第一版整段换 `<w:p>` 导致 docPr/drawing 各从 5 变 7
+（重复带进 docPr）——改为只换 graphicData 内部；② 正文重复——贴回后删掉纯正文
+段落（含 drawing/pict/wps 的段落跳过，避免误删"艺术字"那只的 drawing）。
+另踩非贪婪 `<w:p>` 截断坑（教训㉙）：wps 正文自身是内嵌 `<w:p>`，非贪婪切段
+拿不到闭合壳，改为先定位 `<wps:wsp>` 再向前后找 graphicData 边界。
+
+**账本真实收益**（并列记才看得出）：
+
+| | 改前 | 改后 |
+|---|---:|---:|
+| 图形壳 | 259/319 = 81.2% | **287/319 = 90.0%** |
+| 合计 | 548/619 = 88.5% | **576/619 = 93.1%** |
+| 图形壳掉了 | 60 | **32** |
+
+bodyPr 19 对全转 kept（账本里 `bodyPr|` 行数归零）；连带修好同形状里其他属性，
+掉了共减少 28 对。其他四本账 md5 全基线不变。
+
+**守卫**：`test-docx-wps-shape.mjs`（14 条）钉住提取/19 枚写回/docPr 与 drawing
+计数不变/正文不重复/反例对不上就跳过；`test-vml-shapes` 链断言放宽为"不断链"
+而非固定笔数。
+
+**门禁**：干净树 tsc 0 / vite build ✓、全量 **77 份 77 通过 / 0 失败 / 0 跳过**
+（771.1s，新加的 wps-shape 测试让清单 76→77）；docpr-props 38/38、image-shell
+40/40、vml-shapes 38/38、wps-shape 14/14；其他四本账 md5 全基线。
+
 ## 性能（v0.3）
 
 
