@@ -22,9 +22,9 @@
  },
  "totals": {
   "read": 619,
-  "kept": 576,
-  "value": 5,
-  "lost": 38,
+  "kept": 583,
+  "value": 6,
+  "lost": 30,
   "part": 0,
   "consulted": 672,
   "srcParts": 7,
@@ -543,12 +543,14 @@
    ]
   },
   "blipFill|rotWithShape": {
-   "bucket": "lost",
+   "bucket": "kept",
    "n": 1,
    "src": [
     "1"
    ],
-   "out": []
+   "out": [
+    "1"
+   ]
   },
   "bodyPr|anchor": {
    "bucket": "kept",
@@ -2127,13 +2129,16 @@
    ]
   },
   "gs|pos": {
-   "bucket": "lost",
+   "bucket": "kept",
    "n": 4,
    "src": [
     "0",
     "100000"
    ],
-   "out": []
+   "out": [
+    "0",
+    "100000"
+   ]
   },
   "h|position": {
    "bucket": "kept",
@@ -3227,29 +3232,35 @@
    ]
   },
   "lum|bright": {
-   "bucket": "lost",
+   "bucket": "kept",
    "n": 1,
    "src": [
     "40000"
    ],
-   "out": []
+   "out": [
+    "40000"
+   ]
   },
   "lum|contrast": {
-   "bucket": "lost",
+   "bucket": "kept",
    "n": 1,
    "src": [
     "60000"
    ],
-   "out": []
+   "out": [
+    "60000"
+   ]
   },
   "lumMod|val": {
-   "bucket": "lost",
+   "bucket": "value",
    "n": 3,
    "src": [
     "50000",
     "80000"
    ],
-   "out": []
+   "out": [
+    "50000"
+   ]
   },
   "lumOff|val": {
    "bucket": "lost",
@@ -3783,12 +3794,14 @@
    ]
   },
   "path|path": {
-   "bucket": "lost",
+   "bucket": "kept",
    "n": 1,
    "src": [
     "moveto(0,0) lnto(1000,1000)"
    ],
-   "out": []
+   "out": [
+    "moveto(0,0) lnto(1000,1000)"
+   ]
   },
   "path|textboxrect": {
    "bucket": "kept",
@@ -4746,12 +4759,14 @@
    "out": []
   },
   "shade|val": {
-   "bucket": "lost",
+   "bucket": "kept",
    "n": 1,
    "src": [
     "50000"
    ],
-   "out": []
+   "out": [
+    "50000"
+   ]
   },
   "shadow|algn": {
    "bucket": "kept",
@@ -5488,13 +5503,16 @@
    ]
   },
   "srgbClr|val": {
-   "bucket": "lost",
+   "bucket": "kept",
    "n": 2,
    "src": [
     "0000ff",
     "ff0000"
    ],
-   "out": []
+   "out": [
+    "0000ff",
+    "ff0000"
+   ]
   },
   "start|val": {
    "bucket": "kept",

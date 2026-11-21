@@ -4070,3 +4070,58 @@ D53 记「要先新建载荷槽 + 定 CT_RPr 位次」，本轮复查后把口�
   由 docPrShells 发过，整段换 w:p 就重复；只换真正缺的那一段（graphicData）才对。
 
 
+## v0.219 追加（优先级③ 剩余 32 对：先过第三道筛「夹具结构合不合法」）
+
+- **先把 30 对逐族送进第三道筛（教训⑬），结论是 21 对写在非法位置**，与产品能力
+  无关。逐条依据（ECMA-376 的 complexType）：
+  - `a:gradFill` 被夹具塞进 `pic:blipFill` 里（v0.155 那一片）。CT_BlipFillProperties
+    的 sequence 只有 `a:blip` / `a:srcRect` / `EG_FillModeProperties`（tile|stretch），
+    填充组不在其中。于是住在这条非法 gradFill 里的 **11 对**（alpha / alphaOff /
+    hueOff / satOff / tint / prstClr / scrgbClr r,g,b / gradFill|flip /
+    gradFill|rotWithShape）全部判为夹具非法；`lumMod` 的 80000 那一枚也在这条里
+    （另一枚 50000 在合法位，见下）。
+  - 两枚 `a:ext uri` 直接挂在 `pic:spPr` 下。`a:ext` 只能住在 `a:extLst` 里，
+    CT_ShapeProperties 的 sequence 没有裸 ext 位（1 对）。
+  - `a:scene3d` / `a:sp3d` / `a:props3d` 三个元素被塞进 `a:effectLst`。CT_EffectList
+    只收 blur / fillOverlay / glow / *shdw / reflection / softEdge；scene3d 与 sp3d
+    是 CT_ShapeProperties 的**直挂**子元素。另外 `a:props3d` 这个元素名根本不存在
+    （真实名字是 `a:sp3d`，夹具两个都写是 v0.155 的"赌名字"遗留）。共 **8 对**
+    （sp3d 3 + props3d 3 + lightRig 2）。
+  - `lumOff|val` 住在**第二枚** `a:ln` 里。CT_ShapeProperties 的 `a:ln` 是
+    maxOccurs=1，一个 spPr 里两枚 ln 本身就是非法件（1 对）。
+- **合法位上真丢了 8 对（含 `lumMod` 那半个），本轮修掉 7 对**（新通道 `picSppr`，
+  四片各走一个合法槽）：
+  - `pic:spPr` 的填充组（geometry 之后、`a:ln` 之前）→ 替掉写手无条件发的
+    `a:noFill/>`：修好 `srgbClr|val`、`gs|pos`；
+  - `a:ln` 的子填充（CT_LineProperties 的第一个子元素）→ 修好 `lum|bright`、
+    `lum|contrast`、`shade|val`，并把 `lumMod` 的 50000 那一枚写回；
+  - `a:custGeom` 与 `a:prstGeom` 同槽二选一 → 整枚换掉 `prstGeom rect`，修好
+    `path|path`；
+  - `pic:blipFill@rotWithShape` 属性位 → 修好 `blipFill|rotWithShape`。
+- **为什么不整段换 `pic:spPr`**：`pic:spPr/a:xfrm` 是用户能改的东西（尺寸/旋转/
+  翻转），整段换会把用户刚做的编辑改回源件的旧值。所以只补模型**彻底没有槽**的
+  静态美术描述；xfrm、`a:ln` 的属性（w/cap/cmpd）、`bwMode` 全部留给写手。守卫里
+  有专门的断言盯这四样没被覆盖。
+- **`lumMod|val` 从「掉了」变「值变」，这不是修好（教训⑳）**：写回的是合法位那枚
+  50000，源里另一枚 80000 只住在非法的 gradFill 里。账本 值变 5→6 就是它。要让它
+  归零只有两条路——发非法元素，或把非法位的填充搬到 `spPr` 填充槽。后者会把源件
+  屏上根本没有的渐变**画出来**（图片的 spPr 填充在 blip 之下，一旦非透明就可见），
+  属于用读数换渲染变化，不做。
+- **没动的两族**：`sizeRelH|relativeFrom` / `sizeRelV|relativeFrom` 是合法元素，
+  但真件里这一族长在 `mc:AlternateContent/mc:Choice/wp14:sizeRelH` 里（v0.210 真件
+  见过），与夹具写的 `wp:sizeRelH` 不是一个形状；要做先得给 mc 壳一条通道，比这一族
+  本身大。`Choice|Requires` 是兼容壳的身份，同一笔账。
+- **账本收益并列记**：图形壳 287/319(90.0%) → **294/319(92.2%)**、合计
+  576/619(93.1%) → **583/619(94.2%)**、图形壳掉了 32 → **24**、值变 5 → 6（见上）。
+  正文侧 289/300 完全不动；其他四本账 md5 全基线不变。
+- **守卫**：`test-pic-sppr.mjs` 30 条——提取、四片写回、位次（geometry→fill→ln、
+  a:ln 填充是首子），不动 xfrm/bwMode/ln 属性，计数（pic:pic 3 / pic:spPr 3 /
+  docPr 5）不变，同槽二选一不共存，**反例四条专盯非法位不被带出**（props3d / sp3d /
+  裸 ext uri / docPr 对不上），以及二次补片 document.xml 逐字节不变。
+- **教训**：① 剩余族里"掉了"最多的那一片，先量结构不合法再谈修——三处非法位置
+  吃掉了 21 对，比能修的多两倍；② 合法位与被污染的同名对（`lumMod`）会互相拖累，
+  账本只能停在"值变"，这一步要写进账本而不是悄悄算成修好；③ 字面贴回的边界不是
+  "模型没槽就整段搬"，而是"模型没槽 **且** 这一段用户改不了"——xfrm 一类必须留给
+  写手。
+
+

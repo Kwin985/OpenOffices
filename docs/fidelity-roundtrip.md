@@ -44,9 +44,9 @@ docx ──读手──▶ HTML ──TipTap schema──▶ PM 模型 ──写
 | | 值 |
 |---|---:|
 | 读到的对 | 619 |
-| 保留 | **576（93.1%）** |
-| 值变 | 5 |
-| 掉了 | 38 |
+| 保留 | **583（94.2%）** |
+| 值变 | 6 |
+| 掉了 | 30 |
 | 缺件 | 0 |
 | 源包部件 | 7 |
 | 写出包部件 | 7 |
@@ -62,24 +62,20 @@ docx ──读手──▶ HTML ──TipTap schema──▶ PM 模型 ──写
 | 族 | 读到的 | 保留 | 值变 | 掉了 | 保留率 |
 |---|---:|---:|---:|---:|---:|
 | 正文属性（`w:*`） | 300 | 289 | 5 | 6 | **96.3%** |
-| 图形壳（`a:`/`v:`/`wp:`/`pic:`/`wps:`/`o:`） | 319 | 287 | 0 | 32 | **90.0%** |
+| 图形壳（`a:`/`v:`/`wp:`/`pic:`/`wps:`/`o:`） | 319 | 294 | 1 | 24 | **92.2%** |
 
 口径说明：一个对算正文，当且仅当它在源包里**只**出现在 `w:*` 元素上（沾过图形壳就算图形壳）。
 对名按 local name 归并（与保真账本同口径），所以 `fill|type` 这种两族同名的会并成一笔。
 
-### 掉了（38）
+### 掉了（30）
 
 名字一次都没写出来。这里每一行都是一条**单边通道**：读手读了，模型或写手没有它的槽。
 
 | 对 | 源里出现 | 源值 | 写出值 |
 |---|---:|---|---|
-| `gs|pos` | 4 | 0, 100000 | — |
-| `lumMod|val` | 3 | 50000, 80000 | — |
 | `ext|uri` | 2 | {1234-5678-9abc-def0}, {1234-5678-9abc-def1} | — |
-| `srgbClr|val` | 2 | ff0000, 0000ff | — |
 | `alpha|val` | 1 | 50000 | — |
 | `alphaOff|val` | 1 | 200 | — |
-| `blipFill|rotWithShape` | 1 | 1 | — |
 | `Choice|Requires` | 1 | wps | — |
 | `comments|Ignorable` | 1 | w14 | — |
 | `footerReference|id` | 1 | rid# | — |
@@ -91,10 +87,7 @@ docx ──读手──▶ HTML ──TipTap schema──▶ PM 模型 ──写
 | `hueOff|val` | 1 | 60000 | — |
 | `lightRig|dir` | 1 | t | — |
 | `lightRig|rig` | 1 | threept | — |
-| `lum|bright` | 1 | 40000 | — |
-| `lum|contrast` | 1 | 60000 | — |
 | `lumOff|val` | 1 | 50000 | — |
-| `path|path` | 1 | moveto(0,0) lnto(1000,1000) | — |
 | `props3d|contourW` | 1 | 12700 | — |
 | `props3d|extrusionH` | 1 | 25400 | — |
 | `props3d|prstMaterial` | 1 | plastic | — |
@@ -103,7 +96,6 @@ docx ──读手──▶ HTML ──TipTap schema──▶ PM 模型 ──写
 | `scrgbClr|b` | 1 | 3000 | — |
 | `scrgbClr|g` | 1 | 2000 | — |
 | `scrgbClr|r` | 1 | 1000 | — |
-| `shade|val` | 1 | 50000 | — |
 | `sizeRelH|relativeFrom` | 1 | page | — |
 | `sizeRelV|relativeFrom` | 1 | margin | — |
 | `sp3d|contourW` | 1 | 12700 | — |
@@ -112,13 +104,14 @@ docx ──读手──▶ HTML ──TipTap schema──▶ PM 模型 ──写
 | `tblpPr|overlap` | 1 | never | — |
 | `tint|val` | 1 | 40000 | — |
 
-### 值变（5）
+### 值变（6）
 
 名字在，但某个源值没写回去。比「掉了」更隐蔽——普查看着它在场，屏上也像那么回事。
 
 | 对 | 源里出现 | 源值 | 写出值 |
 |---|---:|---|---|
 | `gridCol|w` | 4 | 5000, 2500 | 4995, 2505 |
+| `lumMod|val` | 3 | 50000, 80000 | 50000 |
 | `abstractNum|abstractNumId` | 1 | 0 | 1, 2, 3 |
 | `abstractNumId|val` | 1 | 0 | 1, 3 |
 | `numId|val` | 1 | 1 | 2 |
@@ -130,7 +123,7 @@ docx ──读手──▶ HTML ──TipTap schema──▶ PM 模型 ──写
 
 （空）
 
-### 保留（576）
+### 保留（583）
 
 这些是真的双向。列出来是为了让「保留」也可核对，而不是一个孤零零的百分比。
 
@@ -148,6 +141,7 @@ docx ──读手──▶ HTML ──TipTap schema──▶ PM 模型 ──写
 | `top|sz` | 5 | 8, 4 | 8, 4 |
 | `top|val` | 5 | single | single |
 | `basedOn|val` | 4 | normal, tablenormal | tablenormal, normal |
+| `gs|pos` | 4 | 0, 100000 | 0, 100000 |
 | `tab|pos` | 4 | 720, 2880, 5760 | 720, 2880, 5760, 0 |
 | `tab|val` | 4 | left, center, right, clear | left, center, right, clear |
 | `top|space` | 4 | 1, 0, 2 | 1, 0, 2 |
@@ -159,8 +153,7 @@ docx ──读手──▶ HTML ──TipTap schema──▶ PM 模型 ──写
 | `left|color` | 3 | 00ff00, auto, 000000 | 00ff00, auto, 000000, adbbd4 |
 | `left|space` | 3 | 2, 0 | 2, 0, 3 |
 | `left|sz` | 3 | 4 | 4 |
-| `left|val` | 3 | dotted, dashed, single | dotted, single, dashed |
-| …共 576 条，完整清单见 `docs/fidelity-roundtrip.json` | | | |
+| …共 583 条，完整清单见 `docs/fidelity-roundtrip.json` | | | |
 
 ## 边界
 

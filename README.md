@@ -4650,6 +4650,64 @@ bodyPr 19 对全转 kept（账本里 `bodyPr|` 行数归零）；连带修好同
 （771.1s，新加的 wps-shape 测试让清单 76→77）；docpr-props 38/38、image-shell
 40/40、vml-shapes 38/38、wps-shape 14/14；其他四本账 md5 全基线。
 
+## v0.219（优先级③ 剩余族：先过第三道筛，21 对是夹具结构非法）
+
+优先级③ 剩下的 32 对图形壳，这轮先做**分档**再做修：结论是 21 对写在非法位置
+（与产品能力无关），合法位上真丢的 8 对（含一枚半）修掉 7 对。
+
+**分档依据（ECMA-376 complexType）**：
+
+| 位置 | 判据 | 对数 |
+|---|---|---:|
+| `a:gradFill` 塞进 `pic:blipFill` | CT_BlipFillProperties 只有 blip/srcRect/tile/stretch | 11 |
+| `a:ext uri` 直接挂 `pic:spPr` | `a:ext` 只能住 `a:extLst` 里 | 1 |
+| `a:scene3d`/`a:sp3d`/`a:props3d` 塞进 `a:effectLst` | CT_EffectList 只收 blur/glow/*shdw/reflection；`props3d` 名字本身不存在 | 8 |
+| `lumOff` 住在第二枚 `a:ln` | `a:ln` maxOccurs=1 | 1 |
+
+**合法位上修掉 7 对**（新通道 `picSppr`，四片各走一个合法槽）：`pic:spPr` 填充组
+（geometry 之后、`a:ln` 之前）→ `srgbClr|val`、`gs|pos`；`a:ln` 的子填充
+（CT_LineProperties 首子元素）→ `lum|bright`、`lum|contrast`、`shade|val`；
+`a:custGeom` 与 `a:prstGeom` 同槽二选一 → `path|path`；`pic:blipFill@rotWithShape`
+属性位 → `blipFill|rotWithShape`。
+
+**为什么不是整段换 `pic:spPr`**：`pic:spPr/a:xfrm` 是用户能改的东西（尺寸/旋转/
+翻转），整段换会把用户的编辑改回源件旧值。只补模型**彻底没有槽**且用户改不了的
+静态美术描述；xfrm、`a:ln` 的 w/cap/cmpd、`bwMode` 全留给写手，守卫里有四条断言
+盯这些没被覆盖。
+
+**`lumMod|val` 从掉了变值变，这不是修好**（教训⑳）：写回的是合法位那枚 50000，
+另一枚 80000 只住在非法 gradFill 里。要归零只有两条路——发非法元素，或把非法位的
+填充搬到 `spPr` 填充槽；后者会把源件屏上根本没有的渐变画出来（图片的 spPr 填充在
+blip 之下），属于用读数换渲染变化，不做。
+
+**账本真实收益**（并列记）：
+
+| | 改前 | 改后 |
+|---|---:|---:|
+| 图形壳 | 287/319 = 90.0% | **294/319 = 92.2%** |
+| 合计 | 576/619 = 93.1% | **583/619 = 94.2%** |
+| 图形壳掉了 | 32 | **24** |
+| 值变 | 5 | 6（见上，`lumMod`） |
+
+正文侧 289/300 完全不动；保真账 `docs/fidelity.*` git 0 改动、`no-theme` 变异腿
+99.0% 不动（读手一行未改）；往返账两次复跑 md5 一致（`cd7873f2`/`4ffc55cc`）。
+
+**守卫**：`test-pic-sppr.mjs` 30 条——提取、四片写回、位次（geometry→fill→ln）、
+不动 xfrm/bwMode/ln 属性、计数（pic:pic 3 / pic:spPr 3 / docPr 5）不变、同槽二选一
+不共存、**反例四条专盯非法位不被带出**（props3d/sp3d/裸 ext uri/docPr 对不上）、
+二次补片 document.xml 逐字节不变。
+
+**没动的两族**：`sizeRelH/V@relativeFrom` 是合法元素，但真件里长在
+`mc:AlternateContent/mc:Choice/wp14:sizeRelH` 里（v0.210 真件见过），与夹具写的
+`wp:sizeRelH` 不同形状，要做先得给 mc 壳一条通道；`Choice|Requires` 是兼容壳身份，
+同一笔账。
+
+**门禁**：干净树 `check:clean` **全绿**（tsc 0 / vite build ✓；收尾清理被沙箱的
+turn 累计删除守卫拦下——413 > 50，不是构建失败）；全量 **78 份 78 通过 / 0 失败 /
+0 跳过**（931.8s，新加的 pic-sppr 让清单 77→78）；`test-pic-sppr` 30/30；
+`test-line-ends` 里有一条序断言钉的是旧的丢填充行为（`noFill > miter`），已更新为
+`solidFill > miter` 并换成「源件无填充的两处仍是 noFill」这条真纪律。
+
 ## 性能（v0.3）
 
 
