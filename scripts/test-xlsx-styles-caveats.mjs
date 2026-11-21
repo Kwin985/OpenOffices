@@ -50,7 +50,15 @@ check('判死记录强 schema', /STYLE_KEYS/.test(gap) && /强 schema/.test(gap)
 check('判死记录回写风险', /屏上回写会破坏|tint 被抹掉/.test(gap))
 check('README 更正无槽说法', /无主题色槽.*是错的|说法是错的/.test(read('../README.md')))
 
-// ── ⑥ v0.212 补证：rgb 族是孤儿假红，不是架构限制 ────────────
+// ── ⑥ v0.217 类 1 定性更正：s= 索引保真、塌缩红是孤儿假红 ───
+check('诊断文档有 v0.217 第八节', /v0\.217 类 1 的 s= 索引/.test(gap))
+check('定性更正写明语义保真', /语义完全保真|语义保真/.test(gap))
+check('撤销 v0.211 错误立项', /方向错误，应撤销|撤销/.test(gap))
+check('重分类为口径假红', /口径假红/.test(gap))
+const rustSrc = read('../src-tauri/src/xlsx.rs')
+check('s= 索引保真测试在场', /fn referenced_xf_indexes_keep_semantics/.test(rustSrc))
+
+// ── ⑦ v0.212 补证：rgb 族是孤儿假红，不是架构限制 ────────────
 check('fgColor|rgb 改判为孤儿样式', /fgColor\|rgb[\s\S]{0,100}孤儿样式/.test(src))
 check('color|rgb 定性非架构限制', /color\|rgb[\s\S]{0,120}非架构限制/.test(src))
 check('indexed 定性点名 crate 无 Indexed', /Indexed 变体/.test(src))

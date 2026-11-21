@@ -3507,5 +3507,67 @@ mod tests {
         std::fs::remove_file(&out).ok();
     }
 
+    /// v0.217：s= 索引链语义保真——被单元格引用的样式（fill/font/numfmt/border 全非0）
+    /// 走产品读手→写手往返后语义不丢。
+    ///
+    /// 这是类 1 的决定性对照：此前账本报 `xf|fillId/fontId/numFmtId` 各 56 次"塌缩"，
+    /// 但真件 R09 里被 s=1..6 引用的 cellXfs 的 fillId/fontId/numFmtId 全是 0——
+    /// 那些非0值全在未被任何单元格引用的孤儿样式（cellStyleXfs）里，写手不重建它们。
+    /// 本测试造一个"每个样式都被引用且 id 非0"的合成件，证明 s= 解析成 CellStyle
+    /// （语义载体）→ 写手重建样式表并同步改写单元格 s= 这条链是保真的：
+    /// 索引数字变了没关系，语义等价即可。
+    #[test]
+    fn referenced_xf_indexes_keep_semantics() {
+        use rust_xlsxwriter::{Color as XColor, Format as XFormat, Workbook as XWorkbook};
+        let src = tmp_path("sidx-src");
+        let out = tmp_path("sidx-out");
+        // 5 个被引用样式：fill/numfmt/border 各异且非0，font 有粗/斜/字号变化
+        {
+            let mut wb = XWorkbook::new();
+            let ws = wb.add_worksheet();
+            let specs: [(u32, u8, &str); 5] = [
+                (0x4080C0, 0, "0.00%"),
+                (0x5070D0, 1, "#,##0.00"),
+                (0x6090E0, 2, "0.000"),
+                (0x70B0F0, 3, "@"),
+                (0x80D080, 4, "0"),
+            ];
+            for (i, (fill, font, nf)) in specs.iter().enumerate() {
+                let mut f = XFormat::new()
+                    .set_background_color(XColor::RGB(*fill))
+                    .set_num_format(*nf)
+                    .set_border(rust_xlsxwriter::FormatBorder::Thin);
+                if *font & 1 == 1 { f = f.set_bold(); }
+                if *font & 2 == 2 { f = f.set_italic(); }
+                if *font & 4 == 4 { f = f.set_font_size(16); }
+                ws.write_with_format(i as u32, 0, 1234.5, &f).unwrap();
+            }
+            wb.save(&src).expect("存源件");
+        }
+        // 读手：5 个格子都带样式，且语义非空（bg + numfmt + border 都在）
+        let payload = read_xlsx_sync(src.clone()).expect("读源件");
+        let styled: Vec<_> = payload.sheets[0].cells.iter()
+            .filter_map(|c| c.s.as_ref().map(|s| (c.r, c.c, s))).collect();
+        assert_eq!(styled.len(), 5, "5 个被引用样式都应读到");
+        for (_, _, s) in &styled {
+            assert!(s.bg.is_some(), "填充色应在载荷里");
+            assert!(s.nf.is_some(), "数字格式应在载荷里");
+            assert!(s.bd.is_some(), "边框应在载荷里");
+        }
+        // 写手往返
+        write_xlsx_sync(out.clone(), payload).expect("写回");
+        let styles = entry(&out, "xl/styles.xml");
+        let cx = styles.split("<cellXfs").nth(1).and_then(|x| x.split("</cellXfs>").next()).unwrap_or("");
+        let xfs: Vec<&str> = cx.split("<xf").skip(1).collect();
+        assert!(xfs.len() >= 6, "写出应保留 6 个 cellXfs（含默认）：{}", xfs.len());
+        // 写出包里 fillId/numFmtId 非0 的样式必须存在（语义没塌成全 0）
+        let fill_nonzero = xfs.iter().any(|x| x.contains("fillId=\"2\"") || x.contains("fillId=\"3\""));
+        let fmt_nonzero = xfs.iter().any(|x| x.contains("numFmtId=\"164\""));
+        assert!(fill_nonzero, "写出的 fillId 应保留非0值（语义未塌缩）");
+        assert!(fmt_nonzero, "写出的 numFmtId 应保留非0值（语义未塌缩）");
+        std::fs::remove_file(&src).ok();
+        std::fs::remove_file(&out).ok();
+    }
+
 }
 

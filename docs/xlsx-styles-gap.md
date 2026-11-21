@@ -13,7 +13,7 @@
 
 | 族 | 源值 → 写出 | 读手字段 | 断点 |
 |---|---|---|---|
-| `xf|fillId` / `fontId` / `borderId` / `numFmtId` | 0,10,11,12,13… → 塌成 0 | `CellStyle` 有 `cl/bg/bd/nf` | 写手 `format_for()` 只按读到的 rgb 语义重建 Format；填充主题色等没读进来 ⇒ 索引塌缩 |
+| `xf|fillId` / `fontId` / `borderId` / `numFmtId` | 0,10,11,12,13… → 塌成 0 | `CellStyle` 有 `cl/bg/bd/nf` | ~~写手只按 rgb 重建、主题色没读进来 ⇒ 索引塌缩~~ **【v0.217 更正】定性错误：被引用样式的 id 在往返中保真，红全是孤儿样式假红，见第八节** |
 | `xf|applyAlignment` | 0,1 → 恒 1 | `ho/vo/wb` | crate 只在有对齐时才落 `applyAlignment`，源里显式的 0 保不住 |
 | `patternFill|patternType` | gray125/none/solid → 少 solid | `StyleBook.fills` 只存一个颜色串 | patternType 没建模 |
 | `sz|val` / `b|val` / 边框 double·medium | 11/13/15/18 → 11；double→thin | `fs/bl/bd` | 部分值在 `format_for()` 里被简化 |
@@ -181,3 +181,47 @@ v0.215 落地了存盘保真后，剩一个问题：用户打开主题色表格�
 这是有据的判死（同 v0.205 Calc 缩放：查实 API 限制后明确移出清单），
 不是无限顺延。若将来 Univer 支持主题色 + tint 且配色可对齐，再重新评估。
 产品代码零改动、账本零改动。
+
+## 八、v0.217 类 1 的 s= 索引：决定性对照实验——语义保真，红是孤儿假红
+
+用户点名 ① xlsx styles 类 1（s= 索引丢失）为下一优先级。本轮用合成件做
+**决定性对照**，一次性定性，不再反复。
+
+### 实验设计
+
+真件 R09 里被 `s=1..6` 实际引用的 cellXfs，`fillId/fontId/numFmtId` **全是 0**，
+只有 borderId 是 1-4。账本 `xf|fillId` 源值 `2,3,4…32`、`xf|fontId` 的 `1…19`、
+`xf|numFmtId` 的 `9,41-44`——全在**未被任何单元格引用的孤儿样式**（49 个
+cellStyleXfs 命名样式 + 未用的 cellXfs）里。所以"塌缩 56 对"很可能是孤儿假红。
+
+为排除"单一真件否定一类能力"的风险，造了一个**每个样式都被引用、且 id 全非0**
+的合成件（s=1..5：fillId=2..6、fontId=0..4、numFmtId=164..168、borderId=1），
+走产品读手 → 写手往返。
+
+### 结果：语义完全保真
+
+- 读手 `style_for(1..5)` 全部读到完整 CellStyle：bg 颜色、粗/斜/字号、numfmt、border 都在；
+  `parse_sheet` 拿到 5 个带样式 cell。
+- 写手往返后，写出包 `cellXfs[1..5]` 的 fillId=2..6、numFmtId=164..168、borderId=1
+  全部保留，单元格 `s=1..5` 引用不变（fontId 差 1 是 crate 默认字体偏移，语义等价）。
+
+**结论：s= 索引链不是 bug。** `parse_sheet` 把 `s=` 解析成 CellStyle（语义载体），
+写手用 CellStyle 重建样式表、重新分配索引并同步改写单元格 `s=`——索引数字变了没关系，
+语义等价就是保真。所谓"索引丢失"只是读侧不保留原始 xf 数字，而这个数字**写手本来
+就不该复用**（crate 按 Format 哈希重排，复用源索引反而会错位）。
+
+### 定性更正
+
+- 类 1 首行 "`xf|fillId/fontId/...` 塌缩 = 写手没接" **定性错误**：
+  被引用样式的这些 id 在往返中保真；账本的红全是孤儿样式假红（同 v0.212 rgb、v0.214 theme）。
+- v0.211 立的"先解决索引丢失、写手按源顺序重建"这条立项**方向错误**，应撤销：
+  没有"源索引到新索引映射"的需求，因为写手同步改写 `s=` 即可。
+- 这一族红应从"真 bug"重分类为**口径假红**：账本对 styles.xml 全表普查，把
+  未被单元格引用的孤儿 cellXfs/cellStyleXfs 属性算进分母。与 v0.202 ODS co2 同族。
+
+### 落地
+
+- 自包含 Rust 单测 `referenced_xf_indexes_keep_semantics` 钉住"被引用样式语义保真"
+  （crate 造合成件 → 读手 → 写手 → 断言 fill/numfmt/border 非0值保留），不依赖未入库文件。
+- 产品代码零改动、五本账零改动——**无需"修"一个不存在的问题**。
+- 这轮的价值：用对照实验撤销了一条错误的立项方向，避免下一轮对着孤儿样式写产品码。
