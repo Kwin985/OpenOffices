@@ -4810,6 +4810,74 @@ Rust lib **169 通过**（xlsx 族 25）；夹具账复位 65/65、md5 `0fd13292
 Rust lib **171 通过**（+2 条新守卫）、ODS 族 35 通过 / 1 ignored；ODS 往返账 14/14 复位、
 md5 与基线逐字节一致、`docs/ods-roundtrip.*` git 零改动。
 
+## v0.222（ODT 链：补发占位格 + 高亮改发 `<mark>` + 两处 `??` 兜底失效）
+
+v0.221 修完 ODS 的合并区，顺着「同一族还有谁」往下查，发现 **ODT（Writer 那一侧）是全仓唯一
+既没有保真账、也没有往返账的链**：`odt.ts` 2482 行读写代码，只有几份针对单点的测试。于是先
+做一轮只读探针，手写一份带格式的 `.odt` 走「读 → HTML → PM → 写」，再按网格逐格对撞。
+
+### 一、表格合并区：与 ODS 同一条，这一侧当时没跟上
+
+写手给 `grid.forEach` 铺了覆盖矩阵，但主循环是 `while (c <= lastCol)` 里 `c += colspan`——
+**跨出去的那几列一枚 `table:covered-table-cell` 都不发**（`covered.has()` 那一支只对「上一行
+纵向合并盖下来的位置」和「行首缺格」生效）。同一张三列表写出来只有两枚格：
+
+```xml
+<table:table-row>
+  <table:table-cell table:number-columns-spanned="2" …><text:p>A</text:p></table:table-cell>
+  <table:table-cell …><text:p>B</text:p></table:table-cell>   <!-- 本该在第 3 列 -->
+</table:table-row>
+```
+
+顺带还有一个更隐蔽的形状：**行右缘取的是「最右那格的左边」**（`Math.max(...line.map(x => x.col))`），
+所以「整行都被上一行的纵向合并盖住」时（一个 `colspan=3 rowspan=2` 的锚点下面那一行），
+`line` 是空的、行尾算成 0，那一行只补出 1 枚占位（3 列要 3 枚）。
+
+**修**：锚点之后按 `colspan - 1` 逐枚补占位；行右缘改成「各格跨越后的右缘」与「本行被盖住的
+位置 +1」两者的最大值，循环用 `c < rowEnd`。
+
+### 二、高亮：读手发错了形状，写手反而是好的
+
+读手把 `fo:background-color` 发成行内 `<span style="background-color: …">`，而 TipTap 的
+`Highlight` 只按 `<mark>` 解析——高亮在「HTML → 模型」这一步就没了。写手侧一直是通的
+（`charStyleXml` 会把 `highlight` mark 的色写成 `fo:background-color`），两头对不上。
+改成与 docx 读手同一枚形状：
+
+```html
+<mark data-color="#ffff00" style="background-color: #ffff00; color: inherit">高亮</mark>
+```
+
+### 三、下划线/删除线：`??` 兜底在测试 DOM 里静默失效
+
+ODF 里这两族各有两枚同义属性（`style:text-underline-type` 与 `style:text-underline-style`），
+读手原本写 `getAttribute('…-type') ?? getAttribute('…-style')`。但 `getAttribute` 缺属性时
+**浏览器返回 `null`、测试用的 `@xmldom/xmldom` 返回空串**：`??` 在 xmldom 下整枚兜底失效。
+后果是「只写 `-style` 的合法 ODF」（LibreOffice 两枚都写，别家不一定）在测试里读不到、
+在浏览器里读得到——**量具与产品量的不是同一件事**。改用 `||`，两边一致。
+
+### 守卫（两条，都验过能红）
+
+| 测试 | 变异 | 红在哪 |
+|---|---|---|
+| `test-odt-table-covered` | 撤掉补占位 | `["A@0","B@1"]` vs `["A@0","covered","B@2"]`（**B 换格**） |
+| 同上 | 行右缘退回旧算法 | `r1` 只补出 1 枚占位 `[3,1,3]` |
+| `test-odt-inline-marks` | 退回 `<span>` + `??` | 16 项全红 |
+
+合成件全由 crate 自造（PM 表格节点 / 产品骨架 + 手写 `content.xml`），不依赖外部文件。
+
+### 这一轮没做的
+
+- **ODT 链仍然没有账本**（docx/pptx/xlsx/ods 都有）。这一轮只是探针级：三处真缺口都是「结构性
+  或单点」，不是一份 700 对的普查能替代的。要立账得先有一份手写的富夹具（本轮那份探针夹具
+  可以直接长成它）。
+- `fo:font-family` 读手仍不认（只认 `style:font-name` / `fo:font-name` / `-asian`）——LibreOffice
+  写的是后者，第三方件可能只写前者，缺真件可证，先记着。
+- 表级 `table:align` / `style:width` 写手不发（`<table:table>` 出来不带 `table:style-name`）。
+
+**门禁**：全量 **80 份 80 通过 / 0 失败 / 0 跳过**（1102.0s）；`check:clean` **全绿**（tsc 0 /
+vite build ✓，尾部收尾清理被 turn 累计删除守卫拦 414 > 50，非构建失败）；相邻四份 ODT 测试
+（`desc` / `docprops` / `link-attrs` / `page-borders`）全过。探针与对撞脚本是只读量具，未入库。
+
 ## 性能（v0.3）
 
 
