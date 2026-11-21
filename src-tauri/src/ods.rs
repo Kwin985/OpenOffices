@@ -439,6 +439,9 @@ pub fn read_ods_styles(path: &str) -> (HashMap<String, SheetFmt>, Option<Default
     let mut row_idx = 0u32;
     let mut row_repeat = 1u32;
     let mut col_idx = 0u32;
+    // 合并锚点交代「还差几列没被 covered 格占位」：正常文件里紧跟其后的 covered 格逐枚抵掉，
+    // 有的生成器会省掉它们，那就直接补进列位——否则合并区右边一整行都会左移
+    let mut pending_cover = 0u32;
     let mut dim_col = 0u32;
     let mut order: Vec<String> = Vec::new(); // 表序，供 settings.xml 冻结按索引回填
 
@@ -520,6 +523,7 @@ pub fn read_ods_styles(path: &str) -> (HashMap<String, SheetFmt>, Option<Default
                     }
                     "table-row" => {
                         col_idx = 0;
+                        pending_cover = 0;
                         row_repeat = clamped_repeat(e, "number-rows-repeated");
                         let sty = attr_str(e, "style-name");
                         if let Some(px) =
@@ -544,6 +548,14 @@ pub fn read_ods_styles(path: &str) -> (HashMap<String, SheetFmt>, Option<Default
                         let cs = clamped_repeat(e, "number-columns-spanned");
                         let rs = clamped_repeat(e, "number-rows-spanned");
                         let sty = attr_str(e, "style-name");
+                        // covered 格抵掉锚点留下的空位；正常格来之前若还欠着，说明这一份省了
+                        // covered 格，那几列还是要算进列位（省掉不等于不存在）
+                        if covered {
+                            pending_cover = pending_cover.saturating_sub(repeat);
+                        } else if pending_cover > 0 {
+                            col_idx += pending_cover;
+                            pending_cover = 0;
+                        }
                         if !covered {
                             if let Some(name) = sty.as_deref().and_then(|n| styles.get(n)) {
                                 for i in 0..repeat.min(1024) {
@@ -566,6 +578,10 @@ pub fn read_ods_styles(path: &str) -> (HashMap<String, SheetFmt>, Option<Default
                                     end_row: row_idx + rs - 1,
                                     end_column: col_idx + cs - 1,
                                 });
+                            }
+                            // 锚点自己只占 1 列（repeat 那一份逐列算），横跨的其余列靠 covered 格占位
+                            if cs > 1 {
+                                pending_cover += repeat * (cs - 1);
                             }
                         }
                         col_idx += repeat;
@@ -799,6 +815,7 @@ pub fn read_ods_cell_side(path: &str) -> xlsx_cell_side::SideRead {
     // 本格左上角；写在重复列上的格是 None（它落在哪一列说不准），批注与链接都别硬派
     let mut cell: Option<(u32, u32)> = None;
     let mut covered = false;
+    let mut pending_cover = 0u32;
     let mut annot = RawAnnot::default();
     let mut link: Option<CellLinkPayload> = None;
     let mut links_seen = 0usize;
@@ -819,9 +836,11 @@ pub fn read_ods_cell_side(path: &str) -> xlsx_cell_side::SideRead {
                         row = 0;
                         row_repeat = 1;
                         col = 0;
+                        pending_cover = 0;
                     }
                     "table-row" => {
                         col = 0;
+                        pending_cover = 0;
                         row_repeat = clamped_repeat(e, "number-rows-repeated");
                         if !is_start {
                             row += row_repeat;
@@ -829,15 +848,25 @@ pub fn read_ods_cell_side(path: &str) -> xlsx_cell_side::SideRead {
                     }
                     "table-cell" | "covered-table-cell" => {
                         let repeat = clamped_repeat(e, "number-columns-repeated");
-                        // 合并区里左上那一格横向占几列——不把它算进列位，后继的格子会整体错位
                         let spanned = clamped_repeat(e, "number-columns-spanned");
                         covered = nm.as_ref() == "covered-table-cell";
+                        // 与样式那一路同一套列位账：锚点只占 repeat 列，横跨的其余列由
+                        // covered 格逐枚抵掉；这一份省了 covered 格就直接补进列位
+                        if covered {
+                            pending_cover = pending_cover.saturating_sub(repeat);
+                        } else if pending_cover > 0 {
+                            col += pending_cover;
+                            pending_cover = 0;
+                        }
                         cell = if covered || repeat != 1 {
                             None
                         } else {
                             Some((row, col))
                         };
-                        col += repeat * spanned;
+                        col += repeat;
+                        if !covered && spanned > 1 {
+                            pending_cover += repeat * (spanned - 1);
+                        }
                         annot = RawAnnot::default();
                         link = None;
                         links_seen = 0;
@@ -1674,6 +1703,15 @@ fn render_sheet(
                     text_p_xml(&text, link_at(r, c), &sheet.name),
                     frames_at(r, c)
                 ));
+                // 合并区在 XML 里是「锚点 + 被它盖住的格」两段：`number-columns-spanned` 只说
+                // 这一格横跨几列，被盖住的列要各有自己的格元素占位。少发这一段，同一行后面
+                // 每一格在文件里的次序就整体左移（读侧是按格元素次序定位的），谁打开都会错位
+                if col_span > 1 {
+                    row_buf.push_str(&format!(
+                        "<table:covered-table-cell table:number-columns-repeated=\"{}\"/>",
+                        col_span - 1
+                    ));
+                }
                 c = m.end_column + 1;
                 continue;
             }
@@ -3353,6 +3391,209 @@ mod tests {
             s.notes
         );
     }
+
+    /// 合并区在 ODF 文件里是「锚点 + 被它盖住的 covered 格」两段：`number-columns-spanned`
+    /// 只说锚点横跨几列，被盖住的列要各有自己的格元素占位。写侧少发那一段，同一行后面
+    /// 每格在文件里的次序就整体左移；读侧若把锚点按 `spanned` 前推、再叠上 covered 格，
+    /// 又会整体右移。这一条同时盯住「写」与「两遍读」（值/合并区/批注各自一路）。
+    #[test]
+    fn ods_merged_region_keeps_later_cells_in_place() {
+        let wb = WorkbookPayload {
+            sheets: vec![SheetPayload {
+                name: "错位".into(),
+                cells: vec![
+                    cell(0, 0, json!("合并")),
+                    CellPayload {
+                        r: 0,
+                        c: 2,
+                        v: Some(json!("右边")),
+                        s: Some(CellStyle {
+                            bg: Some("#ffff00".into()),
+                            ..Default::default()
+                        }),
+                        ..Default::default()
+                    },
+                    cell(3, 0, json!("下面")),
+                ],
+                // 3 行 × 2 列：既考同一行被盖住的那一列，也考下面两行的 covered 段
+                merges: vec![MergeRange {
+                    start_row: 0,
+                    start_column: 0,
+                    end_row: 2,
+                    end_column: 1,
+                }],
+                notes: vec![CellNotePayload {
+                    r: 0,
+                    c: 2,
+                    text: "右边的批注".into(),
+                    ..Default::default()
+                }],
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+
+        // ① 写侧：锚点后面必须有占位格，且在「右边」那一格之前
+        let (content, _styles) = ods_xml(&wb);
+        assert!(
+            content.contains("table:number-columns-spanned=\"2\" table:number-rows-spanned=\"3\""),
+            "锚点要交代自己横跨 2 列 3 行"
+        );
+        let row0 = content
+            .split("<table:table-row>")
+            .nth(1)
+            .and_then(|x| x.split("</table:table-row>").next())
+            .expect("第一行");
+        assert_eq!(
+            row0.matches("<table:covered-table-cell").count(),
+            1,
+            "横跨 2 列 → 一枚占位格（自己那列不算）: {row0}"
+        );
+        assert!(
+            row0.find("<table:covered-table-cell").unwrap() < row0.find("右边").unwrap(),
+            "占位格排在右边那一格之前: {row0}"
+        );
+
+        // ② 值 + 合并区：按格序定位的那一路
+        let path = std::env::temp_dir()
+            .join(format!("openoffices-ods-mergepos-{}.ods", std::process::id()))
+            .to_string_lossy()
+            .to_string();
+        std::fs::write(&path, ods_bytes(&wb).expect("ods bytes")).expect("write");
+        let back = crate::xlsx::read_xlsx_sync(path.clone()).expect("读回失败");
+        let rd = read_ods_cell_side(&path);
+        std::fs::remove_file(&path).ok();
+
+        let sheet = &back.sheets[0];
+        let at = |r: u32, c: u32| {
+            sheet
+                .cells
+                .iter()
+                .find(|x| x.r == r && x.c == c)
+                .and_then(|x| x.v.clone())
+        };
+        assert_eq!(at(0, 0), Some(json!("合并")));
+        assert_eq!(at(0, 2), Some(json!("右边")), "合并区右边那一格不许左移");
+        assert_eq!(at(3, 0), Some(json!("下面")), "合并区下面那一行不许左移");
+        assert_eq!(at(0, 1), None, "被盖住的那一列不该冒出内容");
+        assert_eq!(
+            sheet.merges,
+            vec![MergeRange {
+                start_row: 0,
+                start_column: 0,
+                end_row: 2,
+                end_column: 1
+            }],
+            "合并区本身要读回同一片"
+        );
+        // 样式那一路也按格序落位：(0,2) 的底色不该跑到 (0,1)
+        let st = sheet
+            .cells
+            .iter()
+            .find(|x| x.r == 0 && x.c == 2)
+            .and_then(|x| x.s.clone())
+            .expect("C1 样式读回");
+        assert_eq!(st.bg.as_deref(), Some("#ffff00"), "合并区右边的样式落在原格");
+
+        // ③ 批注那一路（第二遍扫描）
+        let side = rd.by_sheet.get("错位").expect("批注要读回这张表");
+        assert_eq!(side.notes.len(), 1, "一枚批注: {:?}", rd.accounts);
+        assert_eq!(
+            (side.notes[0].r, side.notes[0].c),
+            (0, 2),
+            "A1:B3 合并，批注在 C1"
+        );
+    }
+
+
+    /// 别人写的件省掉了 covered 格（有的生成器只发锚点的 `number-columns-spanned`）：
+    /// 那几列仍然占着位置，读侧要么补进列位、要么后面整行左移。写侧不背这个责——不发
+    /// covered 格的文件本身就是坏的——但读进来的位置不能跟着坏。
+    #[test]
+    fn ods_missing_covered_cells_still_advance() {
+        let wb = WorkbookPayload {
+            sheets: vec![SheetPayload {
+                name: "省写".into(),
+                cells: vec![
+                    cell(0, 0, json!("合并")),
+                    CellPayload {
+                        r: 0,
+                        c: 3,
+                        v: Some(json!("右边")),
+                        s: Some(CellStyle {
+                            bg: Some("#ffff00".into()),
+                            ..Default::default()
+                        }),
+                        ..Default::default()
+                    },
+                ],
+                merges: vec![MergeRange {
+                    start_row: 0,
+                    start_column: 0,
+                    end_row: 0,
+                    end_column: 2,
+                }],
+                notes: vec![CellNotePayload {
+                    r: 0,
+                    c: 3,
+                    text: "右边的批注".into(),
+                    ..Default::default()
+                }],
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        let (mut content, styles) = ods_xml(&wb);
+        assert!(
+            content.contains("<table:covered-table-cell"),
+            "前提：写出来的这一份是带占位格的"
+        );
+        content = content.replace(
+            "<table:covered-table-cell table:number-columns-repeated=\"2\"/>",
+            "",
+        );
+        assert!(
+            !content.contains("<table:covered-table-cell"),
+            "前提：这份外来件省掉了占位格"
+        );
+
+        let path = std::env::temp_dir()
+            .join(format!("openoffices-ods-nocov-{}.ods", std::process::id()))
+            .to_string_lossy()
+            .to_string();
+        std::fs::write(&path, zip_ods(&content, &styles)).expect("write");
+        let back = crate::xlsx::read_xlsx_sync(path.clone()).expect("读回失败");
+        let rd = read_ods_cell_side(&path);
+        std::fs::remove_file(&path).ok();
+
+        let sheet = &back.sheets[0];
+        let st = sheet
+            .cells
+            .iter()
+            .find(|x| x.r == 0 && x.c == 3)
+            .and_then(|x| x.s.clone())
+            .expect("D1 样式读回（省了占位格也不许左移）");
+        assert_eq!(st.bg.as_deref(), Some("#ffff00"), "样式落在第 4 列");
+        assert_eq!(
+            sheet.merges,
+            vec![MergeRange {
+                start_row: 0,
+                start_column: 0,
+                end_row: 0,
+                end_column: 2
+            }],
+            "合并区照常读回"
+        );
+
+        let side = rd.by_sheet.get("省写").expect("批注要读回这张表");
+        assert_eq!(side.notes.len(), 1, "一枚批注: {:?}", rd.accounts);
+        assert_eq!(
+            (side.notes[0].r, side.notes[0].c),
+            (0, 3),
+            "省了占位格，C1 的批注也要落在 D1"
+        );
+    }
+
 
     #[test]
     fn ods_zip_layout() {
