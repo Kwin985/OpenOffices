@@ -952,6 +952,60 @@ export interface VmlShape {
   imageRIds: string[]
 }
 
+/**
+ * v0.218：wps 文本框形状壳。豆包/WPS 的文本框整段住在
+ * `<wps:wsp>…<wps:txbx><w:txbxContent>正文</w:txbxContent></wps:txbx><wps:bodyPr …/></wps:wsp>`。
+ * 产品读手把正文读进模型（屏上看得到），但整只形状壳（style/cNvSpPr/spPr/bodyPr 19 枚）
+ * 没有槽、写手也发不出——往返后正文被拍平成普通段落。这里从源包留下整段字面，
+ * 写手 post-pack 时按正文文字把拍平的段落换回完整形状。
+ */
+export interface WpsShape {
+  /** 源包里含 `<wps:wsp>` 的 `<a:graphicData>…</a:graphicData>` 字面（带 wps uri） */
+  literal: string
+  /** 这道形状在源包的 `<wp:docPr id=…>`：写出包里按它找回对应的 drawing 空壳 */
+  docPrId: string
+  /** txbxContent 里的纯正文，仅用于测试/守卫，回填按 docPrId 对位 */
+  text: string
+  /** bodyPr 的属性字面串（供账本/守卫核对） */
+  bodyPrAttrs: string
+}
+
+/**
+ * 从源包提取 wps 文本框整段。
+ *
+ * 不能用非贪婪 `<w:p>…<\/w:p>` 切段——教训㉙：文本框的正文住在
+ * `<wps:txbxContent>` 里、本身就是一个 `<w:p>`，非贪婪会在正文处截断，
+ * 拿不到后面的 `</wps:wsp>` 与 bodyPr。这里反过来：先定位 `<wps:wsp`，
+ * 向前找包裹它的最近 `<w:p` 开标签，向后找 `</wps:wsp>` 之后的第一个 `</w:p>`。
+ */
+export function wpsShapesOf(docXml: string): WpsShape[] {
+  const out: WpsShape[] = []
+  for (const m of docXml.matchAll(/<wps:wsp(?:\s[^>]*)?>/g)) {
+    const wspAt = m.index ?? 0
+    // 向上找最近的 <a:graphicData …>（含 wps 的那一枚），向下找它的闭标签
+    const gdStart = docXml.lastIndexOf('<a:graphicData', wspAt)
+    if (gdStart < 0 || gdStart > wspAt) continue
+    const gdOpenEnd = docXml.indexOf('>', gdStart)
+    if (gdOpenEnd < 0 || gdOpenEnd > wspAt) continue
+    const gdEnd = docXml.indexOf('</a:graphicData>', wspAt)
+    if (gdEnd < 0) continue
+    const gd = docXml.slice(gdStart, gdEnd + '</a:graphicData>'.length)
+    if (!gd.includes('<wps:bodyPr')) continue
+    // docPr id 在 graphicData 之前的同一只 drawing 里，向前找最近的
+    const docPr = /<wp:docPr\b[^>]*\bid="([^"]+)"/.exec(docXml.slice(Math.max(0, gdStart - 2000), gdStart))
+    if (!docPr) continue
+    const tx = /<w:txbxContent>([\s\S]*?)<\/w:txbxContent>/.exec(gd)?.[1] ?? ''
+    const text = [...tx.matchAll(/<w:t(?:\s[^>]*)?>([\s\S]*?)<\/w:t>/g)].map((t) => t[1]).join('')
+    if (!text) continue
+    const bp = /<wps:bodyPr\b([^>]*?)\/?>/.exec(gd)?.[1]?.trim() ?? ''
+    // 源 graphicData 常省略 uri，补上 wps 的 uri 才是合法形状
+    const literal = gd.replace(/<a:graphicData(?:\s[^>]*)?>/,
+      `<a:graphicData uri="http://schemas.microsoft.com/office/word/2010/wordprocessingShape">`)
+    out.push({ literal, docPrId: docPr[1], text, bodyPrAttrs: bp })
+  }
+  return out
+}
+
 /** 从源包按段落边界提取 VML/嵌入对象整段；源件没说过的一律不生成指令 */
 export function vmlShapesOf(docXml: string, relsText: string): VmlShape[] {
   const imageRIds = new Set<string>()
@@ -1086,6 +1140,11 @@ export interface DocMeta {
    * `patchVmlShapes` 重映射 image rId 后按占位段贴回；写手侧正则读、读手零改动。
    */
   vmlShapes?: VmlShape[]
+  /**
+   * wps 文本框整段字面（v0.218）：`wpsShapesOf` 从源包提取，
+   * `patchWpsShapes` 按正文文字把被拍平的段落换回完整形状（含 bodyPr 19 枚）。
+   */
+  wpsShapes?: WpsShape[]
   /** 文档属性（v0.188）：由 `docxToDocMeta` 从 docProps/core.xml 读出，编辑器可改 */
   docProps?: DocProps
   page?: PageSetup
@@ -1444,6 +1503,9 @@ export async function docxToDocMeta(
   // v0.196：VML 老式形状与嵌入对象整段字面（relsText 上面已经读过，零新增部件读）
   const vmlShapes = vmlShapesOf(docXml, relsText)
   if (vmlShapes.length) out.vmlShapes = vmlShapes
+  // v0.218：wps 文本框整段字面（上面 docXml 已读，零新增部件读）
+  const wpsShapes = wpsShapesOf(docXml)
+  if (wpsShapes.length) out.wpsShapes = wpsShapes
   return out
 }
 
@@ -4001,6 +4063,8 @@ export async function prosemirrorToDocxBytes(
   const withPlacements = await patchLiteralPlacements(withFeat, meta?.literalPlacements, sess)
   // v0.196：VML 老式形状整段字面（rId 按关系类型重映射），与上面几笔共用会话
   const withVml = await patchVmlShapes(withPlacements, meta?.vmlShapes, sess)
+  // v0.218：wps 文本框整段字面（按正文文字把拍平的段落换回形状，含 bodyPr 19 枚）
+  const withWps = await patchWpsShapes(withVml, meta?.wpsShapes, sess)
   // 表闸门三样都要补：样式推出来的（looks）与表自己带的（dt.tblLooks），
   // v0.152 起再加表级条件格式尺寸两枚（dt.tblPrs，与 tblLook 同住 tblPr）
   const needTbl =
@@ -4011,7 +4075,7 @@ export async function prosemirrorToDocxBytes(
     dt.cnfStyles.some((x) => x) ||
     dt.tblBorders.some((x) => x)
   // 单元格不换行（v0.152）：包里没有 noWrap 的槽，按 <w:tc> 出现序插 <w:noWrap/>
-  const withCell = dt.cellExtras.some((x) => x) ? await patchTcPr(withVml, dt.cellExtras, sess) : withVml
+  const withCell = dt.cellExtras.some((x) => x) ? await patchTcPr(withWps, dt.cellExtras, sess) : withWps
   // 底纹的存盘原件（v0.164）：按 <w:shd> 出现序**合并**属性（包只发 val/color/fill 三枚，
   // 且 fill 写的是解析后的屏上色——源件的字面色与主题三枚都要改回来/补上去）
   const withShd = await patchShdAttrs(withCell, dt.shdExtras, sess)
@@ -4483,6 +4547,61 @@ export async function patchVmlShapes(
   }
   if (!pieces.length) return bytes
   const out = xml.slice(0, pStart) + pieces.join('') + xml.slice(pEnd + '</w:p>'.length)
+  setPart(zip, 'word/document.xml', out, sess)
+  return finishPatch(bytes, zip, sess)
+}
+
+/**
+ * v0.218：wps 文本框形状壳回填。
+ *
+ * 写手已经为每只形状发了 drawing 空壳（docPr 由 docPrShells 通道回填、graphicData
+ * 里是 pic:pic 占位），但 wps 形状壳（bodyPr 19 枚等）发不出。这里按 docPr id
+ * 找到那只空壳，把它 graphicData 里的占位换成源包的 wps 形状字面。
+ *
+ * 为什么不整段换 `<w:p>`：那样会重复带进 docPr 与 drawing（docPrShells 已发过），
+ * docPr 从 5 变 7、drawing 从 5 变 7。只换 graphicData 内容，两枚计数都不动。
+ * 守卫：① 写出包已有 `<wps:wsp` 就整笔跳过（幂等）；② docPr id 找不到就跳过；
+ * ③ 只换 graphicData 内部，drawing/docPr/pict 计数不变。
+ */
+export async function patchWpsShapes(
+  bytes: Uint8Array,
+  items: WpsShape[] | undefined,
+  sess?: PackSession,
+): Promise<Uint8Array> {
+  if (!items?.length) return bytes
+  const zip = sess ? sess.zip : await loadZipOf(bytes)
+  const xml = await partText(zip, 'word/document.xml', sess)
+  if (!xml || xml.includes('<wps:wsp')) return bytes
+  let out = xml
+  let touched = false
+  for (const it of items) {
+    if (!it.literal || !it.docPrId) continue
+    const docAt = out.indexOf(`<wp:docPr id="${it.docPrId}"`)
+    if (docAt < 0) continue
+    // graphicData 在 docPr 之后（同一只 drawing 里），找紧随其后的第一枚
+    const gdStart = out.indexOf('<a:graphicData', docAt)
+    if (gdStart < 0) continue
+    const gdEnd = out.indexOf('</a:graphicData>', gdStart)
+    if (gdEnd < 0) continue
+    const old = out.slice(gdStart, gdEnd + '</a:graphicData>'.length)
+    if (old.includes('<wps:wsp')) continue
+    out = out.slice(0, gdStart) + it.literal + out.slice(gdEnd + '</a:graphicData>'.length)
+    // 写手把正文另发成一个普通段落；正文现已回到 wps 形状里，删掉那个重复段落。
+    // 用正文文字找回它，且只删一段（出现序第一个完整 <w:p>），正文被改过就找不到、不删。
+    if (it.text) {
+      const pRe = /<w:p(?:\s[^>]*)?>[\s\S]*?<\/w:p>/g
+      for (const pm of out.matchAll(pRe)) {
+        if (!pm[0].includes(it.text)) continue
+        // 只删"纯正文段落"：不含 drawing/pict/object/wps。写手有时把正文和
+        // drawing 发在同一段（如艺术字），那种段删了会连 drawing 一起丢。
+        if (/<w:drawing|<w:pict|<w:object|<wps:wsp/.test(pm[0])) continue
+        out = out.slice(0, pm.index) + out.slice(pm.index + pm[0].length)
+        break
+      }
+    }
+    touched = true
+  }
+  if (!touched) return bytes
   setPart(zip, 'word/document.xml', out, sess)
   return finishPatch(bytes, zip, sess)
 }
