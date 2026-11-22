@@ -22,6 +22,17 @@ export const Bookmark = Mark.create({
         parseHTML: (el) => (el.getAttribute('data-oo-bookmark') || null),
         renderHTML: (attrs) => (attrs.name ? { 'data-oo-bookmark': attrs.name } : {}),
       },
+      /**
+       * 点书签（v0.227）：ODF 的 `<text:bookmark text:name="…"/>` 没有内容，PM 的 mark
+       * 不能挂在空文本上。读手用一枚零宽空格（U+200B）给它安家，这一格记「它是点书签」，
+       * 写手见到它就发回 `<text:bookmark/>` 而不是区间起止对。docx 那一侧不认这枚属性
+       * （多了个 HTML 属性，载荷串本身没变），不影响原有往返。
+       */
+      point: {
+        default: false as boolean,
+        parseHTML: (el) => el.getAttribute('data-oo-bookmark-point') === '1',
+        renderHTML: (attrs) => (attrs.point ? { 'data-oo-bookmark-point': '1' } : {}),
+      },
     }
   },
   parseHTML() {

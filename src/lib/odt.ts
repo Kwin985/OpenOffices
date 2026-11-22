@@ -860,8 +860,36 @@ class OdtBuilder {
 
   inline(nodes: PMNode[]): string {
     let out = ''
+    // 书签（v0.227）：连续挂着同一枚 bookmark mark 的文本节点合成一段 ODF 区间；
+    // 点书签由读手用零宽空格 + point 标记承载，写手认出后发回无内容的 text:bookmark。
+    let openBm = ''
+    const closeBm = () => {
+      if (openBm) {
+        out += `<text:bookmark-end text:name="${esc(openBm)}"/>`
+        openBm = ''
+      }
+    }
     for (const n of nodes) {
+      if (n.type !== 'text') closeBm()
       if (n.type === 'text') {
+        const bmRaw = (n.marks ?? []).find((k) => k.type === 'bookmark')?.attrs?.name
+        if (typeof bmRaw === 'string' && bmRaw) {
+          const cut = bmRaw.lastIndexOf(';')
+          const nm = cut >= 0 ? bmRaw.slice(0, cut) : bmRaw
+          if (nm) {
+            const point = (n.marks ?? []).find((k) => k.type === 'bookmark')?.attrs?.point === true
+            if (point && (n.text ?? '') === '\u200b') {
+              closeBm()
+              out += `<text:bookmark text:name="${esc(nm)}"/>`
+              continue
+            }
+            if (openBm !== nm) {
+              closeBm()
+              openBm = nm
+              out += `<text:bookmark-start text:name="${esc(nm)}"/>`
+            }
+          }
+        } else closeBm()
         const cid = (n.marks ?? []).find((k) => k.type === 'comment')?.attrs?.cid as number | undefined
         if (this.openAnn != null && (!cid || cid !== this.openAnn)) {
           out += this.closeAnnEl(this.openAnn)
@@ -927,6 +955,7 @@ class OdtBuilder {
         }
         out += inner
       } else if (n.type === 'hardBreak') {
+        closeBm()
         out += '<text:line-break/>'
       } else if (n.type === 'image') {
         const src = (n.attrs?.src as string) ?? ''
@@ -959,6 +988,7 @@ class OdtBuilder {
         out += this.inline(n.content)
       }
     }
+    closeBm()
     if (this.openAnn != null) {
       out += this.closeAnnEl(this.openAnn)
       this.openAnn = null
@@ -1552,11 +1582,18 @@ export async function odtToHtml(
       .filter((x) => x.localName === 'annotation-end')
       .map((x) => x.getAttribute('office:name') ?? ''),
   )
+  // 书签区间（v0.227）：与批注同一套「跨段续挂」——mark 不能跨块，本段开着的书签
+  // 段末收 span、下一段开头再开一枚同名 span，名字留在 openBms 里。
+  const openBms: string[] = []
   // mark 不能跨块：本段渲染前后把仍开着的区间各补一枚 span（cid 留在 openCids，下一段再开）
   const annWrap = (inner: string) => {
-    const pre = openCids.map((c) => `<span data-oo-comment="${c}">`).join('')
+    const pre =
+      openBms.map((n) => `<span data-oo-bookmark="${esc(n)};">`).join('') +
+      openCids.map((c) => `<span data-oo-comment="${c}">`).join('')
     const post =
-      '</span>'.repeat(pointCids.length) + '</span>'.repeat(openCids.length)
+      '</span>'.repeat(pointCids.length) +
+      '</span>'.repeat(openCids.length) +
+      '</span>'.repeat(openBms.length)
     pointCids.length = 0
     return pre + inner + post
   }
@@ -2279,6 +2316,31 @@ export async function odtToHtml(
               (title ? ` title="${esc(title)}"` : '') +
               (target ? ` target="${esc(target)}"` : '') +
               `>${await renderInline(e)}</a>`
+            break
+          }
+          case 'bookmark': {
+            // 点书签（v0.227）：ODF 是一枚没有内容的 text:bookmark。PM 的 mark 挂不住空文本，
+            // 这里用零宽空格给它安家并带一枚 point 标记；写手见到这一对就发回点书签。
+            const name = e.getAttribute('text:name') ?? ''
+            if (name)
+              out += `<span data-oo-bookmark="${esc(name)};" data-oo-bookmark-point="1">&#8203;</span>`
+            break
+          }
+          case 'bookmark-start': {
+            const name = e.getAttribute('text:name') ?? ''
+            if (name) {
+              openBms.push(name)
+              out += `<span data-oo-bookmark="${esc(name)};">`
+            }
+            break
+          }
+          case 'bookmark-end': {
+            const name = e.getAttribute('text:name') ?? ''
+            const at = name ? openBms.lastIndexOf(name) : -1
+            if (at >= 0) {
+              openBms.splice(at, 1)
+              out += '</span>'
+            }
             break
           }
           case 'annotation': {
