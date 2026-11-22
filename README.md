@@ -4835,6 +4835,10 @@ md5 与基线逐字节一致、`docs/ods-roundtrip.*` git 零改动。
 **账本**：本轮改了 docx 读手与 doc-schema，提交后跑三份账确认零改动——保真 99.0%/98.4%
 （md5 `dd942eb8`/`d69a6b20`）、往返 583/619 = 94.2%（md5 `cd7873f2`/`4ffc55cc`）。
 
+**provenance 更新**：AI 面板新增 `src/lib/cloud-ai.ts`（modules 81 → 82），按房规动账本元数据——
+覆盖率数字与 `docs/fidelity-roundtrip.json` 逐字未变，只有 md5 因 provenance 字段变化而刷新。
+公式转换器放在已有的 `ooxml-graphics.ts`，没再新增模块。
+
 ## v0.228（ODT 列表标签几何：先核 RNG 剔假红，再接四格载荷读写闭环）
 
 普查档 B 的最后一族。动手前按 ODF 1.2 的 **RNG 规格原文**核形状，抓出第 3 对假红：
