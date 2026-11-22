@@ -4839,6 +4839,8 @@ md5 与基线逐字节一致、`docs/ods-roundtrip.*` git 零改动。
 覆盖率数字与 `docs/fidelity-roundtrip.json` 逐字未变，只有 md5 因 provenance 字段变化而刷新。
 公式转换器放在已有的 `ooxml-graphics.ts`，没再新增模块。
 
+**门禁**：全量 **90 份 90 通过 / 0 失败 / 0 跳过**（1621.4s）；`check:clean` 全绿（tsc 0 / vite build ✓）。
+
 ## v0.228（ODT 列表标签几何：先核 RNG 剔假红，再接四格载荷读写闭环）
 
 普查档 B 的最后一族。动手前按 ODF 1.2 的 **RNG 规格原文**核形状，抓出第 3 对假红：
