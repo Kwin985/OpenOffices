@@ -4810,6 +4810,29 @@ Rust lib **169 通过**（xlsx 族 25）；夹具账复位 65/65、md5 `0fd13292
 Rust lib **171 通过**（+2 条新守卫）、ODS 族 35 通过 / 1 ignored；ODS 往返账 14/14 复位、
 md5 与基线逐字节一致、`docs/ods-roundtrip.*` git 零改动。
 
+## v0.225（ODT 下划线三格：借 docx 的 `data-u` 六格载荷走完读写）
+
+v0.224 普查档 B 的第一族：`text-underline-style`/`-width`/`-color` 从未被 ODT 读手查问。
+docx 链早就把线型与颜色装进 `data-u` 六格载荷（`线型;屏上色;字面色;主题三枚`），由
+`charExtra` mark 接住后屏上画得出线型/颜色；ODT 此前只读两枚同义属性里的一枚，
+写手则永远发 `solid/single/auto` 死档——**线型、粗细、颜色整族丢**。
+
+**修**：读手把 ODF 三格按「看得见的形状」折成 docx 线型词（dotted→dotted、dashed→dash、
+wavy→wave、bold/thick→thick、`type=double` 优先），颜色两格走 hex 归一化或关键词保形
+（不把 `red` 伪造出 hex），后三格主题槽留空，与 docx 读手发的形状逐字一致；
+写手按载荷回发 `style` / `type` / `width` / `color` 四枚，没有载荷时保留旧的死档。
+
+**守卫**：`test-odt-underline.mjs` 17 条（读七形状 + 两反例 + 写七落点 + 整趟二次读回）；
+负控（读手退回 HEAD）**14 红 / 3 绿**，绿的 3 条全是反例。同族的旧守卫
+`test-odt-inline-marks.mjs` 有两条断言钉的是旧的裸 `<u>文字</u>` 形状，本轮随形状变更同步更新
+（现在 `<u>` 里多一层带 `data-u` 的 span），不是行为回退。
+
+**账本**：三份仍零改动——保真 99.0%/98.4%（md5 `dd942eb8`/`d69a6b20`）、往返
+583/619 = 94.2%（md5 `cd7873f2`/`4ffc55cc`）。本轮只动 `odt.ts`，docx 两条账的输入与漏斗没碰。
+
+**门禁**：全量 **83 份 83 通过 / 0 失败 / 0 跳过**（1291.3s；第一次跑有 2 条旧形状断言红，
+随形状变更更新断言后全绿）；`check:clean` 全绿（tsc 0 / vite build ✓）。
+
 ## v0.224（ODT 查问面普查 + locale/缩放/复杂字号/字族兜底四族读写闭环）
 
 v0.222/223 的缺口都是族级探针撞出来的——撞到哪个修哪个，没人保证「还有谁」被数清了。这一轮给

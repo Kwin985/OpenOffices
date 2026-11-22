@@ -133,8 +133,12 @@ ODT 账本的夹具雏形与分母来源。
 
 ### B. docx 链有对应物、留待后续（按价值排序）
 
-- `text-underline-style` / `-width` / `-color`（3 对）：docx 下划线载荷六格（线型;屏上色;字面色;主题三枚），
-  ODT 只读 `type` ⇒ 下划线颜色/线宽丢。**下一波最顺手的一族**。
+- ~~`text-underline-style` / `-width` / `-color`（3 对）~~ —— **v0.225 已修**：docx 下划线载荷六格
+  （线型;屏上色;字面色;主题三枚）现在由 `data-u` 共用；ODF 的 style/type/width 按看得见的形状折成
+  docx 线型词（dotted→dotted、dashed→dash、wavy→wave、bold/thick→thick、double 优先），颜色两格
+  走 hex 归一化或关键词保形；写侧按载荷回发三格，没有载荷时保留旧的 solid/single/auto 死档。
+  守卫 `test-odt-underline.mjs` 17 条，负控 14 红 / 3 绿（绿的 3 条全是反例）。
+  **下一波最顺手的一族**已换成书签名（docx 有 `w:bookmarkStart@w:name` 与守卫）。
 - `bookmark|name`（1）：docx 读手读 `w:bookmarkStart@w:name` 且有 `test-bookmark-ids` 守卫；ODT 书签名不读不写。
 - `annotation|creator` / `|date`（2）：**写手反而发 `dc:creator`，读手不读**——又一次「两头对不上」，
   与 v0.222 高亮同款病。
