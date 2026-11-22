@@ -846,8 +846,12 @@ class OdtBuilder {
   private openAnnEl(cid: number): string {
     const c = this.meta?.comments?.find((x) => x.id === cid)
     const creator = c?.author ? `<dc:creator>${esc(c.author)}</dc:creator>` : ''
+    // 批注日期（v0.226）：读手一直把 ODF 1.2 的 `dc:date` 子元素收进 DocComment.date，
+    // 写手却只发 dc:creator——另存一次作者还在、时间没了。docx 的批注四枚（id/author/
+    // date/initials）里 initials 在 ODF 没有对应槽（dc:creator 是整名），date 有槽就得发。
+    const date = c?.date ? `<dc:date>${esc(c.date)}</dc:date>` : ''
     const body = (c?.text ?? '').split('\n').map(esc).join('<text:line-break/>')
-    return `<office:annotation office:name="ooc${cid}">${creator}<text:p text:style-name="FN">${body}</text:p></office:annotation>`
+    return `<office:annotation office:name="ooc${cid}">${creator}${date}<text:p text:style-name="FN">${body}</text:p></office:annotation>`
   }
 
   private closeAnnEl(cid: number): string {
