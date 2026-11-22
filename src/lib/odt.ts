@@ -236,6 +236,35 @@ function esc(s: string): string {
 }
 
 /**
+ * 下划线三格 ↔ docx 的线型词（v0.225）。ODF 把线型/粗细拆成 style + type + width 三枚，
+ * docx 的 `w:u/@w:val` 是一门十八档的枚举（thick/dashedHeavy/dotDash…）；两边共用
+ * `data-u` 六格载荷的第一格，所以这里按「看得见的形状」对 nearest 档，不做逐字直译。
+ * ODF 的 slash/xslash/plus 在 Word 那门枚举里没有对应物，退 solid（形状不同，但至少线还在）。
+ */
+const U_ODF_TO_DOCX: Record<string, string> = {
+  solid: 'single', thin: 'single', dotted: 'dotted', dashed: 'dash',
+  double: 'double', wavy: 'wave', bold: 'thick', thick: 'thick',
+  slash: 'single', xslash: 'single', plus: 'single',
+}
+const U_DOCX_TO_ODF: Record<string, string> = {
+  single: 'solid', words: 'solid', dotted: 'dotted', dottedheavy: 'dotted',
+  dash: 'dashed', dashedheavy: 'dashed', dashlong: 'dashed', dashlongheavy: 'dashed',
+  dotdash: 'dashed', dashdotheavy: 'dashed', dotdotdash: 'dashed', dashdotdotheavy: 'dashed',
+  wave: 'wavy', wavyheavy: 'wavy', wavydouble: 'double', double: 'double',
+  thick: 'bold', none: 'none',
+}
+
+/** ODF 的 underline-color → 载荷两格（屏上色、字面色）；非 hex 的颜色关键词整串保留 */
+function uColorPair(c: string | null): [string, string] {
+  const v = (c || '').trim()
+  if (!v || v.toLowerCase() === 'auto' || v.toLowerCase() === 'font-color') return ['', '']
+  const hex = /^#?([0-9a-f]{6})$/i.exec(v)
+  // hex 两格都发：屏上色给 charExtra 画 CSS，字面色给写手回写盘的原生槽
+  if (hex) return [`#${hex[1].toLowerCase()}`, hex[1].toUpperCase()]
+  return ['', v]
+}
+
+/**
  * 合并的语言串 → ODF 的 language + country 两枚属性（v0.224）。
  * docx 的 `w:lang` 把语言装一个格（`zh-CN`），ODF 拆两格发；只有尾段长得像地区码
  * （两字母全大写，或 ISO 639-2/UN M.49 的三位数字）才拆，其余形状整串进 language——
@@ -671,8 +700,26 @@ class OdtBuilder {
       let tp = ''
       if (m.bl) tp += ' fo:font-weight="bold"'
       if (m.it) tp += ' fo:font-style="italic"'
-      if (m.ul)
-        tp += ' style:text-underline-style="solid" style:text-underline-type="single" style:text-underline-width="auto"'
+      if (m.ul) {
+        const raw = typeof m.u === 'string' ? m.u : ''
+        if (raw) {
+          const [val = 'single', screen = '', lit = ''] = raw.split(';')
+          const low = val.toLowerCase()
+          const style = U_DOCX_TO_ODF[low] || 'solid'
+          const typ = low === 'double' || low === 'wavydouble' ? 'double' : 'single'
+          const width = low === 'thick' ? 'bold' : 'auto'
+          tp += ` style:text-underline-style="${style}" style:text-underline-type="${typ}" style:text-underline-width="${width}"`
+          const col = lit || screen
+          if (col) {
+            // 六位 hex 补 # 前缀；不依赖捕获组（那玩意儿容易被编辑器/补丁误吞，
+            // 上一版就因为丢了括号把 #FF0000 写成 #undefined）
+            const isHex = /^#?[0-9a-f]{6}$/i.test(col)
+            tp += ` style:text-underline-color="${esc(isHex ? `#${col.replace(/^#/, '')}` : col)}"`
+          }
+        } else {
+          tp += ' style:text-underline-style="solid" style:text-underline-type="single" style:text-underline-width="auto"'
+        }
+      }
       if (m.st) tp += ' style:text-line-through-style="solid" style:text-line-through-type="single"'
       // 字体族拆拉丁/中日韩两槽；code 与 fam 都写 style:font-name，同元素重复属性会让 XML 解析失败
       const font = m.fam ? splitFont(String(m.fam)) : m.code ? { latin: 'Courier New' } : null
@@ -848,6 +895,9 @@ class OdtBuilder {
           langBidi: (at('charExtra')?.langBidi ?? undefined) as string | undefined,
           szcs: (at('charExtra')?.szcs ?? undefined) as number | undefined,
           scale: (at('charExtra')?.scale ?? undefined) as number | undefined,
+          // 下划线三格（v0.225）：charExtra 的 data-u 六格载荷原样进键；有载荷时按它
+          // 写出线型/粗细/颜色，没载荷时才用旧的 solid/single/auto 死档。
+          u: (at('charExtra')?.u ?? undefined) as string | undefined,
         }
         const hasAny = Object.values(markKey).some(Boolean)
         if (hasAny) {
@@ -1214,6 +1264,15 @@ interface StyleInfo {
   langBidi?: string
   szCs?: number
   scale?: number
+  /**
+   * 下划线三格（v0.225）：ODF 的 `style:text-underline-style` / `-width` / `-color`
+   * 在 docx 链有六格载荷（`data-u` = 线型;屏上色;字面色;主题三枚）。此前 ODT 读手
+   * 只读 type/style 两枚同义属性中的一枚，线型细节与颜色整族丢；写手也只发死板的
+   * solid/single/auto。这里把三格折成 docx 的线型词与颜色，复用 charExtra 的 u 槽。
+   */
+  uVal?: string
+  uColor?: string
+  uColorLit?: string
 }
 
 function pick(el: Element, localName: string): Element | null {
@@ -1634,6 +1693,21 @@ export async function odtToHtml(
     // 浏览器里却读得到。用 `||` 让两边量到同一件事（v0.222）。
     const ul = tp.getAttribute('style:text-underline-type') || tp.getAttribute('style:text-underline-style')
     if (ul && ul !== 'none') out.underline = true
+    // 下划线三格（v0.225）：线型按 style（word 的斜杠/加号退 solid），type=double 优先；
+    // width=bold/thick 只在单线时改线型档（thick），免得覆盖 dotted/dashed 的形状。
+    // 载荷形状与 docx 读手逐字一致（六格，后三格主题槽留空），charExtra mark 直接接。
+    if (ul && ul !== 'none') {
+      const style = (tp.getAttribute('style:text-underline-style') || '').toLowerCase()
+      const typ = (tp.getAttribute('style:text-underline-type') || '').toLowerCase()
+      const width = (tp.getAttribute('style:text-underline-width') || '').toLowerCase()
+      let val = U_ODF_TO_DOCX[style] || (typ === 'double' ? 'double' : 'single')
+      if (typ === 'double') val = 'double'
+      if ((width === 'bold' || width === 'thick') && val === 'single') val = 'thick'
+      const [screen, lit] = uColorPair(tp.getAttribute('style:text-underline-color'))
+      out.uVal = val
+      if (screen) out.uColor = screen
+      if (lit) out.uColorLit = lit
+    }
     const lt = tp.getAttribute('style:text-line-through-type') || tp.getAttribute('style:text-line-through-style')
     if (lt && lt !== 'none') out.strike = true
     const color = tp.getAttribute('fo:color')
@@ -1964,7 +2038,10 @@ export async function odtToHtml(
       (si.langEa ? ` data-lang-ea="${esc(si.langEa)}"` : '') +
       (si.langBidi ? ` data-lang-bidi="${esc(si.langBidi)}"` : '') +
       (si.szCs != null ? ` data-szcs="${si.szCs}"` : '') +
-      (si.scale != null ? ` data-scale="${si.scale}"` : '')
+      (si.scale != null ? ` data-scale="${si.scale}"` : '') +
+      // 下划线三格（v0.225）：与 docx 读手同一枚 data-u 六格载荷，charExtra mark 接住后
+      // 屏上会画出线型与颜色（`<u>` 保留 underline mark 的语义，不另造一套 CSS）。
+      (si.uVal ? ` data-u="${esc([si.uVal, si.uColor ?? '', si.uColorLit ?? '', '', '', ''].join(';'))}"` : '')
     if (css.length || dataAttrs) html = `<span style="${css.join('; ')}"${dataAttrs}>${html}</span>`
     if (si.strike) html = `<s>${html}</s>`
     if (si.underline) html = `<u>${html}</u>`

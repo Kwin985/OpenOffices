@@ -86,7 +86,8 @@ async function main() {
   const { html } = await odtToHtml(src)
 
   // ── ① 只写 -style 的下划线/删除线也要读出来 ─────────────────────
-  check('只有 style:text-underline-style 也出 <u>', html.includes('<u>下划线</u>'), html)
+  // v0.225：下划线三格改走 docx 的 data-u 载荷，<u> 里面多一层 span，形状不再是裸 <u>文字</u>
+  check('只有 style:text-underline-style 也出 <u> 与 data-u 载荷', /<u><span[^>]*data-u="single;;;;;"[^>]*>下划线<\/span><\/u>/.test(html), html)
   check('只有 style:text-line-through-style 也出 <s>', html.includes('<s>删除线</s>'), html)
 
   // ── ② 高亮按 docx 那枚形状出 <mark> ─────────────────────────────
@@ -121,7 +122,7 @@ async function main() {
 
   // ── ④ 复读一遍：三枚都还在（闭环）────────────────────────────────
   const again = await odtToHtml(await prosemirrorToOdtBytes(pm, {}))
-  check('再读回来下划线还在', again.html.includes('<u>下划线</u>'), again.html)
+  check('再读回来下划线与载荷还在', /<u><span[^>]*data-u="single;;;;;"[^>]*>下划线<\/span><\/u>/.test(again.html), again.html)
   check('再读回来删除线还在', again.html.includes('<s>删除线</s>'), again.html)
   check('再读回来高亮还在', again.html.includes('data-color="#ffff00"'), again.html)
 
