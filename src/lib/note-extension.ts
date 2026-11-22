@@ -1,4 +1,5 @@
 import { Node, mergeAttributes, type Editor } from '@tiptap/core'
+import katex from 'katex'
 
 /**
  * 脚注 / 尾注：一个带正文的行内原子节点。
@@ -160,3 +161,61 @@ export const Note = Node.create({
     }
   },
 })
+
+/**
+ * 公式（v0.229）：行内原子节点，LaTeX 源码存在 data-oo-formula 属性上。
+ * OMML ↔ LaTeX 的转换住在 ooxml-graphics.ts，这里只管模型与屏上承载：
+ * 读手把 m:oMath 转成 LaTeX 发成 span[data-oo-formula]，写手读回属性转回 OMML。
+ * 屏上用 KaTeX 渲染（见 DocEditor 的 useEffect），点开可改 LaTeX 源码。
+ */
+export const Formula = Node.create({
+  name: 'formula',
+  group: 'inline',
+  inline: true,
+  atom: true,
+  selectable: true,
+
+  addAttributes() {
+    return {
+      latex: {
+        default: '',
+        parseHTML: (el: HTMLElement) => el.getAttribute('data-oo-formula') ?? '',
+        renderHTML: (attrs: { latex?: string }) => ({
+          'data-oo-formula': typeof attrs.latex === 'string' ? attrs.latex : '',
+        }),
+      },
+    }
+  },
+
+  parseHTML() {
+    return [{ tag: 'span[data-oo-formula]' }]
+  },
+
+  renderHTML({ HTMLAttributes }) {
+    return ['span', mergeAttributes(HTMLAttributes, { class: 'doc-formula' })]
+  },
+})
+
+/**
+ * 屏上渲染：把容器内所有公式 span[data-oo-formula] 画成 KaTeX。
+ * 用 innerHTML 写进 span（不是 React 树）——TipTap 管着这棵 DOM，React 不接管它的内部。
+ * 幂等：已渲染过的（带 data-katex-done）跳过；LaTeX 变了才重画。
+ */
+export function renderFormulas(root: HTMLElement | null): number {
+  if (!root) return 0
+  let n = 0
+  for (const el of Array.from(root.querySelectorAll('span[data-oo-formula]'))) {
+    const latex = el.getAttribute('data-oo-formula') ?? ''
+    if (!latex) continue
+    if (el.getAttribute('data-katex-done') === latex) continue
+    try {
+      el.innerHTML = katex.renderToString(latex, { throwOnError: false, displayMode: false })
+      el.setAttribute('data-katex-done', latex)
+      n++
+    } catch {
+      // KaTeX 画不出来时保留 LaTeX 原文作为字面（字不丢）
+      el.textContent = latex
+    }
+  }
+  return n
+}

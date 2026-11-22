@@ -147,7 +147,8 @@ async function main() {
   check('提取从已读的 relsText 取（零新增部件读）', /const vmlShapes = vmlShapesOf\(docXml, relsText\)/.test(w))
   // v0.218：withVml 之后插了 withWps（wps 文本框），再接 withCell。
   // 断言逐笔接上一笔，但允许中间多一笔——钉的是"没有断链/丢结果"，不是固定笔数。
-  check('主链挂 withVml，逐笔接上一笔', /const withVml = await patchVmlShapes\(withPlacements, meta\?\.vmlShapes, sess\)/.test(w) && /patchWpsShapes\(withVml|patchTcPr\(withVml,| : withVml/.test(w))
+  // v0.229：公式补丁插在 VML 之前（withPlacements → withFormula → withVml），钉的仍是「没断链」
+  check('主链挂 withVml，逐笔接上一笔', /const withVml = await patchVmlShapes\(with\w+, meta\?\.vmlShapes, sess\)/.test(w) && /patchWpsShapes\(withVml|patchTcPr\(withVml,| : withVml/.test(w))
   // 动态链校验只取主链区间（withCols → withNumStart）；withSpace 是边框纯函数、
   // withKid 是局部插值，都不在补丁链里，不该拿来参与校验。
   const defs = [...w.matchAll(/^  const (with[A-Z]\w*) =/gm)].map((m) => ({ name: m[1], at: m.index }))

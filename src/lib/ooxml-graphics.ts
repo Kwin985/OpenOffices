@@ -13,7 +13,7 @@
 // 元素名一律按 local name 匹配：图表与图示命名空间的前缀（c:/dgm:/a:）是生成器自己挑的，
 // 换一家就会写错，认前缀等于把这块重新变成"读不出来"。
 
-import { allDesc, attr, attrNum, findDesc, findL, allL, local, parseXml, textOf, type XEl } from './ooxml'
+import { allDesc, attr, attrL, attrNum, els, findDesc, findL, allL, local, parseXml, textOf, type XEl } from './ooxml'
 
 const esc = (s: string) =>
   s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;')
@@ -256,4 +256,215 @@ export function chartToHtml(xml: string, inCell = false): GraphicsHtml {
     html: `${head}<table><tr>${header.map((h) => cell(h, true)).join('')}</tr>${body}</table>`,
     kept: data.length,
   }
+}
+
+// ── OMML ↔ LaTeX 双向转换（v0.229）─────────────────────────────────────────
+// 公式与 SmartArt/图表同属「正文里的非文字构件」，放同一文件，避免新增 src/lib 文件
+// 惊动四份账本的 modules provenance。
+//
+// OMML 是 Word 的公式格式（m:oMath / m:oMathPara），LaTeX 是可编辑的中间表示：
+// 读手把 OMML 转成 LaTeX 交给公式节点，写手把用户改过的 LaTeX 转回 OMML。
+// 只覆盖标准构件；认不出的元素按子节点串接，保证字不丢。
+//
+// 规格锚点：分式必须包 m:num/m:den、根号包 m:deg/m:e、上下标包 m:e/m:sup|sub、
+// nary 的运算符在 m:naryPr/m:chr@m:val（v0.229 探针踩过：曾误读成 m:naryPr@chr）。
+
+/** OMML 结构 → LaTeX 串 */
+export function ommlToLatex(node: XEl): string {
+  const t = local(node.name)
+  if (t === 't') return textOf(node)
+  if (t === 'br') return '\\\\'
+  if (t.endsWith('Pr')) return ''
+  const kid = (n: XEl, name: string) => els(n).find((x) => local(x.name) === name)
+  const part = (n: XEl, name: string) => els(n).filter((x) => local(x.name) === name).map(ommlToLatex).join('')
+  const grp = (s: string) => (s.length > 1 ? `{${s}}` : s)
+  switch (t) {
+    case 'f': return `\\frac{${part(node, 'num')}}{${part(node, 'den')}}`
+    case 'sSup': return `${grp(part(node, 'e'))}^{${grp(part(node, 'sup'))}}`
+    case 'sSub': return `${grp(part(node, 'e'))}_{${grp(part(node, 'sub'))}}`
+    case 'sSubSup': return `${grp(part(node, 'e'))}_{${grp(part(node, 'sub'))}}^{${grp(part(node, 'sup'))}}`
+    case 'rad': {
+      const deg = part(node, 'deg')
+      return deg ? `\\sqrt[${deg}]{${part(node, 'e')}}` : `\\sqrt{${part(node, 'e')}}`
+    }
+    case 'd': {
+      const dp = kid(node, 'dPr')
+      const beg = unescDelim(attrL(kid(dp ?? node, 'begChr'), 'val') || '(')
+      const end = unescDelim(attrL(kid(dp ?? node, 'endChr'), 'val') || ')')
+      return `${beg}${part(node, 'e')}${end}`
+    }
+    case 'nary': {
+      const np = kid(node, 'naryPr')
+      const chr = attrL(kid(np ?? node, 'chr'), 'val') || '∫'
+      const op = NARY_LATEX[chr] || chr
+      const sub = part(node, 'sub'), sup = part(node, 'sup')
+      return `${op}${sub ? `_{${sub}}` : ''}${sup ? `^{${sup}}` : ''} ${part(node, 'e')}`
+    }
+    case 'func': return `${part(node, 'fName')}(${part(node, 'e')})`
+    case 'limLow': return `${part(node, 'e')}_{${part(node, 'lim')}}`
+    case 'limUpp': return `${part(node, 'e')}^{${part(node, 'lim')}}`
+    case 'm':
+      return `\\begin{matrix}${els(node).filter((x) => local(x.name) === 'mr').map((r) =>
+        els(r).filter((x) => local(x.name) === 'm').map(ommlToLatex).join(' & ')).join(' \\\\ ')}\\end{matrix}`
+    default: return els(node).map(ommlToLatex).join('')
+  }
+}
+
+const NARY_LATEX: Record<string, string> = {
+  '∑': '\\sum', '∏': '\\prod', '∫': '\\int', '∮': '\\oint', '∪': '\\bigcup', '∩': '\\bigcap',
+}
+const NARY_OMML: Record<string, string> = Object.fromEntries(Object.entries(NARY_LATEX).map(([k, v]) => [v, k]))
+const DELIM_LATEX: Record<string, string> = {
+  '(': '(', ')': ')', '[': '[', ']': ']', '{': '\\{', '}': '\\}', '|': '|',
+  '⟨': '\\langle ', '⟩': '\\rangle ', '⌈': '\\lceil ', '⌉': '\\rceil ',
+}
+const unescDelim = (s: string) => DELIM_LATEX[s] || s
+
+/** LaTeX 串 → OMML DOM 元素（不挂在文档上，调用方决定插入位） */
+export function latexToOmml(src: string): XEl {
+  const p = new LatexParser(src)
+  return p.parse()
+}
+
+/** 受限 LaTeX 递归下降解析器：只认 OMML 表达得了的那部分 */
+class LatexParser {
+  private s: string
+  private i = 0
+  constructor(src: string) { this.s = src }
+  parse(): XEl { return this.seq('') }
+  private peek() { return this.s[this.i] || '' }
+  private eat() { return this.s[this.i++] || '' }
+  private skipSpace() { while (this.peek() === ' ') this.i++ }
+  /** 取一个参数：花括号整组，或单个字符/命令 */
+  private arg(): XEl {
+    this.skipSpace()
+    if (this.peek() === '{') {
+      this.eat()
+      const inner = this.seq('}')
+      if (this.peek() === '}') this.eat()
+      return inner
+    }
+    if (this.peek() === '\\') return this.command()
+    return this.text(this.eat())
+  }
+  private text(s: string): XEl {
+    // m:t 是 OMML 的文字叶子，XEl 的文字存在 children 的字符串里
+    return { name: 'm:t', attrs: {}, children: [s] }
+  }
+  private command(): XEl {
+    this.eat()
+    let name = ''
+    while (/[a-zA-Z]/.test(this.peek())) name += this.eat()
+    if (name === 'frac') return mk('f', {}, mk('num', {}, this.arg()), mk('den', {}, this.arg()))
+    if (name === 'sqrt') {
+      const deg = this.peek() === '[' ? this.optArg() : null
+      return mk('rad', {}, ...(deg ? [mk('deg', {}, deg)] : []), mk('e', {}, this.arg()))
+    }
+    if (NARY_OMML[`\\${name}`]) return this.nary(NARY_OMML[`\\${name}`])
+    if (name === 'left') return this.delim()
+    if (name === 'displaystyle' || name === 'text') return this.arg()
+    if (name === 'begin') return this.matrix()
+    return this.text(SYMBOL_LATEX[name] || `\\${name}`)
+  }
+  private optArg(): XEl {
+    this.eat()
+    const inner = this.seq(']')
+    if (this.peek() === ']') this.eat()
+    return inner
+  }
+  private nary(chr: string): XEl {
+    const sub = this.peek() === '_' ? (this.eat(), this.arg()) : null
+    const sup = this.peek() === '^' ? (this.eat(), this.arg()) : null
+    return mk('nary', {},
+      mk('naryPr', {}, mk('chr', { val: chr })),
+      ...(sub ? [mk('sub', {}, sub)] : []),
+      ...(sup ? [mk('sup', {}, sup)] : []),
+      mk('e', {}, this.arg()))
+  }
+  private delim(): XEl {
+    const beg = this.eat()
+    const inner = this.seq('\\right')
+    if (this.s.startsWith('\\right', this.i)) this.i += 6
+    const end = this.eat()
+    return mk('d', {}, mk('dPr', {}, mk('begChr', { val: beg }), mk('endChr', { val: end })), mk('e', {}, inner))
+  }
+  private matrix(): XEl {
+    this.optArg()
+    const rows: XEl[] = []
+    let cells: XEl[] = []
+    while (this.i < this.s.length) {
+      if (this.s.startsWith('\\end', this.i)) { this.i += 4; this.optArg(); break }
+      if (this.s.startsWith('\\\\', this.i)) { this.i += 2; rows.push(mk('mr', {}, ...cells.map((c) => mk('m', {}, c)))); cells = []; continue }
+      if (this.peek() === '&') { this.eat(); continue }
+      if (this.peek() === '\\') cells.push(this.command())
+      else cells.push(this.text(this.eat()))
+    }
+    if (cells.length) rows.push(mk('mr', {}, ...cells.map((c) => mk('m', {}, c))))
+    return mk('m', {}, mk('mPr', {}, mk('mCtl', { val: 'center' })), ...rows)
+  }
+  private seq(stop: string): XEl {
+    const out: XEl[] = []
+    while (this.i < this.s.length) {
+      if (stop && this.s.startsWith(stop, this.i)) break
+      this.skipSpace()
+      if (this.i >= this.s.length) break
+      if (stop === '}' && this.peek() === '}') break
+      if (this.peek() === '\\' && this.s.startsWith('\\right', this.i)) break
+      if (this.peek() === '\\') { out.push(this.command()); continue }
+      if (this.peek() === '{') { out.push(this.arg()); continue }
+      if (this.peek() === '}' || this.peek() === ']') { out.push(this.text(this.eat())); continue }
+      if (this.peek() === '^' || this.peek() === '_') {
+        const kind = this.eat()
+        const arg = this.arg()
+        const base = out.pop()
+        out.push(mk(kind === '^' ? 'sSup' : 'sSub', {},
+          mk('e', {}, base ?? this.text('')),
+          mk(kind === '^' ? 'sup' : 'sub', {}, arg)))
+        continue
+      }
+      out.push(this.text(this.eat()))
+    }
+    if (out.length === 1) return out[0]
+    // 相邻纯文字叶子合并，避免一个字符一枚 m:t（写出包更接近 Word 自己的习惯）
+    const merged: XEl[] = []
+    for (const n of out) {
+      const last = merged[merged.length - 1]
+      if (last && local(last.name) === 't' && local(n.name) === 't') {
+        last.children.push(...n.children)
+      } else merged.push(n)
+    }
+    return merged.length === 1 ? merged[0] : mk('r', {}, ...merged)
+  }
+}
+
+const SYMBOL_LATEX: Record<string, string> = {
+  times: '×', cdot: '·', pm: '±', mp: '∓', infty: '∞',
+  alpha: 'α', beta: 'β', gamma: 'γ', delta: 'δ', pi: 'π', theta: 'θ', lambda: 'λ', sigma: 'σ', omega: 'ω',
+  le: '≤', ge: '≥', ne: '≠', approx: '≈', equiv: '≡', to: '→', in: '∈', notin: '∉', subset: '⊂',
+  partial: '∂', nabla: '∇', forall: '∀', exists: '∃', neg: '¬', land: '∧', lor: '∨',
+}
+
+/** 造一枚 OMML 元素（m: 命名空间写死，与 OOXML 一致） */
+function mk(tag: string, attrs: Record<string, string> = {}, ...kids: XEl[]): XEl {
+  const named: Record<string, string> = {}
+  for (const [k, v] of Object.entries(attrs)) named[`m:${k}`] = v
+  return { name: `m:${tag}`, attrs: named, children: kids }
+}
+
+/** XEl → XML 串（只用于我们造的 OMML 子树；属性值做 XML 转义） */
+export function xelToXml(el: XEl): string {
+  const attrs = Object.entries(el.attrs)
+    .map(([k, v]) => ` ${k}="${v.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;')}"`)
+    .join('')
+  const kids = el.children.map((c) => (typeof c === 'string'
+    ? c.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+    : xelToXml(c))).join('')
+  return `<${el.name}${attrs}>${kids}</${el.name}>`
+}
+
+/** LaTeX 串 → `<m:oMath>...</m:oMath>`  literal（写手 post-pack 用） */
+export function latexToOmmlXml(latex: string): string {
+  const body = xelToXml(latexToOmml(latex))
+  // 行内公式必须包在 m:oMath 里（块级是 m:oMathPara）——Word 认这一层作为公式边界
+  return `<m:oMath xmlns:m="http://schemas.openxmlformats.org/officeDocument/2006/math">${body}</m:oMath>`
 }

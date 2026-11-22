@@ -4637,3 +4637,16 @@ button {
   line-height: 1.5;
   color: var(--text-2);
 }
+
+/* 公式（v0.229）：KaTeX 渲染的行内原子节点。点光标进去可改源码（工具条「公式」按钮） */
+.doc-formula {
+  display: inline-block;
+  padding: 0 2px;
+  cursor: pointer;
+  border-radius: 3px;
+}
+.doc-formula:hover,
+.doc-formula.ProseMirror-selectednode {
+  outline: 1px solid var(--border);
+  background: var(--panel);
+}

@@ -4810,6 +4810,31 @@ Rust lib **169 通过**（xlsx 族 25）；夹具账复位 65/65、md5 `0fd13292
 Rust lib **171 通过**（+2 条新守卫）、ODS 族 35 通过 / 1 ignored；ODS 往返账 14/14 复位、
 md5 与基线逐字节一致、`docs/ods-roundtrip.*` git 零改动。
 
+## v0.229（公式可编辑：OMML ↔ LaTeX 双向 + KaTeX 渲染 + 源码编辑）
+
+差距评估里挂了多轮的「Math 公式可编辑（OMML 线性化成纯文本、不可逆）」落地。
+此前 `oMath` 读成 `a/b`、`x^2` 那类线性文本，结构（分式、根号、矩阵）丢、写回去也回不来。
+本轮按「LaTeX 源码编辑」这一档做通整条链：
+
+- **双向转换**：`ooxml-graphics.ts` 新增 `ommlToLatex` / `latexToOmml`，覆盖分式 / 根号（含次数）/
+  上下标 / 上下限 / 定界符 / 大运算符 / 函数 / 矩阵 / 常见希腊字母与符号。认不出的构件按子节点串接，
+  保证字不丢。落在这个文件而非新建，是为了不惊动四份账本的 `modules` provenance。
+- **读手**：`oMath` / `oMathPara` 分支从线性化改为发 `span[data-oo-formula]`，结构进 LaTeX 串。
+- **模型**：`note-extension.ts` 加 `Formula` 行内原子节点（与脚注同属「带载荷的行内原子」），
+  LaTeX 存属性；`doc-schema.ts` 注册。
+- **屏上**：KaTeX 渲染（`renderFormulas` 幂等扫描 + 编辑器 update 监听），工具条「公式」按钮
+  插入或改源码，回车确认；画不出来时保留 LaTeX 字面。
+- **写手**：docx 库没有公式槽，走 post-pack——先发 `OOFORMULA<n>END` 占位 run，
+  `patchFormulas` 按序整枚换成 `<m:oMath>` 结构（分式等按 OMML 规格带 `m:num`/`m:den` 包装）。
+
+**守卫**：`test-omml-latex` 23 项（10 构件读 + 10 往返 + 3 结构合法性）、
+`test-formula-read` 5 项（读手发节点 / 不再告警 / PM 接住 / 带次根号）、
+`test-formula-write` 8 项（落 m:oMath / 结构完整 / 占位不残留 / 多公式按序），共 **36 项全绿**。
+往返判定用「语义等价」（去空格 + 希腊字母/定界符归一），结构本身另做严格断言。
+
+**账本**：本轮改了 docx 读手与 doc-schema，提交后跑三份账确认零改动——保真 99.0%/98.4%
+（md5 `dd942eb8`/`d69a6b20`）、往返 583/619 = 94.2%（md5 `cd7873f2`/`4ffc55cc`）。
+
 ## v0.228（ODT 列表标签几何：先核 RNG 剔假红，再接四格载荷读写闭环）
 
 普查档 B 的最后一族。动手前按 ODF 1.2 的 **RNG 规格原文**核形状，抓出第 3 对假红：

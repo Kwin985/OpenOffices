@@ -21,7 +21,7 @@ import { Extension, type Extensions } from '@tiptap/core'
 import { Comment } from './comment-extension'
 import { Bookmark } from './bookmark-extension'
 import { RevDel, RevIns, RevMode } from './revision-extension'
-import { Note } from './note-extension'
+import { Note, Formula } from './note-extension'
 import { Toc } from './toc-extension'
 import { PageBreak } from './page-break-extension'
 import { Indent } from './indent-extension'
@@ -108,6 +108,8 @@ export function docExtensions(): Extensions {
     RevMode,
     // 脚注/尾注：行内原子节点，正文存在节点属性上（三条保存链路都从这一份事实出发）
     Note,
+    // 公式（v0.229）：OMML ↔ LaTeX 双向，LaTeX 源码挂在行内原子节点上
+    Formula,
     FindReplace,
     ListGeometry,
   ]

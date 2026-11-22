@@ -91,6 +91,8 @@ import { odtToHtml, prosemirrorToOdtBytes } from '../lib/odt'
 import { planFeed, runFeed, type FeedSource } from '../lib/doc-feed'
 import { registerSaver, runExclusive } from '../lib/registry'
 import { failDialog, failStatus } from '../lib/fail-msg'
+import { aiErrorMessage, AI_ACTION_LABEL, listAiModels, prepareAiSource, runAiAction, type AiAction, type AiModel } from '../lib/cloud-ai'
+import { renderFormulas } from '../lib/note-extension'
 // v0.180：可交互状态栏的条目表住在 lib；fail-msg / print-preview / view-zoom 的口径在那里转调
 import { statusBarItems, type StatusBarAction } from '../lib/status-bar'
 import { saveDoneTimer } from '../lib/save-status'
@@ -178,12 +180,23 @@ function DocEditor({ tab }: Props) {
   const [cmAuthor, setCmAuthor] = useState('')
   const [draft, setDraft] = useState<{ cid: number; text: string } | null>(null)
   const [noteDraft, setNoteDraft] = useState<{ kind: NoteKind; text: string } | null>(null)
+  // 公式草稿：latex 为源码，editPos 非空表示改的是已有节点（否则在光标处插入）
+  const [formulaDraft, setFormulaDraft] = useState<{ latex: string; editPos: number | null } | null>(null)
   // 边框的待用档位（线型/磅/颜色）：点哪条边才把它写下去，所以这一份不进文档、只是工具条上的"笔"
   const [bdSel, setBdSel] = useState({ style: 'solid', pt: 0.5, hex: '#000000' })
   // 条件层面板（v0.116）：一次只放行一枚表样式，挑部位的下拉也算这一层的小状态
   const [condOpenId, setCondOpenId] = useState<string | null>(null)
   const [condType, setCondType] = useState<TableCondType>('firstRow')
   const [, setTick] = useState(0)
+  // —— AI 面板（v0.229）：选中的正文只在点「生成」时才送出，出稿后可插入/丢弃 ——
+  const [aiOpen, setAiOpen] = useState(false)
+  const [aiModels, setAiModels] = useState<AiModel[]>([])
+  const [aiModel, setAiModel] = useState('')
+  const [aiAction, setAiAction] = useState<AiAction>('summary')
+  const [aiSource, setAiSource] = useState('')
+  const [aiOut, setAiOut] = useState('')
+  const [aiBusy, setAiBusy] = useState(false)
+  const aiAbort = useRef<AbortController | null>(null)
   const [frOpen, setFrOpen] = useState(false)
   const [frQ, setFrQ] = useState('')
   const [frCs, setFrCs] = useState(false)
@@ -1464,6 +1477,28 @@ function DocEditor({ tab }: Props) {
     }
   }
 
+  const confirmFormula = () => {
+    if (!editor || !formulaDraft) return
+    const latex = formulaDraft.latex.trim()
+    const editPos = formulaDraft.editPos
+    setFormulaDraft(null)
+    if (!latex) return
+    const type = editor.state.schema.nodes.formula
+    if (!type) return
+    if (editPos != null) {
+      // 改已有节点：用 command 精确替换那一位，不动其它正文
+      editor.chain().focus().command(({ tr }) => {
+        const node = tr.doc.nodeAt(editPos)
+        if (!node || node.type.name !== 'formula') return false
+        tr.setNodeMarkup(editPos, undefined, { ...node.attrs, latex })
+        return true
+      }).run()
+    } else {
+      editor.chain().focus().insertContent({ type: 'formula', attrs: { latex } }).run()
+    }
+    setTimeout(() => setStatus('公式已' + (editPos != null ? '更新' : '插入')), 1200)
+  }
+
   if (!editor) return null
   const notes = notesOf(editor)
   const fr = frPluginKey.getState(editor.state)
@@ -1478,6 +1513,77 @@ function DocEditor({ tab }: Props) {
       {label}
     </button>
   )
+
+  // 公式屏上渲染（v0.229）：TipTap 把公式节点画成 span[data-oo-formula]，这里用 KaTeX 填内容。
+  // 监听编辑器更新 + 容器变化（切标签/布局变化），幂等由 renderFormulas 内的标记保证。
+  useEffect(() => {
+    if (!editor || !wrapRef.current) return
+    const root = wrapRef.current
+    const paint = () => renderFormulas(root)
+    paint()
+    editor.on('update', paint)
+    const mo = new MutationObserver(paint)
+    mo.observe(root, { childList: true, subtree: true })
+    return () => { editor.off('update', paint); mo.disconnect() }
+  }, [editor])
+
+  // —— AI 面板：选中文字 → 预设动作 → 流式输出 → 插入正文 ——
+  const openAi = () => {
+    if (aiOpen) {
+      setAiOpen(false)
+      return
+    }
+    const { from, to } = editor.state.selection
+    const sel = from !== to ? editor.state.doc.textBetween(from, to, '\n') : ''
+    setAiSource(prepareAiSource(sel))
+    setAiOut('')
+    setAiOpen(true)
+    if (!aiModels.length) {
+      listAiModels()
+        .then((models) => {
+          setAiModels(models)
+          const first = models.find((m) => !m.disabled)
+          if (first) setAiModel(first.id)
+        })
+        .catch((e) => setStatus(aiErrorMessage(e)))
+    }
+  }
+
+  const aiGenerate = async () => {
+    if (aiBusy) return
+    const src = prepareAiSource(aiSource)
+    if (!src) {
+      setStatus('请先在正文里选中一段文字，或在面板里粘贴要处理的文本')
+      return
+    }
+    if (!aiModel) {
+      setStatus('还没有可用的模型')
+      return
+    }
+    setAiOut('')
+    setAiBusy(true)
+    const ctl = new AbortController()
+    aiAbort.current = ctl
+    try {
+      const out = await runAiAction(aiAction, src, aiModel, (delta) => setAiOut((v) => v + delta), ctl.signal)
+      if (!out) setStatus('模型返回了空结果，请重试')
+    } catch (e) {
+      if ((e as { name?: string })?.name !== 'AbortError') setStatus(aiErrorMessage(e))
+    } finally {
+      setAiBusy(false)
+      aiAbort.current = null
+    }
+  }
+
+  const aiInsert = () => {
+    const out = aiOut.trim()
+    if (!out) return
+    editor.chain().focus().insertContent(out).run()
+    setAiOut('')
+    setAiOpen(false)
+    setStatus('AI 结果已插入正文')
+    setTimeout(() => setStatus(''), 1800)
+  }
 
   // —— v0.181 打印预览翻页：页数口径与状态栏/预览条同源，页距换算住在 lib ——
   const totalPreviewPages = estimatePages(docH, effPx.h, effPx.top, effPx.bottom)
@@ -1823,6 +1929,33 @@ function DocEditor({ tab }: Props) {
         </label>
         {btn('脚注', () => startNote('footnote'), noteDraft?.kind === 'footnote', '在光标处插入脚注：正文写在文末脚注区，导出 docx/odt 为原生脚注')}
         {btn('尾注', () => startNote('endnote'), noteDraft?.kind === 'endnote', '在光标处插入尾注：编号与脚注各排各的')}
+        {btn('公式', () => {
+          const at = editor.state.selection
+          const node = at.$from.node()
+          if (node?.type.name === 'formula') {
+            setFormulaDraft({ latex: String(node.attrs.latex ?? ''), editPos: at.$from.before() })
+          } else {
+            setFormulaDraft({ latex: '', editPos: null })
+          }
+        }, !!formulaDraft, '插入公式（LaTeX），或把光标放进已有公式改源码')}
+        {formulaDraft && (
+          <span className="tb-link-form" onClick={(e) => e.stopPropagation()}>
+            <input
+              autoFocus
+              className="tb-input"
+              style={{ width: 320 }}
+              value={formulaDraft.latex}
+              placeholder="LaTeX 源码，如 \frac{1}{2}，回车确定"
+              onChange={(e) => setFormulaDraft({ ...formulaDraft, latex: e.target.value })}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') confirmFormula()
+                if (e.key === 'Escape') setFormulaDraft(null)
+              }}
+            />
+            <button className="tb-btn" onClick={confirmFormula}>确定</button>
+            <button className="tb-btn" onClick={() => setFormulaDraft(null)}>取消</button>
+          </span>
+        )}
         {noteDraft && (
           <span className="tb-link-form" onClick={(e) => e.stopPropagation()}>
             <input
@@ -2016,6 +2149,7 @@ function DocEditor({ tab }: Props) {
         {btn('清格式', () => void runCtx('clearFormat'), false,
           '清除格式：摘掉选区里的字符外观（粗斜、字色、高亮、字号等）与样式标签；' +
           '批注/书签/修订/超链接这类带身份的标记保留，标题节点也不转回段落。无选区时清的是后续输入格式')}
+        {btn('AI', openAi, aiOpen, 'AI 助手：把选中文字交给云端模型做摘要/润色/翻译，结果可插入正文')}
         {btn('拼写', toggleSpell, spellOn, '拼写检查：常见错拼、中文误用、重复字。开着会随输入重扫')}
         {btn('协同', toggleCollabPanel, collabOpen, '实时协同：同一房间名的多个实例一起改同一份文档，改动自动合并，不用互相锁')}
         {btn('宏', () => setMacroOpen((v) => !v), macroOpen, '脚本宏：一段 JS 操作这篇文档（只跑自己写的）')}
@@ -2724,6 +2858,40 @@ function DocEditor({ tab }: Props) {
             )}
           </span>
           {meta.page && btn('重置', () => patchMeta({ page: undefined }), false, '恢复 A4 + 默认边距 + 不分栏')}
+        </div>
+      )}
+      {aiOpen && (
+        <div className="doc-toolbar doc-fr-panel" style={{ flexWrap: 'wrap', gap: 6 }}>
+          <span className="tb-label">AI 助手</span>
+          <select className="tb-select" value={aiAction} onChange={(e) => setAiAction(e.target.value as AiAction)} title="对选中文字做什么">
+            {(Object.keys(AI_ACTION_LABEL) as AiAction[]).map((k) => (
+              <option key={k} value={k}>{AI_ACTION_LABEL[k]}</option>
+            ))}
+          </select>
+          <select className="tb-select" value={aiModel} onChange={(e) => setAiModel(e.target.value)} title="选择模型">
+            {aiModels.length === 0 && <option value="">加载模型中…</option>}
+            {aiModels.map((m) => (
+              <option key={m.id} value={m.id} disabled={m.disabled}>{m.name ?? m.id}</option>
+            ))}
+          </select>
+          <textarea
+            className="tb-input"
+            style={{ width: 260, minHeight: 42, resize: 'vertical' }}
+            placeholder="选中的正文（可改）"
+            value={aiSource}
+            onChange={(e) => setAiSource(e.target.value)}
+          />
+          <button className="tb-btn" onClick={() => void aiGenerate()} disabled={aiBusy || !aiModel}>{aiBusy ? '生成中…' : '生成'}</button>
+          {aiBusy && <button className="tb-btn" onClick={() => aiAbort.current?.abort()}>停止</button>}
+          <textarea
+            className="tb-input"
+            style={{ width: 340, minHeight: 56, resize: 'vertical' }}
+            placeholder="生成结果（可改后插入）"
+            value={aiOut}
+            onChange={(e) => setAiOut(e.target.value)}
+          />
+          <button className="tb-btn" onClick={aiInsert} disabled={!aiOut.trim()}>插入正文</button>
+          <button className="tb-btn" onClick={() => { setAiOut(''); setAiOpen(false); aiAbort.current?.abort() }}>关闭</button>
         </div>
       )}
       {frOpen && (

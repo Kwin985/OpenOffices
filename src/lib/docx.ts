@@ -55,6 +55,7 @@ import { xml2js } from 'xml-js'
 import { bdAttr, borderParts, parsePbdrPayload, parseTrPrPayload, pxToEighths, pxToPt, parseBdrPayload, parseCnfPayload, parseFramePayload, parseImgPayload, parsePprPayload, parseShadePayload, parseShdPayload, parseTabsPayload, parseTblbPayload, parseTblpPayload, parseTblPrPayload, parseTlookPayload, CELL_EDGES, CNF_KEYS, EFFECT_ATTRS, effectKey, PPR_IND_KEYS, TBLB_EDGES, TBLB_KEYS, type CellEdge } from './cell-style'
 import { lineToOoxml, type LineRule } from './paragraph-style'
 import { decodeEnt } from './ooxml'
+import { latexToOmmlXml } from './ooxml-graphics'
 import { condLookBits } from './table-cond'
 import { letterSpacingToTwips } from './char-spacing'
 
@@ -1963,6 +1964,17 @@ function childToRuns(child: PMNode, inherited: Inherited, cs?: CommentTrack, dt?
     } else if (child.type === 'image') {
       const run = imageRunOf(child, dt)
       if (run) out.push(run)
+    } else if (child.type === 'formula') {
+      // 公式（v0.229）：docx 库没有公式槽，先发一枚占位 run（带序号），post-pack 时按占位
+      // 把整枚 <w:r> 换成 <m:oMath>。占位文字在正常阅读里不会出现——补丁会替换掉它。
+      const latex = typeof child.attrs?.latex === 'string' ? child.attrs.latex : ''
+      if (latex && dt) {
+        const seqNo = dt.formulas.length
+        dt.formulas.push(latex)
+        out.push(new TextRun({ text: `OOFORMULA${seqNo}END` }))
+      } else if (latex) {
+        out.push(new TextRun({ text: latex }))
+      }
     } else if (child.type === 'note') {
       const kind: NoteKind = child.attrs?.kind === 'endnote' ? 'endnote' : 'footnote'
       const text = typeof child.attrs?.text === 'string' ? child.attrs.text : ''
@@ -3041,6 +3053,8 @@ interface DocTrack {
    * 用户改过 title/target 能写回新值；`patchHyperlinkAttrs` 按出现序补回壳。
    */
   linkExtras: { tip?: string; frame?: string }[]
+  /** 公式占位 run 的 LaTeX 载荷（v0.229），按文档顺序 */
+  formulas: string[]
   used: Set<number>
   ranges: Set<number>
   skipped: Set<number>
@@ -3204,6 +3218,8 @@ function newDocTrack(): DocTrack {
     colorThemes: [],
     colorLits: [],
     bookmarkIds: new Map(),
+    /** 公式（v0.229）：按文档序的 LaTeX 串，与写出包里的占位 run 一一对应 */
+    formulas: [] as string[],
   }
 }
 
@@ -4169,7 +4185,8 @@ export async function prosemirrorToDocxBytes(
   // v0.195：正文长尾四枚字面片（sectPr / comments 根 / proofErr），共用会话
   const withPlacements = await patchLiteralPlacements(withFeat, meta?.literalPlacements, sess)
   // v0.196：VML 老式形状整段字面（rId 按关系类型重映射），与上面几笔共用会话
-  const withVml = await patchVmlShapes(withPlacements, meta?.vmlShapes, sess)
+  const withFormula = await patchFormulas(withPlacements, dt?.formulas, sess)
+  const withVml = await patchVmlShapes(withFormula, meta?.vmlShapes, sess)
   // v0.218：wps 文本框整段字面（按正文文字把拍平的段落换回形状，含 bodyPr 19 枚）
   const withWps = await patchWpsShapes(withVml, meta?.wpsShapes, sess)
   // v0.219：图片四片合法余量（填充/线填充/custGeom/blipFill 旋转）按源件字面补回
@@ -4656,6 +4673,41 @@ export async function patchVmlShapes(
   }
   if (!pieces.length) return bytes
   const out = xml.slice(0, pStart) + pieces.join('') + xml.slice(pEnd + '</w:p>'.length)
+  setPart(zip, 'word/document.xml', out, sess)
+  return finishPatch(bytes, zip, sess)
+}
+
+/**
+ * 公式 OMML 回填（v0.229）：docx 库没有公式槽，写手先发一枚 OOFORMULA<n>END 占位 run，
+ * 这里按序号把整枚 <w:r> 换成 <m:oMath> 结构。按序号认领而不是按文字——占位串唯一，
+ * 用户改过正文也不会误伤别的 run。
+ */
+export async function patchFormulas(
+  bytes: Uint8Array,
+  formulas: string[] | undefined,
+  sess?: PackSession,
+): Promise<Uint8Array> {
+  if (!formulas?.length) return bytes
+  const zip = sess ? sess.zip : await loadZipOf(bytes)
+  const xml = await partText(zip, 'word/document.xml', sess)
+  if (!xml) return bytes
+  let out = xml
+  let patched = 0
+  for (let i = 0; i < formulas.length; i++) {
+    const token = `OOFORMULA${i}END`
+    const at = out.indexOf(token)
+    if (at < 0) continue
+    // 找占位所在的 <w:r>...</w:r>（自闭合或普通两态）
+    const rStart = out.lastIndexOf('<w:r>', at)
+    const rStart2 = out.lastIndexOf('<w:r ', at)
+    const start = Math.max(rStart, rStart2)
+    const end = out.indexOf('</w:r>', at)
+    if (start < 0 || end < 0 || end < at) continue
+    const omml = latexToOmmlXml(formulas[i])
+    out = out.slice(0, start) + omml + out.slice(end + '</w:r>'.length)
+    patched++
+  }
+  if (!patched) return bytes
   setPart(zip, 'word/document.xml', out, sess)
   return finishPatch(bytes, zip, sess)
 }

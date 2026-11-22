@@ -49,7 +49,7 @@
 import { all, allDesc, attr, attrL, attrNum, descend, els, find, findDesc, findL, local, parseXml, textOf, type XEl } from './ooxml'
 import { FieldEngine, fieldLabel, parseInstr, recomputable } from './docx-fields'
 import { embedHtml, inlineFlatten, unwrapEmbed, type EmbedHtml } from './ole'
-import { chartToHtml, smartArtToHtml } from './ooxml-graphics'
+import { chartToHtml, smartArtToHtml, ommlToLatex } from './ooxml-graphics'
 import { BDR_ATTR, CELL_EDGES, PBAR_ATTR, PBDR_ATTR, TRPR_ATTR, CNF_ATTR, CNF_KEYS, CSS_BORDER_STYLE, EFFECT_ATTRS, FRAME_NUMERIC_KEYS, FRAME_STR_KEYS, IMG_ATTR, PPR_ATTR, PPR_IND_KEYS, PPR_ONOFF_KEYS, PPR_STR_KEYS, SHD_ATTR, TAB_LEADERS, TALIGN_ATTR, TBLB_ATTR, TBLB_EDGES, TBLB_KEYS, TBLPR_ATTR, TLOOK_ATTR, bdSpaceAttrs, bdrPayload, borderParts, cnfPayload, effectKey, eighthsToPx, framePayload, imgPayload, pprPayload, ptToPx, rgb2hex, shadeCss, shdPayloadOf, tblbPayload, tblpPayload, tblPrPayload, tabsPayload, tlookPayload, pbdrPayload, trPrPayload, type BdrOrigin, type CellEdge, type CnfPayload, type FramePayload, type ImgPayload, type PprPayload, type ShdPayload, type TabSpec, type TblbPayload, type TblpPayload } from './cell-style'
 import { ooxmlLine } from './paragraph-style'
 import {
@@ -3436,11 +3436,13 @@ class Fidelity {
       }
       case 'oMath':
       case 'oMathPara': {
-        // OMML 结构（分式、根号、矩阵）TipTap 侧没有承载它的节点，线性化成可读文本：
-        // 走默认的 children 会把 m:t 的字符粘成 "a2b2"，这里至少把 a/b、x^2、√y 那层意思写出来
+        // OMML → LaTeX（v0.229）：公式不再是线性文本，而是带结构的可编辑原子节点。
+        // 转换器按 OMML 标准构件递归（分式/根号/上下标/大运算符/定界符/矩阵），
+        // 得到的 LaTeX 由 Formula 节点接住；写手读回属性再转回 OMML。
         if (st.fld > 0 && (!st.show || suppressField(st))) return
-        this.warn('公式（OMML）已线性化为文本，结构（分式/根号/上下标/矩阵）不保真')
-        push(st, emitRunText(ommlLinear(node), props))
+        const latex = ommlToLatex(node)
+        if (!latex) return
+        push(st, `<span data-oo-formula="${attrEsc(latex)}"></span>`)
         return
       }
       case 'drawing':
