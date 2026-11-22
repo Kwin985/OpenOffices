@@ -116,6 +116,10 @@ v0.222/223 的缺口都是「族级探针」撞出来的。这一轮换一套口
 同一套解析器跑两遍、一遍不开记录），与源包真在场的对比。夹具 = LibreOffice 形状的手写富件
 （段落/行内全排 + 表三族 + 列表档 + 链接/书签/脚注/批注 + 页面版式），95 对源对、**43 对从未查问**。
 
+> **v0.226 订正**：这 43 对里有 2 对（`annotation|creator` / `|date`）是**夹具非法形状造成的假红**
+> （属性 vs 子元素），实际未查问只有 41 对。档 B 从 24 对降到 22 对；假红的那一族换个方向
+> 反倒是真缺口（写手不发 `dc:date`），详见档 B 该条。
+
 探针脚本不入库（`tmp/probe-odt-consult.mjs`，gitignored），方法与数字记在这里——它就是将来
 ODT 账本的夹具雏形与分母来源。
 
@@ -140,8 +144,13 @@ ODT 账本的夹具雏形与分母来源。
   守卫 `test-odt-underline.mjs` 17 条，负控 14 红 / 3 绿（绿的 3 条全是反例）。
   **下一波最顺手的一族**已换成书签名（docx 有 `w:bookmarkStart@w:name` 与守卫）。
 - `bookmark|name`（1）：docx 读手读 `w:bookmarkStart@w:name` 且有 `test-bookmark-ids` 守卫；ODT 书签名不读不写。
-- `annotation|creator` / `|date`（2）：**写手反而发 `dc:creator`，读手不读**——又一次「两头对不上」，
-  与 v0.222 高亮同款病。
+- ~~`annotation|creator` / `|date`（2）~~ —— **v0.226 证伪 + 真缺口**：普查报的「读手不读」是**假红**，
+  那份夹具把 `dc:creator` / `dc:date` 写成了属性，而 ODF 1.2 里它们是 `office:annotation` 的**子元素**；
+  读手一直按子元素收，合法件两个字段都读得到。真缺口在**写手**：`openAnnEl` 只发 `dc:creator`，
+  另存一次日期就没了（docx 的 `w:comment/@w:date` 有对应槽）。v0.226 补发 `dc:date`，守卫
+  `test-odt-comment-date.mjs` 7 条（含属性形状假红反例）；负控 2 红 / 5 绿，红的两条全在写侧。
+  **教训**：普查的「源对」也必须先过「夹具结构合不合法」这道筛（v0.219 的同款筛子），
+  非法形状报出来的「没查问」是假账，动手前要按规格核一遍。
 - `list-level-properties|space-before` / `|min-label-width` / `|list-level-position-and-space-mode` +
   `list-level-style-number|num-suffix`（4 对）：列表标签几何与编号后缀；docx 列表有 ind/suff 对应。
 - `text-transform`（1）：docx 有 caps/smallCaps 槽；ODT 的 `uppercase|lowercase|small-caps` 不读。
