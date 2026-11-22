@@ -119,6 +119,10 @@ v0.222/223 的缺口都是「族级探针」撞出来的。这一轮换一套口
 > **v0.226 订正**：这 43 对里有 2 对（`annotation|creator` / `|date`）是**夹具非法形状造成的假红**
 > （属性 vs 子元素），实际未查问只有 41 对。档 B 从 24 对降到 22 对；假红的那一族换个方向
 > 反倒是真缺口（写手不发 `dc:date`），详见档 B 该条。
+>
+> **v0.228 再订正**：列表族那 4 对里又有 1 对（`style:min-label-width`）是假红（合法名是
+> `text:min-label-width`）。累计假红 3 对 ⇒ 真实未查问 40 对；档 B 本轮修掉 3 对真缺口、
+> 剔掉 1 对假红，从 22 对降到 18 对。
 
 探针脚本不入库（`tmp/probe-odt-consult.mjs`，gitignored），方法与数字记在这里——它就是将来
 ODT 账本的夹具雏形与分母来源。
@@ -156,8 +160,15 @@ ODT 账本的夹具雏形与分母来源。
   `test-odt-comment-date.mjs` 7 条（含属性形状假红反例）；负控 2 红 / 5 绿，红的两条全在写侧。
   **教训**：普查的「源对」也必须先过「夹具结构合不合法」这道筛（v0.219 的同款筛子），
   非法形状报出来的「没查问」是假账，动手前要按规格核一遍。
-- `list-level-properties|space-before` / `|min-label-width` / `|list-level-position-and-space-mode` +
-  `list-level-style-number|num-suffix`（4 对）：列表标签几何与编号后缀；docx 列表有 ind/suff 对应。
+- ~~`list-level-properties|space-before` / `|min-label-width` / `|list-level-position-and-space-mode` +
+  `list-level-style-number|num-suffix`~~ —— **v0.228 证伪 1 对 + 修 3 对**：按 ODF 1.2 的 RNG 核过，
+  最小标签宽叫 **`text:min-label-width`**，普查夹具写的 `style:min-label-width` 是**假红**（第 3 对）。
+  真缺口三对是 `text:space-before`、`text:list-level-position-and-space-mode`、`style:num-suffix`：
+  读手按 ODF 合法形状收进列表节点的 `data-oo-listgeom` 四格载荷（屏上折成 padding-left / 负
+  text-indent），写手按载荷登记 `LGn` 列表档回发三枚几何属性 + 后缀；只换第一层，更深层沿用
+  写手默认（0.6cm × 层号）——载荷只有那一层的话，不替别层做主。
+  写侧曾有一处真 bug：没后缀时自定义档硬发默认 `"."`，二次读回首格就变了，已修。
+  守卫 `test-odt-list-geometry.mjs` 12 条，负控 8 红 / 4 绿（绿的 4 条全是反例）。
 - `text-transform`（1）：docx 有 caps/smallCaps 槽；ODT 的 `uppercase|lowercase|small-caps` 不读。
 - `table-properties|width`（1）：表宽；docx 有 `w:tblW` 账。列宽那条路是通的，表级宽不是。
 - `page-layout-properties|print-orientation`（1）：docx 页面设置有 orientation 槽。

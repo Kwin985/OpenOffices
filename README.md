@@ -4810,6 +4810,31 @@ Rust lib **169 通过**（xlsx 族 25）；夹具账复位 65/65、md5 `0fd13292
 Rust lib **171 通过**（+2 条新守卫）、ODS 族 35 通过 / 1 ignored；ODS 往返账 14/14 复位、
 md5 与基线逐字节一致、`docs/ods-roundtrip.*` git 零改动。
 
+## v0.228（ODT 列表标签几何：先核 RNG 剔假红，再接四格载荷读写闭环）
+
+普查档 B 的最后一族。动手前按 ODF 1.2 的 **RNG 规格原文**核形状，抓出第 3 对假红：
+最小标签宽的合法名是 **`text:min-label-width`**，普查夹具写的 `style:min-label-width` 根本不存在
+（累计假红从 2 对涨到 3 对，真实未查问 40 对）。剩下三对是真缺口：`text:space-before`、
+`text:list-level-position-and-space-mode`、`style:num-suffix`——读手一枚都不问，写手则永远发
+死板的 `0.6cm × 层号` 缩进。
+
+**修**：四格（后缀 / 标签间距 / 标签最小宽 / 定位模式）折成 `data-oo-listgeom` 载荷挂在 ol/ul
+上，`doc-schema.ts` 里加一枚 `listGeometry` 扩展接住（不新建节点类型）：屏上把「标签宽 + 间距」
+折成 padding-left 与负 text-indent；写手按载荷登记 `LGn` 列表档回发三枚几何属性与后缀，**只换第一层**，
+更深层沿用写手默认——载荷只有那一层说的话，不替别层做主。
+
+写侧调试时抓到一个真 bug：自定义档在载荷没后缀时硬发默认的 `"."`，二次读回首格就多出
+源件没说过的后缀；已改成「没后缀就不发」。
+
+**守卫**：`test-odt-list-geometry.mjs` 12 条（合法几何读、CSS、后缀、两条非法/空反例、
+LG 档三枚属性与 label-width-and-position 不挂 label-alignment、更深层默认、整趟二次读回）；
+负控（读手与扩展退回 HEAD）**8 红 / 4 绿**，绿的 4 条全是反例。
+
+**账本**：本轮动到 `doc-schema.ts`（docx 往返账的产品源），提交后跑三份账——保真
+99.0%/98.4%（md5 `dd942eb8`/`d69a6b20`）、往返 583/619 = 94.2%（md5 `cd7873f2`/`4ffc55cc`）。
+
+**门禁**：全量 **86 份 86 通过 / 0 失败 / 0 跳过**（1478.3s）；`check:clean` **全绿**（tsc 0 / vite build ✓）。
+
 ## v0.227（ODT 书签名：接 Bookmark mark 通道，区间 + 点书签都闭环）
 
 v0.226 之后普查档 B 的下一个：`bookmark|name`——ODT 读手此前既不认 `text:bookmark`（点书签），
