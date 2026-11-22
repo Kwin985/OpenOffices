@@ -17,7 +17,7 @@ import { Superscript } from '@tiptap/extension-superscript'
 import { Subscript } from '@tiptap/extension-subscript'
 import Highlight from '@tiptap/extension-highlight'
 import { CharacterCount } from '@tiptap/extensions'
-import type { Extensions } from '@tiptap/core'
+import { Extension, type Extensions } from '@tiptap/core'
 import { Comment } from './comment-extension'
 import { Bookmark } from './bookmark-extension'
 import { RevDel, RevIns, RevMode } from './revision-extension'
@@ -109,5 +109,45 @@ export function docExtensions(): Extensions {
     // 脚注/尾注：行内原子节点，正文存在节点属性上（三条保存链路都从这一份事实出发）
     Note,
     FindReplace,
+    ListGeometry,
   ]
 }
+
+/**
+ * 列表标签几何（v0.228）：ODT 的 `text:space-before` / `text:min-label-width` /
+ * `text:list-level-position-and-space-mode` / `style:num-suffix` 四格。
+ * 载荷是四个 `encodeURIComponent` 字段用 `|` 相连，挂在列表节点上（不新建节点类型）。
+ * 屏上把「标签最小宽 + 标签到正文的距离」折成 padding-left / 负 text-indent——
+ * 与 docx 那边的编号缩进同一口径；存盘时由 odt.ts 的写手按载荷发回列表档。
+ */
+const ListGeometry = Extension.create({
+  name: 'listGeometry',
+  addGlobalAttributes() {
+    return [
+      {
+        types: ['bulletList', 'orderedList'],
+        attributes: {
+          listGeom: {
+            default: null as string | null,
+            parseHTML: (el: HTMLElement) => el.getAttribute('data-oo-listgeom') || null,
+            renderHTML: (attrs: Record<string, unknown>) => {
+              const raw = typeof attrs.listGeom === 'string' ? attrs.listGeom : ''
+              if (!raw) return {}
+              const f = raw.split('|').map((x) => {
+                try {
+                  return decodeURIComponent(x)
+                } catch {
+                  return x
+                }
+              })
+              const minw = parseFloat(f[2] ?? '') || 0
+              const gap = parseFloat(f[1] ?? '') || 0
+              const css = `padding-left: ${Math.round((minw + gap) * 37.8)}px; text-indent: -${Math.round(minw * 37.8)}px`
+              return { 'data-oo-listgeom': raw, style: css }
+            },
+          },
+        },
+      },
+    ]
+  },
+})

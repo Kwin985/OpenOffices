@@ -235,6 +235,17 @@ function esc(s: string): string {
     .replace(/"/g, '&quot;')
 }
 
+/** 列表几何载荷 → 四格原值（逐格 decodeURIComponent，坏转义按原串保形） */
+function decodeListGeom(raw: string): string[] {
+  return raw.split('|').map((x) => {
+    try {
+      return decodeURIComponent(x)
+    } catch {
+      return x
+    }
+  })
+}
+
 /**
  * 下划线三格 ↔ docx 的线型词（v0.225）。ODF 把线型/粗细拆成 style + type + width 三枚，
  * docx 的 `w:u/@w:val` 是一门十八档的枚举（thick/dashedHeavy/dotDash…）；两边共用
@@ -376,6 +387,8 @@ class OdtBuilder {
   // 键是 `字符 NUL 专字`——只按字符建键就会把「同一枚 ◆ 换一口字体」并成一档
   bulletStyles = new Map<string, { name: string; ch: string; font: string }>()
   images = new Map<string, ImageEntry>() // src → entry
+  /** 列表标签几何档（v0.228）：载荷 → 名字；第一层用原几何，更深层沿用写手默认宽度 */
+  private listGeomStyles = new Map<string, string>()
   private imageSeq = 0
   private paraSeq = 0
   private cellSeq = 0
@@ -755,6 +768,41 @@ class OdtBuilder {
   /** 一枚自定义符面加一口专字 ↔ 一枚档名：`LB` + 字符码位十六进制（`◆` → `LB25C6`，多字符逐码位以 `-` 相连），
    * 带专字时再接 `_F` + 字体名逐码位十六进制（`Symbol` → `LB25C6_F53-79-6D-62-6F-6C`）。
    * 两段各用 `-` 分组而组间以 `_F` 分界，故 (字符, 字体) 与档名一一对应；同 (字符, 字体) 复用同档。 */
+  /**
+   * 列表标签几何档（v0.228）：模型上的 `data-oo-listgeom` 载荷 → 一份专属 text:list-style。
+   * 只把**第一层**换成源几何，更深层仍用写手默认宽度——载荷本身只有那一层的信息，
+   * 拿它铺满整棵嵌套树是拿一层说的话替别层做主（v0.219 的同款纪律）。
+   * 名字按载荷去重（同几何的列表共用一档），autoStyles 直接吐出登记好的整段 XML。
+   */
+  private listGeomStyleName(raw: string, kind: 'bullet' | 'number', ch: string, font: string, fmt: string): string {
+    const hit = this.listGeomStyles.get(raw)
+    if (hit) return hit
+    const name = `LG${this.listGeomStyles.size + 1}`
+    const [suffix = '', space = '', minw = '', mode = ''] = decodeListGeom(raw)
+    const levels = Array.from({ length: 10 }, (_, i) => i + 1)
+      .map((l) => {
+        const first = l === 1
+        // 没后缀就一枚也不发：自定义档补出默认 "." 等于替源件说话，二次读回载荷首格就变了
+        const suf = first && kind === 'number' && suffix ? ` style:num-suffix="${esc(suffix)}"` : ''
+        const props =
+          (first && space ? ` text:space-before="${esc(space)}"` : '') +
+          (first && minw ? ` text:min-label-width="${esc(minw)}"` : '') +
+          ` text:list-level-position-and-space-mode="${first && mode ? esc(mode) : 'label-alignment'}"`
+        // label-width-and-position 那一档靠上面三枚长度说话，不再挂 label-alignment 子元素
+        const align =
+          first && mode === 'label-width-and-position'
+            ? ''
+            : `<style:list-level-label-alignment text:label-followed-by="listtab" fo:text-indent="-0.6cm" fo:margin-left="${(0.6 * l).toFixed(2)}cm"/>`
+        const fontAttr = kind === 'bullet' && font ? `<style:text-properties style:font-name="${esc(font)}"/>` : ''
+        return kind === 'bullet'
+          ? `<text:list-level-style-bullet text:level="${l}" text:bullet-char="${esc(ch)}"><style:list-level-properties${props}>${align}</style:list-level-properties>${fontAttr}</text:list-level-style-bullet>`
+          : `<text:list-level-style-number text:level="${l}"${suf} style:num-format="${esc(fmt)}"><style:list-level-properties${props}>${align}</style:list-level-properties></text:list-level-style-number>`
+      })
+      .join('')
+    this.listGeomStyles.set(raw, `<text:list-style style:name="${name}">${levels}</text:list-style>`)
+    return name
+  }
+
   private bulletStyleName(ch: string, font: string): string {
     const hit = this.bulletStyles.get(ch + '\u0000' + font)
     if (hit) return hit.name
@@ -816,7 +864,9 @@ class OdtBuilder {
       aligns +
       lb +
       lbCustom +
-      lo
+      lo +
+      // 列表几何专属档：autoStyles 在 blocks 之后求值（见 build），此刻这张表已经填满
+      Array.from(this.listGeomStyles.values()).join('')
     )
   }
 
@@ -1032,7 +1082,12 @@ class OdtBuilder {
           // 字符空而字体非空时字体不发：没有符面可挂的一口字族，发出去就是一枚没人读的档。
           const ch = String(n.attrs?.bulletChar ?? '')
           const font = String(n.attrs?.bulletFont ?? '')
-          const name = ch ? this.bulletStyleName(ch, font) : 'LB'
+          const raw = typeof n.attrs?.listGeom === 'string' && n.attrs.listGeom ? (n.attrs.listGeom as string) : ''
+          const name = raw
+            ? this.listGeomStyleName(raw, 'bullet', ch || '•', font, '')
+            : ch
+              ? this.bulletStyleName(ch, font)
+              : 'LB'
           out += `<text:list text:style-name="${name}">${this.listItems(n.content ?? [])}</text:list>`
           break
         }
@@ -1040,7 +1095,10 @@ class OdtBuilder {
           // 型别挑档名、起号写在第一枚项上（LO 真件的写法），两枚都落不了才回 `LO` 而不写起号
           const fmt = String(n.attrs?.type ?? '')
           const st = String(n.attrs?.start ?? '')
-          const name = { A: 'LA', a: 'La', I: 'LI', i: 'Li' }[fmt] ?? 'LO'
+          const raw = typeof n.attrs?.listGeom === 'string' && n.attrs.listGeom ? (n.attrs.listGeom as string) : ''
+          const name = raw
+            ? this.listGeomStyleName(raw, 'number', '', '', fmt || '1')
+            : { A: 'LA', a: 'La', I: 'LI', i: 'Li' }[fmt] ?? 'LO'
           const sv = /^-?[0-9]+$/.test(st) && st !== '1' ? st : undefined
           out += `<text:list text:style-name="${name}">${this.listItems(n.content ?? [], sv)}</text:list>`
           break
@@ -1608,7 +1666,20 @@ export async function odtToHtml(
    * `font` 是那一层自己的 `style:text-properties@style:font-name` 字面（只有项目符号层吃它）——
    * 「是编号」与「号长什么样」是两件事（b41），「是项目符号」与「符号长什么样」同样是两件事（b44），
    * 「符号长什么样」与「这一枚符该用哪一口字体画」同样是两件事（这一笔）。 */
-  type ListLevel = { num: boolean; fmt: string; start: string; bullet: string; font: string }
+  /** v0.228：几何四格——`suffix`（编号后缀）、`space`（标签到正文的距离）、
+   * `minw`（标签最小宽）、`mode`（定位模式）。ODF 1.2 的合法性核过 RNG：
+   * 最小宽叫 `text:min-label-width`，不是 `style:min-label-width`（普查夹具那枚是假红）。 */
+  type ListLevel = {
+    num: boolean
+    fmt: string
+    start: string
+    bullet: string
+    font: string
+    suffix: string
+    space: string
+    minw: string
+    mode: string
+  }
   const listLevels = new Map<string, Map<number, ListLevel>>()
   /** styles.xml 的 office:styles 里那批具名样式（Text Body、Heading 1…）：它们的排版是文档默认，不是某段的直接格式 */
   const namedStyles = new Set<string>()
@@ -1636,12 +1707,19 @@ export async function odtToHtml(
           // 专字只从这一层自己的直接孩子里取：编号层不吃（真件可达 number 层 0/37 带 text-properties，b45 c2|D），
           // 父样式链与档级默认字体也不吃（那是另一族）；asian/complex/generic 三枚同名属性本轮不吃。
           const tp = num ? null : pick(x, 'text-properties')
+          const lp = pick(x, 'list-level-properties')
           lv.set(Number(x.getAttribute('text:level') ?? '1') || 1, {
             num,
             fmt: x.getAttribute('style:num-format') ?? '',
             start: x.getAttribute('text:start-value') ?? '',
             bullet: x.getAttribute('text:bullet-char') ?? '',
             font: tp?.getAttribute('style:font-name') ?? '',
+            // 列表标签几何（v0.228）：四枚各归各家——后缀在层元素上，另三枚在
+            // style:list-level-properties 子元素里（ODF 1.2 RNG 17.19 核过）
+            suffix: num ? x.getAttribute('style:num-suffix') ?? '' : '',
+            space: lp?.getAttribute('text:space-before') ?? '',
+            minw: lp?.getAttribute('text:min-label-width') ?? '',
+            mode: lp?.getAttribute('text:list-level-position-and-space-mode') ?? '',
           })
         }
         listLevels.set(name, lv) // 同名档后出现的算赢家——与基座那枚 bool 的 `set` 同一口径
@@ -1697,6 +1775,14 @@ export async function odtToHtml(
    *    `text:list-item` 上的盖过档里那一层（编号层元素）上的。门面 f0 记这两家的口径不一样：
    *    档级那家把号记进 `at`（`at=3`、`at=0` 都在），项级那家只在号面 `lab` 上兑现
    *    （`lab=7.`／`0.`／`-2.`）而 `at` 照旧报 1 ⇒ 项级那一枚在门面上读不到 `at`，只能读 `lab`。 */
+  /** 列表标签几何四格 → 载荷属性（v0.228）：逐格 encodeURIComponent，引号/竖线都进不了属性串 */
+  const geomAttrOf = (lv: ListLevel | undefined): string => {
+    if (!lv) return ''
+    const cells = [lv.suffix, lv.space, lv.minw, lv.mode]
+    if (!cells.some(Boolean)) return ''
+    return ` data-oo-listgeom="${cells.map((x) => encodeURIComponent(x)).join('|')}"`
+  }
+
   const listShape = (el: Element): { tag: 'ol' | 'ul'; attrs: string } => {
     let name = el.getAttribute('text:style-name') ?? ''
     let level = 1
@@ -1708,10 +1794,13 @@ export async function odtToHtml(
     const lv = listLevels.get(name)?.get(level)
     if (!lv?.num) {
       // 字体属性与字符出口各自过各自的闸：字符那一臂被拒（非 BMP、控制符、引号）不再顺带吞掉字体那一账（b50 立案的吞账落点）
-      return { tag: 'ul', attrs: bulletCss(lv?.bullet ?? '') + bulletFontAttr(lv?.font ?? '') }
+      return {
+        tag: 'ul',
+        attrs: bulletCss(lv?.bullet ?? '') + bulletFontAttr(lv?.font ?? '') + geomAttrOf(lv),
+      }
     }
-    if (lv.fmt !== '1' && !OL_TYPE.has(lv.fmt)) return { tag: 'ul', attrs: '' }
-    let attrs = lv.fmt === '1' ? '' : ' type="' + lv.fmt + '"'
+    if (lv.fmt !== '1' && !OL_TYPE.has(lv.fmt)) return { tag: 'ul', attrs: geomAttrOf(lv) }
+    let attrs = (lv.fmt === '1' ? '' : ' type="' + lv.fmt + '"') + geomAttrOf(lv)
     // 文档流点名的起号盖过档里那一层的定义：真件两家都住，而本 list 的第一枚直属项离结果更近
     const itemStart =
       Array.from(el.children).find((c) => c.localName === 'list-item')?.getAttribute('text:start-value') ?? ''
