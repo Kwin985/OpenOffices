@@ -4810,6 +4810,28 @@ Rust lib **169 通过**（xlsx 族 25）；夹具账复位 65/65、md5 `0fd13292
 Rust lib **171 通过**（+2 条新守卫）、ODS 族 35 通过 / 1 ignored；ODS 往返账 14/14 复位、
 md5 与基线逐字节一致、`docs/ods-roundtrip.*` git 零改动。
 
+## v0.227（ODT 书签名：接 Bookmark mark 通道，区间 + 点书签都闭环）
+
+v0.226 之后普查档 B 的下一个：`bookmark|name`——ODT 读手此前既不认 `text:bookmark`（点书签），
+也不认 `text:bookmark-start`/`-end`（区间书签），写手也不发；docx 链早就有 Bookmark mark +
+`span[data-oo-bookmark]` 的 `name;id` 两格载荷。本轮让 ODT 接同一条通道：
+
+- **区间**：`bookmark-start`/`end` 之间包一枚同名 span。mark 不能跨块，跨段书签按批注那套
+  「段末收 span、下一段开头再开同名 span」续挂。
+- **点书签**：ODF 的 `<text:bookmark/>` 没有内容，PM 的 mark 挂不住空文本——读手用一枚零宽空格
+  （&#8203;）给它安家，并带一枚 `data-oo-bookmark-point=1`；写手认出这一对就发回无内容的
+  `<text:bookmark/>`，**不把零宽字符写进文件**。`Bookmark` mark 多一格 `point` 属性，载荷串本身
+  没变，doc-schema 零结构改动，docx 那头的往返不受影响。
+
+**守卫**：`test-odt-bookmark.mjs` 12 条（区间读/包住内容、点书签读、无书签反例、跨段两段各一枚、
+写侧 start/end 与点书签、零宽字符不得落盘、整趟二次读回两型、跨链写出 docx 的
+`w:bookmarkStart/End`）；负控（读手与 mark 扩展退回 HEAD）**10 红 / 2 绿**，绿的 2 条全是反例。
+
+**账本**：三份零改动——保真 99.0%/98.4%（md5 `dd942eb8`/`d69a6b20`）、往返
+583/619 = 94.2%（md5 `cd7873f2`/`4ffc55cc`）。本轮只动 `odt.ts` 与 `bookmark-extension.ts`。
+
+**门禁**：全量 **85 份 85 通过 / 0 失败 / 0 跳过**（1143.6s）；`check:clean` **全绿**（tsc 0 / vite build ✓）。
+
 ## v0.226（批注 creator/date：先证伪普查，再补写手漏掉的 `dc:date`）
 
 v0.224 普查把 `annotation|creator` / `|date` 列为「读手从未查问」，v0.225 收工时把它排进下一波。

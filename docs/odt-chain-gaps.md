@@ -143,7 +143,12 @@ ODT 账本的夹具雏形与分母来源。
   走 hex 归一化或关键词保形；写侧按载荷回发三格，没有载荷时保留旧的 solid/single/auto 死档。
   守卫 `test-odt-underline.mjs` 17 条，负控 14 红 / 3 绿（绿的 3 条全是反例）。
   **下一波最顺手的一族**已换成书签名（docx 有 `w:bookmarkStart@w:name` 与守卫）。
-- `bookmark|name`（1）：docx 读手读 `w:bookmarkStart@w:name` 且有 `test-bookmark-ids` 守卫；ODT 书签名不读不写。
+- ~~`bookmark|name`（1）~~ —— **v0.227 已修**：ODT 接 docx 那条 Bookmark mark + `span[data-oo-bookmark]`
+  通道。区间书签（`text:bookmark-start`/`-end`）按同名 span 包住内容，跨段在段末收 span、
+  下一段开头再开一枚；点书签（无内容的 `text:bookmark`）用零宽空格安家 + `data-oo-bookmark-point=1`，
+  写手认出后发回 `<text:bookmark/>` 且不把零宽字符写进文件。载荷仍是 `name;id` 两格字符串槽
+  （ODT 侧 id 空），docx 写手按最后一个分号拆名字——跨链写出 `<w:bookmarkStart>` 也在守卫里。
+  守卫 `test-odt-bookmark.mjs` 12 条，负控 10 红 / 2 绿（绿的 2 条全是反例）。
 - ~~`annotation|creator` / `|date`（2）~~ —— **v0.226 证伪 + 真缺口**：普查报的「读手不读」是**假红**，
   那份夹具把 `dc:creator` / `dc:date` 写成了属性，而 ODF 1.2 里它们是 `office:annotation` 的**子元素**；
   读手一直按子元素收，合法件两个字段都读得到。真缺口在**写手**：`openAnnEl` 只发 `dc:creator`，
