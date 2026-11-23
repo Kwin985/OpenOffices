@@ -1,6 +1,6 @@
 // 图表 PNG 渲染：ChartPayload → VChart spec → 离屏画布 → dataURL（VChart 按需动态加载，独立 chunk）
 import type { ISpec } from '@visactor/vchart'
-import type { ChartAxisPayload, ChartPayload } from './fs'
+import type { ChartAxisPayload, ChartPayload, ChartSeriesPayload } from './fs'
 import type { SlideChartData } from './ppt'
 
 /** 散点图 X 轴是数值轴：cats 存的是 xVal 取出的数，取不到就让 VChart 判为无效（NaN） */
@@ -355,4 +355,47 @@ export async function renderSlideChartPng(
   scale = 2,
 ): Promise<string> {
   return renderSpecToPng(buildSlideChartSpec(d, width, height, scale), width * scale, height * scale)
+}
+
+// ── 图表可编辑（v0.230）─────────────────────────────────────────────────────
+// 图表 PNG 背后始终有一份可编辑的 ChartPayload（类型/分组/标题/系列/数据区）。
+// 这里只做「换数据区」这一件的纯函数：从网格读出类别与系列值，重新生成 series，
+// 其余字段（锚点、尺寸、图型、分组、标题）原样保留。读写两侧共用，避免各写一套口径。
+
+/** 从网格重建系列：首行为系列名、首列为类别，与插入时的 payloadFromSelection 同一口径 */
+export function seriesFromGrid(
+  grid: (string | number | boolean | null)[][],
+  sheet: string,
+  r1: number,
+  c1: number,
+): ChartSeriesPayload[] {
+  const rows = grid.length
+  const cols = grid[0]?.length ?? 0
+  if (rows < 2 || cols < 2) return []
+  const cats = grid.slice(1).map((row) => row[0] ?? null)
+  const out: ChartSeriesPayload[] = []
+  for (let c = 1; c < cols; c++) {
+    out.push({
+      name: String(grid[0]?.[c] ?? `系列${c}`),
+      cat: { sheet, r1: r1 + 1, c1, r2: r1 + rows - 1, c2: c1 },
+      val: { sheet, r1: r1 + 1, c1: c1 + c, r2: r1 + rows - 1, c2: c1 + c },
+      cats: [...cats],
+      vals: grid.slice(1).map((row) => numOf(row[c])),
+    })
+  }
+  return out
+}
+
+/** 用新的系列与样式覆写 payload；锚点/尺寸保留，保证编辑后图表不挪位 */
+export function editChartPayload(
+  base: ChartPayload,
+  patch: { chartType?: string; grouping?: string; title?: string; series?: ChartSeriesPayload[] },
+): ChartPayload {
+  return {
+    ...base,
+    chartType: patch.chartType ?? base.chartType,
+    grouping: patch.grouping ?? base.grouping,
+    title: patch.title ?? base.title,
+    ...(patch.series && patch.series.length ? { series: patch.series } : {}),
+  }
 }

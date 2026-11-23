@@ -743,6 +743,28 @@ button {
   color: var(--text);
 }
 
+.chart-pop-title {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text);
+}
+.chart-pop-empty {
+  font-size: 12px;
+  color: #6b7280;
+}
+.chart-list-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.chart-list-row .tool-btn:first-child {
+  flex: 1;
+  text-align: left;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .chart-pop-actions {
   display: flex;
   justify-content: flex-end;

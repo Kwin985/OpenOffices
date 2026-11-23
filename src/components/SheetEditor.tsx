@@ -28,7 +28,7 @@ import type {
   WorkbookPayload,
 } from '../lib/fs'
 import type { DefinedNamePayload } from '../lib/fs'
-import { renderChartPng } from '../lib/chart'
+import { renderChartPng, seriesFromGrid, editChartPayload } from '../lib/chart'
 import { registerSaver } from '../lib/registry'
 import { saveBusyTimer, saveDoneTimer } from '../lib/save-status'
 import { exportPdfWithOverlay, measurePrintLayout } from '../lib/pdfprint'
@@ -283,6 +283,13 @@ function SheetEditor({ tab }: Props) {  const containerRef = useRef<HTMLDivEleme
   const [chartType, setChartType] = useState('column')
   const [grouping, setGrouping] = useState('standard')
   const [chartTitle, setChartTitle] = useState('')
+  // 图表编辑（v0.230）：editId 指向 chartsRef 里那枚 drawingId；面板开时把 payload 拷进草稿，
+  // 取消不改原状，确定才写回并替换图片源。
+  const [editChartId, setEditChartId] = useState<string | null>(null)
+  const [chartListOpen, setChartListOpen] = useState(false)
+  const [editType, setEditType] = useState('column')
+  const [editGrouping, setEditGrouping] = useState('standard')
+  const [editTitle, setEditTitle] = useState('')
   // 页面设置面板：草稿活在 React 态里，「确定」才写侧通道——取消就是什么都没发生
   const [printOpen, setPrintOpen] = useState(false)
   const [draft, setDraft] = useState<SheetPrintPayload>(() => draftOf(null))
@@ -588,6 +595,100 @@ function SheetEditor({ tab }: Props) {  const containerRef = useRef<HTMLDivEleme
       }
     }
     flash(updated > 0 ? `已刷新 ${updated} 个图表` : '无需刷新或图表已被删除')
+  }
+
+  // —— 图表编辑（v0.230）——
+  const openChartEdit = (id: string) => {
+    const item = chartsRef.current.get(id)
+    if (!item) return
+    setEditChartId(id)
+    setEditType(item.payload.chartType)
+    setEditGrouping(item.payload.grouping)
+    setEditTitle(item.payload.title)
+    setChartListOpen(false)
+  }
+
+  const confirmChartEdit = async () => {
+    const api = apiRef.current
+    const id = editChartId
+    const item = id ? chartsRef.current.get(id) : null
+    if (!api || !id || !item) return
+    try {
+      const next = editChartPayload(item.payload, {
+        chartType: editType,
+        grouping: editGrouping,
+        title: editTitle.trim(),
+      })
+      const ws = api.getActiveWorkbook()?.getSheetByName(item.sheetName)
+      const image = ws?.getImageById(id)
+      if (!ws || !image) {
+        flash('图表图片已被删除，编辑取消')
+        setEditChartId(null)
+        return
+      }
+      const png = await renderChartPng(next)
+      if (!image.setSource(png, api.Enum.ImageSourceType.URL)) {
+        flash('替换图表图片失败')
+        return
+      }
+      chartsRef.current.set(id, { ...item, payload: next })
+      setEditChartId(null)
+      markDirty(tab.id, true)
+      flash('图表已更新')
+    } catch (e) {
+      await message(failDialog(e), { title: '编辑图表失败', kind: 'error' })
+    }
+  }
+
+  // 数据区改成当前选区：复用插入时同一套口径（首行系列名、首列类别）
+  const retargetChart = async () => {
+    const api = apiRef.current
+    const id = editChartId
+    const item = id ? chartsRef.current.get(id) : null
+    const ws = api?.getActiveWorkbook()?.getActiveSheet()
+    if (!api || !id || !item || !ws) return
+    const range = ws.getSelection()?.getActiveRange()
+    if (!range) {
+      flash('请先在工作表上选择 ≥2行×2列 的数据区')
+      return
+    }
+    const r1 = range.getRow(), c1 = range.getColumn()
+    const r2 = range.getLastRow(), c2 = range.getLastColumn()
+    if (r2 - r1 < 1 || c2 - c1 < 1) {
+      flash('数据区需要 ≥2行×2列')
+      return
+    }
+    const grid = ws.getRange(r1, c1, r2 - r1 + 1, c2 - c1 + 1).getValues() as CellValue[][]
+    const series = seriesFromGrid(grid, ws.getSheetName(), r1, c1)
+    if (!series.length) return
+    // 直接落到 payload 并替换图片（这一处等同一个「确定」）
+    const next = editChartPayload(item.payload, { series })
+    const image = ws.getImageById(id)
+    if (!image) return
+    try {
+      const png = await renderChartPng(next)
+      if (!image.setSource(png, api.Enum.ImageSourceType.URL)) return
+      chartsRef.current.set(id, { ...item, payload: next })
+      markDirty(tab.id, true)
+      flash(`图表数据区已改为 ${series.length} 个系列`)
+    } catch (e) {
+      await message(failDialog(e), { title: '替换数据区失败', kind: 'error' })
+    }
+  }
+
+  const deleteChart = (id: string) => {
+    const api = apiRef.current
+    const item = chartsRef.current.get(id)
+    if (!api || !item) return
+    const ws = api.getActiveWorkbook()?.getSheetByName(item.sheetName)
+    const image = ws?.getImageById(id)
+    if (ws && image) ws.deleteImages([image])
+    chartsRef.current.delete(id)
+    setEditChartId(null)
+    setChartListOpen(false)
+    setChartCount(chartsRef.current.size)
+    markDirty(tab.id, true)
+    flash('图表已删除')
   }
 
   // —— 页面设置面板：只改草稿，「确定」才落到侧通道 printRef（保存与导出 PDF 共吃它） ——
@@ -1225,6 +1326,7 @@ function SheetEditor({ tab }: Props) {  const containerRef = useRef<HTMLDivEleme
         <button className="tool-btn" onClick={() => save(false)}>保存</button>
         <button className="tool-btn" onClick={() => save(true)}>另存为…</button>
         <button className="tool-btn" onClick={() => setDialogOpen((v) => !v)}>插入图表</button>
+        <button className="tool-btn" onClick={() => setChartListOpen((v) => !v)} title="点开已有图表改类型、标题或数据区">编辑图表{chartCount > 0 ? ` (${chartCount})` : ''}</button>
         <button className="tool-btn" onClick={() => void exportPdf()} title="自绘网格，纸面照文件的页面设置">导出 PDF</button>
         <button className="tool-btn" onClick={openPrintPanel} title="这一张表该怎么摆到纸上：纸张/边距/页眉页脚/分页">页面设置</button>
         <button
@@ -1275,6 +1377,55 @@ function SheetEditor({ tab }: Props) {  const containerRef = useRef<HTMLDivEleme
             <div className="chart-pop-actions">
               <button className="tool-btn tool-btn-primary" onClick={confirmInsert}>插入</button>
               <button className="tool-btn" onClick={() => setDialogOpen(false)}>取消</button>
+            </div>
+          </div>
+        )}
+        {chartListOpen && (
+          <div className="chart-pop">
+            <div className="chart-pop-title">已有图表（点一个编辑）</div>
+            {chartsRef.current.size === 0 && <div className="chart-pop-empty">还没有图表，先选中数据区再「插入图表」</div>}
+            {Array.from(chartsRef.current.entries()).map(([id, item], i) => (
+              <div key={id} className="chart-list-row">
+                <button className="tool-btn" onClick={() => openChartEdit(id)}>
+                  {i + 1}. {item.payload.title || item.payload.chartType} · {item.sheetName}
+                </button>
+                <button className="tool-btn" onClick={() => deleteChart(id)} title="删除这张图表">删</button>
+              </div>
+            ))}
+            <div className="chart-pop-actions">
+              <button className="tool-btn" onClick={() => setChartListOpen(false)}>关闭</button>
+            </div>
+          </div>
+        )}
+        {editChartId && (
+          <div className="chart-pop">
+            <div className="chart-pop-title">编辑图表</div>
+            <label>
+              类型
+              <select value={editType} onChange={(e) => setEditType(e.target.value)}>
+                {CHART_TYPES.map(([v, label]) => (
+                  <option key={v} value={v}>{label}</option>
+                ))}
+              </select>
+            </label>
+            {CARTESIAN.includes(editType) && (
+              <label>
+                分组
+                <select value={editGrouping} onChange={(e) => setEditGrouping(e.target.value)}>
+                  <option value="standard">标准</option>
+                  <option value="stacked">堆叠</option>
+                  <option value="percentStacked">百分比堆叠</option>
+                </select>
+              </label>
+            )}
+            <label>
+              标题
+              <input value={editTitle} placeholder="（可留空）" onChange={(e) => setEditTitle(e.target.value)} />
+            </label>
+            <div className="chart-pop-actions">
+              <button className="tool-btn tool-btn-primary" onClick={() => void confirmChartEdit()}>保存</button>
+              <button className="tool-btn" onClick={() => void retargetChart()} title="先在工作表上选 ≥2行×2列，再点这里">用当前选区作数据区</button>
+              <button className="tool-btn" onClick={() => setEditChartId(null)}>取消</button>
             </div>
           </div>
         )}
