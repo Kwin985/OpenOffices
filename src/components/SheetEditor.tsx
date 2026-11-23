@@ -29,6 +29,7 @@ import type {
 } from '../lib/fs'
 import type { DefinedNamePayload } from '../lib/fs'
 import { renderChartPng, seriesFromGrid, editChartPayload } from '../lib/chart'
+import { buildPivot, PIVOT_AGGS, type PivotAgg, type PivotResult } from '../lib/pivot'
 import { registerSaver } from '../lib/registry'
 import { saveBusyTimer, saveDoneTimer } from '../lib/save-status'
 import { exportPdfWithOverlay, measurePrintLayout } from '../lib/pdfprint'
@@ -290,6 +291,15 @@ function SheetEditor({ tab }: Props) {  const containerRef = useRef<HTMLDivEleme
   const [editType, setEditType] = useState('column')
   const [editGrouping, setEditGrouping] = useState('standard')
   const [editTitle, setEditTitle] = useState('')
+  // 数据透视表（v0.231）：源区/三维字段/汇总方式/预览，落表在活动单元格右下展开
+  const [pivotOpen, setPivotOpen] = useState(false)
+  const [pivotSource, setPivotSource] = useState('')
+  const [pivotRowField, setPivotRowField] = useState('')
+  const [pivotColField, setPivotColField] = useState('')
+  const [pivotValueField, setPivotValueField] = useState('')
+  const [pivotAgg, setPivotAgg] = useState<PivotAgg>('sum')
+  const [pivotResult, setPivotResult] = useState<PivotResult | null>(null)
+  const pivotGridRef = useRef<(string | number | boolean | null)[][] | null>(null)
   // 页面设置面板：草稿活在 React 态里，「确定」才写侧通道——取消就是什么都没发生
   const [printOpen, setPrintOpen] = useState(false)
   const [draft, setDraft] = useState<SheetPrintPayload>(() => draftOf(null))
@@ -689,6 +699,56 @@ function SheetEditor({ tab }: Props) {  const containerRef = useRef<HTMLDivEleme
     setChartCount(chartsRef.current.size)
     markDirty(tab.id, true)
     flash('图表已删除')
+  }
+
+  // —— 数据透视表（v0.231）——
+  const openPivot = () => {
+    const ws = apiRef.current?.getActiveWorkbook()?.getActiveSheet()
+    const range = ws?.getSelection()?.getActiveRange()
+    if (!ws || !range) {
+      flash('请先选中源数据区（首行是字段名）')
+      return
+    }
+    const r1 = range.getRow(), c1 = range.getColumn()
+    const r2 = range.getLastRow(), c2 = range.getLastColumn()
+    if (r2 - r1 < 1 || c2 - c1 < 1) {
+      flash('源数据区需要 ≥2行×2列（首行字段名）')
+      return
+    }
+    const grid = ws.getRange(r1, c1, r2 - r1 + 1, c2 - c1 + 1).getValues() as (string | number | boolean | null)[][]
+    pivotGridRef.current = grid
+    const header = (grid[0] ?? []).map(String)
+    setPivotSource(`${ws.getSheetName()}!${String.fromCharCode(65 + c1)}${r1 + 1}:${String.fromCharCode(65 + c2)}${r2 + 1}`)
+    setPivotRowField(header[0] ?? '')
+    setPivotColField(header[1] ?? '')
+    setPivotValueField(header[2] ?? header[header.length - 1] ?? '')
+    setPivotResult(null)
+    setPivotOpen(true)
+  }
+
+  const previewPivot = () => {
+    const grid = pivotGridRef.current
+    if (!grid?.length) return
+    const res = buildPivot({ grid, rowField: pivotRowField, colField: pivotColField, valueField: pivotValueField, agg: pivotAgg })
+    setPivotResult(res)
+    if (!res.rows.length) flash('字段配置不对：请确认值字段名存在')
+  }
+
+  const writePivot = () => {
+    const api = apiRef.current
+    const ws = api?.getActiveWorkbook()?.getActiveSheet()
+    if (!ws || !pivotResult?.rows.length) return
+    const sel = ws.getSelection()?.getActiveRange()
+    // 落在当前选区右下方两列处，避免盖住源数据
+    const r = (sel?.getLastRow() ?? 0) + 3
+    const c = sel?.getColumn() ?? 0
+    const w = Math.max(...pivotResult.rows.map((x) => x.length))
+    const grid: (string | number)[][] = Array.from({ length: pivotResult.rows.length }, (_, i) =>
+      Array.from({ length: w }, (_, j) => pivotResult.rows[i]?.[j] ?? ''))
+    ws.getRange(r, c, grid.length, w).setValues(grid)
+    markDirty(tab.id, true)
+    setPivotOpen(false)
+    flash(`透视表已写入 ${grid.length} 行 × ${w} 列（${pivotResult.used} 条数据${pivotResult.skipped ? `，跳过 ${pivotResult.skipped} 条空/非数值` : ''}）`)
   }
 
   // —— 页面设置面板：只改草稿，「确定」才落到侧通道 printRef（保存与导出 PDF 共吃它） ——
@@ -1327,6 +1387,7 @@ function SheetEditor({ tab }: Props) {  const containerRef = useRef<HTMLDivEleme
         <button className="tool-btn" onClick={() => save(true)}>另存为…</button>
         <button className="tool-btn" onClick={() => setDialogOpen((v) => !v)}>插入图表</button>
         <button className="tool-btn" onClick={() => setChartListOpen((v) => !v)} title="点开已有图表改类型、标题或数据区">编辑图表{chartCount > 0 ? ` (${chartCount})` : ''}</button>
+        <button className="tool-btn" onClick={openPivot} title="选源数据区（首行字段名）→ 配行/列/值 → 透视结果写到当前表">数据透视表</button>
         <button className="tool-btn" onClick={() => void exportPdf()} title="自绘网格，纸面照文件的页面设置">导出 PDF</button>
         <button className="tool-btn" onClick={openPrintPanel} title="这一张表该怎么摆到纸上：纸张/边距/页眉页脚/分页">页面设置</button>
         <button
@@ -1427,6 +1488,47 @@ function SheetEditor({ tab }: Props) {  const containerRef = useRef<HTMLDivEleme
               <button className="tool-btn" onClick={() => void retargetChart()} title="先在工作表上选 ≥2行×2列，再点这里">用当前选区作数据区</button>
               <button className="tool-btn" onClick={() => setEditChartId(null)}>取消</button>
             </div>
+          </div>
+        )}
+        {pivotOpen && (
+          <div className="pivot-pop">
+            <div className="chart-pop-title">数据透视表 · {pivotSource}</div>
+            <label>行字段
+              <select value={pivotRowField} onChange={(e) => setPivotRowField(e.target.value)}>
+                <option value="">（无）</option>
+                {(pivotGridRef.current?.[0] ?? []).map((h, i) => <option key={i} value={String(h)}>{String(h)}</option>)}
+              </select>
+            </label>
+            <label>列字段
+              <select value={pivotColField} onChange={(e) => setPivotColField(e.target.value)}>
+                <option value="">（无）</option>
+                {(pivotGridRef.current?.[0] ?? []).map((h, i) => <option key={i} value={String(h)}>{String(h)}</option>)}
+              </select>
+            </label>
+            <label>值字段
+              <select value={pivotValueField} onChange={(e) => setPivotValueField(e.target.value)}>
+                {(pivotGridRef.current?.[0] ?? []).map((h, i) => <option key={i} value={String(h)}>{String(h)}</option>)}
+              </select>
+            </label>
+            <label>汇总
+              <select value={pivotAgg} onChange={(e) => setPivotAgg(e.target.value as PivotAgg)}>
+                {PIVOT_AGGS.map((a) => <option key={a.value} value={a.value}>{a.label}</option>)}
+              </select>
+            </label>
+            <div className="chart-pop-actions">
+              <button className="tool-btn tool-btn-primary" onClick={previewPivot}>预览</button>
+              <button className="tool-btn tool-btn-primary" onClick={writePivot} disabled={!pivotResult?.rows.length}>写入当前表</button>
+              <button className="tool-btn" onClick={() => setPivotOpen(false)}>取消</button>
+            </div>
+            {pivotResult && pivotResult.rows.length > 0 && (
+              <table className="pivot-preview">
+                <tbody>
+                  {pivotResult.rows.map((r, i) => (
+                    <tr key={i}>{r.map((c, j) => <td key={j}>{c}</td>)}</tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
           </div>
         )}
         {printOpen && (
