@@ -4810,6 +4810,26 @@ Rust lib **169 通过**（xlsx 族 25）；夹具账复位 65/65、md5 `0fd13292
 Rust lib **171 通过**（+2 条新守卫）、ODS 族 35 通过 / 1 ignored；ODS 往返账 14/14 复位、
 md5 与基线逐字节一致、`docs/ods-roundtrip.*` git 零改动。
 
+## v0.233（Writer 水印：header VML 读写闭环）
+
+差距清单里 Writer 的「水印」落地。Word 水印不是文档属性，而是 header 部件里的一枚 VML
+形状（`v:shape` + `v:textpath@string`，斜角 315°、半透明、居中），docx 包没有对应槽——
+读手从 header raw XML 正则取文字进 `DocMeta.watermark`，写手 post-pack 注入标准 VML。
+
+- **共存**：有水印但没页眉时包发空段落 `<w:p/>`，补丁按「自闭合 / 有内容」两态注入
+  （房规教训⑬：自闭合要整枚换成有内容段落，不能在其后插 run）；有 headerText 时两者同段共存。
+- **UI**：文档属性面板「水印」输入框，留空即移除；`DocMeta` 整体 JSON 存 .odoc，自动双向。
+- **幂等**：已有相同水印跳过；不同的整段换掉，不叠字。
+- **守卫**：`test-watermark.mjs` 16 项（VML 形状要素、实体解析、写手发部件、读写闭环、
+  与页眉共存、无水印零动作、UI 接线）。
+
+**边界**：只做默认 header（首页/奇偶另版不铺）；ODT 链不写水印；屏上预览未做（只在导出的
+docx/打印里显现）——第一版先把「字在、Word/WPS 认、能改能存」跑通。
+
+**门禁**：`check:clean` 全绿；账本零改动；水印守卫 16 项；全量 94 份中 93 通过，
+唯一红项 `test-ods-roundtrip` 单跑 12/12 通过（本轮与 v0.229/v0.232 同为并发资源竞争，
+runner 高并行时偶发，非真回归）。
+
 ## v0.232（PDF 本地 OCR 第一版：按页识别、零网络、结果可搜索）
 
 差距清单第四档的 PDF OCR 先跑通一版。守住「数据不出本机」的底线：tesseract.js 默认会从
