@@ -22,3 +22,49 @@ if (existsSync(dictSrc)) {
 } else {
   console.log('未找到 word-list，跳过拼写词典（拼写检查将用内置错词表）')
 }
+
+// OCR 资源（v0.232）：tesseract 的 WASM core 与中英语言包从 node_modules 同步到 public。
+// 不入库（public/tessdata 已 gitignore），dev/build 前同步；这样 worker/core/langPath 全指本地，
+// 识别时零网络请求——守住「数据不出本机」的底线。
+// pnpm 严格结构下 core 不在顶层：从 tesseract.js 的 node_modules 找，再退到顶层
+const { readdirSync } = await import('node:fs')
+const coreCandidates = [
+  `${root}node_modules/tesseract.js/node_modules/tesseract.js-core`,
+  `${root}node_modules/tesseract.js-core`,
+]
+const pnpmRoot = `${root}node_modules/.pnpm`
+if (existsSync(pnpmRoot)) {
+  for (const d of readdirSync(pnpmRoot)) {
+    if (d.startsWith('tesseract.js-core@')) coreCandidates.push(`${pnpmRoot}/${d}/node_modules/tesseract.js-core`)
+  }
+}
+const tesseractCore = coreCandidates.find((p) => existsSync(p)) ?? ''
+const ocrDst = `${root}public/tessdata`
+if (existsSync(tesseractCore)) {
+  mkdirSync(ocrDst, { recursive: true })
+  for (const f of [
+    'tesseract-core-lstm.js', 'tesseract-core-lstm.wasm', 'tesseract-core-lstm.wasm.js',
+    'tesseract-core-simd-lstm.js', 'tesseract-core-simd-lstm.wasm', 'tesseract-core-simd-lstm.wasm.js',
+    'tesseract-core-relaxedsimd-lstm.js', 'tesseract-core-relaxedsimd-lstm.wasm', 'tesseract-core-relaxedsimd-lstm.wasm.js',
+  ]) {
+    const src = `${tesseractCore}/${f}`
+    if (existsSync(src)) cpSync(src, `${ocrDst}/${f}`)
+  }
+  // worker 脚本本身也放本地（默认走 Blob URL，这里显式指定同源路径）
+  const workerSrc = `${root}node_modules/tesseract.js/dist/worker.min.js`
+  if (existsSync(workerSrc)) cpSync(workerSrc, `${ocrDst}/worker.min.js`)
+  // worker 脚本本身也放本地（默认走 Blob URL，这里显式指定同源路径）
+  // 语言包：best_int 版（约 eng 4MB / chi_sim 10MB），解压后给 tesseract worker 用
+  for (const [lang, dir] of [
+    ['eng', '4.0.0_best_int'],
+    ['chi_sim', '4.0.0_best_int'],
+  ]) {
+    const base = [`${root}node_modules/tesseract.js/node_modules/@tesseract.js-data/${lang}`, `${root}node_modules/@tesseract.js-data/${lang}`].find((p) => existsSync(p)) ?? ''
+    const src = `${base}/${dir}/${lang}.traineddata.gz`
+    if (existsSync(src)) cpSync(src, `${ocrDst}/${lang}.traineddata.gz`)
+  }
+  console.log('OCR 资源已同步 → public/tessdata（本地识别，零网络）')
+} else {
+  console.log('未找到 tesseract.js-core，跳过 OCR 资源同步（OCR 按钮将不可用）')
+}
+

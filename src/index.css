@@ -4719,3 +4719,44 @@ button {
   background: var(--bg);
   font-weight: 500;
 }
+
+/* PDF 本地 OCR 面板（v0.232）：识别当前页的扫描文字，结果进搜索缓存并可复制 */
+.pdf-ocr-panel {
+  position: absolute;
+  top: 76px;
+  right: 12px;
+  z-index: 32;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  width: 420px;
+  padding: 10px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  box-shadow: 0 6px 20px rgb(0 0 0 / 12%);
+}
+.pdf-ocr-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  color: var(--text);
+}
+.pdf-ocr-head > span:first-child { flex: 1; }
+.pdf-ocr-info {
+  font-size: 12px;
+  color: #6b7280;
+}
+.pdf-ocr-text {
+  width: 100%;
+  min-height: 90px;
+  resize: vertical;
+  padding: 6px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg);
+  color: var(--text);
+  font-size: 12px;
+  line-height: 1.5;
+}

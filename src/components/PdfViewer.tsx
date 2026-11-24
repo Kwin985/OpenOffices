@@ -1,6 +1,7 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import * as pdfjsLib from 'pdfjs-dist'
 import { TextLayer } from 'pdfjs-dist'
+import { recognizeCanvas, ocrToPageText, disposeOcrWorker, hasTextLayer, OCR_LANGS, type OcrLang } from '../lib/pdf-ocr'
 import type { PDFDocumentLoadingTask, PDFDocumentProxy, RenderTask } from 'pdfjs-dist'
 import workerUrl from 'pdfjs-dist/build/pdf.worker.min.mjs?url'
 import type { Tab } from '../store'
@@ -214,6 +215,12 @@ function PdfViewer({ tab }: Props) {
   const [scale, setScale] = useState(1.25)
   const [sizes, setSizes] = useState<Record<number, { w: number; h: number }>>({})
   const [curPage, setCurPage] = useState(1)
+  // OCR（v0.232）：按页识别扫描件，结果进 pageTexts 让搜索可及；文本留在面板供复制
+  const [ocrOpen, setOcrOpen] = useState(false)
+  const [ocrLang, setOcrLang] = useState<OcrLang>('chi_sim')
+  const [ocrBusy, setOcrBusy] = useState(false)
+  const [ocrText, setOcrText] = useState('')
+  const [ocrInfo, setOcrInfo] = useState('')
   const [searchOpen, setSearchOpen] = useState(false)
   const [query, setQuery] = useState('')
   // v0.176：替换文字。只在按下「替换 / 全部替换」时读，不触发重搜
@@ -961,6 +968,39 @@ function PdfViewer({ tab }: Props) {
     pageTexts.current.set(n, t)
     return t
   }
+  // OCR 当前页：从页面 DOM 拿已渲染的 canvas（当前页一定在 DOM 里，比 LRU 位图缓存可靠），
+  // 识别后写进 pageTexts —— 与 pdfjs 文字层同构，搜索因此立刻能搜到扫描件。
+  const ocrCurrentPage = async () => {
+    if (ocrBusy || !doc) return
+    const el = scrollRef.current?.querySelector<HTMLElement>(`[data-page="${curPage}"]`)
+    const canvas = el?.querySelector('canvas')
+    if (!canvas || !canvas.width || !canvas.height) {
+      setOcrInfo('当前页还没渲染好，稍等一下再识别')
+      return
+    }
+    setOcrBusy(true)
+    setOcrInfo('正在本地识别（不联网）…')
+    try {
+      const res = await recognizeCanvas(canvas, ocrLang)
+      if (!res.text) {
+        setOcrInfo('没识别到文字（这页可能是空白或纯图形）')
+        setOcrText('')
+        return
+      }
+      // 只有「原本没文字层」时才覆盖：有文字层说明是文本 PDF，不该被 OCR 结果顶掉
+      const existing = pageTexts.current.get(curPage)
+      if (!existing || !hasTextLayer(existing.items)) {
+        pageTexts.current.set(curPage, ocrToPageText(res.text))
+      }
+      setOcrText(res.text)
+      setOcrInfo(`识别完成 · 置信度 ${res.confidence}% · ${res.lang === 'chi_sim' ? '中文' : '英文'}${existing && hasTextLayer(existing.items) ? '（本页已有文字层，搜索仍用原文）' : '（搜索已可用）'}`)
+    } catch (e) {
+      setOcrInfo(`识别失败：${e instanceof Error ? e.message.slice(0, 120) : String(e)}`)
+    } finally {
+      setOcrBusy(false)
+    }
+  }
+
   const pageTexts = useRef(new Map<number, PageText>())
   const searchSeq = useRef(0)
 
@@ -2535,6 +2575,23 @@ function PdfViewer({ tab }: Props) {
           if (!searchOpen) searchInputRef.current?.focus()
         }, !doc, '搜索 (Ctrl+F)')}
         {btn('☰', () => setSideOpen((v) => !v), !doc, '侧栏 (缩略图/大纲/标注)')}
+        {btn('◉ OCR', () => setOcrOpen((v) => !v), !doc, ocrBusy ? '正在识别当前页…' : 'OCR：本地识别当前扫描页，结果可搜索、可复制（不联网）')}
+        {ocrOpen && (
+          <span className="pdf-ocr-panel" onClick={(e) => e.stopPropagation()}>
+            <span className="pdf-ocr-head">
+              <span>本地 OCR · 第 {curPage} 页</span>
+              <select value={ocrLang} onChange={(e) => setOcrLang(e.target.value as OcrLang)} disabled={ocrBusy}>
+                {OCR_LANGS.map((l) => <option key={l.value} value={l.value}>{l.label}</option>)}
+              </select>
+              <button className="tb-btn" onClick={() => void ocrCurrentPage()} disabled={ocrBusy || !doc}>
+                {ocrBusy ? '识别中…' : '识别本页'}
+              </button>
+              <button className="tb-btn" onClick={() => { setOcrOpen(false); void disposeOcrWorker() }}>关闭</button>
+            </span>
+            <span className="pdf-ocr-info">{ocrInfo || '识别在当前页的位图上进行；语言包与引擎全部在本机，无网络请求。'}</span>
+            {ocrText && <textarea className="pdf-ocr-text" readOnly value={ocrText} placeholder="识别出的文字（可复制）" />}
+          </span>
+        )}
         {searchOpen && (
           <span className="pdf-search">
             <input
