@@ -222,3 +222,131 @@ export function deleteAsRevision(state: EditorState, from: number, to: number): 
   tr.addMark(from, to, delType.create({ author: mode.author, date: new Date().toISOString() }))
   return tr
 }
+
+// ── 文档比较（v0.234）───────────────────────────────────────────────────────
+// 两份文本 → 一份带修订 mark 的 HTML（删除挂 data-rev="del"、插入挂 data-rev="ins"）。
+// 应用后用户能逐条接受/拒绝（复用上面的 acceptRevisions/rejectRevisions），
+// 写手会把带 mark 的文字段写成 w:ins/w:del（docx.ts 的修订壳分支）。
+//
+// 粒度：先按段落对齐（空行也算一段），段内按「词」做 LCS——中文按单字、英文按单词，
+// 这样「把 3 改成 5」只标一个字符，而不是整段闪红。LCS 用 DP，输入上限由调用方守。
+
+export interface CompareOptions {
+  author?: string
+  date?: string
+}
+
+const esc = (s: string) =>
+  s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;')
+
+/** 段落切法：换行分段，保留空段（空行被删也是一处修改） */
+export function splitParagraphs(s: string): string[] {
+  return s.replace(/\r\n?/g, '\n').split('\n')
+}
+
+/** 段内 token：英文/数字连成一词，中日韩逐字，空白单独成 token（保住空格改动） */
+export function tokenize(s: string): string[] {
+  const out: string[] = []
+  const re = /[A-Za-z0-9_]+|[\u4e00-\u9fff\u3040-\u30ff\uac00-\ud7af]|\s+|./gu
+  let m: RegExpExecArray | null
+  while ((m = re.exec(s))) out.push(m[0])
+  return out
+}
+
+interface Op {
+  kind: 'eq' | 'del' | 'ins'
+  text: string
+}
+
+/** 标准 LCS → 增删操作序列（同词连续合并，减少 mark 碎片） */
+function diffTokens(a: string[], b: string[], sep = ''): Op[] {
+  const n = a.length, m = b.length
+  const dp: Uint16Array[] = Array.from({ length: n + 1 }, () => new Uint16Array(m + 1))
+  for (let i = n - 1; i >= 0; i--) {
+    for (let j = m - 1; j >= 0; j--) {
+      dp[i][j] = a[i] === b[j] ? dp[i + 1][j + 1] + 1 : Math.max(dp[i + 1][j], dp[i][j + 1])
+    }
+  }
+  const raw: Op[] = []
+  let i = 0, j = 0
+  while (i < n && j < m) {
+    if (a[i] === b[j]) { raw.push({ kind: 'eq', text: a[i] }); i++; j++ }
+    else if (dp[i + 1][j] >= dp[i][j + 1]) { raw.push({ kind: 'del', text: a[i] }); i++ }
+    else { raw.push({ kind: 'ins', text: b[j] }); j++ }
+  }
+  while (i < n) raw.push({ kind: 'del', text: a[i++] })
+  while (j < m) raw.push({ kind: 'ins', text: b[j++] })
+  const merged: Op[] = []
+  for (const op of raw) {
+    const last = merged[merged.length - 1]
+    if (last && last.kind === op.kind) last.text += sep + op.text
+    else merged.push({ ...op })
+  }
+  return merged
+}
+
+/** 一段的 diff HTML；无差异返回原文（转义后） */
+function diffParagraphHTML(oldText: string, newText: string, opts: Required<CompareOptions>): string {
+  if (oldText === newText) return esc(oldText)
+  const ops = diffTokens(tokenize(oldText), tokenize(newText))
+  return ops.map((op) => {
+    if (op.kind === 'eq') return esc(op.text)
+    const kind = op.kind === 'del' ? 'del' : 'ins'
+    return `<span data-rev="${kind}" data-rev-author="${esc(opts.author)}" data-rev-date="${esc(opts.date)}">${esc(op.text)}</span>`
+  }).join('')
+}
+
+/**
+ * 文档比较主入口：原文本 → 新文本，产出可直接塞进编辑器的段落 HTML 串。
+ * 段落对齐也走 LCS；相邻的一删一插若段落数相同就配对做段内词级 diff，
+ * 于是「把 3 改成 5」只标一个字符，而不是整段闪红。
+ */
+export function compareTextToHtml(
+  oldText: string,
+  newText: string,
+  opts: CompareOptions = {},
+): { html: string; changed: number } {
+  const o = { author: opts.author || '文档比较', date: opts.date || new Date().toISOString() }
+  const a = splitParagraphs(oldText)
+  const b = splitParagraphs(newText)
+  const ops = diffTokens(a, b, '\n')
+  const paras: string[] = []
+  let changed = 0
+
+  for (let k = 0; k < ops.length; k++) {
+    const op = ops[k]
+    if (op.kind === 'eq') {
+      for (const para of op.text.split('\n')) paras.push(`<p>${esc(para)}</p>`)
+      continue
+    }
+    // 相邻的 del + ins 且段数相同 → 逐段做词级 diff（最常见的「改几个字」形状）
+    const next = ops[k + 1]
+    if (op.kind === 'del' && next?.kind === 'ins' && op.text.split('\n').length === next.text.split('\n').length) {
+      const oldPs = op.text.split('\n'), newPs = next.text.split('\n')
+      for (let i = 0; i < oldPs.length; i++) paras.push(`<p>${diffParagraphHTML(oldPs[i], newPs[i], o)}</p>`)
+      changed += oldPs.length
+      k++
+      continue
+    }
+    changed++
+    const kind = op.kind === 'del' ? 'del' : 'ins'
+    for (const para of op.text.split('\n')) {
+      paras.push(`<p><span data-rev="${kind}" data-rev-author="${esc(o.author)}" data-rev-date="${esc(o.date)}">${esc(para)}</span></p>`)
+    }
+  }
+  return { html: paras.join(''), changed }
+}
+
+/** 段内细粒度比较（用于「整段替换但大部分相同」的场景，保留未改的字） */
+export function compareParagraphsToHtml(
+  oldText: string,
+  newText: string,
+  opts: CompareOptions = {},
+): string {
+  const o = { author: opts.author || '文档比较', date: opts.date || new Date().toISOString() }
+  return splitParagraphs(oldText).map((_, i) => {
+    const a = splitParagraphs(oldText)[i] ?? ''
+    const b = splitParagraphs(newText)[i] ?? ''
+    return `<p>${diffParagraphHTML(a, b, o)}</p>`
+  }).join('')
+}

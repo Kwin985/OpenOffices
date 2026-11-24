@@ -4760,3 +4760,27 @@ button {
   font-size: 12px;
   line-height: 1.5;
 }
+
+/* 文档比较预览（v0.234）：del 红删除线、ins 绿下划线；应用后 mark 用同款语义色 */
+.doc-compare-preview {
+  width: 100%;
+  max-height: 220px;
+  overflow: auto;
+  padding: 8px 10px;
+  font-size: 13px;
+  line-height: 1.7;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg);
+}
+.doc-compare-preview p { margin: 0 0 4px; }
+.doc-compare-preview [data-rev='del'] {
+  color: #b91c1c;
+  text-decoration: line-through;
+  background: #fef2f2;
+}
+.doc-compare-preview [data-rev='ins'] {
+  color: #15803d;
+  text-decoration: underline;
+  background: #f0fdf4;
+}

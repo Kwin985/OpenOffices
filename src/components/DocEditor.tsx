@@ -93,6 +93,7 @@ import { registerSaver, runExclusive } from '../lib/registry'
 import { failDialog, failStatus } from '../lib/fail-msg'
 import { aiErrorMessage, AI_ACTION_LABEL, listAiModels, prepareAiSource, runAiAction, type AiAction, type AiModel } from '../lib/cloud-ai'
 import { renderFormulas } from '../lib/note-extension'
+import { compareTextToHtml } from '../lib/revision-extension'
 // v0.180：可交互状态栏的条目表住在 lib；fail-msg / print-preview / view-zoom 的口径在那里转调
 import { statusBarItems, type StatusBarAction } from '../lib/status-bar'
 import { saveDoneTimer } from '../lib/save-status'
@@ -182,6 +183,13 @@ function DocEditor({ tab }: Props) {
   const [noteDraft, setNoteDraft] = useState<{ kind: NoteKind; text: string } | null>(null)
   // 公式草稿：latex 为源码，editPos 非空表示改的是已有节点（否则在光标处插入）
   const [formulaDraft, setFormulaDraft] = useState<{ latex: string; editPos: number | null } | null>(null)
+  // 文档比较（v0.234）：两份文本 → 带修订 mark 的 HTML，应用后可逐条接受/拒绝
+  const [compareOpen, setCompareOpen] = useState(false)
+  const [compareOld, setCompareOld] = useState('')
+  const [compareNew, setCompareNew] = useState('')
+  const [compareHtml, setCompareHtml] = useState('')
+  const [compareChanged, setCompareChanged] = useState(0)
+
   // 边框的待用档位（线型/磅/颜色）：点哪条边才把它写下去，所以这一份不进文档、只是工具条上的"笔"
   const [bdSel, setBdSel] = useState({ style: 'solid', pt: 0.5, hex: '#000000' })
   // 条件层面板（v0.116）：一次只放行一枚表样式，挑部位的下拉也算这一层的小状态
@@ -1514,6 +1522,29 @@ function DocEditor({ tab }: Props) {
     </button>
   )
 
+  // —— 文档比较（v0.234）——
+  const previewCompare = () => {
+    if (!compareOld.trim() && !compareNew.trim()) {
+      setStatus('请先填入原文或改后文本')
+      return
+    }
+    const r = compareTextToHtml(compareOld, compareNew, { author: identityName() })
+    setCompareHtml(r.html)
+    setCompareChanged(r.changed)
+    if (!r.changed) setStatus('两份文本没有差异')
+  }
+
+  const applyCompare = () => {
+    if (!compareHtml || !editor) return
+    // 整篇替换成带修订 mark 的 HTML：未改的正文原样回来，改动的带 del/ins 标记，
+    // 用户能用「接受修订 / 拒绝修订」逐条裁决；写手会把它写成 w:del/w:ins。
+    editor.chain().focus().insertContentAt({ from: 0, to: editor.state.doc.content.size }, compareHtml).run()
+    setCompareOpen(false)
+    setStatus(`已应用 ${compareChanged} 处修订，可逐条接受或拒绝`)
+    setTimeout(() => setStatus(''), 2400)
+  }
+
+
   // 公式屏上渲染（v0.229）：TipTap 把公式节点画成 span[data-oo-formula]，这里用 KaTeX 填内容。
   // 监听编辑器更新 + 容器变化（切标签/布局变化），幂等由 renderFormulas 内的标记保证。
   useEffect(() => {
@@ -2149,6 +2180,7 @@ function DocEditor({ tab }: Props) {
         {btn('清格式', () => void runCtx('clearFormat'), false,
           '清除格式：摘掉选区里的字符外观（粗斜、字色、高亮、字号等）与样式标签；' +
           '批注/书签/修订/超链接这类带身份的标记保留，标题节点也不转回段落。无选区时清的是后续输入格式')}
+        {btn('比较', () => setCompareOpen((v) => !v), compareOpen, '文档比较：粘贴原文与改后文本，预览差异并应用为可接受的修订')}
         {btn('AI', openAi, aiOpen, 'AI 助手：把选中文字交给云端模型做摘要/润色/翻译，结果可插入正文')}
         {btn('拼写', toggleSpell, spellOn, '拼写检查：常见错拼、中文误用、重复字。开着会随输入重扫')}
         {btn('协同', toggleCollabPanel, collabOpen, '实时协同：同一房间名的多个实例一起改同一份文档，改动自动合并，不用互相锁')}
@@ -2858,6 +2890,25 @@ function DocEditor({ tab }: Props) {
             )}
           </span>
           {meta.page && btn('重置', () => patchMeta({ page: undefined }), false, '恢复 A4 + 默认边距 + 不分栏')}
+        </div>
+      )}
+      {compareOpen && (
+        <div className="doc-toolbar doc-fr-panel" style={{ flexWrap: 'wrap', gap: 6 }}>
+          <span className="tb-label">文档比较</span>
+          <textarea className="tb-input" style={{ width: 240, minHeight: 72, resize: 'vertical' }}
+            placeholder="原文（留空表示全文新增）" value={compareOld}
+            onChange={(e) => setCompareOld(e.target.value)} />
+          <textarea className="tb-input" style={{ width: 240, minHeight: 72, resize: 'vertical' }}
+            placeholder="改后文本（留空表示全文删除）" value={compareNew}
+            onChange={(e) => setCompareNew(e.target.value)} />
+          <button className="tb-btn" onClick={previewCompare}>预览差异</button>
+          <button className="tb-btn" onClick={applyCompare} disabled={!compareHtml || !editor} title="整篇替换为带修订的版本，可继续逐条接受/拒绝">
+            应用为修订 {compareChanged > 0 && `(${compareChanged} 处)`}
+          </button>
+          <button className="tb-btn" onClick={() => setCompareOpen(false)}>关闭</button>
+          {compareHtml && (
+            <div className="doc-compare-preview" dangerouslySetInnerHTML={{ __html: compareHtml }} />
+          )}
         </div>
       )}
       {aiOpen && (
