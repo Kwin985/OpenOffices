@@ -2990,6 +2990,15 @@ function DocEditor({ tab }: Props) {
               onChange={(e) => patchMeta({ footerText: e.target.value || undefined })}
             />
           </label>
+          <label className="doc-hf-field" title="水印写在页眉部件的 VML 形状里，Word/WPS 都能认；留空则移除">
+            水印
+            <input
+              className="tb-input"
+              value={meta.watermark ?? ''}
+              placeholder="如：机密（留空则无水印）"
+              onChange={(e) => patchMeta({ watermark: e.target.value || undefined })}
+            />
+          </label>
           <label className="doc-hf-check" title="导出为 Word PAGE 域，每页自动编号">
             <input
               type="checkbox"

@@ -1187,6 +1187,11 @@ export interface DocMeta {
   headerTextFirst?: string
   footerTextFirst?: string
   footerPageNumber?: boolean
+  /**
+   * 水印文字（v0.233）：Word 水印是 header 部件里的 VML 形状（v:shape/v:textpath@string），
+   * 这里从 raw XML 正则读、写手 post-pack 回写。与 headerText 共存（同在 header1.xml，不同元素）。
+   */
+  watermark?: string
   pageNumberFormat?: PageNumberFormat
   comments?: DocComment[]
   /**
@@ -1464,9 +1469,9 @@ export async function docxToDocMeta(
     if (!target) return undefined
     return zip.file(target.startsWith('/') ? target.slice(1) : `word/${target.replace(/^\.\//, '')}`)
   }
-  const readPart = async (tag: string): Promise<{ text?: string; raw: string; hasPage: boolean; hasNumPages: boolean }> => {
+  const readPart = async (tag: string): Promise<{ text?: string; raw: string; xml: string; hasPage: boolean; hasNumPages: boolean }> => {
     const f = refOf(tag)
-    if (!f) return { raw: '', hasPage: false, hasNumPages: false }
+    if (!f) return { raw: '', xml: '', hasPage: false, hasNumPages: false }
     const xml = await f.async('string')
     // 段落里文本按 w:t 顺序拼接（Word 会保留节点内空格，不要额外插空格）
     const text = (xml.match(/<w:t[^>]*>([^<]*)<\/w:t>/g) ?? [])
@@ -1476,7 +1481,7 @@ export async function docxToDocMeta(
     // 页码域形态多样：fldSimple instr / fldChar+instrText / instrText 含 PAGE
     const hasPage = /PAGE(\s|\*|"|'|<)/.test(xml)
     const hasNumPages = /NUMPAGES|SECTIONPAGES/.test(xml)
-    return { text: text || undefined, raw: text, hasPage, hasNumPages }
+    return { text: text || undefined, raw: text, xml, hasPage, hasNumPages }
   }
   const [head, foot] = await Promise.all([readPart('header'), readPart('footer')])
   // 页码域的缓存值（数字/第/页/共）混在 w:t 里，带页码域时把这些剔掉
@@ -1487,6 +1492,8 @@ export async function docxToDocMeta(
       .join(' ')
   const out: DocMeta = {}
   if (head.text) out.headerText = head.text
+  const wm = watermarkFromHeaderXml(head.xml)
+  if (wm) out.watermark = wm
   if (foot.text) {
     const rest = foot.hasPage ? stripPageTokens(foot.text) : foot.text
     if (rest) out.footerText = rest
@@ -3974,14 +3981,20 @@ export async function prosemirrorToDocxBytes(
         : {}),
     }
   }
-  if (meta?.headerText?.trim()) {
+  if (meta?.headerText?.trim() || meta?.watermark?.trim()) {
+    // 水印（v0.233）也要求 header 部件存在——VML 由 post-pack 注入，这里先发一个空段落壳。
+    // 有 headerText 时照旧发文字，两者在 header1.xml 里共存（不同 run）。
     section.headers = {
       default: new Header({
         children: [
           new Paragraph({
-            children: [new TextRun({ text: meta.headerText.trim(), size: 18, color: '6B7280' })],
-            alignment: AlignmentType.RIGHT,
-            border: { bottom: { style: BorderStyle.SINGLE, size: 4, color: 'D1D5DB', space: 2 } },
+            ...(meta.headerText?.trim()
+              ? {
+                  children: [new TextRun({ text: meta.headerText.trim(), size: 18, color: '6B7280' })],
+                  alignment: AlignmentType.RIGHT,
+                  border: { bottom: { style: BorderStyle.SINGLE, size: 4, color: 'D1D5DB', space: 2 } },
+                }
+              : { children: [] }),
           }),
         ],
       }),
@@ -4186,7 +4199,8 @@ export async function prosemirrorToDocxBytes(
   const withPlacements = await patchLiteralPlacements(withFeat, meta?.literalPlacements, sess)
   // v0.196：VML 老式形状整段字面（rId 按关系类型重映射），与上面几笔共用会话
   const withFormula = await patchFormulas(withPlacements, dt?.formulas, sess)
-  const withVml = await patchVmlShapes(withFormula, meta?.vmlShapes, sess)
+  const withWm = await patchWatermark(withFormula, meta?.watermark, sess)
+  const withVml = await patchVmlShapes(withWm, meta?.vmlShapes, sess)
   // v0.218：wps 文本框整段字面（按正文文字把拍平的段落换回形状，含 bodyPr 19 枚）
   const withWps = await patchWpsShapes(withVml, meta?.wpsShapes, sess)
   // v0.219：图片四片合法余量（填充/线填充/custGeom/blipFill 旋转）按源件字面补回
@@ -4644,6 +4658,72 @@ export async function patchLiteralPlacements(
  *
  * 写手侧正则读的部件不进保真账；读手零改动、零新增查问对。
  */
+/**
+ * 水印 VML 回写（v0.233）：docx 包没有水印槽，header 部件里要塞一段标准 Word 水印形状。
+ * style 里 rotation:315 是标准斜角、fillcolor:#c0c0c0 半透明、mso-position-horizontal center。
+ * 幂等：已有相同文字就跳过；不同的先整段换掉，避免重复叠字。
+ */
+export function watermarkVmlRun(text: string): string {
+  const esc = (v: string) => v.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;')
+  return '<w:r><w:rPr><w:noProof/></w:rPr><w:pict>' +
+    '<v:shapetype id="_x0000_t136" coordsize="21600,21600" o:spt="136" adj="10800" path="m@7,l@8,m@5,21600l@6,21600e">' +
+    '<v:formulas><v:f eqn="sum #0 0 10800"/><v:f eqn="prod #0 2 1"/><v:f eqn="sum 21600 0 @1"/>' +
+    '<v:f eqn="sum 0 0 @2"/><v:f eqn="sum 21600 0 @3"/><v:f eqn="if @0 @3 0"/><v:f eqn="if @0 21600 @1"/>' +
+    '<v:f eqn="if @0 0 @2"/><v:f eqn="if @0 @4 21600"/><v:f eqn="mid @5 @6"/><v:f eqn="mid @8 @5"/>' +
+    '<v:f eqn="mid @7 @8"/><v:f eqn="mid @6 @7"/><v:f eqn="sum @6 0 @5"/></v:formulas>' +
+    '<v:path textpathok="t" o:connecttype="custom" o:connectlocs="@9,0;@10,10800;@11,21600;@12,10800" o:connectangles="270,180,90,0"/>' +
+    '<v:textpath on="t" fitshape="t"/><v:handles><v:h position="#0,bottomRight" xrange="6629,14971"/></v:handles>' +
+    '<o:lock v:ext="edit" text="t" shapetype="t"/></v:shapetype>' +
+    '<v:shape id="PowerPlusWaterMarkObject" o:spid="_x0000_s2049" type="#_x0000_t136" ' +
+    'style="position:absolute;margin-left:0;margin-top:0;width:468pt;height:117pt;rotation:315;z-index:-251657216;' +
+    'mso-position-horizontal:center;mso-position-horizontal-relative:margin;mso-position-vertical:center;' +
+    'mso-position-vertical-relative:margin" fillcolor="#c0c0c0" stroked="f">' +
+    '<v:fill opacity=".5"/><v:textpath style="font-family:&quot;SimSun&quot;;font-size:1pt" string="' + esc(text) + '"/>' +
+    '</v:shape></w:pict></w:r>'
+}
+
+/** 解析已有水印文字（读侧复用同一形状判据） */
+export function watermarkFromHeaderXml(xml: string): string {
+  const m = /<v:textpath\b[^>]*\bstring="([^"]*)"/.exec(xml)
+  if (!m) return ''
+  return m[1].replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"')
+}
+
+/** 把水印写进写出包的 header 部件（有 headerText 时并存） */
+export async function patchWatermark(
+  bytes: Uint8Array,
+  text: string | undefined,
+  sess?: PackSession,
+): Promise<Uint8Array> {
+  if (!text?.trim()) return bytes
+  const zip = sess ? sess.zip : await loadZipOf(bytes)
+  let headerName = ''
+  for (const name of Object.keys(zip.files)) {
+    if (/^word\/header\d+\.xml$/.test(name) && (!headerName || name < headerName)) headerName = name
+  }
+  let xml = await partText(zip, headerName, sess)
+  if (!xml) return bytes
+  const existing = watermarkFromHeaderXml(xml)
+  if (existing === text.trim()) return bytes
+  if (existing) xml = xml.replace(/<w:r><w:rPr><w:noProof\/>[\s\S]*?<\/v:shape><\/w:pict><\/w:r>/, '')
+  // 两态：有 headerText 时包发 <w:p>…文字…</w:p>；只水印时发空段落 <w:p/>（自闭合）。
+  // 自闭合要整枚换成有内容的段落，不能只在其后插 run——Word 不认悬在段落外的 run。
+  const closeAt = xml.indexOf('</w:p>')
+  const selfCloseAt = xml.indexOf('<w:p/>')
+  if (closeAt < 0 && selfCloseAt < 0) return bytes
+  if (!xml.includes('xmlns:v=')) {
+    xml = xml.replace(/<w:hdr\b/, '<w:hdr xmlns:v="urn:schemas-microsoft-com:vml" xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:w10="urn:schemas-microsoft-com:office:word"')
+  }
+  const run = watermarkVmlRun(text.trim())
+  if (closeAt >= 0) {
+    xml = xml.slice(0, closeAt) + run + xml.slice(closeAt)
+  } else {
+    xml = xml.slice(0, selfCloseAt) + `<w:p>${run}</w:p>` + xml.slice(selfCloseAt + '<w:p/>'.length)
+  }
+  setPart(zip, headerName, xml, sess)
+  return finishPatch(bytes, zip, sess)
+}
+
 export async function patchVmlShapes(
   bytes: Uint8Array,
   items: VmlShape[] | undefined,
