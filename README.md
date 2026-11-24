@@ -4810,6 +4810,24 @@ Rust lib **169 通过**（xlsx 族 25）；夹具账复位 65/65、md5 `0fd13292
 Rust lib **171 通过**（+2 条新守卫）、ODS 族 35 通过 / 1 ignored；ODS 往返账 14/14 复位、
 md5 与基线逐字节一致、`docs/ods-roundtrip.*` git 零改动。
 
+## v0.232（PDF 本地 OCR 第一版：按页识别、零网络、结果可搜索）
+
+差距清单第四档的 PDF OCR 先跑通一版。守住「数据不出本机」的底线：tesseract.js 默认会从
+jsdelivr CDN 下载 worker / WASM core / traineddata，这里三样全部钉到本地同源路径——
+`scripts/copy-pdfjs-assets.mjs` 在 dev/build 前从 node_modules 同步 core（按 SIMD 选三种变体）、
+worker 与中英 best_int 语言包到 `public/tessdata`（已 gitignore），识别时零网络请求。
+
+- **封装**：`src/lib/pdf-ocr.ts` 统一 `recognizeCanvas(canvas, lang)`，空闲时 `disposeOcrWorker()`
+  回收 WASM；OCR 结果带置信度，如实呈现给用户。
+- **接入**：PDF 工具条「◉ OCR」打开面板，选中文/英文 → 「识别本页」→ 当前页位图送本地引擎；
+  结果写进 `pageTexts`（与 pdfjs 文字层同构），**扫描件立刻可被全文搜索命中**，面板里也能复制。
+- **守卫**：`test-pdf-ocr.mjs` 22 项（零网络路径 5、结果同构 6、资源同步 6、UI 接线 5）。
+
+**第一版边界（诚实清单）**：只做当前页、不做整份批量；OCR 命中不逐字高亮（没有逐-item 几何，
+只跳到页）；已有文字层的页不被 OCR 结果覆盖；运行时真机 OCR 未在沙箱里端到端跑通（Node
+侧 worker 路径限制 + 沙箱网络隔离），静态路径与资源存在性已钉死，交付前需真机点一次确认。 全量 **93 份 93 通过 / 0 失败 / 0 跳过**（1766.5s）、`check:clean` 全绿。
+账本 modules 83 → 84（provenance 更新，覆盖数字不变）。
+
 ## v0.231（数据透视表：自研轻量版，建得起来）
 
 差距清单 ROI 第二档的「数据透视表至少建得起来」落地。Univer 的 pivot preset 在
