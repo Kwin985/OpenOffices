@@ -58,7 +58,7 @@ import {
   type SpellIssue,
 } from '../lib/spell'
 import { CollabSession, type CollabPeer, type CollabStatus } from '../lib/collab'
-import { loadMacros, newMacro, runMacro, saveMacros, type Macro, type MacroRun } from '../lib/macro'
+import { loadMacros, newMacro, runMacro, saveMacros, recordSummary, recordedStepsToCode, stepsFromTransaction, type Macro, type MacroRun, type RecordedStep } from '../lib/macro'
 import { looksLikeVba, runVba, transpileVba, VBA_SAMPLE } from '../lib/vba'
 import { authorColor, identityName, setIdentityName } from '../lib/identity'
 import {
@@ -241,6 +241,11 @@ function DocEditor({ tab }: Props) {
   const [macroOpen, setMacroOpen] = useState(false)
   const [macroSel, setMacroSel] = useState<string>('')
   const [macroCode, setMacroCode] = useState('')
+  // 宏录制器（v0.235）：录制期间收集可重放的纯文本步骤，停止后生成 JS 宏代码
+  const [macroRecording, setMacroRecording] = useState(false)
+  const macroSteps = useRef<RecordedStep[]>([])
+  const macroSkipped = useRef(0)
+
   const [macroOut, setMacroOut] = useState<MacroRun | null>(null)
   // VBA 那一档：转译预览的开关。默认关着——大多数时候用户只想跑，不想看 JS
   const [vbaShow, setVbaShow] = useState(false)
@@ -1194,6 +1199,35 @@ function DocEditor({ tab }: Props) {
     saveMacros(next)
     macroOpenOne(m.id)
   }
+  // 切标签/卸载时若还在录制，解绑监听（否则事务会继续灌进已卸载组件的 ref）
+  useEffect(() => () => {
+    if (macroRecording) editor?.off('transaction', macroRecordHandler)
+  }, [macroRecording, editor])
+
+  // 录制器：录纯文本区间编辑（api.replaceRange）。格式/结构操作跳过并如实计数。
+  const macroRecordHandler = ({ transaction }: { transaction: import('@tiptap/pm/state').Transaction }) => {
+    const got = stepsFromTransaction(transaction)
+    macroSteps.current.push(...got)
+    if (transaction.docChanged && !got.length) macroSkipped.current++
+  }
+  const macroStartRecord = () => {
+    if (!editor) return
+    macroSteps.current = []
+    macroSkipped.current = 0
+    editor.on('transaction', macroRecordHandler)
+    setMacroRecording(true)
+    setStatus('宏录制中：现在开始编辑正文（只录纯文本增删改），完成后点「停止录制」')
+  }
+  const macroStopRecord = () => {
+    if (!editor) return
+    editor.off('transaction', macroRecordHandler)
+    setMacroRecording(false)
+    const code = recordedStepsToCode(macroSteps.current)
+    setMacroCode(code)
+    setMacroSel('') // 清掉旧宏关联，免得「保存」覆盖了选中的那条
+    setStatus(recordSummary(macroSteps.current, macroSkipped.current) + '，代码已填入编辑框，可改后另存为新宏')
+  }
+
   const macroSave = () => {
     const next = macros.map((m) => (m.id === macroSel ? { ...m, code: macroCode } : m))
     setMacros(next)
@@ -2246,6 +2280,11 @@ function DocEditor({ tab }: Props) {
         <div className="doc-toolbar doc-macro-bar">
 
           <span className="tb-label">宏</span>
+          <button className={`tb-btn${macroRecording ? ' tb-active' : ''}`}
+            onClick={() => macroRecording ? macroStopRecord() : macroStartRecord()}
+            title="宏录制器：录下你对正文的纯文本增删改，生成可重放的 JS 宏代码；格式与结构操作会跳过并报数">
+            {macroRecording ? '■ 停止录制' : '● 开始录制'}
+          </button>
           <select
             className="tb-select"
             value={macroSel}

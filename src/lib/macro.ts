@@ -325,3 +325,71 @@ export function runMacro(code: string, editor: Editor, setStatus: (s: string) =>
     return { ok: false, log: out, error: e instanceof Error ? e.message : String(e), changed: st.changed }
   }
 }
+
+// ── 宏录制器（v0.235）───────────────────────────────────────────────────────
+// 把编辑器事务翻译成可重放的 MacroApi 调用序列。录制器的产物是普通 JS 宏代码——
+// 用户能在宏面板里看、改、存、重放，而不是一个黑盒回放器。
+//
+// 只录纯文本区间编辑（api.replaceRange），这是 MacroApi 能精确重放的最小集；
+// 格式/结构操作（加粗、表格、图片…）录不下来，如实报数，不假装录了。
+
+import { ReplaceStep } from '@tiptap/pm/transform'
+import type { Transaction } from '@tiptap/pm/state'
+
+/** JS 字符串字面量：用 JSON.stringify 保证引号/换行/Unicode 都安全 */
+const jsStr = (s: string) => JSON.stringify(s)
+
+export interface RecordedStep {
+  /** 事务内的 from/to（PM 位置）与插入的纯文本 */
+  from: number
+  to: number
+  text: string
+  /** step 的序号，供坐标映射到最终文档 */
+  stepIndex: number
+}
+
+/**
+ * 从事务里提取可录制的纯文本区间编辑。
+ * 规则与修订插件同源：只认 ReplaceStep、slice 无开口、内容全是 inline 文本节点。
+ * 块级插入（回车切段、粘贴表格）与带 mark 的片段都不录——MacroApi 重放不了。
+ */
+export function stepsFromTransaction(tr: Transaction): RecordedStep[] {
+  if (!tr.docChanged) return []
+  const out: RecordedStep[] = []
+  tr.steps.forEach((step, i) => {
+    if (!(step instanceof ReplaceStep)) return
+    if (step.slice.openStart || step.slice.openEnd) return
+    let text = ''
+    let plain = true
+    step.slice.content.forEach((n) => {
+      if (!n.isText) { plain = false; return }
+      text += n.text ?? ''
+    })
+    if (!plain || !text) return
+    // 坐标：step 自身的 from/to 就是它在「本步之前文档」里的位置，不要 map 自己
+    // （map 会把 to 边界推到插入后，得到错的区间）。只把坐标映射到本事务末文档：
+    // 用 slice(i+1) 排除自身，后续 step 的影响才需要跟。
+    const from = tr.mapping.slice(i + 1).map(step.from, -1)
+    const to = tr.mapping.slice(i + 1).map(step.to, -1)
+    out.push({ from, to, text, stepIndex: i })
+  })
+  return out
+}
+
+/** 一串录制步骤 → 可重放的宏代码（每步一条 api.replaceRange 调用） */
+export function recordedStepsToCode(steps: RecordedStep[]): string {
+  const lines = [
+    '// 由宏录制器生成：区间坐标来自录制时的文档，文档结构变化后请核对位置',
+    '// api.replaceRange 保留区间外的格式；区间内按纯文本重写',
+  ]
+  for (const s of steps) {
+    lines.push(`api.replaceRange(${s.from}, ${s.to}, ${jsStr(s.text)});`)
+  }
+  if (!steps.length) lines.push('// 本次录制没有可重放的纯文本编辑')
+  return lines.join('\n') + '\n'
+}
+
+/** 汇总录制统计，供 UI 如实展示「录了几步 / 跳了几步」 */
+export function recordSummary(steps: RecordedStep[], skipped: number): string {
+  return `已录 ${steps.length} 步${skipped ? `，跳过 ${skipped} 步格式/结构操作（宏录制暂不支持）` : ''}`
+}
