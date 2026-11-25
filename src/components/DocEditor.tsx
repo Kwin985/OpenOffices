@@ -5,7 +5,7 @@ import { invoke } from '@tauri-apps/api/core'
 import type { Tab } from '../store'
 import { useApp } from '../store'
 
-import { baseName, pickSaveFile, readBytes, readText, writeBytes, writeText } from '../lib/fs'
+import { baseName, pickDirectory, pickSaveFile, readBytes, readText, writeBytes, writeText } from '../lib/fs'
 import {
   docxToCommentHtml,
   docxToDocMeta,
@@ -86,7 +86,7 @@ import { previewUi, estimatePages, pageScrollTop, pageOfScrollTop, clampPage } f
 import { rulerTicks, rulerVerticalTicks, rulerIndentMarks, rulerIndentFromDrag, type RulerHandle } from '../lib/ruler'
 import { caretColumn, tableTargetPx } from '../lib/table-width'
 import { frPluginKey, activeIndexOf } from '../lib/find-replace'
-import { docTemplate } from '../lib/templates'
+import { docTemplate, parseMergeSource, mergeFieldsOf, mergeAll } from '../lib/templates'
 import { odtToHtml, prosemirrorToOdtBytes } from '../lib/odt'
 import { planFeed, runFeed, type FeedSource } from '../lib/doc-feed'
 import { registerSaver, runExclusive } from '../lib/registry'
@@ -184,6 +184,9 @@ function DocEditor({ tab }: Props) {
   // 公式草稿：latex 为源码，editPos 非空表示改的是已有节点（否则在光标处插入）
   const [formulaDraft, setFormulaDraft] = useState<{ latex: string; editPos: number | null } | null>(null)
   // 文档比较（v0.234）：两份文本 → 带修订 mark 的 HTML，应用后可逐条接受/拒绝
+  const [mergeOpen, setMergeOpen] = useState(false)
+  const [mergeCsv, setMergeCsv] = useState('姓名,部门\n张三,研发\n李四,市场')
+  const [mergeInfo, setMergeInfo] = useState('')
   const [compareOpen, setCompareOpen] = useState(false)
   const [compareOld, setCompareOld] = useState('')
   const [compareNew, setCompareNew] = useState('')
@@ -1556,6 +1559,59 @@ function DocEditor({ tab }: Props) {
     </button>
   )
 
+  // —— 邮件合并（v0.236）——
+  const mergeSource = () => {
+    const src = parseMergeSource(mergeCsv)
+    const used = mergeFieldsOf(editor?.getText() ?? '')
+    const miss = used.filter((f) => !src.fields.includes(f))
+    setMergeInfo(
+      src.rows.length === 0
+        ? '数据源没有数据行（首行是列名）'
+        : `${src.fields.length} 列 / ${src.rows.length} 行${used.length ? ` · 正文用到：${used.join('、')}` : ' · 正文还没有 «列名» 占位符'}${miss.length ? ` · 缺少列：${miss.join('、')}` : ''}${src.warnings.length ? ` · ${src.warnings[0]}` : ''}`,
+    )
+    return src
+  }
+
+  const mergeInsertField = (field: string) => {
+    if (!editor) return
+    editor.chain().focus().insertContent(`«${field}»`).run()
+    markDirty(tab.id, true)
+    setStatus(`已插入占位符 «${field}»`)
+    setTimeout(() => setStatus(''), 1500)
+  }
+
+  const mergeExport = async () => {
+    if (!editor) return
+    const src = mergeSource()
+    if (!src.rows.length) return
+    const plain = editor.getText()
+    const { results, missing } = mergeAll(plain, src)
+    if (missing.length) {
+      setStatus(`正文中这些列数据源没有：${missing.join('、')}（已保留占位符）`)
+      return
+    }
+    const dir = await pickDirectory()
+    if (!dir) return
+    try {
+      // 每份都是完整 .odoc：正文按段落重建，保留模板的页面/页眉等 meta
+      for (let i = 0; i < results.length; i++) {
+        const content = {
+          type: 'doc',
+          content: results[i].split('\n').map((line) => ({
+            type: 'paragraph',
+            ...(line ? { content: [{ type: 'text', text: line }] } : {}),
+          })),
+        }
+        const name = `${baseName(tab.path || '合并')}_${String(i + 1).padStart(3, '0')}.odoc`
+        await writeText(`${dir.replace(/[\\/]$/, '')}/${name}`, JSON.stringify({ ...ODOC_HEADER, content, meta: metaRef.current }))
+      }
+      setStatus(`已生成 ${results.length} 份文档到所选目录`)
+      setTimeout(() => setStatus(''), 2400)
+    } catch (e) {
+      await message(failDialog(e), { title: '批量生成失败', kind: 'error' })
+    }
+  }
+
   // —— 文档比较（v0.234）——
   const previewCompare = () => {
     if (!compareOld.trim() && !compareNew.trim()) {
@@ -2214,6 +2270,7 @@ function DocEditor({ tab }: Props) {
         {btn('清格式', () => void runCtx('clearFormat'), false,
           '清除格式：摘掉选区里的字符外观（粗斜、字色、高亮、字号等）与样式标签；' +
           '批注/书签/修订/超链接这类带身份的标记保留，标题节点也不转回段落。无选区时清的是后续输入格式')}
+        {btn('合并', () => setMergeOpen((v) => !v), mergeOpen, '邮件合并：粘贴 CSV 数据源，正文用 «列名» 占位，批量生成多份文档')}
         {btn('比较', () => setCompareOpen((v) => !v), compareOpen, '文档比较：粘贴原文与改后文本，预览差异并应用为可接受的修订')}
         {btn('AI', openAi, aiOpen, 'AI 助手：把选中文字交给云端模型做摘要/润色/翻译，结果可插入正文')}
         {btn('拼写', toggleSpell, spellOn, '拼写检查：常见错拼、中文误用、重复字。开着会随输入重扫')}
@@ -2929,6 +2986,24 @@ function DocEditor({ tab }: Props) {
             )}
           </span>
           {meta.page && btn('重置', () => patchMeta({ page: undefined }), false, '恢复 A4 + 默认边距 + 不分栏')}
+        </div>
+      )}
+      {mergeOpen && (
+        <div className="doc-toolbar doc-fr-panel" style={{ flexWrap: 'wrap', gap: 6 }}>
+          <span className="tb-label">邮件合并</span>
+          <textarea className="tb-input" style={{ width: 320, minHeight: 72, resize: 'vertical' }}
+            placeholder="粘贴 CSV：首行列名，以后每行一份文档" value={mergeCsv}
+            onChange={(e) => setMergeCsv(e.target.value)} />
+          <button className="tb-btn" onClick={mergeSource}>解析数据源</button>
+          <button className="tb-btn" onClick={() => {
+            const src = parseMergeSource(mergeCsv)
+            src.fields.forEach(mergeInsertField)
+          }} disabled={!parseMergeSource(mergeCsv).fields.length} title="把数据源的所有列名依次插入光标处">
+            插入 «列» 占位符
+          </button>
+          <button className="tb-btn tool-btn-primary" onClick={() => void mergeExport()}>批量生成到目录…</button>
+          <button className="tb-btn" onClick={() => setMergeOpen(false)}>关闭</button>
+          {mergeInfo && <span className="editor-status">{mergeInfo}</span>}
         </div>
       )}
       {compareOpen && (

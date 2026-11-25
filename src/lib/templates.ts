@@ -145,3 +145,87 @@ export function pptTemplate(id: string): Deck {
   ]
   return { app: 'openoffices', kind: 'deck', version: 1, title: `演示 · ${t.name}`, theme: t.id, slides }
 }
+
+// ── 邮件合并（v0.236）───────────────────────────────────────────────────────
+// 第一版：粘贴 CSV/TSV 作数据源，正文用 «列名» 作占位，按行生成 N 份结果。
+// 占位符只是文本，不写 Word 的 MERGEFIELD 域——那是第二版（要在 docx 里写域代码）。
+// 纯函数放这里（templates 本来就是「预置内容」，邮件合并是它的自然延伸），不新增 lib 文件。
+
+export interface MergeSource {
+  fields: string[]
+  rows: Record<string, string>[]
+  /** 解析告警（如某行列数不足），如实报给用户 */
+  warnings: string[]
+}
+
+/**
+ * CSV/TSV 解析：首行列名，支持双引号包裹（"" 转义）、逗号/制表符分隔。
+ * 不用正则硬拆——引号里可能有逗号或换行，状态机逐字符走才不会错位（房规：正则跨元素会吞边界）。
+ */
+export function parseMergeSource(text: string, tab = false): MergeSource {
+  const sep = tab ? '\t' : ','
+  const rows: string[][] = []
+  let field = ''
+  let row: string[] = []
+  let quoted = false
+  const pushField = () => { row.push(field); field = '' }
+  const pushRow = () => { pushField(); if (row.some((c) => c !== '')) rows.push(row); row = [] }
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i]
+    if (quoted) {
+      if (c === '"') {
+        if (text[i + 1] === '"') { field += '"'; i++ }
+        else quoted = false
+      } else field += c
+      continue
+    }
+    if (c === '"' && field === '') { quoted = true; continue }
+    if (c === sep) { pushField(); continue }
+    if (c === '\n' || c === '\r') {
+      if (c === '\r' && text[i + 1] === '\n') i++
+      pushRow()
+      continue
+    }
+    field += c
+  }
+  if (field || row.length) pushRow()
+  if (!rows.length) return { fields: [], rows: [], warnings: [] }
+  const fields = rows[0].map((f, i) => f.trim() || `列${i + 1}`)
+  const warnings: string[] = []
+  const data = rows.slice(1).map((r, ri) => {
+    const rec: Record<string, string> = {}
+    fields.forEach((f, ci) => { rec[f] = (r[ci] ?? '').trim() })
+    if (r.length < fields.length) warnings.push(`第 ${ri + 2} 行列数不足，缺的列按空值处理`)
+    if (r.length > fields.length) warnings.push(`第 ${ri + 2} 行列数超出，多出的列忽略`)
+    return rec
+  })
+  return { fields, rows: data, warnings }
+}
+
+/** 从正文纯文本里找 «列名»，返回去重列名（按出现序） */
+export function mergeFieldsOf(text: string): string[] {
+  const out: string[] = []
+  for (const m of text.matchAll(/«([^»\n]+)»/g)) {
+    const f = m[1].trim()
+    if (f && !out.includes(f)) out.push(f)
+  }
+  return out
+}
+
+/** 按一行数据替换所有占位符；没提供的值保留原占位符（不假装有值） */
+export function mergeOne(text: string, row: Record<string, string>): string {
+  return text.replace(/«([^»\n]+)»/g, (whole, name: string) => {
+    const key = String(name).trim()
+    return Object.prototype.hasOwnProperty.call(row, key) ? row[key] : whole
+  })
+}
+
+/** 批量生成：一行一份，返回文本数组与缺失字段统计 */
+export function mergeAll(
+  text: string,
+  src: MergeSource,
+): { results: string[]; missing: string[] } {
+  const used = mergeFieldsOf(text)
+  const missing = used.filter((f) => !src.fields.includes(f))
+  return { results: src.rows.map((r) => mergeOne(text, r)), missing }
+}
