@@ -4810,6 +4810,26 @@ Rust lib **169 通过**（xlsx 族 25）；夹具账复位 65/65、md5 `0fd13292
 Rust lib **171 通过**（+2 条新守卫）、ODS 族 35 通过 / 1 ignored；ODS 往返账 14/14 复位、
 md5 与基线逐字节一致、`docs/ods-roundtrip.*` git 零改动。
 
+## v0.239（无障碍第一版：工具条语义化 + 状态播报）
+
+语言组里另一个不依赖外部资源的纯代码能力。现状盘点：四个编辑器里只有 PDF 密码对话框
+有 `role="dialog"` —— 工具条上百来个按钮对屏幕阅读器几乎全是不可读的图标或裸文本。
+
+- **按钮语义化**：Writer/Calc/PDF 的 `btn` 工厂统一加 `type="button"`、`aria-label`
+  （图标按钮用中文 title 作可读名）、`aria-pressed`（切换态）/`aria-disabled`（禁用态）；
+  Impress 的 63 个按钮全补 `type="button"`。
+- **状态播报**：Writer/Calc/PDF 主状态条加 `role="status" aria-live="polite" aria-atomic="true"`；
+  Writer 另加 `.sr-only` 播报区挂 `status`（保存/比较/合并/RTL 等结果都能被念出来）。
+- **踩坑**：最初把 `//` 注释插进 JSX 属性区（tsc 不报错但会污染 DOM 属性），
+  移回函数体外；`//` 在标签内不是合法 JSX 注释。
+- **守卫**：`test-a11y.mjs` 19 项（三编辑器 aria 属性、播报区、Impress 63 按钮、既有 ARIA 不回退）。
+  账本零改动（纯组件层）。
+
+**边界**：第一版只做「可读 + 可播报」，不做完整键盘导航体系（跳转快捷键、焦点管理、
+高对比度主题）——那需要系统性的交互重审，不是加属性的工作量。
+
+**门禁**：`check:clean` 全绿、账本零改动、全量 **100 份 100 通过 / 0 失败 / 0 跳过**（1436.8s）。
+
 ## v0.238（Writer RTL 段落：w:bidi 屏上兑现 + 工具条切换）
 
 语言资源组里唯一不依赖外部词典/语法引擎的纯代码能力。关键发现：`w:bidi` 段落 onOff
