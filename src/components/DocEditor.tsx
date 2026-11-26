@@ -87,6 +87,7 @@ import { rulerTicks, rulerVerticalTicks, rulerIndentMarks, rulerIndentFromDrag, 
 import { caretColumn, tableTargetPx } from '../lib/table-width'
 import { frPluginKey, activeIndexOf } from '../lib/find-replace'
 import { docTemplate, parseMergeSource, mergeFieldsOf, mergeAll, addSubDoc, removeSubDoc, moveSubDoc, paragraphsFromOdoc, expandSubDocs } from '../lib/templates'
+import { isRtlParagraph, withRtlPpr, PPR_ATTR } from '../lib/cell-style'
 import { odtToHtml, prosemirrorToOdtBytes } from '../lib/odt'
 import { planFeed, runFeed, type FeedSource } from '../lib/doc-feed'
 import { registerSaver, runExclusive } from '../lib/registry'
@@ -1562,6 +1563,18 @@ function DocEditor({ tab }: Props) {
     </button>
   )
 
+  // —— RTL 段落（v0.238）——
+  const toggleRtl = () => {
+    if (!editor) return
+    const attrs = editor.getAttributes('paragraph') as Record<string, unknown>
+    const raw = typeof attrs[PPR_ATTR] === 'string' ? attrs[PPR_ATTR] as string : ''
+    const next = withRtlPpr(raw, !isRtlParagraph(raw))
+    editor.chain().focus().updateAttributes('paragraph', { [PPR_ATTR]: next || null }).run()
+    markDirty(tab.id, true)
+    setStatus(isRtlParagraph(raw) ? '已关闭本段 RTL（从右到左）' : '已开启本段 RTL（从右到左）')
+    setTimeout(() => setStatus(''), 1500)
+  }
+
   // —— 主控文档（v0.237）——
   const subDocs = meta.subDocs ?? []
   const setSubDocs = (next: string[]) => patchMeta({ subDocs: next.length ? next : undefined })
@@ -2256,6 +2269,10 @@ function DocEditor({ tab }: Props) {
         ))}
         {btn('清高亮', () => editor.chain().focus().unsetHighlight().run())}
         <span className="tb-sep" />
+        {btn('RTL', toggleRtl, (() => {
+          const raw = editor?.getAttributes('paragraph')?.[PPR_ATTR]
+          return isRtlParagraph(typeof raw === 'string' ? raw : '')
+        })(), '切换当前段落的从右到左排版（w:bidi），随 docx 往返')}
         {btn('左', () => editor.chain().focus().setTextAlign('left').run(), editor.isActive({ textAlign: 'left' }))}
         {btn('中', () => editor.chain().focus().setTextAlign('center').run(), editor.isActive({ textAlign: 'center' }))}
         {btn('右', () => editor.chain().focus().setTextAlign('right').run(), editor.isActive({ textAlign: 'right' }))}

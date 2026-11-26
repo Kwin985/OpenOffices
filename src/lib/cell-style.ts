@@ -853,6 +853,23 @@ export function parsePprPayload(raw: string | null | undefined): PprPayload {
   return out
 }
 
+/**
+ * 段落是否 RTL（v0.238）：w:bidi 段落 onOff 已在 data-ppr 载荷里往返，
+ * 此前只进载荷不兑现屏上——这里把它读成方向，让编辑器里也能看到从右到左。
+ * onOff 三态：'1' 开 / '0' 关 / 缺键未声明；只有显式 '1' 才翻向。
+ */
+export function isRtlParagraph(rawPpr: string | null | undefined): boolean {
+  return parsePprPayload(rawPpr).bidi === '1'
+}
+
+/** 对 data-ppr 载荷开/关 bidi；不改其它键，关时整键删（不留 bidi=0 的噪音） */
+export function withRtlPpr(rawPpr: string | null | undefined, rtl: boolean): string {
+  const kv = parsePprPayload(rawPpr)
+  if (rtl) kv.bidi = '1'
+  else delete kv.bidi
+  return pprPayload(kv)
+}
+
 /** key/value 表 → data-ppr 载荷（与 parsePprPayload 互逆，排序保稳定） */
 export function pprPayload(kv: PprPayload): string {
   return Object.keys(kv)

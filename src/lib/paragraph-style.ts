@@ -1,5 +1,5 @@
 import { Extension, Mark, type CommandProps, type Editor } from '@tiptap/core'
-import { BDR_ATTR, CELL_EDGES, PBAR_ATTR, PBDR_ATTR, FRAME_ATTR, PPR_ATTR, SHADE_ATTR, SHD_ATTR, TABS_ATTR, bdAttr, bdrAttrsOf, edgeAttrs, inlineBorder, parseFramePayload, parsePprPayload, parseTabsPayload, rgb2hex, shadeAttrs, shdAttrsOf, pbarAttrsOf, pbdrAttrsOf, type CellEdge } from './cell-style'
+import { BDR_ATTR, CELL_EDGES, PBAR_ATTR, PBDR_ATTR, FRAME_ATTR, PPR_ATTR, SHADE_ATTR, SHD_ATTR, TABS_ATTR, bdAttr, bdrAttrsOf, edgeAttrs, inlineBorder, parseFramePayload, parsePprPayload, isRtlParagraph, parseTabsPayload, rgb2hex, shadeAttrs, shdAttrsOf, pbarAttrsOf, pbdrAttrsOf, type CellEdge } from './cell-style'
 
 /**
  * 段落的排版属性：行距、段前段后、底纹与四边边框。
@@ -271,7 +271,11 @@ export const ParagraphStyle = Extension.create({
             parseHTML: (el: HTMLElement) => el.getAttribute(PPR_ATTR) || null,
             renderHTML: (attrs: Record<string, unknown>) => {
               const raw = typeof attrs.ppr === 'string' ? attrs.ppr : ''
-              return Object.keys(parsePprPayload(raw)).length ? { [PPR_ATTR]: raw } : {}
+              const out: Record<string, string> = Object.keys(parsePprPayload(raw)).length ? { [PPR_ATTR]: raw } : {}
+              // RTL（v0.238）：bidi=1 的段落屏上兑现从右到左。只加 dir/style，
+              // data-ppr 载荷原样保留——读手 HTML 不经过这个扩展，账本零改动。
+              if (isRtlParagraph(raw)) out.dir = 'rtl'
+              return out
             },
           },
           // 分页四件套（v0.143）：w:pageBreakBefore / keepNext / keepLines / widowControl。

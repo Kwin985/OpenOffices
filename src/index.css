@@ -4784,3 +4784,10 @@ button {
   text-decoration: underline;
   background: #f0fdf4;
 }
+
+/* RTL 段落（v0.238）：data-ppr 的 bidi=1 由段落扩展发 dir=rtl，样式在这里兜。
+   用属性选择器而不是内联 style，避免覆盖行距/缩进等由其它 attr 生成的 style。 */
+.ProseMirror p[dir='rtl'],
+.ProseMirror h1[dir='rtl'], .ProseMirror h2[dir='rtl'], .ProseMirror h3[dir='rtl'] {
+  text-align: right;
+}
