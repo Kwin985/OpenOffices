@@ -22,7 +22,7 @@ for (const [name, src] of [['Writer', doc], ['Calc', sheet], ['PDF', pdf]]) {
   check(`${name} 按钮 type=button`, chunk.includes('type="button"'))
   check(`${name} 按钮有 aria-label`, chunk.includes('aria-label={title || label}'))
 }
-check('Writer/Calc 切换态 aria-pressed', doc.includes('aria-pressed={active}') && sheet.includes('aria-pressed={active}'))
+check('Writer/Calc 切换态 aria-pressed（只发真值）', doc.includes('aria-pressed={active || undefined}') && sheet.includes('aria-pressed={active || undefined}'))
 check('PDF 禁用态 aria-disabled', pdf.includes('aria-disabled={disabled}'))
 check('按钮注释在 JSX 属性区之外', !/title=\{title\}\s*\n\s*\/\//.test(doc) && !/title=\{title\}\s*\n\s*\/\//.test(sheet))
 

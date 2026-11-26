@@ -86,7 +86,7 @@ import { previewUi, estimatePages, pageScrollTop, pageOfScrollTop, clampPage } f
 import { rulerTicks, rulerVerticalTicks, rulerIndentMarks, rulerIndentFromDrag, type RulerHandle } from '../lib/ruler'
 import { caretColumn, tableTargetPx } from '../lib/table-width'
 import { frPluginKey, activeIndexOf } from '../lib/find-replace'
-import { docTemplate, parseMergeSource, mergeFieldsOf, mergeAll, addSubDoc, removeSubDoc, moveSubDoc, paragraphsFromOdoc, expandSubDocs } from '../lib/templates'
+import { docTemplate, parseMergeSource, mergeFieldsOf, mergeAll, addSubDoc, removeSubDoc, moveSubDoc, paragraphsFromOdoc, expandSubDocs, htmlToParagraphs, mergeFieldSnippet } from '../lib/templates'
 import { isRtlParagraph, withRtlPpr, PPR_ATTR } from '../lib/cell-style'
 import { odtToHtml, prosemirrorToOdtBytes } from '../lib/odt'
 import { planFeed, runFeed, type FeedSource } from '../lib/doc-feed'
@@ -1561,7 +1561,7 @@ function DocEditor({ tab }: Props) {
       onClick={onClick}
       title={title}
       aria-label={title || label}
-      aria-pressed={active}
+      aria-pressed={active || undefined}
     >
       {label}
     </button>
@@ -1600,9 +1600,8 @@ function DocEditor({ tab }: Props) {
           const { docxToHtml } = await import('../lib/docx')
           const bytes = await readBytes(p)
           const html = await docxToHtml(bytes)
-          // HTML → 纯文本：去掉标签、解实体（展开是段落级纯文本合并，不保格式）
-          parts.push(html.replace(/<[^>]+>/g, ' ').replace(/&nbsp;/g, ' ').replace(/&amp;/g, '&')
-            .replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/\s+/g, ' ').trim())
+          // HTML → 纯文本段落（v0.240 修）：</p> 换换行再剥标签，保住段落边界
+          parts.push(htmlToParagraphs(html))
         }
       } catch (e) {
         parts.push(`（读取失败：${p} — ${e instanceof Error ? e.message.slice(0, 60) : String(e)}）`)
@@ -1633,14 +1632,6 @@ function DocEditor({ tab }: Props) {
         : `${src.fields.length} 列 / ${src.rows.length} 行${used.length ? ` · 正文用到：${used.join('、')}` : ' · 正文还没有 «列名» 占位符'}${miss.length ? ` · 缺少列：${miss.join('、')}` : ''}${src.warnings.length ? ` · ${src.warnings[0]}` : ''}`,
     )
     return src
-  }
-
-  const mergeInsertField = (field: string) => {
-    if (!editor) return
-    editor.chain().focus().insertContent(`«${field}»`).run()
-    markDirty(tab.id, true)
-    setStatus(`已插入占位符 «${field}»`)
-    setTimeout(() => setStatus(''), 1500)
   }
 
   const mergeExport = async () => {
@@ -1689,6 +1680,17 @@ function DocEditor({ tab }: Props) {
 
   const applyCompare = () => {
     if (!compareHtml || !editor) return
+    // v0.240 守卫：比较只基于纯文本，整篇替换会把表格/图片/公式等结构抹掉。
+    // 有这些结构时拒绝应用并说清原因，不要静默替用户丢内容。
+    const complex = ['table', 'image', 'formula', 'blockquote'].filter((t) => {
+      let found = false
+      editor.state.doc.descendants((n) => { if (n.type.name === t) { found = true; return false } })
+      return found
+    })
+    if (complex.length) {
+      setStatus(`当前文档含 ${complex.join('、')}，文档比较只处理纯文本，为避免丢失已拒绝应用；请先移到别处再比较`)
+      return
+    }
     // 整篇替换成带修订 mark 的 HTML：未改的正文原样回来，改动的带 del/ins 标记，
     // 用户能用「接受修订 / 拒绝修订」逐条裁决；写手会把它写成 w:del/w:ins。
     editor.chain().focus().insertContentAt({ from: 0, to: editor.state.doc.content.size }, compareHtml).run()
@@ -3091,7 +3093,12 @@ function DocEditor({ tab }: Props) {
           <button className="tb-btn" onClick={mergeSource}>解析数据源</button>
           <button className="tb-btn" onClick={() => {
             const src = parseMergeSource(mergeCsv)
-            src.fields.forEach(mergeInsertField)
+            if (!src.fields.length) return
+            // v0.240：一次插入整串，避免 forEach 多次 chain().focus() 都插在同一点
+            editor?.chain().focus().insertContent(mergeFieldSnippet(src.fields)).run()
+            if (src.fields.length) markDirty(tab.id, true)
+            setStatus(`已插入 ${src.fields.length} 个占位符：${mergeFieldSnippet(src.fields)}`)
+            setTimeout(() => setStatus(''), 2400)
           }} disabled={!parseMergeSource(mergeCsv).fields.length} title="把数据源的所有列名依次插入光标处">
             插入 «列» 占位符
           </button>

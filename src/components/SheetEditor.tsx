@@ -336,7 +336,7 @@ function SheetEditor({ tab }: Props) {  const containerRef = useRef<HTMLDivEleme
   const btn = (label: string, onClick: () => void, active = false, title?: string) => (
     <button key={label + title} type="button" className={`tb-btn${active ? ' tb-active' : ''}`}
       onClick={onClick} title={title}
-      aria-label={title || label} aria-pressed={active}>
+      aria-label={title || label} aria-pressed={active || undefined}>
       {label}
     </button>
   )

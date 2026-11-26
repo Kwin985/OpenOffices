@@ -212,6 +212,11 @@ export function mergeFieldsOf(text: string): string[] {
   return out
 }
 
+/** 把列名列表拼成一段可一次插入的占位符串（v0.240 修：避免多次 chain 插同一点） */
+export function mergeFieldSnippet(fields: string[]): string {
+  return fields.map((f) => `«${f}»`).join(' ')
+}
+
 /** 按一行数据替换所有占位符；没提供的值保留原占位符（不假装有值） */
 export function mergeOne(text: string, row: Record<string, string>): string {
   return text.replace(/«([^»\n]+)»/g, (whole, name: string) => {
@@ -277,4 +282,29 @@ export function paragraphsFromOdoc(json: string): string {
 /** 多份子文档正文按清单序合并展开；每份之间空一行分隔（空份跳过，不造假空段） */
 export function expandSubDocs(parts: string[]): string {
   return parts.map((s) => s.trim()).filter(Boolean).join('\n\n')
+}
+
+/**
+ * HTML 正文 → 纯文本段落（v0.240 修）：主控文档展开 .docx 子文档时用。
+ *
+ * 旧写法 `html.replace(/<[^>]+>/g, ' ')` 把 `</p><p>` 换成一个空格，三段会挤成一行——
+ * 展开后段落边界全丢。正确做法：先把块级结束标签换成换行，再剥剩余标签。
+ * 只处理表格/列表/段落/标题这些块级边界；内联标签（b/i/span）直接剥掉即可。
+ */
+export function htmlToParagraphs(html: string): string {
+  return html
+    .replace(/<\/(?:p|div|h[1-6]|li|tr|blockquote)>/gi, '\n')
+    .replace(/<br\s*\/?>/gi, '\n')
+    .replace(/<\/td>/gi, '\t')
+    .replace(/<[^>]+>/g, '')
+    .replace(/&nbsp;/g, ' ')
+    .replace(/&amp;/g, '&')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&quot;/g, '"')
+    .split('\n')
+    .map((s) => s.replace(/^\s+|\s+$/g, ''))
+    .join('\n')
+    .replace(/^\n+/, '') // 去首尾空行，保留正文中间的空段（那是原文的空白段落）
+    .replace(/\n+$/, '')
 }
