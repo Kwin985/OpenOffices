@@ -1188,6 +1188,11 @@ export interface DocMeta {
   footerTextFirst?: string
   footerPageNumber?: boolean
   /**
+   * 主控文档的子文档路径清单（v0.237）：随 .odoc meta 整体 JSON 往返。
+   * 展开是纯文本段落级合并，不写回子文档、不处理 docx 子文档的格式。
+   */
+  subDocs?: string[]
+  /**
    * 水印文字（v0.233）：Word 水印是 header 部件里的 VML 形状（v:shape/v:textpath@string），
    * 这里从 raw XML 正则读、写手 post-pack 回写。与 headerText 共存（同在 header1.xml，不同元素）。
    */

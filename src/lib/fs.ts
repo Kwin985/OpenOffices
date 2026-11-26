@@ -440,6 +440,17 @@ export async function pickPdfFiles(multiple: boolean): Promise<string[]> {
   return selected ? [selected] : []
 }
 
+/** 选子文档（主控文档入口），multiple 时为多选路径列表 */
+export async function pickSubDocs(): Promise<string[]> {
+  const selected = await open({
+    multiple: true,
+    filters: [{ name: '文档', extensions: ['odoc', 'docx'] }],
+  })
+  if (Array.isArray(selected)) return selected
+  return selected ? [selected] : []
+}
+
+
 /** 选目录（页面拆分输出） */
 export async function pickDirectory(): Promise<string | null> {
   const selected = await open({ directory: true })

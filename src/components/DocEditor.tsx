@@ -5,7 +5,7 @@ import { invoke } from '@tauri-apps/api/core'
 import type { Tab } from '../store'
 import { useApp } from '../store'
 
-import { baseName, pickDirectory, pickSaveFile, readBytes, readText, writeBytes, writeText } from '../lib/fs'
+import { baseName, pickDirectory, pickSaveFile, pickSubDocs, readBytes, readText, writeBytes, writeText } from '../lib/fs'
 import {
   docxToCommentHtml,
   docxToDocMeta,
@@ -86,7 +86,7 @@ import { previewUi, estimatePages, pageScrollTop, pageOfScrollTop, clampPage } f
 import { rulerTicks, rulerVerticalTicks, rulerIndentMarks, rulerIndentFromDrag, type RulerHandle } from '../lib/ruler'
 import { caretColumn, tableTargetPx } from '../lib/table-width'
 import { frPluginKey, activeIndexOf } from '../lib/find-replace'
-import { docTemplate, parseMergeSource, mergeFieldsOf, mergeAll } from '../lib/templates'
+import { docTemplate, parseMergeSource, mergeFieldsOf, mergeAll, addSubDoc, removeSubDoc, moveSubDoc, paragraphsFromOdoc, expandSubDocs } from '../lib/templates'
 import { odtToHtml, prosemirrorToOdtBytes } from '../lib/odt'
 import { planFeed, runFeed, type FeedSource } from '../lib/doc-feed'
 import { registerSaver, runExclusive } from '../lib/registry'
@@ -164,6 +164,7 @@ const WORDS_THROTTLE_MS = 400
 function DocEditor({ tab }: Props) {
   const renameTab = useApp((s) => s.renameTab)
   const markDirty = useApp((s) => s.markDirty)
+  const openTab = useApp((s) => s.openTab)
   const markRecent = useApp((s) => s.markRecent)
   const [status, setStatus] = useState<string>(tab.path ? '正在加载…' : '')
   const [linkDraft, setLinkDraft] = useState<string | null>(null)
@@ -184,6 +185,8 @@ function DocEditor({ tab }: Props) {
   // 公式草稿：latex 为源码，editPos 非空表示改的是已有节点（否则在光标处插入）
   const [formulaDraft, setFormulaDraft] = useState<{ latex: string; editPos: number | null } | null>(null)
   // 文档比较（v0.234）：两份文本 → 带修订 mark 的 HTML，应用后可逐条接受/拒绝
+  const [masterOpen, setMasterOpen] = useState(false)
+  const [masterInfo, setMasterInfo] = useState('')
   const [mergeOpen, setMergeOpen] = useState(false)
   const [mergeCsv, setMergeCsv] = useState('姓名,部门\n张三,研发\n李四,市场')
   const [mergeInfo, setMergeInfo] = useState('')
@@ -1559,6 +1562,49 @@ function DocEditor({ tab }: Props) {
     </button>
   )
 
+  // —— 主控文档（v0.237）——
+  const subDocs = meta.subDocs ?? []
+  const setSubDocs = (next: string[]) => patchMeta({ subDocs: next.length ? next : undefined })
+  const masterAdd = async () => {
+    const paths = await pickSubDocs()
+    if (!paths.length) return
+    const next = paths.reduce(addSubDoc, subDocs)
+    setSubDocs(next)
+    setMasterInfo(`已加入 ${next.length - subDocs.length} 份子文档`)
+  }
+  const masterExpand = async () => {
+    if (!editor || !subDocs.length) return
+    const parts: string[] = []
+    for (const p of subDocs) {
+      try {
+        if (p.toLowerCase().endsWith('.odoc')) parts.push(paragraphsFromOdoc(await readText(p)))
+        else {
+          // .docx 子文档：走读手转纯文本（只正文，域/页眉等结构不参与展开）
+          const { docxToHtml } = await import('../lib/docx')
+          const bytes = await readBytes(p)
+          const html = await docxToHtml(bytes)
+          // HTML → 纯文本：去掉标签、解实体（展开是段落级纯文本合并，不保格式）
+          parts.push(html.replace(/<[^>]+>/g, ' ').replace(/&nbsp;/g, ' ').replace(/&amp;/g, '&')
+            .replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/\s+/g, ' ').trim())
+        }
+      } catch (e) {
+        parts.push(`（读取失败：${p} — ${e instanceof Error ? e.message.slice(0, 60) : String(e)}）`)
+      }
+    }
+    const merged = expandSubDocs(parts)
+    if (!merged) { setMasterInfo('子文档都没有可展开的正文'); return }
+    const json = {
+      type: 'doc',
+      content: merged.split('\n').map((line) => ({
+        type: 'paragraph',
+        ...(line ? { content: [{ type: 'text', text: line }] } : {}),
+      })),
+    }
+    editor.chain().focus().setContent(json).run()
+    markDirty(tab.id, true)
+    setMasterInfo(`已按清单顺序展开 ${subDocs.length} 份子文档（原文未被改动）`)
+  }
+
   // —— 邮件合并（v0.236）——
   const mergeSource = () => {
     const src = parseMergeSource(mergeCsv)
@@ -2270,6 +2316,7 @@ function DocEditor({ tab }: Props) {
         {btn('清格式', () => void runCtx('clearFormat'), false,
           '清除格式：摘掉选区里的字符外观（粗斜、字色、高亮、字号等）与样式标签；' +
           '批注/书签/修订/超链接这类带身份的标记保留，标题节点也不转回段落。无选区时清的是后续输入格式')}
+        {btn('主控', () => setMasterOpen((v) => !v), masterOpen, '主控文档：管理子文档清单，逐个打开，按序展开合并正文')}
         {btn('合并', () => setMergeOpen((v) => !v), mergeOpen, '邮件合并：粘贴 CSV 数据源，正文用 «列名» 占位，批量生成多份文档')}
         {btn('比较', () => setCompareOpen((v) => !v), compareOpen, '文档比较：粘贴原文与改后文本，预览差异并应用为可接受的修订')}
         {btn('AI', openAi, aiOpen, 'AI 助手：把选中文字交给云端模型做摘要/润色/翻译，结果可插入正文')}
@@ -2986,6 +3033,30 @@ function DocEditor({ tab }: Props) {
             )}
           </span>
           {meta.page && btn('重置', () => patchMeta({ page: undefined }), false, '恢复 A4 + 默认边距 + 不分栏')}
+        </div>
+      )}
+      {masterOpen && (
+        <div className="doc-toolbar doc-fr-panel" style={{ flexWrap: 'wrap', gap: 6 }}>
+          <span className="tb-label">主控文档 · {subDocs.length} 份子文档</span>
+          <button className="tb-btn" onClick={() => void masterAdd()}>添加子文档…</button>
+          <button className="tb-btn" onClick={() => void masterExpand()} disabled={!subDocs.length} title="按清单顺序把各子文档正文合并进当前文档（不写回子文档）">
+            展开合并到当前文档
+          </button>
+          <button className="tb-btn" onClick={() => setMasterOpen(false)}>关闭</button>
+          {subDocs.length > 0 && (
+            <div className="master-doc-list">
+              {subDocs.map((p, i) => (
+                <div key={p} className="master-doc-row">
+                  <span className="master-doc-name" title={p}>{i + 1}. {baseName(p)}</span>
+                  <button className="tb-btn" onClick={() => setSubDocs(moveSubDoc(subDocs, p, -1))} disabled={i === 0} title="上移">↑</button>
+                  <button className="tb-btn" onClick={() => setSubDocs(moveSubDoc(subDocs, p, 1))} disabled={i === subDocs.length - 1} title="下移">↓</button>
+                  <button className="tb-btn" onClick={() => openTab({ kind: 'doc', title: baseName(p), path: p })} title="在标签页打开这份子文档">打开</button>
+                  <button className="tb-btn" onClick={() => setSubDocs(removeSubDoc(subDocs, p))} title="从清单移除">✕</button>
+                </div>
+              ))}
+            </div>
+          )}
+          {masterInfo && <span className="editor-status">{masterInfo}</span>}
         </div>
       )}
       {mergeOpen && (

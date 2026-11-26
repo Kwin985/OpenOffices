@@ -229,3 +229,52 @@ export function mergeAll(
   const missing = used.filter((f) => !src.fields.includes(f))
   return { results: src.rows.map((r) => mergeOne(text, r)), missing }
 }
+
+// ── 主控文档（v0.237）───────────────────────────────────────────────────────
+// 一份主控文档持有若干子文档路径（DocMeta.subDocs，随 .odoc 整体 JSON 往返）。
+// 第一版：清单管理 + 逐个打开 + 按序把子文档正文展开合并进当前文档。
+// 不写回子文档、不处理 .docx 子文档的格式——展开是纯文本段落级合并。
+
+/** 子文档路径去重追加：已存在的不再加，保持原序 */
+export function addSubDoc(list: string[], path: string): string[] {
+  if (!path || list.includes(path)) return list
+  return [...list, path]
+}
+
+/** 移除一枚（按路径），返回新数组 */
+export function removeSubDoc(list: string[], path: string): string[] {
+  return list.filter((p) => p !== path)
+}
+
+/** 上/下移一枚；越界返回原数组（不可变） */
+export function moveSubDoc(list: string[], path: string, delta: -1 | 1): string[] {
+  const i = list.indexOf(path)
+  const j = i + delta
+  if (i < 0 || j < 0 || j >= list.length) return list
+  const out = [...list]
+  ;[out[i], out[j]] = [out[j], out[i]]
+  return out
+}
+
+/** 从 .odoc 的 JSON 文本里取正文纯文本（段落按 \n 拼），坏件返回空串 */
+export function paragraphsFromOdoc(json: string): string {
+  try {
+    const o = JSON.parse(json) as { app?: string; kind?: string; content?: { content?: unknown[] } }
+    if (o.app !== 'openoffices' || o.kind !== 'doc') return ''
+    const nodes = o.content?.content ?? []
+    const lines: string[] = []
+    for (const n of nodes) {
+      const node = n as { type?: string; content?: { text?: string }[] }
+      if (node.type !== 'paragraph') continue
+      lines.push((node.content ?? []).map((c) => c.text ?? '').join(''))
+    }
+    return lines.join('\n')
+  } catch {
+    return ''
+  }
+}
+
+/** 多份子文档正文按清单序合并展开；每份之间空一行分隔（空份跳过，不造假空段） */
+export function expandSubDocs(parts: string[]): string {
+  return parts.map((s) => s.trim()).filter(Boolean).join('\n\n')
+}
