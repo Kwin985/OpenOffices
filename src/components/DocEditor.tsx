@@ -1552,12 +1552,16 @@ function DocEditor({ tab }: Props) {
   const notes = notesOf(editor)
   const fr = frPluginKey.getState(editor.state)
   const frActive = fr && fr.matches.length ? activeIndexOf(fr, editor.state.selection.from, editor.state.selection.to) : -1
+  // 无障碍（v0.239）：图标按钮没有可读名，用 title 作 aria-label；切换态用 aria-pressed / aria-disabled 播报。
   const btn = (label: string, onClick: () => void, active = false, title?: string) => (
     <button
       key={label + title}
+      type="button"
       className={`tb-btn${active ? ' tb-active' : ''}`}
       onClick={onClick}
       title={title}
+      aria-label={title || label}
+      aria-pressed={active}
     >
       {label}
     </button>
@@ -2049,6 +2053,8 @@ function DocEditor({ tab }: Props) {
 
   return (
     <div className={`editor-pane${previewOpen ? ' is-preview' : ''}`}>
+      {/* 无障碍（v0.239）：操作结果（保存/比较/合并/RTL…）由屏幕阅读器播报 */}
+      <span className="sr-only" role="status" aria-live="polite" aria-atomic="true">{status}</span>
       {previewUi(previewOpen).showPreviewBar && (
         <div className="doc-preview-bar">
           <span className="doc-preview-title">打印预览 · 只读</span>

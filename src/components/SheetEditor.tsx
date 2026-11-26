@@ -332,8 +332,11 @@ function SheetEditor({ tab }: Props) {  const containerRef = useRef<HTMLDivEleme
   }
 
   // —— 宏（表格侧只有 VBA 子集） ——
+  // 无障碍（v0.239）：图标按钮没有可读名，用 title 作 aria-label；切换态用 aria-pressed / aria-disabled 播报。
   const btn = (label: string, onClick: () => void, active = false, title?: string) => (
-    <button key={label + title} className={`tb-btn${active ? ' tb-active' : ''}`} onClick={onClick} title={title}>
+    <button key={label + title} type="button" className={`tb-btn${active ? ' tb-active' : ''}`}
+      onClick={onClick} title={title}
+      aria-label={title || label} aria-pressed={active}>
       {label}
     </button>
   )
@@ -1865,7 +1868,8 @@ function SheetEditor({ tab }: Props) {  const containerRef = useRef<HTMLDivEleme
             )
           })()}
         {status && (
-          <span className="editor-status" title={statusTip(status)}>
+          <span className="editor-status" role="status" aria-live="polite" aria-atomic="true"
+          title={statusTip(status)}>
             {statusText(status)}
           </span>
         )}

@@ -4791,3 +4791,16 @@ button {
 .ProseMirror h1[dir='rtl'], .ProseMirror h2[dir='rtl'], .ProseMirror h3[dir='rtl'] {
   text-align: right;
 }
+
+/* 无障碍（v0.239）：仅屏幕阅读器可见的播报区，不占视觉空间 */
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}

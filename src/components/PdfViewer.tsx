@@ -2424,8 +2424,11 @@ function PdfViewer({ tab }: Props) {
     )
   }
 
+  // 无障碍（v0.239）：图标按钮没有可读名，用 title 作 aria-label；切换态用 aria-pressed / aria-disabled 播报。
   const btn = (label: string, onClick: () => void, disabled = false, title?: string) => (
-    <button key={label + title} className="tb-btn" onClick={onClick} disabled={disabled} title={title}>
+    <button key={label + title} type="button" className="tb-btn"
+      onClick={onClick} disabled={disabled} title={title}
+      aria-label={title || label} aria-disabled={disabled}>
       {label}
     </button>
   )
@@ -2460,7 +2463,8 @@ function PdfViewer({ tab }: Props) {
   return (
     <div className="editor-pane">
       <div className="editor-toolbar">
-        <span className="editor-status" title={statusTip(status)}>
+        <span className="editor-status" role="status" aria-live="polite" aria-atomic="true"
+          title={statusTip(status)}>
           {statusText(status)}
         </span>
         <span className="editor-hint">PDF · 选文字加高亮/便签（Ctrl+S 存回文件，表单值与图章一并写回） · ✎ 标注：拖移/改色/删除，▭◯↗✏ 拖拽绘制，🖼 图章点击落章 · 🖨 打印 · Ctrl+滚轮缩放 · Ctrl+F 搜索 · ☰ 侧栏</span>

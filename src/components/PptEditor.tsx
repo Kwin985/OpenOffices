@@ -1060,18 +1060,18 @@ function PptEditor({ tab }: Props) {
         }}
       />
       <div className="editor-toolbar">
-        <button className="tool-btn" onClick={() => save(false)}>保存</button>
-        <button className="tool-btn" onClick={() => save(true)}>另存为…</button>
-        <button className="tool-btn" onClick={() => void exportPptx()}>导出 pptx…</button>
-        <button className="tool-btn" onClick={() => void exportPdf()} title="每张幻灯片一页横向输出">导出 PDF</button>
-        <button
+        <button type="button" className="tool-btn" onClick={() => save(false)}>保存</button>
+        <button type="button" className="tool-btn" onClick={() => save(true)}>另存为…</button>
+        <button type="button" className="tool-btn" onClick={() => void exportPptx()}>导出 pptx…</button>
+        <button type="button" className="tool-btn" onClick={() => void exportPdf()} title="每张幻灯片一页横向输出">导出 PDF</button>
+        <button type="button"
           className={`tool-btn${showFind ? ' tool-btn-primary' : ''}`}
           onClick={() => (showFind ? frClose() : setShowFind(true))}
           title="查找替换（Ctrl+F / Ctrl+H）"
         >
           查找替换
         </button>
-        <button
+        <button type="button"
           className={`tool-btn${animBrush ? ' tool-btn-primary' : ''}`}
           onClick={brushStart}
           title="动画刷：复制本页的切页 / 要点动画设置，再点缩略图刷到那一页（Esc 取消）"
@@ -1079,7 +1079,7 @@ function PptEditor({ tab }: Props) {
           动画刷
         </button>
         {animBrush && (
-          <button
+          <button type="button"
             className="tool-btn"
             onClick={() => {
               brushApply(deck.slides.map((_, i) => i))
@@ -1104,20 +1104,20 @@ function PptEditor({ tab }: Props) {
           <option value="image">图片页</option>
           <option value="blank">空白页</option>
         </select>
-        <button className="tool-btn" onClick={() => moveSlide(-1)} title="上移">↑</button>
-        <button className="tool-btn" onClick={() => moveSlide(1)} title="下移">↓</button>
-        <button className="tool-btn" onClick={removeSlide} title="删除本页">删页</button>
-        <button className="tool-btn" onClick={addTextBox} title="在页面上加一个可自由拖动/缩放的文本框（画布层，随 pptx 往返）">
+        <button type="button" className="tool-btn" onClick={() => moveSlide(-1)} title="上移">↑</button>
+        <button type="button" className="tool-btn" onClick={() => moveSlide(1)} title="下移">↓</button>
+        <button type="button" className="tool-btn" onClick={removeSlide} title="删除本页">删页</button>
+        <button type="button" className="tool-btn" onClick={addTextBox} title="在页面上加一个可自由拖动/缩放的文本框（画布层，随 pptx 往返）">
           ＋文本框
         </button>
-        <button
+        <button type="button"
           className="tool-btn"
           onClick={addTable}
           title="在页面上加一张可拖动/缩放的表格（导出为 PowerPoint 原生表格，对方还能继续编辑）"
         >
           ＋表格
         </button>
-        <button
+        <button type="button"
           className="tool-btn"
           onClick={addChart}
           title="在页面上加一张图表（柱/条/线/饼/面积；导出落图片，数据留在 .opd 里随时可改）"
@@ -1227,7 +1227,7 @@ function PptEditor({ tab }: Props) {
         )}
         {/* v0.141：点击换页开关。文件里 advClick="0" 的页以前一改就变回「点击就翻」——
             现在有开关，缺省（未设）与「开」在文件里同义，关掉才写 0 */}
-        <button
+        <button type="button"
           className={`tool-btn${slide.advClick === false ? '' : ' tool-btn-primary'}`}
           onClick={() =>
             editSlide(cur, (s) => {
@@ -1240,7 +1240,7 @@ function PptEditor({ tab }: Props) {
         </button>
         {/* v0.115：揭示序可调。只有 ≥2 项时才给入口——一项的次序没有可排的东西 */}
         {seqItems.length > 1 && (
-          <button
+          <button type="button"
             className={`tool-btn${showSequence ? ' tool-btn-primary' : ''}`}
             onClick={() => setShowSequence((v) => !v)}
             title="调整本页逐条播放的先后（正文逐条与形状各占一票，随 pptx 往返）"
@@ -1248,14 +1248,14 @@ function PptEditor({ tab }: Props) {
             播放顺序 {seqItems.length}
           </button>
         )}
-        <button
+        <button type="button"
           className={`tool-btn${showMaster ? ' tool-btn-primary' : ''}`}
           onClick={() => setShowMaster((v) => !v)}
           title="母版背景与配色：整份 deck 生效，随 .opd 与 pptx 往返"
         >
           母版配色
         </button>
-        <button
+        <button type="button"
           className={`tool-btn${showPlaceholders ? ' tool-btn-primary' : ''}`}
           onClick={() => setShowPlaceholders((v) => !v)}
           title="母版占位框：显示标题与正文两枚占位矩形，拖动平移、右下角缩放；改动写回母版，导出 pptx / PDF 与放映跟随"
@@ -1279,7 +1279,7 @@ function PptEditor({ tab }: Props) {
           />
           秒
         </label>
-        <button
+        <button type="button"
           className="tool-btn tool-btn-primary"
           onClick={() => {
             setPresentIdx(cur)
@@ -1294,7 +1294,7 @@ function PptEditor({ tab }: Props) {
         <span className="tool-sep" />
         {/* v0.178：七档刻度，与 Writer 的视图缩放同一份定义；只改屏幕，打印/导出/放映按 100% */}
         <span className="ppt-zoom" title="视图缩放：只改屏幕上的舞台，导出 pptx/PDF 与放映始终按 100%；也可在舞台区按 Ctrl+滚轮">
-          <button className="tool-btn" onClick={() => setZoom((z) => zoomStep(z, -1))} title="缩小一档">−</button>
+          <button type="button" className="tool-btn" onClick={() => setZoom((z) => zoomStep(z, -1))} title="缩小一档">−</button>
           <select
             className="tool-select"
             value={String(zoom)}
@@ -1304,10 +1304,10 @@ function PptEditor({ tab }: Props) {
               <option key={s} value={s}>{zoomPct(s)}</option>
             ))}
           </select>
-          <button className="tool-btn" onClick={() => setZoom((z) => zoomStep(z, 1))} title="放大一档">＋</button>
-          <button className="tool-btn" onClick={() => setZoom(1)} title="回到 100%">100%</button>
-          <button className="tool-btn" onClick={() => fitTo('width')} title="适合页宽：按幻灯片宽铺满舞台区">↔</button>
-          <button className="tool-btn" onClick={() => fitTo('page')} title="适合整页：幻灯片连高一起装下">⤢</button>
+          <button type="button" className="tool-btn" onClick={() => setZoom((z) => zoomStep(z, 1))} title="放大一档">＋</button>
+          <button type="button" className="tool-btn" onClick={() => setZoom(1)} title="回到 100%">100%</button>
+          <button type="button" className="tool-btn" onClick={() => fitTo('width')} title="适合页宽：按幻灯片宽铺满舞台区">↔</button>
+          <button type="button" className="tool-btn" onClick={() => fitTo('page')} title="适合整页：幻灯片连高一起装下">⤢</button>
         </span>
         {status && (
           <span className="editor-status" title={statusTip(status)}>
@@ -1348,7 +1348,7 @@ function PptEditor({ tab }: Props) {
             value={frRep}
             onChange={(e) => setFrRep(e.target.value)}
           />
-          <button
+          <button type="button"
             className={`tool-btn tool-btn-mini${frCase ? ' tool-btn-primary' : ''}`}
             onClick={() => { setFrCase((v) => !v); setFrIdx(0) }}
             title="区分大小写"
@@ -1362,11 +1362,11 @@ function PptEditor({ tab }: Props) {
                   : '无命中')
               : '输入关键词'}
           </span>
-          <button className="tool-btn tool-btn-mini" disabled={!frHits.length} onClick={() => frGoto(frIdx - 1)}>↑</button>
-          <button className="tool-btn tool-btn-mini" disabled={!frHits.length} onClick={() => frGoto(frIdx + 1)}>↓</button>
-          <button className="tool-btn tool-btn-mini" disabled={!frHits.length} onClick={frReplaceOne}>替换</button>
-          <button className="tool-btn tool-btn-mini" disabled={!frHits.length} onClick={frReplaceEvery}>全部替换</button>
-          <button className="tool-btn tool-btn-mini" onClick={frClose}>关闭</button>
+          <button type="button" className="tool-btn tool-btn-mini" disabled={!frHits.length} onClick={() => frGoto(frIdx - 1)}>↑</button>
+          <button type="button" className="tool-btn tool-btn-mini" disabled={!frHits.length} onClick={() => frGoto(frIdx + 1)}>↓</button>
+          <button type="button" className="tool-btn tool-btn-mini" disabled={!frHits.length} onClick={frReplaceOne}>替换</button>
+          <button type="button" className="tool-btn tool-btn-mini" disabled={!frHits.length} onClick={frReplaceEvery}>全部替换</button>
+          <button type="button" className="tool-btn tool-btn-mini" onClick={frClose}>关闭</button>
           {frHits.length > 0 && frHits[frIdx] && (
             <span className="editor-hint" style={{ flexBasis: '100%' }}>
               {pptMatchLabel(frHits[frIdx])} · 「{frHits[frIdx].preview}」
@@ -1392,7 +1392,7 @@ function PptEditor({ tab }: Props) {
             {items.map((it) => it.separator ? (
               <div key={it.id} className="doc-ctx-sep" />
             ) : (
-              <button
+              <button type="button"
                 key={it.id}
                 className="doc-ctx-item"
                 disabled={it.disabled}
@@ -1415,7 +1415,7 @@ function PptEditor({ tab }: Props) {
             <span className="ppt-seq-item" key={revealItemKey(it)}>
               <span className="ppt-seq-no">{i + 1}</span>
               <span className="ppt-seq-name" title="这一票在放映第几击上出场">{revealName(slide, it)}</span>
-              <button
+              <button type="button"
                 className="tool-btn tool-btn-mini"
                 title="提前一击"
                 disabled={i === 0}
@@ -1423,7 +1423,7 @@ function PptEditor({ tab }: Props) {
               >
                 ↑
               </button>
-              <button
+              <button type="button"
                 className="tool-btn tool-btn-mini"
                 title="推后一击"
                 disabled={i === seqItems.length - 1}
@@ -1433,7 +1433,7 @@ function PptEditor({ tab }: Props) {
               </button>
             </span>
           ))}
-          <button className="tool-btn tool-btn-mini" onClick={resetRevealOrder} title="退回默认序（正文逐条在前、形状按层叠序在后）">
+          <button type="button" className="tool-btn tool-btn-mini" onClick={resetRevealOrder} title="退回默认序（正文逐条在前、形状按层叠序在后）">
             默认序
           </button>
           <span className="ppt-seq-hint">放映按这一列先后揭示，导出各占 PowerPoint 一枚 clickEffect</span>
@@ -1483,17 +1483,17 @@ function PptEditor({ tab }: Props) {
               onChange={(e) => patchMaster({ bodyColor: e.target.value })}
             />
           </label>
-          <button className="tool-btn tool-btn-mini" onClick={() => masterBgRef.current?.click()}>
+          <button type="button" className="tool-btn tool-btn-mini" onClick={() => masterBgRef.current?.click()}>
             背景图…
           </button>
-          <button
+          <button type="button"
             className="tool-btn tool-btn-mini"
             disabled={!m?.bgImage}
             onClick={() => patchMaster({ bgImage: undefined })}
           >
             清除背景图
           </button>
-          <button
+          <button type="button"
             className="tool-btn tool-btn-mini"
             title="去掉母版四色，回落到当前主题"
             onClick={() =>
@@ -1604,14 +1604,14 @@ function PptEditor({ tab }: Props) {
                       {slide.image ? (
                         <img className="ppt-edit-img" src={slide.image} alt="" />
                       ) : (
-                        <button className="ppt-img-add" onClick={() => fileRef.current?.click()}>
+                        <button type="button" className="ppt-img-add" onClick={() => fileRef.current?.click()}>
                           ＋ 插入图片
                         </button>
                       )}
                       {slide.image && (
                         <div className="ppt-img-actions">
-                          <button className="tool-btn tool-btn-mini" onClick={() => fileRef.current?.click()}>换图</button>
-                          <button
+                          <button type="button" className="tool-btn tool-btn-mini" onClick={() => fileRef.current?.click()}>换图</button>
+                          <button type="button"
                             className="tool-btn tool-btn-mini"
                             onClick={() => editSlide(cur, (s) => (s.image = undefined))}
                           >
@@ -1745,7 +1745,7 @@ function PptEditor({ tab }: Props) {
                                 })
                               }
                             />
-                            <button
+                            <button type="button"
                               className={`tool-btn tool-btn-mini${sh.bold ? ' tool-btn-primary' : ''}`}
                               onClick={() => patchShape(sh.id, { bold: !sh.bold })}
                               title="粗体"
@@ -1754,14 +1754,14 @@ function PptEditor({ tab }: Props) {
                             </button>
                             {/* v0.141：斜体与下划线。读侧 v0.140 才收进来，界面这一轮补入口；
                                 下划线只表达「有线」，双线/点线导入时降级成单线 */}
-                            <button
+                            <button type="button"
                               className={`tool-btn tool-btn-mini ppt-btn-italic${sh.italic ? ' tool-btn-primary' : ''}`}
                               onClick={() => patchShape(sh.id, { italic: !sh.italic })}
                               title="斜体（随 pptx rPr@i 往返）"
                             >
                               I
                             </button>
-                            <button
+                            <button type="button"
                               className={`tool-btn tool-btn-mini ppt-btn-underline${sh.underline ? ' tool-btn-primary' : ''}`}
                               onClick={() => patchShape(sh.id, { underline: !sh.underline })}
                               title="下划线（随 pptx rPr@u 往返；只表达单线）"
@@ -1783,7 +1783,7 @@ function PptEditor({ tab }: Props) {
                               <option value="middle">居中</option>
                               <option value="bottom">靠下</option>
                             </select>
-                            <button
+                            <button type="button"
                               className={`tool-btn tool-btn-mini${sh.wrap === false ? ' tool-btn-primary' : ''}`}
                               onClick={() => patchShape(sh.id, { wrap: sh.wrap === false ? undefined : false })}
                               title="不换行：文本溢出框外也不折行（bodyPr@wrap=none）"
@@ -1820,7 +1820,7 @@ function PptEditor({ tab }: Props) {
                               onChange={(e) => patchShape(sh.id, { fill: e.target.value })}
                             />
                             {sh.fill && (
-                              <button
+                              <button type="button"
                                 className="tool-btn tool-btn-mini"
                                 title="去掉底色"
                                 onClick={() => patchShape(sh.id, { fill: undefined })}
@@ -1836,7 +1836,7 @@ function PptEditor({ tab }: Props) {
                               onChange={(e) => patchShape(sh.id, { outline: e.target.value })}
                             />
                             {sh.outline && (
-                              <button
+                              <button type="button"
                                 className="tool-btn tool-btn-mini"
                                 title="去掉边框"
                                 onClick={() => patchShape(sh.id, { outline: undefined })}
@@ -1848,7 +1848,7 @@ function PptEditor({ tab }: Props) {
                         )}
                         {sh.kind === 'table' && sh.table && (
                           <>
-                            <button
+                            <button type="button"
                               className="tool-btn tool-btn-mini"
                               title="加一行"
                               onClick={() => {
@@ -1858,7 +1858,7 @@ function PptEditor({ tab }: Props) {
                             >
                               行＋
                             </button>
-                            <button
+                            <button type="button"
                               className="tool-btn tool-btn-mini"
                               title="删一行（至少留 1 行）"
                               onClick={() => {
@@ -1870,7 +1870,7 @@ function PptEditor({ tab }: Props) {
                             >
                               行－
                             </button>
-                            <button
+                            <button type="button"
                               className="tool-btn tool-btn-mini"
                               title="加一列"
                               onClick={() => {
@@ -1880,7 +1880,7 @@ function PptEditor({ tab }: Props) {
                             >
                               列＋
                             </button>
-                            <button
+                            <button type="button"
                               className="tool-btn tool-btn-mini"
                               title="删一列（至少留 1 列）"
                               onClick={() => {
@@ -1892,7 +1892,7 @@ function PptEditor({ tab }: Props) {
                             >
                               列－
                             </button>
-                            <button
+                            <button type="button"
                               className={`tool-btn tool-btn-mini${sh.table!.hasHeader ? ' tool-btn-primary' : ''}`}
                               title="首行当表头（导出时 PowerPoint 认它是表头行）"
                               onClick={() =>
@@ -1903,7 +1903,7 @@ function PptEditor({ tab }: Props) {
                             >
                               表头
                             </button>
-                            <button
+                            <button type="button"
                               className={`tool-btn tool-btn-mini${sh.table!.border !== false ? ' tool-btn-primary' : ''}`}
                               title="显示格线"
                               onClick={() =>
@@ -1948,7 +1948,7 @@ function PptEditor({ tab }: Props) {
                             />
                             {/* v0.141：隔行底纹。pptxgenjs 那一行在它源码里是注释，
                                 所以这一枚只能靠解包注入落盘（见 pptx-export） */}
-                            <button
+                            <button type="button"
                               className={`tool-btn tool-btn-mini${sh.table!.bandRow ? ' tool-btn-primary' : ''}`}
                               title="隔行底纹（tblPr@bandRow）"
                               onClick={() =>
@@ -1984,7 +1984,7 @@ function PptEditor({ tab }: Props) {
                                     }
                                   />
                                 ))}
-                                <button
+                                <button type="button"
                                   className="tool-btn tool-btn-mini"
                                   title="各列等宽（清掉列宽占比）"
                                   onClick={() =>
@@ -2022,7 +2022,7 @@ function PptEditor({ tab }: Props) {
                                     }
                                   />
                                 ))}
-                                <button
+                                <button type="button"
                                   className="tool-btn tool-btn-mini"
                                   title="各行等高（清掉行高占比，交给 PowerPoint 自适应）"
                                   onClick={() =>
@@ -2035,7 +2035,7 @@ function PptEditor({ tab }: Props) {
                                 </button>
                               </span>
                             )}
-                            <button
+                            <button type="button"
                               className={`tool-btn tool-btn-mini${editingShape === sh.id ? ' tool-btn-primary' : ''}`}
                               title="逐个格子改字（也可以直接双击表格）"
                               onClick={() => setEditingShape(editingShape === sh.id ? null : sh.id)}
@@ -2085,14 +2085,14 @@ function PptEditor({ tab }: Props) {
                                 ),
                               )}
                             </select>
-                            <button
+                            <button type="button"
                               className={`tool-btn tool-btn-mini${chartCsvFor === sh.id ? ' tool-btn-primary' : ''}`}
                               title="改数据（首行系列名，首列类目，逗号分隔）"
                               onClick={() => setChartCsvFor(chartCsvFor === sh.id ? null : sh.id)}
                             >
                               数据
                             </button>
-                            <button
+                            <button type="button"
                               className={`tool-btn tool-btn-mini${sh.chart!.stacked ? ' tool-btn-primary' : ''}`}
                               title="堆叠（饼图不认这一档）"
                               onClick={() =>
@@ -2103,14 +2103,14 @@ function PptEditor({ tab }: Props) {
                             </button>
                           </>
                         )}
-                        <button
+                        <button type="button"
                           className="tool-btn tool-btn-mini"
                           title="上一层（后画在上）"
                           onClick={() => moveShape(sh.id, 1)}
                         >
                           ↑
                         </button>
-                        <button
+                        <button type="button"
                           className="tool-btn tool-btn-mini"
                           title="下一层"
                           onClick={() => moveShape(sh.id, -1)}
@@ -2165,7 +2165,7 @@ function PptEditor({ tab }: Props) {
                             ))}
                           </select>
                         )}
-                        <button className="tool-btn tool-btn-mini" onClick={() => removeShape(sh.id)}>
+                        <button type="button" className="tool-btn tool-btn-mini" onClick={() => removeShape(sh.id)}>
                           删除
                         </button>
                       </div>
@@ -2185,7 +2185,7 @@ function PptEditor({ tab }: Props) {
                               patchShape(sh.id, { chart: { ...sh.chart!, cats, series } })
                             }}
                           />
-                          <button
+                          <button type="button"
                             className="tool-btn tool-btn-mini"
                             onClick={() => setChartCsvFor(null)}
                           >
@@ -2242,10 +2242,10 @@ function PptEditor({ tab }: Props) {
             <span>
               {presentIdx + 1} / {deck.slides.length} · ←/→ 翻页 · N 备注 · P 演讲者视图 · Esc 退出
             </span>
-            <button className="tool-btn" onClick={() => void togglePresenter()}>
+            <button type="button" className="tool-btn" onClick={() => void togglePresenter()}>
               演讲者视图
             </button>
-            <button className="tool-btn" onClick={() => setPresent(false)}>退出放映</button>
+            <button type="button" className="tool-btn" onClick={() => setPresent(false)}>退出放映</button>
           </div>
         </div>
       )}
