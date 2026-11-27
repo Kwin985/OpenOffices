@@ -4810,6 +4810,22 @@ Rust lib **169 通过**（xlsx 族 25）；夹具账复位 65/65、md5 `0fd13292
 Rust lib **171 通过**（+2 条新守卫）、ODS 族 35 通过 / 1 ignored；ODS 往返账 14/14 复位、
 md5 与基线逐字节一致、`docs/ods-roundtrip.*` git 零改动。
 
+## v0.242（全面自动测试入口）
+
+把散落的门禁串成一键全跑：`node scripts/check-all.mjs`（`--skip-slow` 快检，跳过全量单测）。
+13 项：干净树 tsc+vite（交付口径）、五本账各带复位检查、Rust lib、全量单测。
+
+调试过程本身就是几类房规的实证：
+- Node `spawnSync` 直接调 `pnpm/npx/cargo` 在 Git Bash 下 ENOENT——必须 `shell: true`。
+- 沙箱删除守卫按 turn 累计，多笔账各自 rmSync 会撞闸——每笔给全新 `--tmp` 目录。
+- pptx 账的 `--selftest` 会写主账本 provenance（modules 81→84），跑完要还原——
+  check-all 现在跑前存字节、跑后自动复位，复位检查只认最终字节与跑前一致。
+- `check-clean-tree` 的 `finish()` 清理被删除守卫 redirect 到 trash 后抛异常，
+  把已经 `CLEAN|全绿` 的门禁反咬成退出码 1——清理失败改为只提示、不改结论。
+
+**结果**：最终一轮 **13/13 全绿**（干净树 45s、五本账 14–24s、Rust 4s、全量单测 1525s），
+账本逐字节还原、配置逐字节还原。
+
 ## v0.241（OCR worker 生命周期收口）
 
 继续质量审查（v0.229–232 那批）：公式/图表/透视表都核过各层的守卫与边界，没发现真问题；
