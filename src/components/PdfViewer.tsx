@@ -236,6 +236,9 @@ function PdfViewer({ tab }: Props) {
     aliveRef.current = true
     return () => {
       aliveRef.current = false
+      // v0.241：切标签/卸载时回收 OCR 的 WASM worker——否则它常驻吃内存。
+      // 「关闭」按钮也调这一枚，重复调用安全（模块里 worker 已置空就直接返回）。
+      void disposeOcrWorker()
     }
   }, [])
   const [sideOpen, setSideOpen] = useState(false)
@@ -982,6 +985,8 @@ function PdfViewer({ tab }: Props) {
     setOcrInfo('正在本地识别（不联网）…')
     try {
       const res = await recognizeCanvas(canvas, ocrLang)
+      // v0.241：识别期间切走了标签，结果别再往已卸载的组件上写
+      if (!aliveRef.current) return
       if (!res.text) {
         setOcrInfo('没识别到文字（这页可能是空白或纯图形）')
         setOcrText('')
