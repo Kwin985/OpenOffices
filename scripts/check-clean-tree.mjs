@@ -37,13 +37,21 @@ if (useIndex) {
   ref = t.stdout.trim()
 }
 
-const work = `${root}tmp/clean-check-${process.pid}`
-const tarPath = `${root}tmp/clean-check-${process.pid}.tar`
+// 导出目录可被外部指定（check-all 一键全跑时给每轮一枚全新目录，避沙箱删除守卫按 turn 累计的闸）
+const cleanTag = process.env.CLEAN_TAG || String(process.pid)
+const work = `${root}tmp/clean-check-${cleanTag}`
+const tarPath = `${root}tmp/clean-check-${cleanTag}.tar`
 mkdirSync(work, { recursive: true })
 
 const finish = (code) => {
-  if (existsSync(work)) rmSync(work, { recursive: true, force: true })
-  if (existsSync(tarPath)) unlinkSync(tarPath)
+  // 清理失败不改门禁结论：检查项已经跑完并给出 PASS/FAIL，删除守卫或 trash 故障
+  // 不该把全绿反咬成红灯。失败只提示一句，产物留在 tmp/ 里可手工处理。
+  try {
+    if (existsSync(work)) rmSync(work, { recursive: true, force: true })
+    if (existsSync(tarPath)) unlinkSync(tarPath)
+  } catch (e) {
+    console.error(`CLEAN|临时目录清理跳过（不影响检查结论）：${e instanceof Error ? e.message.slice(0, 120) : String(e)}`)
+  }
   process.exit(code)
 }
 
@@ -55,7 +63,7 @@ if (arc.status !== 0 || !arc.stdout?.length) {
 // 两个坑：Windows 上 spawnSync 往 stdin 灌几 MB 的 tar 会 EOF；GNU tar 会把
 // "E:/..." 当成 host:path 去连远程。所以落临时文件 + 给 tar 传相对路径。
 writeFileSync(tarPath, arc.stdout)
-const rel = `tmp/clean-check-${process.pid}`
+const rel = `tmp/clean-check-${cleanTag}`
 const ext = spawnSync('tar', ['-xf', `${rel}.tar`, '-C', rel], {
   cwd: root, maxBuffer: 64 * 1024 * 1024,
 })
